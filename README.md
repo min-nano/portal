@@ -147,15 +147,24 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 
 #### 保存先（チャンネル）
 
-同じデータベースの中を **チャンネル** 単位で分け、本番・開発・PR プレビューが互いのデータを踏まないようにしています。ドキュメント ID はツール名（例: `excel-report-formatter`）です。
+同じデータベースの中を **チャンネル** 単位で分け、本番・開発・PR プレビューが互いのデータを踏まないようにしています。
 
-| チャンネル | パス | 使う環境 |
+| チャンネル | `SETTINGS_CHANNEL_PATH` | 使う環境 |
 | --- | --- | --- |
-| production | `static-channels/production/tool_settings/<ツール名>` | `main`（本番の Cloud Run） |
-| development | `static-channels/development/tool_settings/<ツール名>` | **既定**。ローカル開発 |
-| プレビュー | `preview-channels/pr-<番号>/tool_settings/<ツール名>` | PR プレビュー（PR ごと） |
+| production | `static-channels/production` | `main`（本番の Cloud Run） |
+| development | `static-channels/development` | **既定**。ローカル開発 |
+| プレビュー | `preview-channels/pr-<番号>` | PR プレビュー（PR ごと） |
 
-どのチャンネルを使うかは環境変数 `SETTINGS_ROOT`（コレクションパス）で決まります。**未設定のときは development** を指し、本番を指すのは `SETTINGS_ROOT=static-channels/production/tool_settings` を明示的に設定した Cloud Run サービスだけです。環境変数の設定漏れ・ローカル開発・壊れたワークフローのいずれからも本番データに到達できないため、設定ミスの症状は必ず「設定が空に見える」であり、「本番を汚す」は起こりません。
+環境変数で指定するのは **チャンネルのドキュメントパスまで** です。その下に何を置くかはアプリ側の都合なので、`tool_settings/<ツール名>` は `settings_store.py` が付けます。実際の保存先は例えばこうなります:
+
+```
+static-channels/production/tool_settings/excel-report-formatter
+preview-channels/pr-29/tool_settings/excel-report-formatter
+```
+
+**未設定のときは development** を指し、本番を指すのは `SETTINGS_CHANNEL_PATH=static-channels/production` を明示的に設定した Cloud Run サービスだけです。環境変数の設定漏れ・ローカル開発・壊れたワークフローのいずれからも本番データに到達できないため、設定ミスの症状は必ず「設定が空に見える」であり、「本番を汚す」は起こりません。
+
+値がチャンネル（ドキュメント）になっていない場合 — セグメント数が奇数、`tool_settings` まで含めてしまった、空 — は、Firestore に触る前にエラーで止まります。
 
 `preview-channels` と `static-channels` を分けているのは後片付けのためでもあります。プレビューの削除（`preview-cleanup.yml`）は `preview-channels/pr-<番号>` の再帰削除だけを行い、本番データのある `static-channels` は削除処理の射程の外にあります。
 
@@ -166,15 +175,15 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 チャンネル分割の前は、共有設定がコレクション `tool_settings` の直下（`tool_settings/<ツール名>`）にありました。新しい配置へ移すには、**本番へデプロイする前に** 次の順で作業します。
 
 1. 既存のドキュメントを `static-channels/production/tool_settings/` 配下へコピーする（ツールごとに 1 ドキュメントなので Firebase コンソールでの手作業で十分）。
-2. 本番の Cloud Run に `SETTINGS_ROOT` を設定する。CI は本番サービスに環境変数を渡さない方針のため、ここは手動で一度だけ行う:
+2. 本番の Cloud Run に `SETTINGS_CHANNEL_PATH` を設定する。CI は本番サービスに環境変数を渡さない方針のため、ここは手動で一度だけ行う:
    ```bash
    gcloud run services update portal-api \
      --region "$REGION" --project "$PROJECT_ID" \
-     --update-env-vars SETTINGS_ROOT=static-channels/production/tool_settings
+     --update-env-vars SETTINGS_CHANNEL_PATH=static-channels/production
    ```
 3. その後に PR をマージする。
 
-順序が重要です。2 を先に済ませておけば、旧コードは未知の環境変数を無視するだけなので無害で、新コードが出た瞬間から正しいパスを読みます。逆に新コードが先に出ると、本番が既定の development チャンネル（空）を読み、雛形設定が消えたように見えます（データは失われず、`SETTINGS_ROOT` を設定すれば復帰します）。移行が済んだら、旧パスの `tool_settings` コレクションは削除して構いません。
+順序が重要です。2 を先に済ませておけば、旧コードは未知の環境変数を無視するだけなので無害で、新コードが出た瞬間から正しいパスを読みます。逆に新コードが先に出ると、本番が既定の development チャンネル（空）を読み、雛形設定が消えたように見えます（データは失われず、`SETTINGS_CHANNEL_PATH` を設定すれば復帰します）。移行が済んだら、旧パスの `tool_settings` コレクションは削除して構いません。
 
 雛形ファイル自体は GAS 版と同じ運用です: ネイティブ .xlsx のままフォルダ内に置き、社内の閲覧可能者だけに共有する（SA への共有は不要。読むのは常に利用者本人の代理トークン）。
 
@@ -194,7 +203,7 @@ gcloud run deploy portal-api \
   --project "$PROJECT_ID" \
   --service-account "$SA" \
   --allow-unauthenticated \
-  --set-env-vars "^;^CLERK_ISSUER=https://<本番の Clerk Frontend API>;CLERK_AUTHORIZED_PARTIES=https://<your-hosting-domain>,https://$SITE_ID.web.app;ALLOWED_EMAIL_DOMAINS=<your-workspace-domain>;DWD_SERVICE_ACCOUNT_EMAIL=$SA;SETTINGS_ROOT=static-channels/production/tool_settings"
+  --set-env-vars "^;^CLERK_ISSUER=https://<本番の Clerk Frontend API>;CLERK_AUTHORIZED_PARTIES=https://<your-hosting-domain>,https://$SITE_ID.web.app;ALLOWED_EMAIL_DOMAINS=<your-workspace-domain>;DWD_SERVICE_ACCOUNT_EMAIL=$SA;SETTINGS_CHANNEL_PATH=static-channels/production"
 ```
 
 * Firebase Hosting のリライト経由で呼び出すため `--allow-unauthenticated` が必要です（アプリ層の認可は Clerk JWT 検証で行う。Cloud Run の URL を直接叩かれても JWT が無ければ 401）。
@@ -206,7 +215,7 @@ gcloud run deploy portal-api \
 | `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り、`*` ワイルドカード可）。本番サービスには本番のオリジンのみを設定する |
 | `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り） |
 | `DWD_SERVICE_ACCOUNT_EMAIL` | 代理トークンに使う SA のメール（省略時は ADC から推定） |
-| `SETTINGS_ROOT` | 共有設定を置く Firestore のコレクションパス。本番は `static-channels/production/tool_settings`。**未設定だと development チャンネルを指す**（「共有設定（Firestore）」参照） |
+| `SETTINGS_CHANNEL_PATH` | 共有設定を置くチャンネルの Firestore ドキュメントパス。本番は `static-channels/production`。**未設定だと development チャンネルを指す**（「共有設定（Firestore）」参照） |
 | `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。既定 `(default)` |
 | `CORS_ALLOWED_ORIGINS` | （任意）CORS 許可オリジン。既定 `http://localhost:5173` |
 
@@ -314,7 +323,7 @@ PR を開く・push するたびに、その PR 専用の **プレビュー環�
 `preview.yml` の流れ:
 
 1. フロントエンドを開発インスタンスのキーでビルドする。
-2. **Cloud Run に `portal-api-pr-<番号>` をデプロイし、`allUsers` に公開する。** 本番（`deploy.yml`）と違い、ランタイム SA・環境変数を毎回すべて渡すので、サービスが無ければ作成・あれば更新となり、**初回に手動でサービスを作る必要はありません**。`SETTINGS_ROOT` にはこの PR 専用の Firestore パスを渡します。
+2. **Cloud Run に `portal-api-pr-<番号>` をデプロイし、`allUsers` に公開する。** 本番（`deploy.yml`）と違い、ランタイム SA・環境変数を毎回すべて渡すので、サービスが無ければ作成・あれば更新となり、**初回に手動でサービスを作る必要はありません**。`SETTINGS_CHANNEL_PATH` にはこの PR 専用のチャンネル（`preview-channels/pr-<番号>`）を渡します。
 3. `firebase.json` の `/api/**` リライト先をこの PR のサービスに書き換える。チャンネルのデプロイはそのときの `firebase.json` をリリースに焼き込むため、この書き換えはこの PR のチャンネルにだけ効きます（リポジトリの `firebase.json` は本番の `portal-api` を指したまま）。
 4. プレビューチャンネル `pr-<番号>` へデプロイし、URL を PR にコメントする（最終デプロイから 7 日で失効）。
 
@@ -354,9 +363,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 CLERK_ISSUER=https://xxxx.clerk.accounts.dev \
 GOOGLE_APPLICATION_CREDENTIALS=~/keys/portal-api-dev.json \
 .venv/bin/uvicorn app.main:app --reload --port 8080
-# SETTINGS_ROOT は未設定でよい。既定の development チャンネル
-# （static-channels/development/tool_settings）を読み書きするため、
-# ADC を持っていても本番の共有設定には触れない。
+# SETTINGS_CHANNEL_PATH は未設定でよい。既定の development チャンネル
+# （static-channels/development）を読み書きするため、ADC を持っていても
+# 本番の共有設定には触れない。
 
 # フロントエンド（/api は vite が localhost:8080 へプロキシ）
 cd frontend

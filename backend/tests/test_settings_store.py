@@ -10,7 +10,9 @@ import pytest
 from app import settings_store
 from app.settings_store import SettingsError
 
-DEVELOPMENT_ROOT = "static-channels/development/tool_settings"
+# 環境変数で指定するのはチャンネルまで。tool_settings 以下はアプリ側が付ける。
+DEVELOPMENT_CHANNEL = "static-channels/development"
+DEVELOPMENT_DOC = f"{DEVELOPMENT_CHANNEL}/tool_settings/excel-report-formatter"
 
 
 class FakeSnapshot:
@@ -67,21 +69,29 @@ def test_set_then_get_roundtrip(fake_client):
     settings_store.set_tool_settings("excel-report-formatter", values)
 
     assert settings_store.get_tool_settings("excel-report-formatter") == values
-    assert fake_client.documents[f"{DEVELOPMENT_ROOT}/excel-report-formatter"] == values
+    assert fake_client.documents[DEVELOPMENT_DOC] == values
+
+
+def test_collection_is_appended_by_the_app_not_the_environment(fake_client, monkeypatch):
+    """環境変数はチャンネルまで。tool_settings/<ツール名> はアプリ側が決める。"""
+    monkeypatch.setenv("SETTINGS_CHANNEL_PATH", "static-channels/production")
+    settings_store.set_tool_settings("excel-report-formatter", {"x": 1})
+
+    assert list(fake_client.documents) == [
+        "static-channels/production/tool_settings/excel-report-formatter"
+    ]
 
 
 def test_default_channel_is_development_not_production(fake_client):
     """環境変数の設定漏れが本番データに届かないこと（この構成の要点）。"""
     settings_store.set_tool_settings("excel-report-formatter", {"x": 1})
 
-    assert list(fake_client.documents) == [
-        f"{DEVELOPMENT_ROOT}/excel-report-formatter"
-    ]
+    assert list(fake_client.documents) == [DEVELOPMENT_DOC]
     assert not any("production" in path for path in fake_client.documents)
 
 
-def test_settings_root_selects_preview_channel(fake_client, monkeypatch):
-    monkeypatch.setenv("SETTINGS_ROOT", "preview-channels/pr-123/tool_settings")
+def test_preview_channel_is_selected_by_the_environment(fake_client, monkeypatch):
+    monkeypatch.setenv("SETTINGS_CHANNEL_PATH", "preview-channels/pr-123")
     settings_store.set_tool_settings("excel-report-formatter", {"x": 1})
 
     assert fake_client.documents == {
@@ -90,22 +100,22 @@ def test_settings_root_selects_preview_channel(fake_client, monkeypatch):
 
 
 def test_channels_do_not_see_each_others_data(fake_client, monkeypatch):
-    monkeypatch.setenv("SETTINGS_ROOT", "static-channels/production/tool_settings")
+    monkeypatch.setenv("SETTINGS_CHANNEL_PATH", "static-channels/production")
     settings_store.set_tool_settings("excel-report-formatter", {"channel": "prod"})
 
-    monkeypatch.setenv("SETTINGS_ROOT", "preview-channels/pr-1/tool_settings")
+    monkeypatch.setenv("SETTINGS_CHANNEL_PATH", "preview-channels/pr-1")
     assert settings_store.get_tool_settings("excel-report-formatter") == {}
 
     settings_store.set_tool_settings("excel-report-formatter", {"channel": "pr-1"})
 
-    monkeypatch.setenv("SETTINGS_ROOT", "static-channels/production/tool_settings")
+    monkeypatch.setenv("SETTINGS_CHANNEL_PATH", "static-channels/production")
     assert settings_store.get_tool_settings("excel-report-formatter") == {
         "channel": "prod"
     }
 
 
-def test_surrounding_slashes_in_settings_root_are_ignored(fake_client, monkeypatch):
-    monkeypatch.setenv("SETTINGS_ROOT", "/static-channels/production/tool_settings/")
+def test_surrounding_slashes_in_channel_path_are_ignored(fake_client, monkeypatch):
+    monkeypatch.setenv("SETTINGS_CHANNEL_PATH", "/static-channels/production/")
     settings_store.set_tool_settings("excel-report-formatter", {"x": 1})
 
     assert fake_client.documents == {
@@ -114,23 +124,26 @@ def test_surrounding_slashes_in_settings_root_are_ignored(fake_client, monkeypat
 
 
 @pytest.mark.parametrize(
-    "root",
+    "channel",
     [
-        "static-channels/production",  # 偶数セグメント = ドキュメントパス
+        "static-channels",  # 奇数セグメント = コレクションパス
+        "static-channels/production/tool_settings",  # tool_settings を含めてしまった
         "",
     ],
 )
-def test_settings_root_that_is_not_a_collection_path_is_rejected(
-    fake_client, monkeypatch, root
+def test_channel_path_that_is_not_a_document_path_is_rejected(
+    fake_client, monkeypatch, channel
 ):
-    monkeypatch.setenv("SETTINGS_ROOT", root)
+    monkeypatch.setenv("SETTINGS_CHANNEL_PATH", channel)
 
     with pytest.raises(SettingsError) as e:
         settings_store.get_tool_settings("excel-report-formatter")
-    assert "SETTINGS_ROOT" in str(e.value)
+    assert "SETTINGS_CHANNEL_PATH" in str(e.value)
     # 権限やネットワークの問題と取り違えないよう、Firestore の一般的な
     # エラーメッセージには包み直さない。
     assert "datastore.user" not in str(e.value)
+    # 弾かれたときは Firestore に一切触らない。
+    assert fake_client.documents == {}
 
 
 def test_tools_are_namespaced_per_document(fake_client):

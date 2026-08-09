@@ -58,27 +58,33 @@ def firestore_database() -> str:
     return os.environ.get("FIRESTORE_DATABASE", "(default)")
 
 
-# 環境変数が未設定のときに使う共有設定の置き場。本番ではなく development を
-# 指しているのは意図的（下の settings_root を参照）。
-DEFAULT_SETTINGS_ROOT = "static-channels/development/tool_settings"
+# 環境変数が未設定のときに使うチャンネル。本番ではなく development を
+# 指しているのは意図的（下の settings_channel_path を参照）。
+DEFAULT_SETTINGS_CHANNEL_PATH = "static-channels/development"
 
 
-def settings_root() -> str:
-    """共有設定を置く Firestore のコレクションパス（チャンネルごとに分ける）。
+def settings_channel_path() -> str:
+    """共有設定を置くチャンネルの Firestore ドキュメントパス。
 
     同じデータベース内をチャンネル単位で分割し、本番・開発・PR プレビューが
     互いのデータを踏まないようにする:
 
-      static-channels/production/tool_settings/<ツール名>   本番（main）
-      static-channels/development/tool_settings/<ツール名>  既定・ローカル開発
-      preview-channels/pr-<番号>/tool_settings/<ツール名>   PR プレビュー
+      static-channels/production   本番（main）
+      static-channels/development  既定・ローカル開発
+      preview-channels/pr-<番号>   PR プレビュー
+
+    環境ごとに変わるのはここまでで、この下にどんなコレクションを置くかは
+    アプリ側の都合（settings_store を参照）。
 
     既定を development にしているのは、環境変数の設定漏れ・ローカル開発・
     壊れたワークフローのいずれもが本番データに到達しないようにするため。
-    本番の Cloud Run にだけ SETTINGS_ROOT を明示的に設定する運用にすることで、
-    「本番を汚す」は起こらず、設定ミスの症状は必ず「設定が空に見える」になる。
+    本番の Cloud Run にだけ SETTINGS_CHANNEL_PATH を明示的に設定する運用に
+    することで、「本番を汚す」は起こらず、設定ミスの症状は必ず「設定が空に
+    見える」になる。
     """
-    return os.environ.get("SETTINGS_ROOT", DEFAULT_SETTINGS_ROOT).strip("/")
+    return os.environ.get(
+        "SETTINGS_CHANNEL_PATH", DEFAULT_SETTINGS_CHANNEL_PATH
+    ).strip("/")
 
 
 def cors_allowed_origins() -> list[str]:

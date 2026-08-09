@@ -134,7 +134,7 @@ jobs:
             --region asia-northeast1 \
             --project '${{ vars.PROJECT_ID }}' \
             --service-account '${{ vars.RUNTIME_SA_EMAIL }}' \
-            --set-env-vars "^;^CLERK_ISSUER=$CLERK_ISSUER_TEST;CLERK_AUTHORIZED_PARTIES=https://${{ vars.SITE_ID }}--pr-$PR-*.web.app;ALLOWED_EMAIL_DOMAINS=${{ vars.ALLOWED_EMAIL_DOMAINS }};DWD_SERVICE_ACCOUNT_EMAIL=${{ vars.RUNTIME_SA_EMAIL }};SETTINGS_ROOT=preview-channels/pr-$PR/tool_settings" \
+            --set-env-vars "^;^CLERK_ISSUER=$CLERK_ISSUER_TEST;CLERK_AUTHORIZED_PARTIES=https://${{ vars.SITE_ID }}--pr-$PR-*.web.app;ALLOWED_EMAIL_DOMAINS=${{ vars.ALLOWED_EMAIL_DOMAINS }};DWD_SERVICE_ACCOUNT_EMAIL=${{ vars.RUNTIME_SA_EMAIL }};SETTINGS_CHANNEL_PATH=preview-channels/pr-$PR" \
             --quiet
       - name: Allow unauthenticated invocations
         # gcloud run deploy の --allow-unauthenticated は、権限不足で IAM を

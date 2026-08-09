@@ -5,11 +5,14 @@ GAS 版のスクリプトプロパティ（TEMPLATE_FOLDER_ID / TEMPLATE_FILE_NA
 ファイルを誤って編集・削除して設定を壊すリスクがあるため、人が直接触らない
 Firestore に保存する。
 
-保存先はチャンネル（本番 / 開発 / PR プレビュー）ごとに分かれたコレクションの
-下のドキュメント（ID = ツール名）で、ルートは config.settings_root() が返す:
+チャンネル（本番 / 開発 / PR プレビュー。config.settings_channel_path() が返す）
+の下の、コレクション tool_settings のドキュメント（ID = ツール名）に保存する:
 
   static-channels/production/tool_settings/excel-report-formatter:
     {"template_folder_id": "...", "template_file_name": "..."}
+
+環境変数で決まるのはチャンネルのパスまでで、その下の構造（tool_settings/
+<ツール名>）はこのモジュールが決める。
 
 アクセスには Cloud Run のランタイムサービスアカウントの ADC をそのまま使う。
 ランタイム SA に roles/datastore.user を付与しておくこと（README 参照）。
@@ -20,6 +23,9 @@ import threading
 from google.cloud import firestore
 
 from . import config
+
+# チャンネルの下に置くコレクション。環境ごとに変わらないためアプリ側で持つ。
+_COLLECTION = "tool_settings"
 
 _client_instance = None
 _client_lock = threading.Lock()
@@ -43,19 +49,19 @@ def _client():
 
 
 def _document_path(tool: str) -> str:
-    """チャンネルのルート配下の、そのツールのドキュメントパスを組み立てる。
+    """チャンネル配下の、そのツールのドキュメントパスを組み立てる。
 
-    Firestore のパスはコレクションとドキュメントが交互に並ぶため、ルートは
-    奇数個のセグメントでなければならない。設定ミスで意図しないパスを読み書き
-    しないよう、Firestore に触る前にここで弾く。
+    Firestore のパスはコレクションとドキュメントが交互に並ぶため、チャンネル
+    （ドキュメント）は偶数個のセグメントでなければならない。設定ミスで意図
+    しないパスを読み書きしないよう、Firestore に触る前にここで弾く。
     """
-    root = config.settings_root()
-    if not root or len(root.split("/")) % 2 == 0:
+    channel = config.settings_channel_path()
+    if not channel or len(channel.split("/")) % 2 != 0:
         raise SettingsError(
-            "SETTINGS_ROOT がコレクションパスになっていません"
-            f"（奇数個のセグメントが必要）: {root!r}"
+            "SETTINGS_CHANNEL_PATH がドキュメントパスになっていません"
+            f"（偶数個のセグメントが必要。例 static-channels/production）: {channel!r}"
         )
-    return f"{root}/{tool}"
+    return f"{channel}/{_COLLECTION}/{tool}"
 
 
 def _wrap_error(e: Exception) -> SettingsError:
