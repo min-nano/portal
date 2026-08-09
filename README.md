@@ -73,7 +73,7 @@ firestore/                    # Firestore セキュリティルールとその�
   firestore.rules             # クライアント SDK からのアクセスを全面拒否（deny-all）
   tests/rules.test.js         # エミュレータでルールを検証
 firebase.json                 # Hosting 設定（/api/** → Cloud Run リライト）・Firestore ルールの参照
-.github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml（PR プレビュー）
+.github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml・preview-cleanup.yml（PR プレビュー）
 ```
 
 ## ⚙️ セットアップ
@@ -265,7 +265,7 @@ echo "SA_EMAIL     = $DEPLOY_SA"
 
 ### 8. PR プレビュー（`.github/workflows/preview.yml`）
 
-PR を開く・push するたびに、Firebase Hosting の **プレビューチャンネル** `pr-<PR番号>` へフロントエンドをデプロイし、URL を PR コメントに掲示します（最終デプロイから 7 日で失効、PR クローズ時に削除）。本番と同じ `firebase.json` が使われるため、プレビュー URL でも `/api/**` は本番の Cloud Run（`portal-api`）へリライトされます。
+PR を開く・push するたびに、Firebase Hosting の **プレビューチャンネル** `pr-<PR番号>` へフロントエンドをデプロイし、URL を PR コメントに掲示します（最終デプロイから 7 日で失効、PR クローズ時に `preview-cleanup.yml` が削除）。本番と同じ `firebase.json` が使われるため、プレビュー URL でも `/api/**` は本番の Cloud Run（`portal-api`）へリライトされます。
 
 | 環境 | Hosting | Clerk | バックエンド |
 | --- | --- | --- | --- |
