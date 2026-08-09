@@ -29,11 +29,11 @@ jobs:
       id-token: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22'
           cache: npm
@@ -46,7 +46,7 @@ jobs:
           npm ci
           npm run build
       - id: auth
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: '${{ vars.WIF_PROVIDER }}'
           service_account: '${{ vars.SA_EMAIL }}'
@@ -60,7 +60,7 @@ jobs:
             --json > channel.json
           echo "url=$(jq -r '.result | to_entries[0].value.url' channel.json)" >> "$GITHUB_OUTPUT"
       - name: Comment preview URL on PR
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const marker = '<!-- firebase-hosting-preview -->';
