@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@clerk/clerk-js": "^6.27.0",
-    "@clerk/localizations": "^4.14.1"
+    "@clerk/localizations": "^4.14.1",
+    "@clerk/ui": "^1.29.1"
   },
   "devDependencies": {
     "vite": "^8.2.0",

@@ -7,6 +7,10 @@
 // 「アクセスしているユーザーとして実行」に相当する本人性の根拠になる。
 
 import { Clerk } from '@clerk/clerk-js';
+// clerk-js v6 から、サインイン画面などの UI コンポーネントは本体に含まれず
+// @clerk/ui として分離された。load() に渡さないと mountSignIn() が
+// 「Clerk was not loaded with Ui components」で失敗する。
+import { ClerkUI } from '@clerk/ui/entry';
 import { jaJP } from '@clerk/localizations';
 
 let clerkInstance = null;
@@ -19,7 +23,7 @@ async function initClerk() {
     );
   }
   clerkInstance = new Clerk(publishableKey);
-  await clerkInstance.load({ localization: jaJP });
+  await clerkInstance.load({ localization: jaJP, ui: { ClerkUI } });
   return clerkInstance;
 }
 
