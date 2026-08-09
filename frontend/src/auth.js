@@ -14,6 +14,9 @@ import { ClerkUI } from '@clerk/ui/entry';
 import { jaJP } from '@clerk/localizations';
 
 let clerkInstance = null;
+// このタブでサインアウト操作中かどうか。下のセッション監視リスナーが
+// サインアウトの処理中に割り込んで reload するのを防ぐ。
+let signingOut = false;
 
 async function initClerk() {
   const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
@@ -66,13 +69,20 @@ export async function requireSignIn() {
   const signOutBtn = document.getElementById('signOutBtn');
   if (signOutBtn) {
     signOutBtn.addEventListener('click', async () => {
+      signingOut = true;
       await clerk.signOut();
       window.location.reload();
     });
   }
   // 別タブでのサインアウトなどでセッションが消えたら、サインイン画面に戻す。
+  //
+  // このタブ自身のサインアウト中は何もしない。clerk-js v6 の signOut() は
+  // セッションの削除リクエスト（client.removeSessions()）より先にローカルの
+  // user を空にしてリスナーへ通知する（v5 は削除の完了後だった）。ここで
+  // reload してしまうと削除リクエストが中断され、リロード後もサインイン状態の
+  // ままになる。このタブの後始末は上のクリックハンドラ側が行う。
   clerk.addListener(({ user }) => {
-    if (!user) window.location.reload();
+    if (!user && !signingOut) window.location.reload();
   });
 
   app.hidden = false;
