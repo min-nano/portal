@@ -198,7 +198,9 @@ gcloud run deploy portal-api \
    cd frontend && VITE_CLERK_PUBLISHABLE_KEY=pk_... npm ci && npm run build && cd ..
    npx firebase-tools deploy --only hosting,firestore:rules --project "$PROJECT_ID"
    ```
-4. カスタムドメインを使う場合は、Firebase コンソール → Hosting → 「カスタムドメインを追加」で接続する（所有権確認と DNS 設定はコンソールのみ）。
+4. カスタムドメインを使う場合は、Firebase コンソール → Hosting → 「カスタムドメインを追加」で接続する（所有権確認と DNS 設定はコンソールのみ）。接続したら、リポジトリ変数 `CANONICAL_HOST` にそのホスト名（例 `portal.example.com`）を設定する。本番ビルドに埋め込まれ、`<サイトID>.web.app` / `.firebaseapp.com` へのアクセスをカスタムドメインへリダイレクトする（`frontend/src/canonical-host.js`）。
+
+   > Firebase Hosting のリダイレクト設定はパスにしかマッチできずホスト名で振り分けられないため、この寄せ替えはフロントエンド側で行っている。PR プレビュー（`<サイトID>--pr-N-xxxx.web.app`）とローカル開発はリダイレクト対象外。
 
 `firebase.json` の `rewrites` により `/api/**` が Cloud Run の `portal-api`（asia-northeast1）へ転送されます。サービス名やリージョンを変えた場合はここも合わせてください。
 
@@ -213,6 +215,7 @@ gcloud run deploy portal-api \
 | `SA_EMAIL` | デプロイ実行用サービスアカウントのメール |
 | `CLERK_PUBLISHABLE_KEY` | 本番ビルドに埋め込む Clerk Publishable Key（**本番インスタンス** `pk_live_...`） |
 | `CLERK_PUBLISHABLE_KEY_TEST` | プレビュービルドに埋め込む Clerk Publishable Key（**開発インスタンス** `pk_test_...`） |
+| `CANONICAL_HOST` | 本番のカスタムドメイン（例 `portal.example.com`）。`.web.app` へのアクセスをここへリダイレクトする。未設定ならリダイレクトしない |
 
 JSON キーは使わず WIF（キーレス）で認証します。WIF とデプロイ用 SA は以下のように作成できます（Cloud Shell 等）:
 
