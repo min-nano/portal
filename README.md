@@ -145,14 +145,15 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 ### 5. Cloud Run 初回デプロイ
 
 ```bash
-# 値にカンマ（複数指定）を含むため、区切り文字を @ に変える ^@^ 記法でまとめて渡す。
+# 値にカンマ（複数指定）を含むため、区切り文字を ; に変える ^;^ 記法でまとめて渡す。
+# （@ や , は SA のメールアドレス・複数指定の値に含まれるため区切り文字に使えない）
 gcloud run deploy portal-api \
   --source backend \
   --region "$REGION" \
   --project "$PROJECT_ID" \
   --service-account "$SA" \
   --allow-unauthenticated \
-  --set-env-vars "^@^CLERK_ISSUER=https://<本番の Clerk Frontend API>,https://<開発インスタンスの Frontend API>@CLERK_AUTHORIZED_PARTIES=https://<your-hosting-domain>,https://$PROJECT_ID--pr-*.web.app@ALLOWED_EMAIL_DOMAINS=<your-workspace-domain>@DWD_SERVICE_ACCOUNT_EMAIL=$SA"
+  --set-env-vars "^;^CLERK_ISSUER=https://<本番の Clerk Frontend API>,https://<開発インスタンスの Frontend API>;CLERK_AUTHORIZED_PARTIES=https://<your-hosting-domain>,https://$PROJECT_ID--pr-*.web.app;ALLOWED_EMAIL_DOMAINS=<your-workspace-domain>;DWD_SERVICE_ACCOUNT_EMAIL=$SA"
 ```
 
 * Firebase Hosting のリライト経由で呼び出すため `--allow-unauthenticated` が必要です（アプリ層の認可は Clerk JWT 検証で行う。Cloud Run の URL を直接叩かれても JWT が無ければ 401）。
