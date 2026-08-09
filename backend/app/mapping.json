@@ -1,0 +1,102 @@
+{
+  "_readme": [
+    "Excel 雛形（社外秘フォーマット）への書き込み位置を定義するマッピングファイルです。",
+    "フォーマットが微修正された場合は、原則このファイルを編集するだけで追従できます（excel_report.py は変更不要）。",
+    "",
+    "■ フロントエンドとの同期について",
+    "  旧 GAS 版ではフロントエンドの MEASUREMENT_GROUPS / VALIDATION 定数をこのファイルと",
+    "  手動で一致させる必要がありましたが、本ポータルではバックエンドがこのファイルから",
+    "  フォーム定義を導出して /api/tools/excel-report-formatter/config で配信します。",
+    "  このファイルが単一の情報源であり、フロントエンド側の追従作業は不要です。",
+    "",
+    "■ フォーマットを読み直すとき（重要）",
+    "  見た目のラベルで判断すると解釈を誤ります。必ず雛形の『データ入力規則（プルダウン）』を",
+    "  正として、記入欄の列・選択肢を決めてください。具体的な抽出手順とスニペットは",
+    "  README.md「フォーマット改訂時の読み取り・マッピング更新手順」に記載しています。",
+    "",
+    "■ 用語",
+    "  - room block（部屋ブロック）: 1部屋分の記入欄。雛形では 14 行ぶんが 1 ブロック。",
+    "  - measurement（計測点）: 1部屋内の各計測位置（床X方向・壁の上下 など）。ブロック先頭行からの相対行で表す。",
+    "  - select（選択欄）: 計測点ごとのプルダウン。雛形のデータ入力規則と一致させる。",
+    "      床は『傾斜方向』を S 列に入力する（P 列の X方向/Y方向/斜め方向 は印字済みラベル）。",
+    "      壁・柱は『どの向きで測定したか』を P 列に入力する（S 列は使わない）。",
+    "  - value_fields（数値欄）: 全計測点共通の記入列（水平器計測値・測定値の差・距離）。",
+    "",
+    "■ セル位置の決まり方",
+    "  property_name は property_name_cell にそのまま書き込む。",
+    "  部屋 i（0 始まり）の先頭行 = block_start_rows[i]。",
+    "    階数   -> {floor_col}{先頭行}",
+    "    部屋名 -> {room_name_col}{先頭行}",
+    "    各計測点 m について、書き込む行 = 先頭行 + m.row_offset",
+    "      選択欄     -> {m.select.col}{行}（値は m.select.options のいずれか）",
+    "      水平器計測値 -> {value_fields.digital_level}{行}",
+    "      測定値の差   -> {value_fields.diff}{行}",
+    "      距離        -> {value_fields.distance}{行}",
+    "  ※ 計測位置ラベル（床 / X方向 など）・区切りの「/」・分母 1000・換算計測値の数式は",
+    "     雛形に印字済みのため書き込まない（マッピングにも含めない）。",
+    "",
+    "■ 部屋数を変える / フォーマット修正への追従",
+    "  対応できる部屋数 = block_start_rows の要素数。雛形にブロックを増減した場合は、",
+    "  各ブロックの先頭行を block_start_rows に並べ直すだけでよい。",
+    "  列がずれた場合は floor_col / room_name_col / value_fields / 各 select.col を直す。",
+    "  選択肢が変わった場合は該当 measurement の select.options を直す（雛形のプルダウンと一致させる）。",
+    "",
+    "■ 出力前の簡易バリデーション（validation）",
+    "  Excel 出力ボタンを押したときに、フロントエンドが出力前に行う確認用のルールを",
+    "  ここに集約している。これは入力をブロックする厳格チェックではなく、入力ミスを",
+    "  利用者に確認させるための『警告』で、確認後はそのまま出力できる。",
+    "  この組み合わせ（しきい値・例外の選択肢・必須の選択欄）は運用で変わりうるため、",
+    "  ソースに直書きせずマッピングとして外出しする（/config API 経由でフロントエンドに届く）。",
+    "    - slope_warning_threshold: 傾斜の警告しきい値（1000 分率）。水平器計測値、または",
+    "        1000*差/距離 の絶対値がこの値以上だと再検査になりうるため確認を促す（既定 6）。",
+    "    - no_value_select_options: 選択しても計測値の入力が不要な選択肢（『傾斜無』『―』）。",
+    "        これら以外を選択しているのに数値が未入力なら確認を促す。",
+    "    - require_select_keys: 必ず選択させる計測点の key（柱は必ず選択するため未選択を確認）。",
+    "",
+    "■ シート保護されたセルへの書き込み制御（重要）",
+    "  シート保護が有効（ws.protection.sheet = True）な雛形では、明示的にアンロック",
+    "  （locked=False）されていないセルへの書き込みおよびクリアをスキップする。",
+    "  入力例ブロック（グレーアウトされた最初の部屋）のセルはロックされたまま維持し、",
+    "  実際の記入ブロックのセルだけ locked=False に設定することで書き込み可否を制御できる。",
+    "  このルールはマッピング設定された全セル（物件名・階数・部屋名・選択欄・数値欄）に適用される。"
+  ],
+
+  "sheet_name": "傾斜測定",
+  "property_name_cell": "H5",
+
+  "room_block": {
+    "floor_col": "E",
+    "room_name_col": "G",
+    "value_fields": {
+      "digital_level": "V",
+      "diff": "AC",
+      "distance": "AG"
+    },
+    "measurements": [
+      { "key": "floor_x",   "group": "床", "label": "X方向",   "row_offset": 0,
+        "select": { "col": "S", "label": "傾斜方向", "options": ["←", "→", "傾斜無"] } },
+      { "key": "floor_y",   "group": "床", "label": "Y方向",   "row_offset": 2,
+        "select": { "col": "S", "label": "傾斜方向", "options": ["↑", "↓", "傾斜無"] } },
+      { "key": "floor_diag", "group": "床", "label": "斜め方向", "row_offset": 4,
+        "select": { "col": "S", "label": "傾斜方向", "options": ["↖", "↗", "↘", "↙", "傾斜無"] } },
+
+      { "key": "wall_ud", "group": "壁", "label": "上下", "row_offset": 6,
+        "select": { "col": "P", "label": "測定した壁", "options": ["上壁", "下壁"] } },
+      { "key": "wall_lr", "group": "壁", "label": "左右", "row_offset": 8,
+        "select": { "col": "P", "label": "測定した壁", "options": ["右壁", "左壁"] } },
+
+      { "key": "pillar_ud", "group": "柱", "label": "上下", "row_offset": 10,
+        "select": { "col": "P", "label": "測定した柱", "options": ["上柱", "下柱", "―"] } },
+      { "key": "pillar_lr", "group": "柱", "label": "左右", "row_offset": 12,
+        "select": { "col": "P", "label": "測定した柱", "options": ["右柱", "左柱", "―"] } }
+    ]
+  },
+
+  "validation": {
+    "slope_warning_threshold": 6,
+    "no_value_select_options": ["傾斜無", "―"],
+    "require_select_keys": ["pillar_ud", "pillar_lr"]
+  },
+
+  "block_start_rows": [29, 43, 57, 71, 94, 108, 122, 136, 150]
+}

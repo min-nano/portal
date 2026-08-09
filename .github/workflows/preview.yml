@@ -1,0 +1,117 @@
+name: Preview
+
+# PR ごとに Firebase Hosting のプレビューチャンネル（pr-<番号>）へデプロイする。
+# フロントエンドは Clerk の開発（テスト）インスタンスのキーでビルドし、
+# 本番（main への push → deploy.yml）とは Clerk 環境を分ける。
+# /api/** のリライト先は本番と同じ Cloud Run サービスのため、バックエンドの
+# CLERK_ISSUER / CLERK_AUTHORIZED_PARTIES にプレビュー用の発行者・オリジン
+# パターンを併記しておくこと（README「PR プレビュー」参照）。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+# 同じ PR への連続 push は最後のものだけデプロイされればよい。
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    name: Firebase Hosting preview channel
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build (Clerk test instance)
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: '${{ vars.CLERK_PUBLISHABLE_KEY_TEST }}'
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: '${{ vars.WIF_PROVIDER }}'
+          service_account: '${{ vars.SA_EMAIL }}'
+      - name: Deploy to preview channel
+        id: deploy
+        run: |
+          npx firebase-tools@latest hosting:channel:deploy "pr-${{ github.event.pull_request.number }}" \
+            --project '${{ vars.PROJECT_ID }}' \
+            --expires 7d \
+            --non-interactive \
+            --json > channel.json
+          echo "url=$(jq -r '.result | to_entries[0].value.url' channel.json)" >> "$GITHUB_OUTPUT"
+      - name: Comment preview URL on PR
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const marker = '<!-- firebase-hosting-preview -->';
+            const body = [
+              marker,
+              '🔍 **プレビューデプロイ**: ${{ steps.deploy.outputs.url }}',
+              '',
+              '- コミット: ${{ github.event.pull_request.head.sha }}',
+              '- チャンネル: `pr-${{ github.event.pull_request.number }}`（最終デプロイから 7 日で失効、push ごとに更新）',
+              '- 認証は Clerk の開発（テスト）インスタンスを使用します。',
+            ].join('\n');
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(
+              (c) => c.user.type === 'Bot' && c.body.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  cleanup-preview:
+    name: Delete preview channel
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: '${{ vars.WIF_PROVIDER }}'
+          service_account: '${{ vars.SA_EMAIL }}'
+      - name: Delete channel
+        # チャンネルが既に失効・削除済みでも失敗にしない。
+        run: |
+          npx firebase-tools@latest hosting:channel:delete "pr-${{ github.event.pull_request.number }}" \
+            --project '${{ vars.PROJECT_ID }}' \
+            --force || true
