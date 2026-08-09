@@ -19,10 +19,7 @@ concurrency:
 jobs:
   deploy-preview:
     name: Firebase Hosting preview channel
-    # デプロイ用のリポジトリ変数（WIF_PROVIDER 等）が未設定の間は、失敗させる
-    # のではなくスキップする（インフラのセットアップ前でも PR のチェックを
-    # 汚さないため。設定方法は README「GitHub Actions（CI/CD)」参照）。
-    if: github.event.action != 'closed' && vars.WIF_PROVIDER != ''
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -98,7 +95,7 @@ jobs:
 
   cleanup-preview:
     name: Delete preview channel
-    if: github.event.action == 'closed' && vars.WIF_PROVIDER != ''
+    if: github.event.action == 'closed'
     runs-on: ubuntu-latest
     permissions:
       contents: read
