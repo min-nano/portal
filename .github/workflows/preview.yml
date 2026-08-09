@@ -42,6 +42,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Check required repository variables
+        # 未設定のリポジトリ変数は空文字として展開され、gcloud はそれを
+        # 「未指定」として受け入れてしまう。--service-account '' なら Compute
+        # 既定 SA、CLERK_ISSUER= なら認証設定なし、といった具合に、壊れた
+        # プレビュー環境が「成功」として出来上がる。先にここで落とす。
+        env:
+          PROJECT_ID: '${{ vars.PROJECT_ID }}'
+          WIF_PROVIDER: '${{ vars.WIF_PROVIDER }}'
+          SA_EMAIL: '${{ vars.SA_EMAIL }}'
+          SITE_ID: '${{ vars.SITE_ID }}'
+          RUNTIME_SA_EMAIL: '${{ vars.RUNTIME_SA_EMAIL }}'
+          CLERK_ISSUER_TEST: '${{ vars.CLERK_ISSUER_TEST }}'
+          CLERK_PUBLISHABLE_KEY_TEST: '${{ vars.CLERK_PUBLISHABLE_KEY_TEST }}'
+          ALLOWED_EMAIL_DOMAINS: '${{ vars.ALLOWED_EMAIL_DOMAINS }}'
+        run: |
+          missing=()
+          for name in PROJECT_ID WIF_PROVIDER SA_EMAIL SITE_ID RUNTIME_SA_EMAIL \
+                      CLERK_ISSUER_TEST CLERK_PUBLISHABLE_KEY_TEST ALLOWED_EMAIL_DOMAINS; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::リポジトリ変数が未設定です: ${missing[*]}（README「PR プレビュー」参照）"
+            exit 1
+          fi
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -78,8 +102,24 @@ jobs:
             --region asia-northeast1 \
             --project '${{ vars.PROJECT_ID }}' \
             --service-account '${{ vars.RUNTIME_SA_EMAIL }}' \
-            --allow-unauthenticated \
             --set-env-vars "^;^CLERK_ISSUER=${{ vars.CLERK_ISSUER_TEST }};CLERK_AUTHORIZED_PARTIES=https://${{ vars.SITE_ID }}--pr-$PR-*.web.app;ALLOWED_EMAIL_DOMAINS=${{ vars.ALLOWED_EMAIL_DOMAINS }};DWD_SERVICE_ACCOUNT_EMAIL=${{ vars.RUNTIME_SA_EMAIL }};SETTINGS_ROOT=preview-channels/pr-$PR/tool_settings" \
+            --quiet
+      - name: Allow unauthenticated invocations
+        # gcloud run deploy の --allow-unauthenticated は、権限不足で IAM を
+        # 設定できなくても警告どまりで終了コード 0 を返す（「Setting IAM
+        # Policy...warning」）。それでは Hosting のリライト（匿名で呼ぶ）が
+        # 403 になるプレビューが「成功」として通ってしまうため、束縛は
+        # 権限不足でちゃんと失敗するこのコマンドで明示的に行う。
+        #
+        # デプロイ用 SA に roles/run.admin が必要（run.developer には
+        # run.services.setIamPolicy が含まれない）。アプリ層の認可は Clerk の
+        # JWT 検証で行うため、公開されていても JWT が無ければ 401。
+        run: |
+          gcloud run services add-iam-policy-binding "portal-api-pr-$PR" \
+            --region asia-northeast1 \
+            --project '${{ vars.PROJECT_ID }}' \
+            --member allUsers \
+            --role roles/run.invoker \
             --quiet
       - name: Point /api/** at the preview backend
         # チャンネルのデプロイはそのときの firebase.json をリリースに焼き込む
