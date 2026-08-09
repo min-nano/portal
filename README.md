@@ -224,6 +224,7 @@ GITHUB_REPO=<owner/repo>
 gcloud iam service-accounts create deployer --display-name "GitHub Actions deployer" --project "$PROJECT_ID"
 DEPLOY_SA=deployer@"$PROJECT_ID".iam.gserviceaccount.com
 for role in roles/run.developer roles/storage.admin roles/cloudbuild.builds.editor \
+  roles/artifactregistry.writer \
   roles/serviceusage.serviceUsageConsumer roles/firebasehosting.admin \
   roles/firebaserules.admin roles/firebase.viewer; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
