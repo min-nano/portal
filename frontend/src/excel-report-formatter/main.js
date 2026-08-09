@@ -8,6 +8,7 @@
 
 import '../styles.css';
 import { requireSignIn } from '../auth.js';
+import { redirectToCanonicalHost } from '../canonical-host.js';
 import { apiGet, apiPostForBlob, apiSendJson } from '../api.js';
 import { collectWarnings } from './form-logic.js';
 
@@ -344,6 +345,10 @@ function bindStickyHeadWorkarounds() {
 }
 
 async function start() {
+  // .web.app へのアクセスはカスタムドメインへ寄せる。リダイレクト中は
+  // Clerk を初期化しない（別ドメインでセッションを持たせないため）。
+  if (redirectToCanonicalHost()) return;
+
   const clerk = await requireSignIn();
   if (!clerk) return; // サインイン画面を表示中。
 

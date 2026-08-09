@@ -52,6 +52,9 @@ jobs:
       - name: Build
         env:
           VITE_CLERK_PUBLISHABLE_KEY: '${{ vars.CLERK_PUBLISHABLE_KEY }}'
+          # 本番のみ。.web.app へのアクセスをカスタムドメインへ寄せる
+          # （未設定ならリダイレクトしない）。プレビューには渡さない。
+          VITE_CANONICAL_HOST: '${{ vars.CANONICAL_HOST }}'
         run: |
           cd frontend
           npm ci
