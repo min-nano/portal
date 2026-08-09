@@ -154,6 +154,11 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 ### 5. Cloud Run 初回デプロイ
 
 ```bash
+# Hosting のサイト ID（https://<SITE_ID>.web.app の <SITE_ID> 部分）。
+# 通常はプロジェクト ID と同じだが、別のサブドメインになった場合はその値を使う。
+# プレビュー URL（https://<SITE_ID>--pr-N-xxxx.web.app）もサイト ID が基準になる。
+SITE_ID=<Hosting のサイト ID>
+
 # 値にカンマ（複数指定）を含むため、区切り文字を ; に変える ^;^ 記法でまとめて渡す。
 # （@ や , は SA のメールアドレス・複数指定の値に含まれるため区切り文字に使えない）
 gcloud run deploy portal-api \
@@ -162,7 +167,7 @@ gcloud run deploy portal-api \
   --project "$PROJECT_ID" \
   --service-account "$SA" \
   --allow-unauthenticated \
-  --set-env-vars "^;^CLERK_ISSUER=https://<本番の Clerk Frontend API>,https://<開発インスタンスの Frontend API>;CLERK_AUTHORIZED_PARTIES=https://<your-hosting-domain>,https://$PROJECT_ID--pr-*.web.app;ALLOWED_EMAIL_DOMAINS=<your-workspace-domain>;DWD_SERVICE_ACCOUNT_EMAIL=$SA"
+  --set-env-vars "^;^CLERK_ISSUER=https://<本番の Clerk Frontend API>,https://<開発インスタンスの Frontend API>;CLERK_AUTHORIZED_PARTIES=https://<your-hosting-domain>,https://$SITE_ID.web.app,https://$SITE_ID--pr-*.web.app;ALLOWED_EMAIL_DOMAINS=<your-workspace-domain>;DWD_SERVICE_ACCOUNT_EMAIL=$SA"
 ```
 
 * Firebase Hosting のリライト経由で呼び出すため `--allow-unauthenticated` が必要です（アプリ層の認可は Clerk JWT 検証で行う。Cloud Run の URL を直接叩かれても JWT が無ければ 401）。
@@ -171,7 +176,7 @@ gcloud run deploy portal-api \
 | 環境変数 | 用途 |
 | --- | --- |
 | `CLERK_ISSUER` | 許可する Clerk の Frontend API URL（JWT の `iss`。カンマ区切りで複数可）。本番インスタンスに加え、PR プレビュー用の開発インスタンスを併記する |
-| `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り、`*` ワイルドカード可）。プレビュー URL は `https://<project>--pr-*.web.app` のようにパターンで許可する |
+| `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り、`*` ワイルドカード可）。プレビュー URL は `https://<サイトID>--pr-*.web.app` のようにパターンで許可する |
 | `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り） |
 | `DWD_SERVICE_ACCOUNT_EMAIL` | 代理トークンに使う SA のメール（省略時は ADC から推定） |
 | `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。既定 `(default)` |
@@ -184,8 +189,9 @@ gcloud run deploy portal-api \
    firebase login --no-localhost   # 初回のみ（gcloud とは認証が別）
    firebase projects:addfirebase "$PROJECT_ID"
    gcloud services enable firebasehosting.googleapis.com
-   firebase hosting:sites:create "$PROJECT_ID" --project "$PROJECT_ID"  # 既定サイト（プロジェクト ID と同名）
+   firebase hosting:sites:create "$PROJECT_ID" --project "$PROJECT_ID"  # 既定サイト（通常はプロジェクト ID と同名）
    ```
+   サイト ID はグローバルに一意のため、プロジェクト ID が使えず **別のサブドメインになる場合がある**。実際のサイト ID は `firebase hosting:sites:list` で確認し、`CLERK_AUTHORIZED_PARTIES` のプレビュー URL パターン等にはその値を使うこと。プロジェクトに複数サイトを作る場合は `firebase.json` の `hosting` に `"site": "<サイトID>"` を明示する（1 サイトのみなら省略可）。
 2. `.firebaserc` の `default` をプロジェクト ID に書き換える。
 3. 初回は手動デプロイで確認できる:
    ```bash
@@ -221,10 +227,10 @@ PR を開く・push するたびに、Firebase Hosting の **プレビューチ�
 
 プレビューを動かすための前提:
 
-1. **Clerk 開発インスタンス** にも本番と同じ設定を行う（Google のみ有効化・セッショントークンの `email` クレーム）。プレビュー URL はデプロイごとに変わるため、開発インスタンスの **Allowed origins**（Clerk ダッシュボード / Backend API）に `https://<project>--pr-*.web.app` をワイルドカードで登録する。
+1. **Clerk 開発インスタンス** にも本番と同じ設定を行う（Google のみ有効化・セッショントークンの `email` クレーム）。プレビュー URL はデプロイごとに変わるため、開発インスタンスの **Allowed origins**（Clerk ダッシュボード / Backend API）に `https://<サイトID>--pr-*.web.app` をワイルドカードで登録する（サイト ID は Hosting の既定サイトのサブドメイン。プロジェクト ID と異なる場合がある）。
 2. **バックエンドの環境変数**（前掲）:
    - `CLERK_ISSUER` に開発インスタンスの Frontend API を併記（プレビューのトークンは発行者が異なるため）
-   - `CLERK_AUTHORIZED_PARTIES` に `https://<project>--pr-*.web.app` を追加
+   - `CLERK_AUTHORIZED_PARTIES` に `https://<サイトID>--pr-*.web.app` を追加
 3. リポジトリ変数 `CLERK_PUBLISHABLE_KEY_TEST` を設定する。
 
 > デプロイ用のリポジトリ変数（`WIF_PROVIDER` など）が未設定・不正な間は、プレビューのジョブは失敗します（設定の壊れに気付けるよう、意図的にスキップしない）。
