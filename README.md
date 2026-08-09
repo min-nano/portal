@@ -233,6 +233,12 @@ done
 gcloud iam service-accounts add-iam-policy-binding "portal-api@$PROJECT_ID.iam.gserviceaccount.com" \
   --member "serviceAccount:$DEPLOY_SA" --role roles/iam.serviceAccountUser --project "$PROJECT_ID"
 
+# ソースデプロイのビルドは Compute デフォルト SA として実行されるため、
+# deployer にはビルド SA を使う権限（actAs）も必要
+gcloud iam service-accounts add-iam-policy-binding \
+  "${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --member "serviceAccount:$DEPLOY_SA" --role roles/iam.serviceAccountUser --project "$PROJECT_ID"
+
 # Workload Identity プール + GitHub OIDC プロバイダ（このリポジトリからのみに制限）
 gcloud services enable iamcredentials.googleapis.com sts.googleapis.com --project "$PROJECT_ID"
 gcloud iam workload-identity-pools create github --location global \
