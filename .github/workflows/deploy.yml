@@ -1,0 +1,71 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy-backend:
+    name: Cloud Run (portal-api)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: '${{ vars.WIF_PROVIDER }}'
+          service_account: '${{ vars.SA_EMAIL }}'
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+      - name: Deploy to Cloud Run
+        # 環境変数・ランタイム SA・公開設定は初回セットアップ（README 参照）で
+        # サービスに設定済みのものが引き継がれるため、ここでは指定しない。
+        run: |
+          gcloud run deploy portal-api \
+            --source backend \
+            --region asia-northeast1 \
+            --project '${{ vars.PROJECT_ID }}' \
+            --quiet
+
+  deploy-frontend:
+    name: Firebase Hosting
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: '${{ vars.CLERK_PUBLISHABLE_KEY }}'
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: '${{ vars.WIF_PROVIDER }}'
+          service_account: '${{ vars.SA_EMAIL }}'
+      - name: Deploy to Firebase Hosting
+        # google-github-actions/auth が書き出す ADC（GOOGLE_APPLICATION_CREDENTIALS）
+        # を firebase-tools がそのまま利用する（トークンやサービスアカウント鍵は不要）。
+        run: |
+          npx firebase-tools@latest deploy \
+            --only hosting \
+            --project '${{ vars.PROJECT_ID }}' \
+            --non-interactive

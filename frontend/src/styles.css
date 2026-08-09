@@ -1,0 +1,79 @@
+/* ポータル共通スタイル。フォーム部分は GAS 版 index.html から移植。 */
+
+body { font-family: sans-serif; padding: 16px; background-color: #f4f4f9; margin: 0; }
+.container { background: white; padding: 16px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); max-width: 720px; margin: 0 auto; }
+h2 { font-size: 1.2em; color: #333; margin-top: 0; }
+h3 { font-size: 1em; color: #1a3a8f; margin: 0; }
+label { display: block; margin-top: 10px; font-weight: bold; font-size: 0.85em; }
+input[type="text"], input[type="number"], select { width: 100%; padding: 9px; margin-top: 4px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
+/* スピナー（数値の増減ボタン）は不要なので非表示にする。狭い欄でも数値が隠れない。 */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; }
+button { margin-top: 16px; width: 100%; padding: 12px; background-color: #4285f4; color: white; border: none; border-radius: 4px; font-size: 1em; cursor: pointer; }
+button:disabled { background-color: #aaa; }
+#message { margin-top: 15px; text-align: center; color: red; }
+
+/* ヘッダー（サインイン状態の表示） */
+.portal-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; max-width: 720px; margin: 0 auto 12px; flex-wrap: wrap; }
+.portal-header .title { font-weight: bold; color: #1a3a8f; }
+.portal-header .title a { color: inherit; text-decoration: none; }
+.portal-header .account { display: flex; align-items: center; gap: 8px; font-size: 0.8em; color: #555; }
+.portal-header .account button { margin-top: 0; width: auto; padding: 5px 10px; font-size: 0.85em; background-color: #5f6368; }
+
+/* サインインゲート */
+.auth-gate { max-width: 420px; margin: 48px auto 0; text-align: center; }
+.auth-gate .note { font-size: 0.85em; color: #555; margin-bottom: 16px; }
+.auth-gate .clerk-mount { display: flex; justify-content: center; }
+
+/* ポータルトップのツール一覧 */
+.tool-list { list-style: none; padding: 0; margin: 0; }
+.tool-card { display: block; border: 1px solid #d6d6e0; border-radius: 8px; padding: 14px; margin-top: 12px; background: #fafbff; text-decoration: none; }
+.tool-card .name { font-weight: bold; color: #1a3a8f; }
+.tool-card .desc { font-size: 0.85em; color: #555; margin-top: 6px; }
+
+/* 雛形設定バー */
+.template-bar { background: #eef3ff; border: 1px solid #d3e0ff; border-radius: 6px; padding: 10px 12px; margin-bottom: 16px; font-size: 0.85em; }
+.template-bar .label { color: #555; }
+.template-bar .name { font-weight: bold; color: #1a3a8f; word-break: break-all; }
+.template-bar .unset { color: #c0392b; font-weight: bold; }
+.template-bar button { margin-top: 8px; width: auto; padding: 6px 12px; font-size: 0.85em; background-color: #5f6368; }
+
+/* 雛形選択ダイアログ（Google Picker の代替。実行ユーザーに見えるファイルを検索する） */
+.dialog-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: flex-start; justify-content: center; padding: 24px 12px; z-index: 100; }
+.dialog { background: white; border-radius: 8px; padding: 16px; width: 100%; max-width: 480px; max-height: 85vh; overflow-y: auto; box-sizing: border-box; }
+.dialog h3 { margin-bottom: 8px; }
+.dialog .hint { margin-top: 0; }
+.dialog .search-row { display: flex; gap: 8px; margin-top: 10px; }
+.dialog .search-row input { margin-top: 0; flex: 1; }
+.dialog .search-row button { margin-top: 0; width: auto; padding: 9px 16px; }
+.dialog .close { background-color: #5f6368; }
+.template-results { margin-top: 12px; }
+.template-results .status { font-size: 0.85em; color: #555; }
+.template-result { width: 100%; margin-top: 8px; padding: 10px; background: #fafbff; color: #333; border: 1px solid #d6d6e0; border-radius: 6px; text-align: left; cursor: pointer; }
+.template-result .file-name { font-weight: bold; color: #1a3a8f; word-break: break-all; }
+.template-result .file-meta { font-size: 0.8em; color: #777; margin-top: 2px; }
+
+/* 部屋ブロック */
+.room { border: 1px solid #d6d6e0; border-radius: 8px; padding: 10px; margin-top: 14px; background: #fafbff; }
+.room-head { display: flex; flex-direction: column; gap: 8px; position: sticky; top: 0; z-index: 10; background: #fafbff; border-radius: 8px 8px 0 0; padding-bottom: 8px; border-bottom: 1px solid #d6d6e0; margin-bottom: 2px; }
+.room-title-row { display: flex; align-items: center; justify-content: space-between; }
+.room-title-row h3 { white-space: nowrap; }
+.room-head .remove { width: auto; margin-top: 0; padding: 4px 10px; font-size: 0.8em; background-color: #c0392b; }
+.room-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.room-meta label { display: inline; margin-top: 0; font-size: 0.8em; }
+.room-meta input { width: auto; margin-top: 0; padding: 5px 6px; }
+.room-meta input[data-room-field="floor"] { width: 56px; }
+.room-meta input[data-room-field="room_name"] { width: 110px; }
+
+/* 計測値は選択と数値しか入れないので、表形式で縦に詰めてラベルはヘッダー列で代表する。 */
+.measure-table { width: 100%; border-collapse: collapse; margin-top: 10px; table-layout: fixed; }
+.measure-table th, .measure-table td { border: 1px solid #e3e3ef; padding: 2px 3px; text-align: center; }
+.measure-table thead th { background: #eef3ff; color: #1a3a8f; font-size: 0.72em; font-weight: bold; padding: 4px 3px; }
+.measure-table col.col-point { width: 24%; }
+.measure-table td.point-cell { font-size: 0.78em; font-weight: bold; color: #333; background: #fafbff; text-align: left; padding-left: 6px; white-space: nowrap; }
+.measure-table tr.group-row td { background: #ececf5; color: #555; font-size: 0.74em; font-weight: bold; text-align: left; padding: 3px 6px; }
+/* iOS Safari はフォントサイズ 16px 未満の入力欄でフォーカス時にズームする。1rem で固定して防ぐ。 */
+.measure-table select, .measure-table input { width: 100%; padding: 5px 2px; margin-top: 0; box-sizing: border-box; border: 1px solid #ccc; border-radius: 3px; font-size: 1rem; text-align: center; scroll-margin-top: 72px; }
+.add-room { background-color: #34a853; }
+.hint { font-size: 0.78em; color: #777; margin-top: 4px; }

@@ -1,0 +1,18 @@
+# Node
+node_modules/
+frontend/dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# ローカル設定・秘密情報
+.env
+.env.local
+*-service-account*.json
+
+# Firebase CLI のキャッシュ
+.firebase/
+firebase-debug.log

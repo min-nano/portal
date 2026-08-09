@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>社内ポータル</title>
+</head>
+<body>
+  <header class="portal-header">
+    <span class="title">社内ポータル</span>
+    <span class="account" id="accountArea" hidden>
+      <span id="accountEmail"></span>
+      <button type="button" id="signOutBtn">サインアウト</button>
+    </span>
+  </header>
+
+  <div id="authGate" class="auth-gate" hidden>
+    <p class="note">社内の Google アカウントでサインインしてください。</p>
+    <div class="clerk-mount"></div>
+  </div>
+
+  <div id="app" class="container" hidden>
+    <h2>ツール一覧</h2>
+    <ul class="tool-list">
+      <li>
+        <a class="tool-card" href="/tools/excel-report-formatter/">
+          <span class="name">現況検査レポート作成ツール</span>
+          <p class="desc">
+            傾斜測定の計測値を入力して、Excel の報告書（社外秘フォーマット）を生成します。
+            雛形は Google Drive 上の最新ファイルを自動で参照します。
+          </p>
+        </a>
+      </li>
+    </ul>
+  </div>
+
+  <script type="module" src="/src/portal.js"></script>
+</body>
+</html>
