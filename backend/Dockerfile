@@ -1,5 +1,5 @@
 # Cloud Run 用コンテナ。gcloud run deploy --source backend でもこの Dockerfile が使われる。
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
