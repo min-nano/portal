@@ -9,8 +9,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@clerk/clerk-js": "^5.67.0",
-    "@clerk/localizations": "^3.16.0"
+    "@clerk/clerk-js": "^6.27.0",
+    "@clerk/localizations": "^4.14.1"
   },
   "devDependencies": {
     "vite": "^8.2.0",
