@@ -246,8 +246,9 @@ gcloud run deploy portal-api \
 | `CANONICAL_HOST` | 本番のカスタムドメイン（例 `portal.example.com`）。`.web.app` へのアクセスをここへリダイレクトする。未設定ならリダイレクトしない |
 | `SITE_ID` | Hosting のサイト ID。プレビュー用 Cloud Run の許可オリジン `https://<サイトID>--pr-<番号>-*.web.app` の組み立てに使う |
 | `RUNTIME_SA_EMAIL` | Cloud Run のランタイム SA のメール（本番の `portal-api` と同じもの）。プレビュー用サービスの作成時に渡す |
-| `CLERK_ISSUER_TEST` | Clerk **開発インスタンス** の Frontend API URL。プレビュー用バックエンドの `CLERK_ISSUER` になる |
 | `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り）。プレビュー用バックエンドに渡す（本番はサービスに設定済みの値を使う） |
+
+> プレビュー用バックエンドの `CLERK_ISSUER` は変数にせず、`CLERK_PUBLISHABLE_KEY_TEST` から導出します。Clerk の Publishable Key は `pk_test_<base64>` の形で、デコードすると Frontend API のホスト名 + `$` になるためです。二重管理をやめることで、鍵とインスタンスの食い違いが原理的に起きなくなります。`pk_live_...` が設定されていればエラーで止まります（プレビューが本番の Clerk インスタンスを向かないように）。
 
 JSON キーは使わず WIF（キーレス）で認証します。WIF とデプロイ用 SA は以下のように作成できます（Cloud Shell 等）:
 
@@ -331,7 +332,7 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
      -d '{"allowed_origins": ["https://<サイトID>--pr-*.web.app", "http://localhost:5173"]}'
    ```
    （サイト ID は Hosting の既定サイトのサブドメイン。プロジェクト ID と異なる場合がある。）
-2. リポジトリ変数 `CLERK_PUBLISHABLE_KEY_TEST` / `SITE_ID` / `RUNTIME_SA_EMAIL` / `CLERK_ISSUER_TEST` / `ALLOWED_EMAIL_DOMAINS` を設定する（前掲の表）。
+2. リポジトリ変数 `CLERK_PUBLISHABLE_KEY_TEST` / `SITE_ID` / `RUNTIME_SA_EMAIL` / `ALLOWED_EMAIL_DOMAINS` を設定する（前掲の表）。バックエンドの `CLERK_ISSUER` はこのうち `CLERK_PUBLISHABLE_KEY_TEST` から導出されるので、別途の設定は不要です。
 3. デプロイ用 SA に `roles/run.admin`・`roles/artifactregistry.repoAdmin`・`roles/datastore.user` があること（前掲のコマンドで付与済み）。Cloud Run サービスを `allUsers` に公開するには `run.services.setIamPolicy` が要り、これは `roles/run.developer` には含まれません。
 
 > 組織ポリシー `constraints/iam.allowedPolicyMemberDomains` が `allUsers` を禁止している環境では、公開の Cloud Run サービスを作れません。本番の `portal-api` が公開で動いていれば、このプロジェクトでは通っています。

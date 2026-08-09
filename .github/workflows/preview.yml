@@ -53,19 +53,51 @@ jobs:
           SA_EMAIL: '${{ vars.SA_EMAIL }}'
           SITE_ID: '${{ vars.SITE_ID }}'
           RUNTIME_SA_EMAIL: '${{ vars.RUNTIME_SA_EMAIL }}'
-          CLERK_ISSUER_TEST: '${{ vars.CLERK_ISSUER_TEST }}'
           CLERK_PUBLISHABLE_KEY_TEST: '${{ vars.CLERK_PUBLISHABLE_KEY_TEST }}'
           ALLOWED_EMAIL_DOMAINS: '${{ vars.ALLOWED_EMAIL_DOMAINS }}'
         run: |
           missing=()
           for name in PROJECT_ID WIF_PROVIDER SA_EMAIL SITE_ID RUNTIME_SA_EMAIL \
-                      CLERK_ISSUER_TEST CLERK_PUBLISHABLE_KEY_TEST ALLOWED_EMAIL_DOMAINS; do
+                      CLERK_PUBLISHABLE_KEY_TEST ALLOWED_EMAIL_DOMAINS; do
             [ -n "${!name}" ] || missing+=("$name")
           done
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "::error::リポジトリ変数が未設定です: ${missing[*]}（README「PR プレビュー」参照）"
             exit 1
           fi
+      - name: Derive the Clerk issuer from the publishable key
+        # Clerk の Publishable Key は pk_test_<base64> の形で、デコードすると
+        # Frontend API のホスト名 + "$" になる。バックエンドの CLERK_ISSUER は
+        # そこから一意に決まるため、別のリポジトリ変数として二重管理せず導出する
+        # （鍵とインスタンスの食い違いが原理的に起きない）。
+        env:
+          KEY: '${{ vars.CLERK_PUBLISHABLE_KEY_TEST }}'
+        run: |
+          # pk_live_ を誤って設定すると、プレビューが本番の Clerk インスタンスを
+          # 向いてしまう。開発インスタンスのキーであることを先に確かめる。
+          case "$KEY" in
+            pk_test_*) ;;
+            *)
+              echo "::error::CLERK_PUBLISHABLE_KEY_TEST は開発インスタンスのキー（pk_test_...）である必要があります。"
+              exit 1
+              ;;
+          esac
+          encoded="${KEY#pk_test_}"
+          # Clerk のキーは base64 のパディングを落としているため補う。
+          while [ $(( ${#encoded} % 4 )) -ne 0 ]; do encoded="${encoded}="; done
+          if ! host="$(printf '%s' "$encoded" | base64 -d 2>/dev/null)"; then
+            echo "::error::CLERK_PUBLISHABLE_KEY_TEST をデコードできませんでした。"
+            exit 1
+          fi
+          host="${host%\$}"
+          case "$host" in
+            ''|*[!a-zA-Z0-9.-]*)
+              echo "::error::CLERK_PUBLISHABLE_KEY_TEST から取り出したホスト名が不正です: '${host}'"
+              exit 1
+              ;;
+          esac
+          echo "CLERK_ISSUER_TEST=https://$host" >> "$GITHUB_ENV"
+          echo "プレビューの Clerk issuer: https://$host"
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -102,7 +134,7 @@ jobs:
             --region asia-northeast1 \
             --project '${{ vars.PROJECT_ID }}' \
             --service-account '${{ vars.RUNTIME_SA_EMAIL }}' \
-            --set-env-vars "^;^CLERK_ISSUER=${{ vars.CLERK_ISSUER_TEST }};CLERK_AUTHORIZED_PARTIES=https://${{ vars.SITE_ID }}--pr-$PR-*.web.app;ALLOWED_EMAIL_DOMAINS=${{ vars.ALLOWED_EMAIL_DOMAINS }};DWD_SERVICE_ACCOUNT_EMAIL=${{ vars.RUNTIME_SA_EMAIL }};SETTINGS_ROOT=preview-channels/pr-$PR/tool_settings" \
+            --set-env-vars "^;^CLERK_ISSUER=$CLERK_ISSUER_TEST;CLERK_AUTHORIZED_PARTIES=https://${{ vars.SITE_ID }}--pr-$PR-*.web.app;ALLOWED_EMAIL_DOMAINS=${{ vars.ALLOWED_EMAIL_DOMAINS }};DWD_SERVICE_ACCOUNT_EMAIL=${{ vars.RUNTIME_SA_EMAIL }};SETTINGS_ROOT=preview-channels/pr-$PR/tool_settings" \
             --quiet
       - name: Allow unauthenticated invocations
         # gcloud run deploy の --allow-unauthenticated は、権限不足で IAM を
