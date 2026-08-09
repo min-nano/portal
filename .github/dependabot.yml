@@ -1,0 +1,141 @@
+version: 2
+
+# グループ化の方針
+#   - minor / patch はエコシステム単位でまとめて 1 本の PR にする（daily 実行の PR 乱立を防ぐ）
+#   - major は破壊的変更を含みうるため、あえてグループ外に置き個別 PR で確認する
+#   - npm は production / development を分け、レビューの重さを揃える
+#   - groups は上から順に評価され、最初にマッチしたグループに入る
+updates:
+  # GitHub Actions (.github/workflows/*.yml)
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # フロントエンド (Vite / Vitest)
+  - package-ecosystem: npm
+    directory: "/frontend"
+    schedule:
+      interval: daily
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - frontend
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      # Clerk は clerk-js と localizations のバージョンを揃えたいので独立させる
+      frontend-clerk:
+        patterns:
+          - "@clerk/*"
+        update-types:
+          - minor
+          - patch
+      frontend-production:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      # vite / vitest は同時に上がることが多いので開発依存としてまとめる
+      frontend-development:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+
+  # Firestore ルールのテスト環境（すべて開発依存）
+  - package-ecosystem: npm
+    directory: "/firestore"
+    schedule:
+      interval: daily
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - firestore
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      # firebase 系 SDK / CLI は相互に依存するため 1 本にまとめる
+      firestore-firebase:
+        patterns:
+          - "firebase"
+          - "firebase-tools"
+          - "@firebase/*"
+        update-types:
+          - minor
+          - patch
+      firestore-development:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+
+  # バックエンド (FastAPI / requirements.txt)
+  - package-ecosystem: pip
+    directory: "/backend"
+    schedule:
+      interval: daily
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - backend
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # google-auth と google-cloud-firestore はバージョンを揃えたい
+      backend-google:
+        patterns:
+          - "google-*"
+        update-types:
+          - minor
+          - patch
+      backend-python:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # バックエンドの Cloud Run 用コンテナ
+  - package-ecosystem: docker
+    directory: "/backend"
+    schedule:
+      interval: daily
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      backend-docker:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
