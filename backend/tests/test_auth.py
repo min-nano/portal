@@ -16,7 +16,11 @@ from app import clerk_auth
 from app.clerk_auth import AuthError
 
 ISSUER = "https://clerk.example.com"
+# PR プレビューで使う Clerk 開発インスタンス相当の第 2 発行者。
+PREVIEW_ISSUER = "https://xxxx.clerk.accounts.dev"
 FRONTEND_ORIGIN = "https://portal.example.com"
+# PR プレビューのオリジンはデプロイごとに変わるためワイルドカードで許可する。
+PREVIEW_ORIGIN_PATTERN = "https://portal--pr-*.web.app"
 
 _PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 _PRIVATE_PEM = _PRIVATE_KEY.private_bytes(
@@ -59,10 +63,14 @@ def make_token(key=_PRIVATE_PEM, **overrides):
 
 @pytest.fixture(autouse=True)
 def auth_env(monkeypatch):
-    monkeypatch.setenv("CLERK_ISSUER", ISSUER)
-    monkeypatch.setenv("CLERK_AUTHORIZED_PARTIES", FRONTEND_ORIGIN)
+    monkeypatch.setenv("CLERK_ISSUER", f"{ISSUER},{PREVIEW_ISSUER}")
+    monkeypatch.setenv(
+        "CLERK_AUTHORIZED_PARTIES", f"{FRONTEND_ORIGIN},{PREVIEW_ORIGIN_PATTERN}"
+    )
     monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", "example.co.jp")
-    monkeypatch.setattr(clerk_auth, "_signing_key_for", lambda token: _PUBLIC_PEM)
+    monkeypatch.setattr(
+        clerk_auth, "_signing_key_for", lambda token, issuer: _PUBLIC_PEM
+    )
 
 
 def test_valid_token_returns_user_email():
@@ -85,8 +93,17 @@ def test_wrong_signature_is_rejected():
 
 
 def test_wrong_issuer_is_rejected():
-    with pytest.raises(AuthError):
+    with pytest.raises(AuthError) as e:
         clerk_auth.verify_token(make_token(iss="https://evil.example.com"))
+    assert "iss" in str(e.value)
+
+
+def test_second_issuer_is_accepted():
+    # PR プレビュー用の開発インスタンス（CLERK_ISSUER に併記）も受け付ける。
+    user = clerk_auth.verify_token(
+        make_token(iss=PREVIEW_ISSUER, azp="https://portal--pr-12-abcd1234.web.app")
+    )
+    assert user.email == "tester@example.co.jp"
 
 
 def test_unlisted_azp_is_rejected():
@@ -94,6 +111,20 @@ def test_unlisted_azp_is_rejected():
     with pytest.raises(AuthError) as e:
         clerk_auth.verify_token(make_token(azp="https://other.example.com"))
     assert "azp" in str(e.value)
+
+
+def test_azp_wildcard_matches_preview_origins_only():
+    # ワイルドカードはプレビュー URL のパターンにだけマッチする。
+    user = clerk_auth.verify_token(make_token(azp="https://portal--pr-3-xyz.web.app"))
+    assert user.email == "tester@example.co.jp"
+
+    with pytest.raises(AuthError):
+        clerk_auth.verify_token(make_token(azp="https://portal-evil.web.app"))
+
+
+def test_missing_azp_is_rejected_when_parties_configured():
+    with pytest.raises(AuthError):
+        clerk_auth.verify_token(make_token(azp=None))
 
 
 def test_missing_email_claim_explains_session_token_customization():

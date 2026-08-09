@@ -13,19 +13,23 @@ def _csv(name: str) -> list[str]:
     return [v.strip() for v in os.environ.get(name, "").split(",") if v.strip()]
 
 
-def clerk_issuer() -> str:
-    """Clerk の Frontend API の URL（JWT の iss と一致させる）。
+def clerk_issuers() -> list[str]:
+    """許可する Clerk の Frontend API の URL（JWT の iss。カンマ区切りで複数可）。
 
-    例: https://xxxx.clerk.accounts.dev（開発インスタンス）
-        https://clerk.example.com（本番インスタンス）
+    例: https://clerk.example.com（本番インスタンス）
+        https://xxxx.clerk.accounts.dev（開発インスタンス。PR プレビューで使用）
+    本番と PR プレビュー（開発インスタンス）を同じバックエンドで受けるため、
+    両方を列挙できるようにしている。
     """
-    return os.environ.get("CLERK_ISSUER", "").rstrip("/")
+    return [v.rstrip("/") for v in _csv("CLERK_ISSUER")]
 
 
 def clerk_authorized_parties() -> list[str]:
     """Clerk セッション JWT の azp として許可するフロントエンドのオリジン。
 
-    例: https://<project>.web.app,http://localhost:5173
+    カンマ区切りで複数指定でき、fnmatch 形式のワイルドカードが使える。
+    PR プレビューの URL はデプロイごとに変わるためパターンで許可する。
+    例: https://<project>.web.app,https://<project>--pr-*.web.app
     未設定の場合は azp 検証をスキップする（ローカル開発用。本番では必ず設定する）。
     """
     return _csv("CLERK_AUTHORIZED_PARTIES")

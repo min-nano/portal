@@ -73,21 +73,22 @@ firestore/                    # Firestore セキュリティルールとその�
   firestore.rules             # クライアント SDK からのアクセスを全面拒否（deny-all）
   tests/rules.test.js         # エミュレータでルールを検証
 firebase.json                 # Hosting 設定（/api/** → Cloud Run リライト）・Firestore ルールの参照
-.github/workflows/            # tests.yml（CI）/ deploy.yml（CD）
+.github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml（PR プレビュー）
 ```
 
 ## ⚙️ セットアップ
 
 ### 1. Clerk
 
-1. Clerk でアプリケーションを作成する。
-2. **SSO connections で Google のみを有効化** し、Email/Password などその他のサインイン手段はすべて無効にする。
-3. **Sessions → Customize session token** に以下を設定する（バックエンドがメールアドレスを取り出すために必須）:
-   ```json
-   {"email": "{{user.primary_email_address}}"}
-   ```
-4. API Keys から **Publishable Key**（`pk_...`）を控える。フロントエンドのビルド時に `VITE_CLERK_PUBLISHABLE_KEY` として渡す。
-5. 本番ドメイン（Firebase Hosting の URL / カスタムドメイン）を Clerk のアプリケーションに登録する。
+1. Clerk でアプリケーションを作成する。**本番（production）インスタンス** は `main` のデプロイに、**開発（development）インスタンス** は PR プレビューに使う。
+2. **両インスタンス** で以下を設定する:
+   - **SSO connections で Google のみを有効化** し、Email/Password などその他のサインイン手段はすべて無効にする。
+   - **Sessions → Customize session token** に以下を設定する（バックエンドがメールアドレスを取り出すために必須）:
+     ```json
+     {"email": "{{user.primary_email_address}}"}
+     ```
+3. API Keys から **Publishable Key** を控える。本番（`pk_live_...`）はリポジトリ変数 `CLERK_PUBLISHABLE_KEY`、開発（`pk_test_...`）は `CLERK_PUBLISHABLE_KEY_TEST` に設定する（ローカル開発ではどちらかを `VITE_CLERK_PUBLISHABLE_KEY` として渡す）。
+4. 本番ドメイン（Firebase Hosting の URL / カスタムドメイン）を本番インスタンスに登録する。開発インスタンスにはプレビュー URL のパターン（後述の「PR プレビュー」参照）を Allowed origins に登録する。
 
 > Secret Key はこの構成では使いません（バックエンドは JWKS 公開鍵で検証するだけ）。
 
@@ -144,16 +145,14 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 ### 5. Cloud Run 初回デプロイ
 
 ```bash
+# 値にカンマ（複数指定）を含むため、区切り文字を @ に変える ^@^ 記法でまとめて渡す。
 gcloud run deploy portal-api \
   --source backend \
   --region "$REGION" \
   --project "$PROJECT_ID" \
   --service-account "$SA" \
   --allow-unauthenticated \
-  --set-env-vars "CLERK_ISSUER=https://<your-clerk-frontend-api>" \
-  --set-env-vars "CLERK_AUTHORIZED_PARTIES=https://<your-hosting-domain>" \
-  --set-env-vars "ALLOWED_EMAIL_DOMAINS=<your-workspace-domain>" \
-  --set-env-vars "DWD_SERVICE_ACCOUNT_EMAIL=$SA"
+  --set-env-vars "^@^CLERK_ISSUER=https://<本番の Clerk Frontend API>,https://<開発インスタンスの Frontend API>@CLERK_AUTHORIZED_PARTIES=https://<your-hosting-domain>,https://$PROJECT_ID--pr-*.web.app@ALLOWED_EMAIL_DOMAINS=<your-workspace-domain>@DWD_SERVICE_ACCOUNT_EMAIL=$SA"
 ```
 
 * Firebase Hosting のリライト経由で呼び出すため `--allow-unauthenticated` が必要です（アプリ層の認可は Clerk JWT 検証で行う。Cloud Run の URL を直接叩かれても JWT が無ければ 401）。
@@ -161,8 +160,8 @@ gcloud run deploy portal-api \
 
 | 環境変数 | 用途 |
 | --- | --- |
-| `CLERK_ISSUER` | Clerk の Frontend API URL（JWT の `iss`）。例 `https://xxxx.clerk.accounts.dev` |
-| `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り） |
+| `CLERK_ISSUER` | 許可する Clerk の Frontend API URL（JWT の `iss`。カンマ区切りで複数可）。本番インスタンスに加え、PR プレビュー用の開発インスタンスを併記する |
+| `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り、`*` ワイルドカード可）。プレビュー URL は `https://<project>--pr-*.web.app` のようにパターンで許可する |
 | `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り） |
 | `DWD_SERVICE_ACCOUNT_EMAIL` | 代理トークンに使う SA のメール（省略時は ADC から推定） |
 | `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。既定 `(default)` |
@@ -182,16 +181,36 @@ gcloud run deploy portal-api \
 
 ### 7. GitHub Actions（CI/CD）
 
-`main` への push で自動デプロイが走ります（`.github/workflows/deploy.yml`）。Settings → Secrets and variables → Actions に以下の **Variables** を設定してください。
+`main` への push で本番デプロイ（`.github/workflows/deploy.yml`）、PR で Hosting のプレビューデプロイ（`.github/workflows/preview.yml`。後述）が走ります。Settings → Secrets and variables → Actions に以下の **Variables** を設定してください。
 
 | 変数 | 用途 |
 | --- | --- |
 | `PROJECT_ID` | デプロイ先 GCP プロジェクト ID |
 | `WIF_PROVIDER` | Workload Identity プールのプロバイダ名（`projects/.../providers/...`） |
 | `SA_EMAIL` | デプロイ実行用サービスアカウントのメール |
-| `CLERK_PUBLISHABLE_KEY` | フロントエンドビルドに埋め込む Clerk Publishable Key |
+| `CLERK_PUBLISHABLE_KEY` | 本番ビルドに埋め込む Clerk Publishable Key（**本番インスタンス** `pk_live_...`） |
+| `CLERK_PUBLISHABLE_KEY_TEST` | プレビュービルドに埋め込む Clerk Publishable Key（**開発インスタンス** `pk_test_...`） |
 
 デプロイ用 SA には最低限 `roles/run.developer`（+ ソースデプロイ用に `roles/cloudbuild.builds.editor`, `roles/artifactregistry.writer`, `roles/storage.admin` 相当）、Hosting 用に `roles/firebasehosting.admin`、Firestore ルールのデプロイ用に `roles/firebaserules.admin`、および `portal-api` ランタイム SA への `roles/iam.serviceAccountUser` が必要です。JSON キーは使わず WIF（キーレス）で認証します。
+
+### 8. PR プレビュー（`.github/workflows/preview.yml`）
+
+PR を開く・push するたびに、Firebase Hosting の **プレビューチャンネル** `pr-<PR番号>` へフロントエンドをデプロイし、URL を PR コメントに掲示します（最終デプロイから 7 日で失効、PR クローズ時に削除）。本番と同じ `firebase.json` が使われるため、プレビュー URL でも `/api/**` は本番の Cloud Run（`portal-api`）へリライトされます。
+
+| 環境 | Hosting | Clerk | バックエンド |
+| --- | --- | --- | --- |
+| `main`（本番） | 本番チャンネル（`deploy.yml`） | 本番インスタンス（`CLERK_PUBLISHABLE_KEY`） | Cloud Run `portal-api` |
+| PR プレビュー | `pr-<番号>` チャンネル（`preview.yml`） | 開発インスタンス（`CLERK_PUBLISHABLE_KEY_TEST`） | 本番と共通 |
+
+プレビューを動かすための前提:
+
+1. **Clerk 開発インスタンス** にも本番と同じ設定を行う（Google のみ有効化・セッショントークンの `email` クレーム）。プレビュー URL はデプロイごとに変わるため、開発インスタンスの **Allowed origins**（Clerk ダッシュボード / Backend API）に `https://<project>--pr-*.web.app` をワイルドカードで登録する。
+2. **バックエンドの環境変数**（前掲）:
+   - `CLERK_ISSUER` に開発インスタンスの Frontend API を併記（プレビューのトークンは発行者が異なるため）
+   - `CLERK_AUTHORIZED_PARTIES` に `https://<project>--pr-*.web.app` を追加
+3. リポジトリ変数 `CLERK_PUBLISHABLE_KEY_TEST` を設定する。
+
+> **注意**: バックエンドは本番・プレビュー共通のため、共有設定（Firestore の雛形設定）や Drive 上の雛形も本番と共有されます。また開発インスタンス発行のトークンも本番 API が受け付けることになりますが、メールドメイン制限（`ALLOWED_EMAIL_DOMAINS`）と代理アクセスの本人権限はどちらの経路でも同じに適用されます。
 
 ## 🧑‍💻 ローカル開発
 
