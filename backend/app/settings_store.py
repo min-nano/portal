@@ -5,9 +5,10 @@ GAS 版のスクリプトプロパティ（TEMPLATE_FOLDER_ID / TEMPLATE_FILE_NA
 ファイルを誤って編集・削除して設定を壊すリスクがあるため、人が直接触らない
 Firestore に保存する。
 
-コレクション tool_settings のドキュメント（ID = ツール名）に保存する:
+保存先はチャンネル（本番 / 開発 / PR プレビュー）ごとに分かれたコレクションの
+下のドキュメント（ID = ツール名）で、ルートは config.settings_root() が返す:
 
-  tool_settings/excel-report-formatter:
+  static-channels/production/tool_settings/excel-report-formatter:
     {"template_folder_id": "...", "template_file_name": "..."}
 
 アクセスには Cloud Run のランタイムサービスアカウントの ADC をそのまま使う。
@@ -19,8 +20,6 @@ import threading
 from google.cloud import firestore
 
 from . import config
-
-_COLLECTION = "tool_settings"
 
 _client_instance = None
 _client_lock = threading.Lock()
@@ -43,6 +42,22 @@ def _client():
         return _client_instance
 
 
+def _document_path(tool: str) -> str:
+    """チャンネルのルート配下の、そのツールのドキュメントパスを組み立てる。
+
+    Firestore のパスはコレクションとドキュメントが交互に並ぶため、ルートは
+    奇数個のセグメントでなければならない。設定ミスで意図しないパスを読み書き
+    しないよう、Firestore に触る前にここで弾く。
+    """
+    root = config.settings_root()
+    if not root or len(root.split("/")) % 2 == 0:
+        raise SettingsError(
+            "SETTINGS_ROOT がコレクションパスになっていません"
+            f"（奇数個のセグメントが必要）: {root!r}"
+        )
+    return f"{root}/{tool}"
+
+
 def _wrap_error(e: Exception) -> SettingsError:
     return SettingsError(
         "共有設定（Firestore）へのアクセスに失敗しました。Firestore API の有効化と、"
@@ -51,8 +66,11 @@ def _wrap_error(e: Exception) -> SettingsError:
 
 
 def get_tool_settings(tool: str) -> dict:
+    # パスの組み立て（設定の検証）は try の外。Firestore アクセスの失敗として
+    # 包み直すと、設定ミスが権限の問題に見えてしまうため。
+    path = _document_path(tool)
     try:
-        snapshot = _client().collection(_COLLECTION).document(tool).get()
+        snapshot = _client().document(path).get()
     except Exception as e:
         raise _wrap_error(e) from e
     if not snapshot.exists:
@@ -62,7 +80,8 @@ def get_tool_settings(tool: str) -> dict:
 
 
 def set_tool_settings(tool: str, values: dict):
+    path = _document_path(tool)
     try:
-        _client().collection(_COLLECTION).document(tool).set(values)
+        _client().document(path).set(values)
     except Exception as e:
         raise _wrap_error(e) from e

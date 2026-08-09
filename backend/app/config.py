@@ -58,6 +58,29 @@ def firestore_database() -> str:
     return os.environ.get("FIRESTORE_DATABASE", "(default)")
 
 
+# 環境変数が未設定のときに使う共有設定の置き場。本番ではなく development を
+# 指しているのは意図的（下の settings_root を参照）。
+DEFAULT_SETTINGS_ROOT = "static-channels/development/tool_settings"
+
+
+def settings_root() -> str:
+    """共有設定を置く Firestore のコレクションパス（チャンネルごとに分ける）。
+
+    同じデータベース内をチャンネル単位で分割し、本番・開発・PR プレビューが
+    互いのデータを踏まないようにする:
+
+      static-channels/production/tool_settings/<ツール名>   本番（main）
+      static-channels/development/tool_settings/<ツール名>  既定・ローカル開発
+      preview-channels/pr-<番号>/tool_settings/<ツール名>   PR プレビュー
+
+    既定を development にしているのは、環境変数の設定漏れ・ローカル開発・
+    壊れたワークフローのいずれもが本番データに到達しないようにするため。
+    本番の Cloud Run にだけ SETTINGS_ROOT を明示的に設定する運用にすることで、
+    「本番を汚す」は起こらず、設定ミスの症状は必ず「設定が空に見える」になる。
+    """
+    return os.environ.get("SETTINGS_ROOT", DEFAULT_SETTINGS_ROOT).strip("/")
+
+
 def cors_allowed_origins() -> list[str]:
     """CORS を許可するオリジン。
 

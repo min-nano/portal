@@ -1,15 +1,23 @@
 name: Preview
 
-# PR ごとに Firebase Hosting のプレビューチャンネル（pr-<番号>）へデプロイする。
-# フロントエンドは Clerk の開発（テスト）インスタンスのキーでビルドし、
-# 本番（main への push → deploy.yml）とは Clerk 環境を分ける。
-# /api/** のリライト先は本番と同じ Cloud Run サービスのため、バックエンドの
-# CLERK_ISSUER / CLERK_AUTHORIZED_PARTIES にプレビュー用の発行者・オリジン
-# パターンを併記しておくこと（README「PR プレビュー」参照）。
+# PR ごとに、フロントエンド・バックエンド・共有設定のすべてを本番から切り離した
+# プレビュー環境を作る。
 #
-# PR クローズ時のチャンネル削除は preview-cleanup.yml に分けてある
-# （同じワークフローに入れると、クローズ以外のイベントのたびに削除ジョブが
-# 「スキップ」としてチェック一覧に並んでしまうため）。
+#   Hosting    : プレビューチャンネル pr-<番号>
+#   Clerk      : 開発（テスト）インスタンス
+#   Cloud Run  : PR ごとのサービス portal-api-pr-<番号>（このワークフローが自動生成）
+#   Firestore  : preview-channels/pr-<番号>/tool_settings（同一 DB 内で分離）
+#
+# バックエンドを PR ごとに立てるため、本番の Cloud Run は本番インスタンスの
+# トークンと本番オリジンだけを受け付ければよく、プレビュー用の発行者・
+# オリジンパターンを併記する必要がない（README「PR プレビュー」参照）。
+#
+# デプロイの順序に意味がある。Hosting のリライト先 Cloud Run サービスは
+# チャンネルのデプロイ時点で存在している必要があるため、Cloud Run が先。
+#
+# PR クローズ時の後片付け（チャンネル・サービス・Firestore データの削除）は
+# preview-cleanup.yml に分けてある（同じワークフローに入れると、クローズ以外の
+# イベントのたびに削除ジョブが「スキップ」としてチェック一覧に並んでしまうため）。
 
 on:
   pull_request:
@@ -22,12 +30,14 @@ concurrency:
 
 jobs:
   deploy-preview:
-    name: Firebase Hosting preview channel
+    name: Preview environment
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
       pull-requests: write
+    env:
+      PR: ${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -50,10 +60,40 @@ jobs:
         with:
           workload_identity_provider: '${{ vars.WIF_PROVIDER }}'
           service_account: '${{ vars.SA_EMAIL }}'
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Deploy preview backend to Cloud Run
+        # 本番（deploy.yml）と違い、設定は毎回すべて渡す。サービスが無ければ
+        # 作成、あれば更新となり、初回だけ手動で作る必要がない。
+        #
+        # CLERK_AUTHORIZED_PARTIES にはプレビュー URL の実際のホスト名では
+        # なくパターンを渡す。チャンネル URL のハッシュ部分はデプロイするまで
+        # 分からないが、pr-<番号>- までは PR 番号だけで決まるため、この PR の
+        # チャンネルだけに絞ったうえで Cloud Run を先にデプロイできる。
+        #
+        # 値にカンマ（複数指定）を含むため、区切り文字を ; に変える ^;^ 記法を使う。
+        run: |
+          gcloud run deploy "portal-api-pr-$PR" \
+            --source backend \
+            --region asia-northeast1 \
+            --project '${{ vars.PROJECT_ID }}' \
+            --service-account '${{ vars.RUNTIME_SA_EMAIL }}' \
+            --allow-unauthenticated \
+            --set-env-vars "^;^CLERK_ISSUER=${{ vars.CLERK_ISSUER_TEST }};CLERK_AUTHORIZED_PARTIES=https://${{ vars.SITE_ID }}--pr-$PR-*.web.app;ALLOWED_EMAIL_DOMAINS=${{ vars.ALLOWED_EMAIL_DOMAINS }};DWD_SERVICE_ACCOUNT_EMAIL=${{ vars.RUNTIME_SA_EMAIL }};SETTINGS_ROOT=preview-channels/pr-$PR/tool_settings" \
+            --quiet
+      - name: Point /api/** at the preview backend
+        # チャンネルのデプロイはそのときの firebase.json をリリースに焼き込む
+        # ため、ここでの書き換えはこの PR のチャンネルにだけ効く（本番の
+        # リライト先は firebase.json のまま portal-api）。
+        run: |
+          jq --arg service "portal-api-pr-$PR" \
+            '.hosting.rewrites |= map(if .run then .run.serviceId = $service else . end)' \
+            firebase.json > firebase.json.tmp
+          mv firebase.json.tmp firebase.json
       - name: Deploy to preview channel
         id: deploy
         run: |
-          npx firebase-tools@latest hosting:channel:deploy "pr-${{ github.event.pull_request.number }}" \
+          npx firebase-tools@latest hosting:channel:deploy "pr-$PR" \
             --project '${{ vars.PROJECT_ID }}' \
             --expires 7d \
             --non-interactive \
@@ -69,8 +109,12 @@ jobs:
               '🔍 **プレビューデプロイ**: ${{ steps.deploy.outputs.url }}',
               '',
               '- コミット: ${{ github.event.pull_request.head.sha }}',
-              '- チャンネル: `pr-${{ github.event.pull_request.number }}`（最終デプロイから 7 日で失効、push ごとに更新）',
+              '- チャンネル: `pr-${{ env.PR }}`（最終デプロイから 7 日で失効、push ごとに更新）',
               '- 認証は Clerk の開発（テスト）インスタンスを使用します。',
+              '- バックエンド: Cloud Run `portal-api-pr-${{ env.PR }}`（この PR 専用）',
+              '- 共有設定: Firestore `preview-channels/pr-${{ env.PR }}/tool_settings`（本番と分離。雛形の設定はこの PR 内でやり直しが必要です）',
+              '',
+              'バックエンド・共有設定とも本番から切り離されているため、この URL での操作が本番に影響することはありません。PR クローズ時にまとめて削除されます。',
             ].join('\n');
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,

@@ -1,9 +1,22 @@
 name: Preview cleanup
 
-# PR クローズ時に Firebase Hosting のプレビューチャンネル（pr-<番号>）を削除する。
+# PR クローズ時に、preview.yml が作ったプレビュー環境を丸ごと片付ける。
+#
+#   Hosting          : プレビューチャンネル pr-<番号>
+#   Cloud Run        : サービス portal-api-pr-<番号>
+#   Artifact Registry: そのサービスのソースデプロイで積まれたイメージ
+#   Firestore        : preview-channels/pr-<番号> 配下
+#
+# 削除対象はいずれも preview-channels / pr-<番号> という命名に閉じている。
+# 本番の共有設定は static-channels 配下にあり、このワークフローがどう壊れても
+# 到達しない。
+#
 # デプロイ側（preview.yml）とはトリガーを分けている。同じワークフローに入れて
 # if で振り分けると、push のたびに削除ジョブが「スキップ」としてチェック一覧に
 # 出てしまうため。
+#
+# 各ステップは既に消えている場合でも失敗にしない（|| true）。1 つの後片付けが
+# 失敗しても残りを続けられるよう、ステップを分けている。
 
 on:
   pull_request:
@@ -16,11 +29,13 @@ concurrency:
 
 jobs:
   cleanup-preview:
-    name: Delete preview channel
+    name: Delete preview environment
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
+    env:
+      PR: ${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -30,9 +45,31 @@ jobs:
         with:
           workload_identity_provider: '${{ vars.WIF_PROVIDER }}'
           service_account: '${{ vars.SA_EMAIL }}'
-      - name: Delete channel
-        # チャンネルが既に失効・削除済みでも失敗にしない。
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Delete Hosting channel
         run: |
-          npx firebase-tools@latest hosting:channel:delete "pr-${{ github.event.pull_request.number }}" \
+          npx firebase-tools@latest hosting:channel:delete "pr-$PR" \
             --project '${{ vars.PROJECT_ID }}' \
             --force || true
+      - name: Delete Cloud Run service
+        run: |
+          gcloud run services delete "portal-api-pr-$PR" \
+            --region asia-northeast1 \
+            --project '${{ vars.PROJECT_ID }}' \
+            --quiet || true
+      - name: Delete container images
+        # ソースデプロイのイメージはサービス名ごとのパスに積まれるため、
+        # このパスを消せばこの PR の分だけが消える。
+        run: |
+          gcloud artifacts docker images delete \
+            "asia-northeast1-docker.pkg.dev/${{ vars.PROJECT_ID }}/cloud-run-source-deploy/portal-api-pr-$PR" \
+            --delete-tags \
+            --quiet || true
+      - name: Delete preview settings in Firestore
+        # ドキュメントを消してもサブコレクションは消えないため再帰削除する。
+        run: |
+          npx firebase-tools@latest firestore:delete "preview-channels/pr-$PR" \
+            --recursive \
+            --force \
+            --project '${{ vars.PROJECT_ID }}' || true
