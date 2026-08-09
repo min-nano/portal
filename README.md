@@ -113,6 +113,15 @@ gcloud iam service-accounts add-iam-policy-binding "$SA" \
   --member "serviceAccount:$SA" \
   --role roles/iam.serviceAccountTokenCreator \
   --project "$PROJECT_ID"
+
+# ソースデプロイ（gcloud run deploy --source）のビルドは既定で Compute Engine の
+# デフォルト SA として実行される。新しめのプロジェクトではこの SA に Editor が
+# 付かないため、ビルドに必要なロールを明示的に付与する（ソース zip の読み取り・
+# ログ書き込み・Artifact Registry への push をカバー。CI からのデプロイにも効く）。
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member "serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role roles/cloudbuild.builds.builder
 ```
 
 ### 3. Domain-wide delegation（代理アクセス）
