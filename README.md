@@ -202,12 +202,16 @@ gcloud run deploy portal-api \
   --region "$REGION" \
   --project "$PROJECT_ID" \
   --service-account "$SA" \
-  --allow-unauthenticated \
   --set-env-vars "^;^CLERK_ISSUER=https://<本番の Clerk Frontend API>;CLERK_AUTHORIZED_PARTIES=https://<your-hosting-domain>,https://$SITE_ID.web.app;ALLOWED_EMAIL_DOMAINS=<your-workspace-domain>;DWD_SERVICE_ACCOUNT_EMAIL=$SA;SETTINGS_CHANNEL_PATH=static-channels/production"
 ```
 
-* Firebase Hosting のリライト経由で呼び出すため `--allow-unauthenticated` が必要です（アプリ層の認可は Clerk JWT 検証で行う。Cloud Run の URL を直接叩かれても JWT が無ければ 401）。
-* 2 回目以降のデプロイは CI が `gcloud run deploy --source backend` を実行するだけで、環境変数・SA・公開設定は引き継がれます。
+* **サービスは非公開のままにします（`--allow-unauthenticated` は付けません）。** 同一プロジェクトの Firebase Hosting からのリライトは、`roles/run.invoker` の束縛が無くても届きます。実際、本番の `portal-api` は IAM バインディングを 1 つも持たない状態で `/api/**` が 200 を返しています:
+  ```bash
+  gcloud run services get-iam-policy portal-api --region "$REGION" --project "$PROJECT_ID"  # etag のみ
+  curl -s -o /dev/null -w '%{http_code}\n' "https://$SITE_ID.web.app/api/healthz"           # 200
+  ```
+  `allUsers` を付ける方式は不要なうえ、`run.app` の URL を直接叩ける口を開けてしまいます。組織ポリシー `constraints/iam.allowedPolicyMemberDomains` がある環境では、そもそも付けられません。
+* 2 回目以降のデプロイは CI が `gcloud run deploy --source backend` を実行するだけで、環境変数・SA の設定は引き継がれます。
 
 | 環境変数 | 用途 |
 | --- | --- |
@@ -268,11 +272,10 @@ GITHUB_REPO=<owner/repo>
 # デプロイ専用 SA とロール
 gcloud iam service-accounts create deployer --display-name "GitHub Actions deployer" --project "$PROJECT_ID"
 DEPLOY_SA=deployer@"$PROJECT_ID".iam.gserviceaccount.com
-# run.admin は run.developer の上位。プレビュー用サービスを CI から新規作成する
-# 際の --allow-unauthenticated（run.services.setIamPolicy）に必要。
 # artifactregistry.repoAdmin と datastore.user は、PR クローズ時にイメージと
 # プレビューの共有設定を削除するために必要（writer / なし では消せない）。
-for role in roles/run.admin roles/storage.admin roles/cloudbuild.builds.editor \
+# サービスの公開（setIamPolicy）は行わないため run.developer で足りる。
+for role in roles/run.developer roles/storage.admin roles/cloudbuild.builds.editor \
   roles/artifactregistry.repoAdmin \
   roles/datastore.user \
   roles/serviceusage.serviceUsageConsumer roles/firebasehosting.admin \
@@ -323,7 +326,7 @@ PR を開く・push するたびに、その PR 専用の **プレビュー環�
 `preview.yml` の流れ:
 
 1. フロントエンドを開発インスタンスのキーでビルドする。
-2. **Cloud Run に `portal-api-pr-<番号>` をデプロイし、`allUsers` に公開する。** 本番（`deploy.yml`）と違い、ランタイム SA・環境変数を毎回すべて渡すので、サービスが無ければ作成・あれば更新となり、**初回に手動でサービスを作る必要はありません**。`SETTINGS_CHANNEL_PATH` にはこの PR 専用のチャンネル（`preview-channels/pr-<番号>`）を渡します。
+2. **Cloud Run に `portal-api-pr-<番号>` をデプロイする。** 本番（`deploy.yml`）と違い、ランタイム SA・環境変数を毎回すべて渡すので、サービスが無ければ作成・あれば更新となり、**初回に手動でサービスを作る必要はありません**。`SETTINGS_CHANNEL_PATH` にはこの PR 専用のチャンネル（`preview-channels/pr-<番号>`）を渡します。本番と同じく非公開のままにします。
 3. `firebase.json` の `/api/**` リライト先をこの PR のサービスに書き換える。チャンネルのデプロイはそのときの `firebase.json` をリリースに焼き込むため、この書き換えはこの PR のチャンネルにだけ効きます（リポジトリの `firebase.json` は本番の `portal-api` を指したまま）。
 4. プレビューチャンネル `pr-<番号>` へデプロイし、URL を PR にコメントする（最終デプロイから 7 日で失効）。
 
@@ -342,20 +345,13 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
    ```
    （サイト ID は Hosting の既定サイトのサブドメイン。プロジェクト ID と異なる場合がある。）
 2. リポジトリ変数 `CLERK_PUBLISHABLE_KEY_TEST` / `SITE_ID` / `RUNTIME_SA_EMAIL` / `ALLOWED_EMAIL_DOMAINS` を設定する（前掲の表）。バックエンドの `CLERK_ISSUER` はこのうち `CLERK_PUBLISHABLE_KEY_TEST` から導出されるので、別途の設定は不要です。
-3. デプロイ用 SA に `roles/run.admin`・`roles/artifactregistry.repoAdmin`・`roles/datastore.user` があること（前掲のコマンドで付与済み）。Cloud Run サービスを `allUsers` に公開するには `run.services.setIamPolicy` が要り、これは `roles/run.developer` には含まれません。
+3. デプロイ用 SA に `roles/artifactregistry.repoAdmin`・`roles/datastore.user` があること（前掲のコマンドで付与済み）。どちらも PR クローズ時の後片付けに使います。
 
-> **組織ポリシー `constraints/iam.allowedPolicyMemberDomains`（ドメイン制限共有）が `allUsers` を禁止していると、プレビュー用サービスを公開できません。** この場合、公開のステップが `FAILED_PRECONDITION: One or more users named in the policy do not belong to a permitted customer` で失敗します。本番の `portal-api` が公開で動いていることは、この制約が無いことの根拠になりません（ポリシーが後から適用された場合、既存のバインディングはそのまま残るため）。現在の状態は次で確認できます:
-> ```bash
-> # 本番サービスが実際に allUsers で公開されているか
-> gcloud run services get-iam-policy portal-api --region "$REGION" --project "$PROJECT_ID"
-> # 組織ポリシーの実効値
-> gcloud org-policies describe iam.allowedPolicyMemberDomains --effective --project "$PROJECT_ID"
-> ```
-> 制約がある場合は、プロジェクトに対してこの制約の例外を設定するか（組織の管理者権限が必要）、プレビューの公開方法を見直す必要があります。
+> プレビュー用サービスも本番と同じく **非公開のまま** です（「Cloud Run 初回デプロイ」参照）。`allUsers` への公開は不要で、組織ポリシー `constraints/iam.allowedPolicyMemberDomains` がある環境では `FAILED_PRECONDITION: One or more users named in the policy do not belong to a permitted customer` で失敗します。リライトが実際に届いているかは、ワークフローが毎回 `/api/healthz` への疎通確認で検証します。
 
 > リポジトリ変数が未設定・不正な間は、プレビューのジョブは失敗します（設定の壊れに気付けるよう、意図的にスキップしない）。ワークフローの先頭で必要な変数が揃っているかを確認し、足りなければ変数名を挙げて落とします。**未設定の変数は空文字として展開され、`gcloud` はそれを「未指定」として受け入れてしまう** ためです（`--service-account ''` なら Compute 既定 SA が使われ、`CLERK_ISSUER=` なら認証設定が空のまま起動し、壊れたプレビューが「成功」として出来上がる）。
 
-> 同じ理由で、公開設定は `gcloud run deploy --allow-unauthenticated` ではなく `gcloud run services add-iam-policy-binding` で明示的に行っています。前者は権限不足で IAM を設定できなくても警告どまりで終了コード 0 を返すため、`/api/**` が 403 になるプレビューがジョブとしては成功してしまいます。
+> 同じ理由で、デプロイの成否だけでなく **プレビュー URL から `/api/healthz` に実際に届くか** を毎回確かめます。`gcloud run deploy` が成功しても、リライト先が届かなければプレビューは使い物になりません。それを URL を渡された人が最初に踏むのではなく、ジョブの失敗として先に出します。
 
 > **注意**: 分離されるのは Hosting・Clerk・バックエンド・共有設定です。**Drive 上の雛形ファイルは本番と共有** されます（同じ Workspace の同じファイルのため）。プレビューの共有設定は空の状態から始まるので、雛形フォルダはプレビュー内で改めて指定してください。テスト用のフォルダを指定すれば、Drive も実質的に分離できます。
 

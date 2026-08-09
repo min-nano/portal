@@ -136,23 +136,12 @@ jobs:
             --service-account '${{ vars.RUNTIME_SA_EMAIL }}' \
             --set-env-vars "^;^CLERK_ISSUER=$CLERK_ISSUER_TEST;CLERK_AUTHORIZED_PARTIES=https://${{ vars.SITE_ID }}--pr-$PR-*.web.app;ALLOWED_EMAIL_DOMAINS=${{ vars.ALLOWED_EMAIL_DOMAINS }};DWD_SERVICE_ACCOUNT_EMAIL=${{ vars.RUNTIME_SA_EMAIL }};SETTINGS_CHANNEL_PATH=preview-channels/pr-$PR" \
             --quiet
-      - name: Allow unauthenticated invocations
-        # gcloud run deploy の --allow-unauthenticated は、権限不足で IAM を
-        # 設定できなくても警告どまりで終了コード 0 を返す（「Setting IAM
-        # Policy...warning」）。それでは Hosting のリライト（匿名で呼ぶ）が
-        # 403 になるプレビューが「成功」として通ってしまうため、束縛は
-        # 権限不足でちゃんと失敗するこのコマンドで明示的に行う。
-        #
-        # デプロイ用 SA に roles/run.admin が必要（run.developer には
-        # run.services.setIamPolicy が含まれない）。アプリ層の認可は Clerk の
-        # JWT 検証で行うため、公開されていても JWT が無ければ 401。
-        run: |
-          gcloud run services add-iam-policy-binding "portal-api-pr-$PR" \
-            --region asia-northeast1 \
-            --project '${{ vars.PROJECT_ID }}' \
-            --member allUsers \
-            --role roles/run.invoker \
-            --quiet
+      # サービスは非公開のまま（IAM バインディングを付けない）。同一プロジェクトの
+      # Firebase Hosting からのリライトは、run.invoker の束縛が無くても届く
+      # （本番の portal-api も IAM バインディングを持たないまま動いている）。
+      # allUsers を付ける方式は、組織ポリシー iam.allowedPolicyMemberDomains に
+      # 阻まれるうえ、そもそも不要で、run.app の URL を直接叩ける口を開けてしまう。
+      # 実際に届いているかは、下の疎通確認（/api/healthz）で毎回確かめる。
       - name: Point /api/** at the preview backend
         # チャンネルのデプロイはそのときの firebase.json をリリースに焼き込む
         # ため、ここでの書き換えはこの PR のチャンネルにだけ効く（本番の
@@ -171,6 +160,21 @@ jobs:
             --non-interactive \
             --json > channel.json
           echo "url=$(jq -r '.result | to_entries[0].value.url' channel.json)" >> "$GITHUB_OUTPUT"
+      - name: Check that /api/** reaches the preview backend
+        # プレビュー URL からバックエンドまで実際に通ることを毎回確かめる。
+        # ここを省くと、Hosting のリライト先が届かない（403 など）状態でも
+        # ジョブは成功し、URL を貼られた人が初めて気付くことになる。
+        # /api/healthz は認証不要なので、200 ならリライトが機能している。
+        run: |
+          url='${{ steps.deploy.outputs.url }}/api/healthz'
+          for attempt in 1 2 3 4 5; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$url" || echo 000)"
+            [ "$code" = "200" ] && { echo "疎通確認 OK: $url"; exit 0; }
+            echo "試行 $attempt: HTTP $code（チャンネルの反映待ちの可能性あり）"
+            sleep 10
+          done
+          echo "::error::プレビューの /api/** がバックエンドに届いていません（最後の応答: HTTP $code）。$url"
+          exit 1
       - name: Comment preview URL on PR
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
