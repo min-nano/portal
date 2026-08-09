@@ -210,6 +210,8 @@ PR を開く・push するたびに、Firebase Hosting の **プレビューチ�
    - `CLERK_AUTHORIZED_PARTIES` に `https://<project>--pr-*.web.app` を追加
 3. リポジトリ変数 `CLERK_PUBLISHABLE_KEY_TEST` を設定する。
 
+> デプロイ用のリポジトリ変数（`WIF_PROVIDER` など）が未設定の間、プレビューのジョブは失敗ではなく **スキップ** になります（セットアップ完了後の PR から自動的に有効になる）。
+
 > **注意**: バックエンドは本番・プレビュー共通のため、共有設定（Firestore の雛形設定）や Drive 上の雛形も本番と共有されます。また開発インスタンス発行のトークンも本番 API が受け付けることになりますが、メールドメイン制限（`ALLOWED_EMAIL_DOMAINS`）と代理アクセスの本人権限はどちらの経路でも同じに適用されます。
 
 ## 🧑‍💻 ローカル開発
