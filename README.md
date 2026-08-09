@@ -179,13 +179,20 @@ gcloud run deploy portal-api \
 
 ### 6. Firebase Hosting
 
-1. Firebase コンソールで **同じ GCP プロジェクト** に Hosting を有効化する。
+1. **同じ GCP プロジェクト** に Firebase を追加し、Hosting の既定サイトを作成する。コンソールからでも、CLI（Cloud Shell 等）からでもよい:
+   ```bash
+   firebase login --no-localhost   # 初回のみ（gcloud とは認証が別）
+   firebase projects:addfirebase "$PROJECT_ID"
+   gcloud services enable firebasehosting.googleapis.com
+   firebase hosting:sites:create "$PROJECT_ID" --project "$PROJECT_ID"  # 既定サイト（プロジェクト ID と同名）
+   ```
 2. `.firebaserc` の `default` をプロジェクト ID に書き換える。
 3. 初回は手動デプロイで確認できる:
    ```bash
-   cd frontend && VITE_CLERK_PUBLISHABLE_KEY=pk_... npm run build && cd ..
-   npx firebase-tools deploy --only hosting --project "$PROJECT_ID"
+   cd frontend && VITE_CLERK_PUBLISHABLE_KEY=pk_... npm ci && npm run build && cd ..
+   npx firebase-tools deploy --only hosting,firestore:rules --project "$PROJECT_ID"
    ```
+4. カスタムドメインを使う場合は、Firebase コンソール → Hosting → 「カスタムドメインを追加」で接続する（所有権確認と DNS 設定はコンソールのみ）。
 
 `firebase.json` の `rewrites` により `/api/**` が Cloud Run の `portal-api`（asia-northeast1）へ転送されます。サービス名やリージョンを変えた場合はここも合わせてください。
 
