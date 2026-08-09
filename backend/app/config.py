@@ -49,13 +49,9 @@ def delegated_sa_email() -> str:
     return os.environ.get("DWD_SERVICE_ACCOUNT_EMAIL", "")
 
 
-def settings_file_id() -> str:
-    """共有設定 JSON（Drive 上）のファイル ID。
-
-    GAS 版のスクリプトプロパティに相当する全利用者共通の設定置き場。
-    サービスアカウントのメールアドレスに「編集者」で共有しておくこと。
-    """
-    return os.environ.get("SETTINGS_FILE_ID", "")
+def firestore_database() -> str:
+    """共有設定の保存先 Firestore データベース名。通常は既定の "(default)"。"""
+    return os.environ.get("FIRESTORE_DATABASE", "(default)")
 
 
 def cors_allowed_origins() -> list[str]:

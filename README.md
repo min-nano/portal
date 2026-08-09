@@ -11,7 +11,7 @@
 | フロントエンド | **Firebase Hosting** + Vite (vanilla JS) | モバイル最適化の入力フォーム。`/api/**` は Hosting のリライトで Cloud Run へ転送（同一オリジン） |
 | 認証 | **Clerk**（Google ログインのみ有効化） | サインインとセッション JWT の発行 |
 | バックエンド | **Cloud Run**（FastAPI / Python） | Clerk JWT の検証、Excel 生成（openpyxl）、Drive アクセス |
-| データ保存 | **Google Workspace の Drive** | Excel 雛形（社外秘フォーマット）と全利用者共通の設定 JSON |
+| データ保存 | **Google Workspace の Drive** / Firestore | Drive: Excel 雛形（社外秘フォーマット）。Firestore: 全利用者共通の設定 |
 
 ### セキュリティ / 権限モデル（GAS 版との対応）
 
@@ -24,7 +24,7 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
    - 確認したメールアドレスのユーザーとして、サービスアカウントが **読み取り専用スコープ** (`drive.readonly`) の代理トークンを取得し、Workspace の Drive API を呼ぶ。
    - つまり雛形の取得・検索は常に **本人の Drive 権限の範囲内** で行われる。雛形にアクセス権の無いユーザーは、サインインできても雛形を読めない（GAS 版と同じ UX・同じ境界）。
 
-全利用者共通の設定（雛形フォルダ ID・ファイル名。GAS 版のスクリプトプロパティ相当）だけは、Drive 上の設定 JSON ファイルを **サービスアカウント自身の権限** で読み書きします（そのファイルのみを SA に共有する。delegation のスコープは広げない）。
+全利用者共通の設定（雛形フォルダ ID・ファイル名。GAS 版のスクリプトプロパティ相当）は **Firestore**（コレクション `tool_settings`、ドキュメント ID = ツール名）に保存します。人が直接編集できる Drive 上の JSON ファイルと違い、管理ユーザーの誤操作で設定が壊れるリスクがなく、アクセスはランタイム SA の IAM（`roles/datastore.user`）だけで完結します。delegation のスコープも広げません。
 
 ```
 ブラウザ (Firebase Hosting)
@@ -32,10 +32,11 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
   ▼
 Firebase Hosting  ──  /api/** リライト  ──▶  Cloud Run (portal-api)
                                               │ 1. Clerk JWKS で JWT 検証 → email 確定
-                                              │ 2. email の代理トークンで Drive から雛形取得
-                                              │ 3. openpyxl で報告書生成 → xlsx を返却
+                                              │ 2. 共有設定（雛形の場所）を Firestore から取得
+                                              │ 3. email の代理トークンで Drive から雛形取得
+                                              │ 4. openpyxl で報告書生成 → xlsx を返却
                                               ▼
-                                        Google Workspace Drive
+                                Google Workspace Drive / Firestore
 ```
 
 ## ✨ 現在の機能（現況検査レポート作成ツール）
@@ -65,7 +66,7 @@ backend/                      # Cloud Run サービス (FastAPI)
   app/main.py                 # API ルート
   app/clerk_auth.py           # Clerk JWT 検証
   app/google_drive.py         # 代理トークン・Drive API
-  app/settings_store.py       # 共有設定（Drive 上の JSON）
+  app/settings_store.py       # 共有設定（Firestore）
   app/excel_report.py         # Excel 生成（旧 functions/main.py の移植）
   app/mapping.json            # セルマッピング（単一の情報源）
 firebase.json                 # Hosting 設定（/api/** → Cloud Run リライト）
@@ -95,7 +96,8 @@ REGION=asia-northeast1
 
 # 必要な API を有効化
 gcloud services enable run.googleapis.com iamcredentials.googleapis.com \
-  drive.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com \
+  drive.googleapis.com firestore.googleapis.com \
+  cloudbuild.googleapis.com artifactregistry.googleapis.com \
   --project "$PROJECT_ID"
 
 # ランタイム用サービスアカウント（Cloud Run にアタッチし、代理トークンにも使う）
@@ -118,13 +120,19 @@ gcloud iam service-accounts add-iam-policy-binding "$SA" \
    ```
    ※ 読み取り専用のみ。委任スコープはこれ以上広げない。
 
-### 4. 共有設定ファイル（Drive）
+### 4. 共有設定（Firestore）
 
-GAS 版のスクリプトプロパティに相当する、全利用者共通の設定置き場です。
+GAS 版のスクリプトプロパティに相当する、全利用者共通の設定置き場です。人が直接編集できるファイルに置くと管理ユーザーの誤操作で設定が壊れる恐れがあるため、Firestore を使います。手動でのデータ投入は不要で、画面の「雛形を設定」から保存されます。
 
-1. Workspace の Drive に空の JSON ファイル（内容は `{}`、名前は例えば `portal-settings.json`）を作成する。
-2. そのファイルをサービスアカウントのメールアドレス（`portal-api@...iam.gserviceaccount.com`）に **編集者** で共有する。
-3. ファイル ID（URL の `/d/<ここ>/`）を控え、Cloud Run の環境変数 `SETTINGS_FILE_ID` に設定する。
+```bash
+# Firestore データベース（Native モード）を作成し、ランタイム SA に読み書き権限を付与
+gcloud firestore databases create --location "$REGION" --project "$PROJECT_ID"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member "serviceAccount:$SA" \
+  --role roles/datastore.user
+```
+
+保存先はコレクション `tool_settings`、ドキュメント ID はツール名（例: `excel-report-formatter`）です。
 
 雛形ファイル自体は GAS 版と同じ運用です: ネイティブ .xlsx のままフォルダ内に置き、社内の閲覧可能者だけに共有する（SA への共有は不要。読むのは常に利用者本人の代理トークン）。
 
@@ -140,7 +148,6 @@ gcloud run deploy portal-api \
   --set-env-vars "CLERK_ISSUER=https://<your-clerk-frontend-api>" \
   --set-env-vars "CLERK_AUTHORIZED_PARTIES=https://<your-hosting-domain>" \
   --set-env-vars "ALLOWED_EMAIL_DOMAINS=<your-workspace-domain>" \
-  --set-env-vars "SETTINGS_FILE_ID=<settings-file-id>" \
   --set-env-vars "DWD_SERVICE_ACCOUNT_EMAIL=$SA"
 ```
 
@@ -152,8 +159,8 @@ gcloud run deploy portal-api \
 | `CLERK_ISSUER` | Clerk の Frontend API URL（JWT の `iss`）。例 `https://xxxx.clerk.accounts.dev` |
 | `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り） |
 | `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り） |
-| `SETTINGS_FILE_ID` | 共有設定 JSON（Drive）のファイル ID |
 | `DWD_SERVICE_ACCOUNT_EMAIL` | 代理トークンに使う SA のメール（省略時は ADC から推定） |
+| `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。既定 `(default)` |
 | `CORS_ALLOWED_ORIGINS` | （任意）CORS 許可オリジン。既定 `http://localhost:5173` |
 
 ### 6. Firebase Hosting
@@ -184,12 +191,11 @@ gcloud run deploy portal-api \
 ## 🧑‍💻 ローカル開発
 
 ```bash
-# バックエンド（要: SA の JSON 鍵 or gcloud ADC。Drive を触らない範囲なら無くても起動する）
+# バックエンド（要: SA の JSON 鍵 or gcloud ADC。Drive/Firestore を触らない範囲なら無くても起動する）
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 CLERK_ISSUER=https://xxxx.clerk.accounts.dev \
 GOOGLE_APPLICATION_CREDENTIALS=~/keys/portal-api-dev.json \
-SETTINGS_FILE_ID=... \
 .venv/bin/uvicorn app.main:app --reload --port 8080
 
 # フロントエンド（/api は vite が localhost:8080 へプロキシ）
@@ -204,7 +210,7 @@ npm run dev
 旧リポジトリのテスト（Cloud Function の pytest・GAS の jest）を新構成に移植しています。CI（`.github/workflows/tests.yml`）が push / PR ごとに実行します。
 
 ```bash
-# バックエンド: API 経由の Excel 生成・雛形設定・JWT 検証（Drive と認証はテスト内でフェイク）
+# バックエンド: API 経由の Excel 生成・雛形設定・JWT 検証（Drive/Firestore と認証はテスト内でフェイク）
 cd backend && python -m pytest
 
 # フロントエンド: フォームの純粋ロジック（バリデーション・数値正規化）

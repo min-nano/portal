@@ -46,15 +46,14 @@ def drive(monkeypatch):
         return ("delegated", email)
 
     monkeypatch.setattr(main.google_drive, "delegated_session", delegated_session)
-    monkeypatch.setattr(main.google_drive, "service_session", lambda: "service")
 
     monkeypatch.setattr(
         main.settings_store,
         "get_tool_settings",
-        lambda session, tool: fake.settings.get(tool, {}),
+        lambda tool: fake.settings.get(tool, {}),
     )
 
-    def set_tool_settings(session, tool, values):
+    def set_tool_settings(tool, values):
         fake.settings[tool] = values
         fake.saved.append((tool, values))
 

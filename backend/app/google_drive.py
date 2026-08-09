@@ -1,19 +1,11 @@
-"""Google Drive へのアクセス。
+"""Google Drive へのアクセス（ユーザー代理 / domain-wide delegation）。
 
-2 種類の資格情報を使い分ける。
+Clerk JWT で確認したメールアドレスのユーザーとして Drive を読む。
+GAS 版の「実行ユーザーの権限で DriveApp を読む」に相当し、雛形ファイルに
+アクセス権のあるユーザーだけが雛形を取得・検索できるという権限モデルを
+そのまま維持する。スコープは読み取り専用（drive.readonly）に限定。
 
-1. ユーザー代理（domain-wide delegation）
-   Clerk JWT で確認したメールアドレスのユーザーとして Drive を読む。
-   GAS 版の「実行ユーザーの権限で DriveApp を読む」に相当し、雛形ファイルに
-   アクセス権のあるユーザーだけが雛形を取得・検索できるという権限モデルを
-   そのまま維持する。スコープは読み取り専用（drive.readonly）に限定。
-
-2. サービスアカウント自身
-   全利用者共通の設定ファイル（SETTINGS_FILE_ID の JSON）の読み書きにのみ使う。
-   設定ファイルをサービスアカウントのメールに共有しておくことで、delegation の
-   スコープを広げずに共有設定を保存できる。
-
-どちらも JSON 鍵ファイルなしで動作するよう、Cloud Run 上ではランタイム
+JSON 鍵ファイルなしで動作するよう、Cloud Run 上ではランタイム
 サービスアカウントの IAM Credentials API（signJwt）で署名する。この方式には
 ランタイム SA が自分自身に対して roles/iam.serviceAccountTokenCreator を
 持っている必要がある（README 参照）。ローカル開発では
@@ -28,11 +20,9 @@ from google.oauth2 import service_account
 from . import config
 
 DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
-DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 
 _TOKEN_URI = "https://oauth2.googleapis.com/token"
 _FILES_URL = "https://www.googleapis.com/drive/v3/files"
-_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -45,8 +35,8 @@ class DriveError(Exception):
         self.status = status
 
 
-def _credentials(scopes: list[str], subject: str | None = None):
-    """サービスアカウント資格情報を作る。subject を渡すとそのユーザーの代理になる。"""
+def _credentials(scopes: list[str], subject: str) -> service_account.Credentials:
+    """subject のユーザー代理となるサービスアカウント資格情報を作る。"""
     source, _ = google.auth.default()
 
     # ローカル開発: JSON 鍵ファイル（service_account.Credentials）ならそのまま使う。
@@ -71,24 +61,18 @@ def _credentials(scopes: list[str], subject: str | None = None):
         )
 
     signer = iam.Signer(Request(), source, sa_email)
-    kwargs = {"subject": subject} if subject else {}
     return service_account.Credentials(
         signer=signer,
         service_account_email=sa_email,
         token_uri=_TOKEN_URI,
         scopes=scopes,
-        **kwargs,
+        subject=subject,
     )
 
 
 def delegated_session(user_email: str) -> AuthorizedSession:
     """user_email の代理（読み取り専用）で Drive を呼ぶセッション。"""
     return AuthorizedSession(_credentials([DRIVE_READONLY_SCOPE], subject=user_email))
-
-
-def service_session() -> AuthorizedSession:
-    """サービスアカウント自身として Drive を呼ぶセッション（設定ファイル専用）。"""
-    return AuthorizedSession(_credentials([DRIVE_SCOPE]))
 
 
 def _escape_query_value(value: str) -> str:
@@ -191,15 +175,3 @@ def download_file(
     )
     _raise_for_status(resp, context)
     return resp.content
-
-
-def upload_file_content(
-    session: AuthorizedSession, file_id: str, content: bytes, mime_type: str
-):
-    resp = session.patch(
-        f"{_UPLOAD_URL}/{file_id}",
-        params={"uploadType": "media", "supportsAllDrives": "true"},
-        data=content,
-        headers={"Content-Type": mime_type},
-    )
-    _raise_for_status(resp, "設定ファイルの保存")

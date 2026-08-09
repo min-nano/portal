@@ -18,6 +18,7 @@ from . import clerk_auth, config, excel_report, google_drive, settings_store
 from .clerk_auth import AuthError, User
 from .excel_report import ReportError
 from .google_drive import XLSX_MIME, DriveError
+from .settings_store import SettingsError
 
 TOOL_EXCEL_REPORT = "excel-report-formatter"
 _TOOL_PREFIX = f"/api/tools/{TOOL_EXCEL_REPORT}"
@@ -54,6 +55,11 @@ async def _report_error_handler(_request: Request, exc: ReportError):
     return _error_response(exc.status, str(exc))
 
 
+@app.exception_handler(SettingsError)
+async def _settings_error_handler(_request: Request, exc: SettingsError):
+    return _error_response(exc.status, str(exc))
+
+
 @app.exception_handler(Exception)
 async def _unexpected_error_handler(_request: Request, exc: Exception):
     return _error_response(500, str(exc))
@@ -82,9 +88,7 @@ async def get_form_config(user: User = Depends(require_user)):
 @app.get(f"{_TOOL_PREFIX}/template")
 async def get_template_status(user: User = Depends(require_user)):
     """現在保存されている雛形設定の状態を返す。UI の初期表示で使う。"""
-    settings = settings_store.get_tool_settings(
-        google_drive.service_session(), TOOL_EXCEL_REPORT
-    )
+    settings = settings_store.get_tool_settings(TOOL_EXCEL_REPORT)
     folder_id = settings.get("template_folder_id", "")
     file_name = settings.get("template_file_name", "")
     return {"configured": bool(folder_id and file_name), "fileName": file_name}
@@ -149,7 +153,6 @@ async def save_template_selection(request: Request, user: User = Depends(require
         )
 
     settings_store.set_tool_settings(
-        google_drive.service_session(),
         TOOL_EXCEL_REPORT,
         {"template_folder_id": parents[0], "template_file_name": meta.get("name", "")},
     )
@@ -170,9 +173,7 @@ async def create_report(request: Request, user: User = Depends(require_user)):
     if not body or not isinstance(body, dict):
         raise ReportError("No data provided")
 
-    settings = settings_store.get_tool_settings(
-        google_drive.service_session(), TOOL_EXCEL_REPORT
-    )
+    settings = settings_store.get_tool_settings(TOOL_EXCEL_REPORT)
     folder_id = settings.get("template_folder_id", "")
     file_name = settings.get("template_file_name", "")
     if not folder_id or not file_name:
