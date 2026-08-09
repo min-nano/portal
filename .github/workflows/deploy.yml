@@ -34,7 +34,7 @@ jobs:
             --quiet
 
   deploy-frontend:
-    name: Firebase Hosting
+    name: Firebase Hosting + Firestore rules
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -61,11 +61,11 @@ jobs:
         with:
           workload_identity_provider: '${{ vars.WIF_PROVIDER }}'
           service_account: '${{ vars.SA_EMAIL }}'
-      - name: Deploy to Firebase Hosting
+      - name: Deploy to Firebase Hosting and Firestore rules
         # google-github-actions/auth が書き出す ADC（GOOGLE_APPLICATION_CREDENTIALS）
         # を firebase-tools がそのまま利用する（トークンやサービスアカウント鍵は不要）。
         run: |
           npx firebase-tools@latest deploy \
-            --only hosting \
+            --only hosting,firestore:rules \
             --project '${{ vars.PROJECT_ID }}' \
             --non-interactive

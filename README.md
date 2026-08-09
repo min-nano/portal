@@ -69,7 +69,10 @@ backend/                      # Cloud Run サービス (FastAPI)
   app/settings_store.py       # 共有設定（Firestore）
   app/excel_report.py         # Excel 生成（旧 functions/main.py の移植）
   app/mapping.json            # セルマッピング（単一の情報源）
-firebase.json                 # Hosting 設定（/api/** → Cloud Run リライト）
+firestore/                    # Firestore セキュリティルールとそのテスト
+  firestore.rules             # クライアント SDK からのアクセスを全面拒否（deny-all）
+  tests/rules.test.js         # エミュレータでルールを検証
+firebase.json                 # Hosting 設定（/api/** → Cloud Run リライト）・Firestore ルールの参照
 .github/workflows/            # tests.yml（CI）/ deploy.yml（CD）
 ```
 
@@ -134,6 +137,8 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 
 保存先はコレクション `tool_settings`、ドキュメント ID はツール名（例: `excel-report-formatter`）です。
 
+**セキュリティルール**: Firestore にアクセスするのはバックエンド（IAM 認可のサーバークライアント。ルールの対象外）だけなので、クライアント SDK からのアクセスは `firestore/firestore.rules` で **全面拒否** しています。ルールは CI（`main` への push）で Hosting と一緒に自動デプロイされ、deny-all であることをエミュレータのテストで検証しています。
+
 雛形ファイル自体は GAS 版と同じ運用です: ネイティブ .xlsx のままフォルダ内に置き、社内の閲覧可能者だけに共有する（SA への共有は不要。読むのは常に利用者本人の代理トークン）。
 
 ### 5. Cloud Run 初回デプロイ
@@ -186,7 +191,7 @@ gcloud run deploy portal-api \
 | `SA_EMAIL` | デプロイ実行用サービスアカウントのメール |
 | `CLERK_PUBLISHABLE_KEY` | フロントエンドビルドに埋め込む Clerk Publishable Key |
 
-デプロイ用 SA には最低限 `roles/run.developer`（+ ソースデプロイ用に `roles/cloudbuild.builds.editor`, `roles/artifactregistry.writer`, `roles/storage.admin` 相当）、Hosting 用に `roles/firebasehosting.admin`、および `portal-api` ランタイム SA への `roles/iam.serviceAccountUser` が必要です。JSON キーは使わず WIF（キーレス）で認証します。
+デプロイ用 SA には最低限 `roles/run.developer`（+ ソースデプロイ用に `roles/cloudbuild.builds.editor`, `roles/artifactregistry.writer`, `roles/storage.admin` 相当）、Hosting 用に `roles/firebasehosting.admin`、Firestore ルールのデプロイ用に `roles/firebaserules.admin`、および `portal-api` ランタイム SA への `roles/iam.serviceAccountUser` が必要です。JSON キーは使わず WIF（キーレス）で認証します。
 
 ## 🧑‍💻 ローカル開発
 
@@ -215,6 +220,10 @@ cd backend && python -m pytest
 
 # フロントエンド: フォームの純粋ロジック（バリデーション・数値正規化）
 cd frontend && npm test
+
+# Firestore ルール: クライアント SDK からのアクセスが全面拒否されること
+# （エミュレータを自動起動する。要 Java ランタイム）
+cd firestore && npm ci && npm test
 ```
 
 ## 🗺 セルマッピング (`backend/app/mapping.json`)

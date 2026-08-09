@@ -1,0 +1,15 @@
+{
+  "name": "portal-firestore-rules",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project demo-portal \"vitest run\"",
+    "test:no-emulator": "vitest run"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.9.0",
+    "firebase-tools": "^13.35.1",
+    "vitest": "^3.1.4"
+  }
+}

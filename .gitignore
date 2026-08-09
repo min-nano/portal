@@ -13,6 +13,8 @@ __pycache__/
 .env.local
 *-service-account*.json
 
-# Firebase CLI のキャッシュ
+# Firebase CLI・エミュレータのキャッシュ
 .firebase/
 firebase-debug.log
+firestore-debug.log
+ui-debug.log
