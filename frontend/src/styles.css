@@ -1,5 +1,10 @@
 /* ポータル共通スタイル。フォーム部分は GAS 版 index.html から移植。 */
 
+/* display を指定した要素（.dialog-backdrop の flex など）でも hidden 属性を
+   常に効かせる。UA スタイルの [hidden] { display: none } は author スタイルの
+   display 指定に負けるため、明示的に上書きしておかないとダイアログが閉じない。 */
+[hidden] { display: none !important; }
+
 body { font-family: sans-serif; padding: 16px; background-color: #f4f4f9; margin: 0; }
 .container { background: white; padding: 16px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); max-width: 720px; margin: 0 auto; }
 h2 { font-size: 1.2em; color: #333; margin-top: 0; }
