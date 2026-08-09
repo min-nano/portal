@@ -2,8 +2,12 @@
 
 import './styles.css';
 import { requireSignIn } from './auth.js';
+import { redirectToCanonicalHost } from './canonical-host.js';
 
 async function start() {
+  // .web.app へのアクセスはカスタムドメインへ寄せる。リダイレクト中は
+  // Clerk を初期化しない（別ドメインでセッションを持たせないため）。
+  if (redirectToCanonicalHost()) return;
   await requireSignIn();
 }
 
