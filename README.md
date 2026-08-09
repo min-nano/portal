@@ -214,7 +214,44 @@ gcloud run deploy portal-api \
 | `CLERK_PUBLISHABLE_KEY` | 本番ビルドに埋め込む Clerk Publishable Key（**本番インスタンス** `pk_live_...`） |
 | `CLERK_PUBLISHABLE_KEY_TEST` | プレビュービルドに埋め込む Clerk Publishable Key（**開発インスタンス** `pk_test_...`） |
 
-デプロイ用 SA には最低限 `roles/run.developer`（+ ソースデプロイ用に `roles/cloudbuild.builds.editor`, `roles/artifactregistry.writer`, `roles/storage.admin` 相当）、Hosting 用に `roles/firebasehosting.admin`、Firestore ルールのデプロイ用に `roles/firebaserules.admin`、および `portal-api` ランタイム SA への `roles/iam.serviceAccountUser` が必要です。JSON キーは使わず WIF（キーレス）で認証します。
+JSON キーは使わず WIF（キーレス）で認証します。WIF とデプロイ用 SA は以下のように作成できます（Cloud Shell 等）:
+
+```bash
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+GITHUB_REPO=<owner/repo>
+
+# デプロイ専用 SA とロール
+gcloud iam service-accounts create deployer --display-name "GitHub Actions deployer" --project "$PROJECT_ID"
+DEPLOY_SA=deployer@"$PROJECT_ID".iam.gserviceaccount.com
+for role in roles/run.developer roles/storage.admin roles/cloudbuild.builds.editor \
+  roles/serviceusage.serviceUsageConsumer roles/firebasehosting.admin \
+  roles/firebaserules.admin roles/firebase.viewer; do
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member "serviceAccount:$DEPLOY_SA" --role "$role" --condition=None
+done
+gcloud iam service-accounts add-iam-policy-binding "portal-api@$PROJECT_ID.iam.gserviceaccount.com" \
+  --member "serviceAccount:$DEPLOY_SA" --role roles/iam.serviceAccountUser --project "$PROJECT_ID"
+
+# Workload Identity プール + GitHub OIDC プロバイダ（このリポジトリからのみに制限）
+gcloud services enable iamcredentials.googleapis.com sts.googleapis.com --project "$PROJECT_ID"
+gcloud iam workload-identity-pools create github --location global \
+  --display-name "GitHub Actions" --project "$PROJECT_ID"
+gcloud iam workload-identity-pools providers create-oidc github-actions \
+  --location global --workload-identity-pool github \
+  --issuer-uri "https://token.actions.githubusercontent.com" \
+  --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
+  --attribute-condition "assertion.repository == '$GITHUB_REPO'" \
+  --project "$PROJECT_ID"
+gcloud iam service-accounts add-iam-policy-binding "$DEPLOY_SA" \
+  --member "principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository/$GITHUB_REPO" \
+  --role roles/iam.workloadIdentityUser --project "$PROJECT_ID"
+
+# リポジトリ変数に設定する値
+echo "WIF_PROVIDER = projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github-actions"
+echo "SA_EMAIL     = $DEPLOY_SA"
+```
+
+リポジトリ変数は GitHub の Settings 画面のほか、`gh` CLI（`gh variable set <名前> -R <owner/repo> --body <値>`）でも設定できます。
 
 ### 8. PR プレビュー（`.github/workflows/preview.yml`）
 
