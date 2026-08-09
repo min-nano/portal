@@ -227,7 +227,14 @@ PR を開く・push するたびに、Firebase Hosting の **プレビューチ�
 
 プレビューを動かすための前提:
 
-1. **Clerk 開発インスタンス** にも本番と同じ設定を行う（Google のみ有効化・セッショントークンの `email` クレーム）。プレビュー URL はデプロイごとに変わるため、開発インスタンスの **Allowed origins**（Clerk ダッシュボード / Backend API）に `https://<サイトID>--pr-*.web.app` をワイルドカードで登録する（サイト ID は Hosting の既定サイトのサブドメイン。プロジェクト ID と異なる場合がある）。
+1. **Clerk 開発インスタンス** にも本番と同じ設定を行う（Google のみ有効化・セッショントークンの `email` クレーム）。開発インスタンスは既定で任意のオリジンからの利用を許可するため、プレビュー URL のための追加設定は通常不要。オリジンを明示的に制限したい場合のみ、**Allowed origins** を Backend API で設定する（ダッシュボードに UI は無い。渡した配列で全置換される点に注意）:
+   ```bash
+   curl -X PATCH https://api.clerk.com/v1/instance \
+     -H "Authorization: Bearer <開発インスタンスの Secret Key (sk_test_...)>" \
+     -H "Content-Type: application/json" \
+     -d '{"allowed_origins": ["https://<サイトID>--pr-*.web.app", "http://localhost:5173"]}'
+   ```
+   （サイト ID は Hosting の既定サイトのサブドメイン。プロジェクト ID と異なる場合がある。）
 2. **バックエンドの環境変数**（前掲）:
    - `CLERK_ISSUER` に開発インスタンスの Frontend API を併記（プレビューのトークンは発行者が異なるため）
    - `CLERK_AUTHORIZED_PARTIES` に `https://<サイトID>--pr-*.web.app` を追加
