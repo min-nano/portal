@@ -344,7 +344,14 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 2. リポジトリ変数 `CLERK_PUBLISHABLE_KEY_TEST` / `SITE_ID` / `RUNTIME_SA_EMAIL` / `ALLOWED_EMAIL_DOMAINS` を設定する（前掲の表）。バックエンドの `CLERK_ISSUER` はこのうち `CLERK_PUBLISHABLE_KEY_TEST` から導出されるので、別途の設定は不要です。
 3. デプロイ用 SA に `roles/run.admin`・`roles/artifactregistry.repoAdmin`・`roles/datastore.user` があること（前掲のコマンドで付与済み）。Cloud Run サービスを `allUsers` に公開するには `run.services.setIamPolicy` が要り、これは `roles/run.developer` には含まれません。
 
-> 組織ポリシー `constraints/iam.allowedPolicyMemberDomains` が `allUsers` を禁止している環境では、公開の Cloud Run サービスを作れません。本番の `portal-api` が公開で動いていれば、このプロジェクトでは通っています。
+> **組織ポリシー `constraints/iam.allowedPolicyMemberDomains`（ドメイン制限共有）が `allUsers` を禁止していると、プレビュー用サービスを公開できません。** この場合、公開のステップが `FAILED_PRECONDITION: One or more users named in the policy do not belong to a permitted customer` で失敗します。本番の `portal-api` が公開で動いていることは、この制約が無いことの根拠になりません（ポリシーが後から適用された場合、既存のバインディングはそのまま残るため）。現在の状態は次で確認できます:
+> ```bash
+> # 本番サービスが実際に allUsers で公開されているか
+> gcloud run services get-iam-policy portal-api --region "$REGION" --project "$PROJECT_ID"
+> # 組織ポリシーの実効値
+> gcloud org-policies describe iam.allowedPolicyMemberDomains --effective --project "$PROJECT_ID"
+> ```
+> 制約がある場合は、プロジェクトに対してこの制約の例外を設定するか（組織の管理者権限が必要）、プレビューの公開方法を見直す必要があります。
 
 > リポジトリ変数が未設定・不正な間は、プレビューのジョブは失敗します（設定の壊れに気付けるよう、意図的にスキップしない）。ワークフローの先頭で必要な変数が揃っているかを確認し、足りなければ変数名を挙げて落とします。**未設定の変数は空文字として展開され、`gcloud` はそれを「未指定」として受け入れてしまう** ためです（`--service-account ''` なら Compute 既定 SA が使われ、`CLERK_ISSUER=` なら認証設定が空のまま起動し、壊れたプレビューが「成功」として出来上がる）。
 
