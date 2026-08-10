@@ -394,11 +394,13 @@ def _render_certificate(session, data: dict, settings: dict) -> tuple[bytes, lis
         )
         exported = google_drive.export_file(session, copy["id"], google_drive.PDF_MIME)
     finally:
-        # 後片付けの失敗で生成そのものを失敗させない（一時ファイルが
-        # 残っても証明書は正しく作れているため）。
         try:
             google_drive.delete_file(session, copy["id"])
         except DriveError:
+            # 後片付けの失敗で生成そのものを失敗させない。一時ファイルが
+            # 残るだけで証明書は正しく作れているうえ、finally の中で
+            # 送出すると本来のエラー（置換・書き出しの失敗）を覆い隠して
+            # しまうため、ここで握りつぶす。
             pass
 
     warnings = structural_cert.missing_placeholder_warnings(counts, data)

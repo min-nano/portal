@@ -271,6 +271,9 @@ def create_file(
         try:
             delete_file(session, file_id)
         except DriveError:
+            # 後片付けの失敗は握りつぶす。利用者に伝えるべきなのは
+            # 「アップロードに失敗した」ことであり、下の raise で送出する
+            # 元の例外をこちらで置き換えてしまわないようにする。
             pass
         raise
 
