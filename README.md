@@ -2,7 +2,7 @@
 
 社内向けツールをまとめる Web ポータルです。GAS（Google Apps Script）で運用してきたツールを、デプロイ・URL 管理の制約が少ない構成へ移行していきます。
 
-最初のツールとして、[gas-addon-excel-report-formatter](https://github.com/h-ikeda/gas-addon-excel-report-formatter) と同等の **現況検査レポート作成ツール**（傾斜測定 報告フォーム → Excel 出力）を実装しています。
+最初のツールとして、[gas-addon-excel-report-formatter](https://github.com/h-ikeda/gas-addon-excel-report-formatter) と同等の **現況検査レポート作成ツール**（傾斜測定 報告フォーム → Excel 出力）を実装しています。続いて **構造計算安全証明書 作成ツール**（第四号書式の証明書 → PDF を Drive へ保存 / 既存 PDF の編集）を追加しました。
 
 ## 🏗 システム構成
 
@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | フロントエンド | **Firebase Hosting** + Vite (vanilla JS) | モバイル最適化の入力フォーム。`/api/**` は Hosting のリライトで Cloud Run へ転送（同一オリジン） |
 | 認証 | **Clerk**（Google ログインのみ有効化） | サインインとセッション JWT の発行 |
-| バックエンド | **Cloud Run**（FastAPI / Python） | Clerk JWT の検証、Excel 生成（openpyxl）、Drive アクセス |
-| データ保存 | **Google Workspace の Drive** / Firestore | Drive: Excel 雛形（社外秘フォーマット）。Firestore: 全利用者共通の設定 |
+| バックエンド | **Cloud Run**（FastAPI / Python） | Clerk JWT の検証、Excel 生成（openpyxl）、PDF 生成・解析（Docs API + pypdf / pdfminer.six）、Drive アクセス |
+| データ保存 | **Google Workspace の Drive** / Firestore | Drive: Excel 雛形（社外秘フォーマット）・証明書の雛形（Google ドキュメント）・生成した PDF。Firestore: 全利用者共通の設定 |
 
 ### セキュリティ / 権限モデル（GAS 版との対応）
 
@@ -39,7 +39,9 @@ Firebase Hosting  ──  /api/** リライト  ──▶  Cloud Run (portal-api
                                 Google Workspace Drive / Firestore
 ```
 
-## ✨ 現在の機能（現況検査レポート作成ツール）
+## ✨ 現在の機能
+
+### 現況検査レポート作成ツール
 
 GAS 版の機能をそのまま移植しています。
 
@@ -53,22 +55,42 @@ GAS 版の機能をそのまま移植しています。
 
 **GAS 版からの改善**: フォーム定義とバリデーション設定は `/api/tools/excel-report-formatter/config` が `mapping.json` から導出して配信するため、フロントエンドの定数（旧 `MEASUREMENT_GROUPS` / `VALIDATION`）を手動で同期する作業が不要になりました。`mapping.json` が単一の情報源です。
 
+### 構造計算安全証明書 作成ツール
+
+建築士法第 20 条第 2 項の「構造計算によって建築物の安全性を確かめた旨の証明書」（第四号書式）を作成します。
+
+* 雛形は **Google ドキュメント**。記入欄は `{{委託者名}}` のような **プレースホルダー**で書いておく
+* 雛形は現況検査レポート作成ツールと同じく Drive から検索して選択し、設定（フォルダ ID + ファイル名）は Firestore に保存。同じフォルダに同名で差し替えると自動で最新版を使用
+* フォーム入力でプレースホルダーを置換し、PDF へ書き出したうえで、**該当する選択肢の番号に ○ を描き込む**（建築物の区分 / 構造計算の種類 / 構造計算の方法 / 大臣認定の有無）
+* 生成した PDF は、設定した **保存先フォルダ**（これも Drive から選択して Firestore に保存）へ保存
+* **編集**: 作成済みの PDF を Drive から選択、または手元からアップロードすると、内容を解析してフォームへ流し込む。一部を直して **上書き保存**（Drive の版履歴が残る）または **別名で保存** ができる
+
+生成の流れは「雛形を複製 → 複製に対して `replaceAllText` → PDF へ書き出し → 複製を削除 → ○ を重ねる → Drive へ保存」で、**雛形そのものは書き換えません**。すべて実行ユーザー本人の代理権限で行うため、本人が読めない雛形・書けないフォルダは扱えません。
+
+読み込みの精度について: このツールが作った PDF は、フォーム入力そのものを PDF の文書情報に埋め込んでいるため **完全に復元** できます。それ以外の PDF は本文のレイアウトから推定するため、画面に「推定して読み込んだ」旨の注意が出ます（○ はベクター図形なので、選択肢は位置から復元できます。一方、雛形上で同じ行に並ぶ「建築物の名称」と「用途」は分離できないため、まとめて名称欄へ読み込みます）。
+
 ## 📁 リポジトリ構成
 
 ```
 frontend/                     # Firebase Hosting に載せる SPA (Vite)
   index.html                  # ポータルトップ（ツール一覧）
   tools/excel-report-formatter/index.html
+  tools/structural-cert-formatter/index.html
   src/auth.js                 # Clerk（サインインゲート・トークン取得）
   src/api.js                  # Bearer 付き fetch ラッパー
   src/excel-report-formatter/ # フォーム本体（GAS 版 index.html の移植）
+  src/structural-cert-formatter/  # 構造計算安全証明書のフォーム・編集画面
 backend/                      # Cloud Run サービス (FastAPI)
   app/main.py                 # API ルート
   app/clerk_auth.py           # Clerk JWT 検証
   app/google_drive.py         # 代理トークン・Drive API
+  app/google_docs.py          # Docs API（雛形のプレースホルダー置換）
   app/settings_store.py       # 共有設定（Firestore）
   app/excel_report.py         # Excel 生成（旧 functions/main.py の移植）
   app/mapping.json            # セルマッピング（単一の情報源）
+  app/structural_cert.py      # 証明書の生成・PDF 解析
+  app/structural_cert_mapping.json  # 証明書の雛形マッピング（単一の情報源）
+  app/pdf_tools.py            # PDF の文字座標取得と ○ の描き込み
 firestore/                    # Firestore セキュリティルールとそのテスト
   firestore.rules             # クライアント SDK からのアクセスを全面拒否（deny-all）
   tests/rules.test.js         # エミュレータでルールを検証
@@ -130,8 +152,18 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 2. Google Workspace 管理コンソール → セキュリティ → アクセスとデータ管理 → **API の制御 → ドメイン全体の委任** で、そのクライアント ID に対して次のスコープを登録する:
    ```
    https://www.googleapis.com/auth/drive.readonly
+   https://www.googleapis.com/auth/drive
+   https://www.googleapis.com/auth/documents
    ```
-   ※ 読み取り専用のみ。委任スコープはこれ以上広げない。
+
+   スコープの使い分けは次のとおりで、バックエンドは操作ごとに必要な方だけのトークンを取ります（`google_drive.delegated_session` / `delegated_write_session`）。
+
+   | スコープ | 使う場面 |
+   | --- | --- |
+   | `drive.readonly` | 雛形・候補ファイルの検索と取得、編集する PDF の読み込み（現況検査レポート作成ツールはこれだけで完結） |
+   | `drive` + `documents` | 構造計算安全証明書の生成。雛形の複製・プレースホルダー置換・PDF 書き出し・複製の削除・Drive への保存 |
+
+   ※ 書き込みスコープは代理するユーザー本人の権限の範囲でしか効きません（本人が書けない場所へは保存できません）。証明書ツールを使わない場合は `drive.readonly` だけの登録で構いません。
 
 ### 4. 共有設定（Firestore）
 
@@ -159,8 +191,16 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 
 ```
 static-channels/production/tool_settings/excel-report-formatter
+static-channels/production/tool_settings/structural-cert-formatter
 preview-channels/pr-29/tool_settings/excel-report-formatter
 ```
+
+ツールごとに保存する内容は次のとおりです（いずれも画面から保存され、手動でのデータ投入は不要）。
+
+| ツール | キー |
+| --- | --- |
+| `excel-report-formatter` | `template_folder_id` / `template_file_name` |
+| `structural-cert-formatter` | `template_folder_id` / `template_file_name`（Google ドキュメントの雛形）、`output_folder_id` / `output_folder_name`（PDF の保存先） |
 
 **未設定のときは development** を指し、本番を指すのは `SETTINGS_CHANNEL_PATH=static-channels/production` を明示的に設定した Cloud Run サービスだけです。環境変数の設定漏れ・ローカル開発・壊れたワークフローのいずれからも本番データに到達できないため、設定ミスの症状は必ず「設定が空に見える」であり、「本番を汚す」は起こりません。
 
@@ -390,10 +430,11 @@ npm run dev
 旧リポジトリのテスト（Cloud Function の pytest・GAS の jest）を新構成に移植しています。CI（`.github/workflows/tests.yml`）が push / PR ごとに実行します。
 
 ```bash
-# バックエンド: API 経由の Excel 生成・雛形設定・JWT 検証（Drive/Firestore と認証はテスト内でフェイク）
+# バックエンド: API 経由の Excel 生成・証明書 PDF の生成と解析・雛形設定・JWT 検証
+# （Drive/Docs/Firestore と認証はテスト内でフェイク）
 cd backend && python -m pytest
 
-# フロントエンド: フォームの純粋ロジック（バリデーション・数値正規化）
+# フロントエンド: フォームの純粋ロジック（バリデーション・数値正規化・ファイル名の組み立て）
 cd frontend && npm test
 
 # Firestore ルール: クライアント SDK からのアクセスが全面拒否されること
@@ -442,6 +483,40 @@ for row in ws.iter_rows():
 * 選択値は数値化・正規化せず文字列のまま書き込み、プルダウン候補と完全一致させる。
 * 変更後は `backend/tests/` の期待値（mapping.json から自動解決される）が通ることを確認する。フロントエンドは `/config` 経由で自動追従するため変更不要。
 
+## 📄 証明書マッピング (`backend/app/structural_cert_mapping.json`)
+
+構造計算安全証明書は「雛形（Google ドキュメント）のどこに何を差し込むか」「どの選択肢のどの文字に ○ を付けるか」「PDF からどう読み戻すか」をこのファイルに集約しています。雛形が改訂された場合は、原則このファイルを編集するだけで（コード変更なしに）追従できます。画面のフォームも `/api/tools/structural-cert-formatter/config` がこのファイルから導出して配信するため、二重管理はありません。
+
+| キー | 役割 |
+| --- | --- |
+| `text_fields` | 記入欄の定義。`placeholders` が雛形の `{{…}}` 文字列（複数書けるので表記ゆれにも対応できる） |
+| `choice_groups` | 選択肢の定義。`anchor` が「その選択肢の行の先頭にある文字列」、`circle_length` が ○ で囲む文字数 |
+| `sections` | 画面での並び順（証明書の記載順に合わせる） |
+| `parse_rules` | 既存 PDF を読み戻すときの抽出規則 |
+| `circle` | ○ の余白と線の太さ |
+| `output_file_name_template` | 既定のファイル名 |
+
+### 雛形を作るとき・直すときの注意
+
+* 記入欄は `{{建物名称}}` のように **二重波括弧** で書き、`text_fields[].placeholders` と一致させる。値が空の欄も置換されるので、プレースホルダーが証明書に残ることはありません。
+* 雛形に無いプレースホルダーへ値を入力すると、保存は成功したうえで画面に「反映されていません」という警告が出ます（黙って欠落させません）。
+* `anchor` と `parse_rules[].label` は **雛形の見た目どおり** に書けます（読み込み時に空白の除去と 1 文字ずつの NFKC 正規化を掛けて比較するため、全角数字・全角括弧・康熙部首の違いを気にしなくて構いません）。`parse_rules[].pattern` だけは正規表現なので、正規化後の表記（半角数字・半角括弧）で書いてください。
+* `anchor` は雛形の中で **ちょうど 1 か所** に一致する必要があります。0 件（雛形が変わった）でも 2 件以上（区別できない）でも、○ の位置を誤らないようエラーで止まります。似た行がある場合は `anchor` を長くしてください。
+
+### 実際の書き出し PDF での確認方法
+
+```python
+# 雛形を PDF へ書き出したもの（Drive の「ファイル → ダウンロード → PDF」でよい）を見て、
+# anchor がどう抽出されるかを確認する。
+from app import pdf_tools
+
+pages = pdf_tools.read_layout(open("雛形.pdf", "rb").read())
+for line in pages[0].lines:
+    print(repr(line.text))          # ← ここに出る文字列がそのまま anchor に使える
+```
+
+テストでは雛形そのものを同梱せず（個人名・登録番号が入るため）、同じレイアウトの PDF を `backend/tests/pdf_util.py` がその場で組み立てています。
+
 ## 🚀 ロードマップ
 
 - [x] **Phase 1: ポータル基盤**
@@ -453,4 +528,4 @@ for row in ws.iter_rows():
 - [ ] **Phase 3: AI（Gemini API）連携による自動化**
   - 手書き図面の画像から計測値を抽出し、フォームに初期値を自動設定。
 - [ ] **Phase 4: 実運用向けチューニング**
-  - 生成した Excel の Drive への自動保存（delegation スコープの見直しが必要）など。
+  - 生成した Excel の Drive への自動保存など（代理の書き込みスコープは構造計算安全証明書 作成ツールの追加で導入済み）。

@@ -44,6 +44,17 @@ export async function apiSendJson(path, method, body) {
   return resp.json();
 }
 
+/** ファイルをアップロードして JSON を受け取るエンドポイント用。 */
+export async function apiPostFile(path, file) {
+  const form = new FormData();
+  form.append('file', file);
+  // Content-Type は指定しない。境界文字列付きの multipart/form-data を
+  // ブラウザに組み立てさせる必要がある。
+  const resp = await authorizedFetch(path, { method: 'POST', body: form });
+  await raiseForError(resp);
+  return resp.json();
+}
+
 /** バイナリ（xlsx など）を返すエンドポイント用。Blob とファイル名を返す。 */
 export async function apiPostForBlob(path, body, fallbackFileName) {
   const resp = await authorizedFetch(path, {
