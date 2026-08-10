@@ -31,7 +31,7 @@ const config = {
     },
     {
       key: 'program_certified',
-      label: '大臣の認定',
+      label: '国土交通大臣の認定',
       required: false,
       options: [
         { value: '有', label: '有', requires_field: '' },
@@ -51,7 +51,10 @@ const config = {
       title: '構造計算の種類',
       items: [{ choice: 'calc_type' }, { field: 'other_calc_type' }],
     },
-    { title: 'プログラム', items: [{ choice: 'program_certified' }] },
+    {
+      title: '当該構造計算に用いたプログラム',
+      items: [{ choice: 'program_certified' }],
+    },
   ],
 };
 
@@ -73,7 +76,13 @@ describe('buildForm', () => {
   it('sections の並びどおりにセクションを作る', () => {
     const titles = [...root.querySelectorAll('.cert-section h3')].map((h) => h.textContent);
 
-    expect(titles).toEqual(['証明日', '建築物', '構造計算の種類', 'プログラム']);
+    // 必須の項目をひとつだけ持つセクションは、見出しが * を引き受ける。
+    expect(titles).toEqual([
+      '証明日 *',
+      '建築物',
+      '構造計算の種類 *',
+      '当該構造計算に用いたプログラム',
+    ]);
   });
 
   it('記入欄には単位とラベルを付ける', () => {
@@ -130,6 +139,28 @@ describe('buildForm', () => {
     expect(radios.some((r) => r.checked)).toBe(false);
   });
 
+  it('見出しと同じ名前の選択肢は、名前も囲みも重ねない', () => {
+    const group = root.querySelector('[name="choice-calc_type"]').closest('fieldset');
+
+    // 見出し「構造計算の種類 *」と同じ文言の legend は出さない。
+    expect(group.querySelector('legend')).toBeNull();
+    // 囲みも二重にしない。
+    expect(group.classList.contains('bare')).toBe(true);
+    // 名前は見出しが担う（読み上げでも同じ結び付きになる）。
+    expect(group.getAttribute('aria-labelledby')).toBe(
+      group.closest('.cert-section').querySelector('h3').id
+    );
+  });
+
+  it('見出しと別の名前を持つ選択肢は、名前を出して囲む', () => {
+    const group = root
+      .querySelector('[name="choice-program_certified"]')
+      .closest('fieldset');
+
+    expect(group.querySelector('legend').textContent).toBe('国土交通大臣の認定');
+    expect(group.classList.contains('bare')).toBe(false);
+  });
+
   it('作り直しても項目が重複しない', () => {
     buildForm(root, config);
 
@@ -143,7 +174,11 @@ describe('証明日（日付ピッカー）', () => {
     const picker = root.querySelector('[data-date-picker]');
 
     expect(picker.type).toBe('date');
-    expect(root.querySelector('label[for="certDate"]').textContent).toBe('証明日 *');
+    // 見出しが「証明日 *」なので、同じ文言のラベルは重ねて出さない。
+    expect(root.querySelector('label[for="certDate"]')).toBeNull();
+    expect(picker.getAttribute('aria-labelledby')).toBe(
+      root.querySelector('.cert-section h3').id
+    );
     ['era_year', 'month', 'day'].forEach((key) => {
       expect(root.querySelector(`[data-field="${key}"]`).type).toBe('hidden');
     });

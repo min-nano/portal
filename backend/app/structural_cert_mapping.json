@@ -18,9 +18,15 @@
   "metadata_key": "/PortalStructuralCert",
 
   "mark": {
-    "_comment": "circle_padding は正円の半径に足す余白、check_padding は □ に対するレ点の余白。",
+    "_comment": [
+      "circle_padding は正円の半径に足す余白、check_padding は □ に対するレ点の余白。",
+      "lift_ratio は印を持ち上げる量（文字の高さに対する比）。PDF の文字の外接矩形は",
+      "ディセンダの分だけ下に広く、数字や □ の字面は上寄りにある。そのまま矩形の中心に",
+      "合わせると印が下にずれるため、字面の中心へ寄せる。雛形の書き出しで実測した値。"
+    ],
     "circle_padding": 1.4,
     "check_padding": 0.2,
+    "lift_ratio": 0.133,
     "line_width": 0.9
   },
 
@@ -220,7 +226,7 @@
     },
     {
       "key": "program_certified",
-      "label": "当該構造計算に用いたプログラムの国土交通大臣の認定",
+      "label": "国土交通大臣の認定",
       "options": [
         { "value": "有", "label": "有", "anchor": "□有", "mark": "check", "mark_length": 1 },
         { "value": "無", "label": "無", "anchor": "□無", "mark": "check", "mark_length": 1 }

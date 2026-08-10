@@ -270,18 +270,24 @@ def _mark_box(option: dict, anchor_box: Box) -> tuple[str, Box]:
 
     番号は正円で囲む（文字の外接矩形は縦横比が 1 ではないため、そのまま
     楕円にすると横長に見える）。□ はレ点を中に入れる。
+
+    どちらも、文字の外接矩形をそのまま使うと印が下にずれる。矩形は
+    ディセンダの分だけ下に広い一方、数字も □ もその領域を使わないためで、
+    字面の中心へ持ち上げてから印を作る（lift_ratio を参照）。
     """
     mark = load_mapping()["mark"]
+    lift = anchor_box.height * mark["lift_ratio"]
+    box = Box(
+        anchor_box.x0, anchor_box.y0 + lift, anchor_box.x1, anchor_box.y1 + lift
+    )
+
     kind = option.get("mark", pdf_tools.CIRCLE)
     if kind == pdf_tools.CHECK:
         padding = mark["check_padding"]
         return kind, Box(
-            anchor_box.x0 - padding,
-            anchor_box.y0 - padding,
-            anchor_box.x1 + padding,
-            anchor_box.y1 + padding,
+            box.x0 - padding, box.y0 - padding, box.x1 + padding, box.y1 + padding
         )
-    return kind, pdf_tools.square_around(anchor_box, mark["circle_padding"])
+    return kind, pdf_tools.square_around(box, mark["circle_padding"])
 
 
 def finalize_pdf(pdf_bytes: bytes, data: dict) -> bytes:

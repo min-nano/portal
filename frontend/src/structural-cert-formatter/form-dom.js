@@ -47,6 +47,14 @@ export function buildField(doc, field) {
   return wrap;
 }
 
+/** 日付ピッカーが受け持つ 3 欄のうち、ひとつでも必須なら必須扱いにする。 */
+function isDateRequired(spec, fieldsByKey) {
+  return [spec.era_year, spec.month, spec.day].some((key) => {
+    const field = fieldsByKey.get(key);
+    return Boolean(field && field.required);
+  });
+}
+
 /**
  * 証明日の入力欄。見えているのは日付ピッカーひとつで、証明書に刷る和暦の
  * 3 欄（年号年 / 月 / 日）は隠し入力に持たせる。
@@ -55,21 +63,22 @@ export function buildField(doc, field) {
  * ときでも中身を失わないため。その場合ピッカーは空のままだが、保存すれば
  * 元の値がそのまま出る（何が刷られるかは下の確認欄に出す）。
  */
-export function buildDateField(doc, spec, fieldsByKey) {
+export function buildDateField(doc, spec, fieldsByKey, { hideLabel, labelledBy } = {}) {
   const wrap = doc.createElement('div');
   wrap.className = 'cert-field cert-date';
 
-  const required = [spec.era_year, spec.month, spec.day].some(
-    (key) => fieldsByKey.get(key) && fieldsByKey.get(key).required
-  );
-  const label = doc.createElement('label');
-  label.setAttribute('for', 'certDate');
-  label.textContent = (spec.label || '日付') + (required ? ' *' : '');
-  wrap.appendChild(label);
+  // セクションの見出しと同じ名前なら、ラベルは出さない（見出しが名前を担う）。
+  if (!hideLabel) {
+    const label = doc.createElement('label');
+    label.setAttribute('for', 'certDate');
+    label.textContent = (spec.label || '日付') + (isDateRequired(spec, fieldsByKey) ? ' *' : '');
+    wrap.appendChild(label);
+  }
 
   const picker = doc.createElement('input');
   picker.type = 'date';
   picker.id = 'certDate';
+  if (hideLabel && labelledBy) picker.setAttribute('aria-labelledby', labelledBy);
   picker.dataset.datePicker = '';
   picker.dataset.eraYearField = spec.era_year;
   picker.dataset.monthField = spec.month;
@@ -139,13 +148,24 @@ function setFieldValue(root, key, value) {
   if (input) input.value = value;
 }
 
-export function buildChoiceGroup(doc, group) {
+/**
+ * 選択肢のグループ。
+ *
+ * セクションの見出しがそのままこのグループの名前になっている場合
+ * （建築物の区分など、セクションに選択肢しか無いとき）は、見出しと囲みが
+ * 二重になるだけなので legend を出さず、枠も付けない。名前はセクションの
+ * 見出しが担う（読み上げ用に aria-labelledby で結び付ける）。
+ */
+export function buildChoiceGroup(doc, group, { hideLegend, labelledBy } = {}) {
   const wrap = doc.createElement('fieldset');
-  wrap.className = 'cert-choices';
+  wrap.className = hideLegend ? 'cert-choices bare' : 'cert-choices';
+  if (labelledBy) wrap.setAttribute('aria-labelledby', labelledBy);
 
-  const legend = doc.createElement('legend');
-  legend.textContent = group.label + (group.required ? ' *' : '');
-  wrap.appendChild(legend);
+  if (!hideLegend) {
+    const legend = doc.createElement('legend');
+    legend.textContent = group.label + (group.required ? ' *' : '');
+    wrap.appendChild(legend);
+  }
 
   // 必須でないグループは「選ばない」状態にも戻せるようにする。
   const options = group.required
@@ -180,19 +200,46 @@ export function buildForm(root, config) {
   const fieldsByKey = new Map(config.text_fields.map((f) => [f.key, f]));
   const groupsByKey = new Map(config.choice_groups.map((g) => [g.key, g]));
 
-  config.sections.forEach((section) => {
+  config.sections.forEach((section, index) => {
     const wrap = doc.createElement('section');
     wrap.className = 'cert-section';
+
+    // 見出しがそのまま名前になっている項目は、セクションの見出しにまとめる
+    // （同じ文言と囲みが二重にならないように）。
+    const mergedChoice = section.items.find(
+      (item) => item.choice && groupsByKey.get(item.choice).label === section.title
+    );
+    const mergedGroup = mergedChoice ? groupsByKey.get(mergedChoice.choice) : null;
+    const mergedDate = section.items.find(
+      (item) => item.date && item.date.label === section.title
+    );
+
+    const required =
+      (mergedGroup && mergedGroup.required) ||
+      (mergedDate && isDateRequired(mergedDate.date, fieldsByKey));
     const heading = doc.createElement('h3');
-    heading.textContent = section.title;
+    heading.id = `cert-section-${index}`;
+    heading.textContent = section.title + (required ? ' *' : '');
     wrap.appendChild(heading);
+
     section.items.forEach((item) => {
       if (item.field) {
         wrap.appendChild(buildField(doc, fieldsByKey.get(item.field)));
       } else if (item.date) {
-        wrap.appendChild(buildDateField(doc, item.date, fieldsByKey));
+        wrap.appendChild(
+          buildDateField(doc, item.date, fieldsByKey, {
+            hideLabel: item === mergedDate,
+            labelledBy: heading.id,
+          })
+        );
       } else {
-        wrap.appendChild(buildChoiceGroup(doc, groupsByKey.get(item.choice)));
+        const group = groupsByKey.get(item.choice);
+        wrap.appendChild(
+          buildChoiceGroup(doc, group, {
+            hideLegend: group === mergedGroup,
+            labelledBy: heading.id,
+          })
+        );
       }
     });
     root.appendChild(wrap);
