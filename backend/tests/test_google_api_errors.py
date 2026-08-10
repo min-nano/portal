@@ -7,6 +7,7 @@
 """
 
 import json
+import re
 
 import pytest
 
@@ -109,8 +110,12 @@ def test_docs_403_points_at_api_enablement_and_quotes_google(monkeypatch):
         google_docs.replace_all_text(FakeSession(), "doc-1", {"{{a}}": "b"})
 
     message = str(excinfo.value)
-    assert "docs.googleapis.com" in message
-    assert "auth/documents" in message
+    # 利用者がそのまま使える名前（有効化するサービス ID と登録するスコープ）が
+    # 案内に出ていること。ホスト名だけの部分一致で確かめると、URL の検証を
+    # している箇所と見分けが付かず CodeQL に誤検知されるため、前後の文言まで
+    # 含めて確認する。
+    assert re.search(r"Google Docs API \(docs\.googleapis\.com\) が有効", message)
+    assert re.search(r"auth/documents\) が登録", message)
     assert "has not been used in project" in message
 
 
