@@ -273,10 +273,13 @@ GITHUB_REPO=<owner/repo>
 # デプロイ専用 SA とロール
 gcloud iam service-accounts create deployer --display-name "GitHub Actions deployer" --project "$PROJECT_ID"
 DEPLOY_SA=deployer@"$PROJECT_ID".iam.gserviceaccount.com
+# run.admin は run.developer の上位。プレビュー用サービスを CI から新規作成する
+# 際の --no-invoker-iam-check に必要（このフラグは invoker-iam-disabled
+# アノテーションを変更するため run.services.setIamPolicy を要求する。
+# run.developer では PERMISSION_DENIED になる）。
 # artifactregistry.repoAdmin と datastore.user は、PR クローズ時にイメージと
 # プレビューの共有設定を削除するために必要（writer / なし では消せない）。
-# サービスの公開（setIamPolicy）は行わないため run.developer で足りる。
-for role in roles/run.developer roles/storage.admin roles/cloudbuild.builds.editor \
+for role in roles/run.admin roles/storage.admin roles/cloudbuild.builds.editor \
   roles/artifactregistry.repoAdmin \
   roles/datastore.user \
   roles/serviceusage.serviceUsageConsumer roles/firebasehosting.admin \
@@ -348,7 +351,9 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
    ```
    （サイト ID は Hosting の既定サイトのサブドメイン。プロジェクト ID と異なる場合がある。）
 2. リポジトリ変数 `CLERK_PUBLISHABLE_KEY_TEST` / `SITE_ID` / `RUNTIME_SA_EMAIL` / `ALLOWED_EMAIL_DOMAINS` を設定する（前掲の表）。バックエンドの `CLERK_ISSUER` はこのうち `CLERK_PUBLISHABLE_KEY_TEST` から導出されるので、別途の設定は不要です。
-3. デプロイ用 SA に `roles/artifactregistry.repoAdmin`・`roles/datastore.user` があること（前掲のコマンドで付与済み）。どちらも PR クローズ時の後片付けに使います。
+3. デプロイ用 SA に `roles/run.admin`・`roles/artifactregistry.repoAdmin`・`roles/datastore.user` があること（前掲のコマンドで付与済み）。`run.admin` は `--no-invoker-iam-check` に必要です — **このフラグは `run.services.setIamPolicy` を要求します**（`--allow-unauthenticated` と同じ権限。`roles/run.developer` では新規サービスの作成が `Changes to invoker_iam_disabled require run.services.setIamPolicy permissions` で失敗します）。残り 2 つは PR クローズ時の後片付けに使います。
+
+   > 本番の `deploy.yml` はこのフラグを渡さず、サービスに設定済みの値をそのまま引き継ぎます。アノテーションを変更しないため `setIamPolicy` は不要で、本番デプロイ自体は `run.developer` 相当の権限でも通ります。権限が要るのは値を設定・変更するときだけです。
 
 > プレビュー用サービスも本番と同じく `--no-invoker-iam-check` で呼び出しを許可します（「Cloud Run 初回デプロイ」参照）。`--allow-unauthenticated` は組織ポリシー `constraints/iam.allowedPolicyMemberDomains` のある環境では `FAILED_PRECONDITION: One or more users named in the policy do not belong to a permitted customer` で拒否されるため使いません。リライトが実際に届いているかは、ワークフローが毎回 `/api/healthz` への疎通確認で検証します。
 
