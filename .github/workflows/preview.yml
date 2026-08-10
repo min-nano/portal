@@ -127,6 +127,14 @@ jobs:
         # 分からないが、pr-<番号>- までは PR 番号だけで決まるため、この PR の
         # チャンネルだけに絞ったうえで Cloud Run を先にデプロイできる。
         #
+        # --no-invoker-iam-check で呼び出し側の IAM チェックを外す。Hosting の
+        # リライトは匿名で呼ぶため、これが無いと /api/** が 403 になる。本番の
+        # portal-api も同じ方法で公開されている（allUsers への束縛ではなく、
+        # チェック自体の無効化。ドメイン制限共有 iam.allowedPolicyMemberDomains
+        # のある組織では allUsers を IAM ポリシーに書けないため、こちらを使う）。
+        # サービスは Cloud Run の URL でも到達可能になるが、認可はアプリ層の
+        # Clerk JWT 検証で行うため、JWT が無ければ 401 で弾かれる。
+        #
         # 値にカンマ（複数指定）を含むため、区切り文字を ; に変える ^;^ 記法を使う。
         run: |
           gcloud run deploy "portal-api-pr-$PR" \
@@ -134,14 +142,9 @@ jobs:
             --region asia-northeast1 \
             --project '${{ vars.PROJECT_ID }}' \
             --service-account '${{ vars.RUNTIME_SA_EMAIL }}' \
+            --no-invoker-iam-check \
             --set-env-vars "^;^CLERK_ISSUER=$CLERK_ISSUER_TEST;CLERK_AUTHORIZED_PARTIES=https://${{ vars.SITE_ID }}--pr-$PR-*.web.app;ALLOWED_EMAIL_DOMAINS=${{ vars.ALLOWED_EMAIL_DOMAINS }};DWD_SERVICE_ACCOUNT_EMAIL=${{ vars.RUNTIME_SA_EMAIL }};SETTINGS_CHANNEL_PATH=preview-channels/pr-$PR" \
             --quiet
-      # サービスは非公開のまま（IAM バインディングを付けない）。同一プロジェクトの
-      # Firebase Hosting からのリライトは、run.invoker の束縛が無くても届く
-      # （本番の portal-api も IAM バインディングを持たないまま動いている）。
-      # allUsers を付ける方式は、組織ポリシー iam.allowedPolicyMemberDomains に
-      # 阻まれるうえ、そもそも不要で、run.app の URL を直接叩ける口を開けてしまう。
-      # 実際に届いているかは、下の疎通確認（/api/healthz）で毎回確かめる。
       - name: Point /api/** at the preview backend
         # チャンネルのデプロイはそのときの firebase.json をリリースに焼き込む
         # ため、ここでの書き換えはこの PR のチャンネルにだけ効く（本番の
