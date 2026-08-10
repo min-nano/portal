@@ -10,7 +10,9 @@ body { font-family: sans-serif; padding: 16px; background-color: #f4f4f9; margin
 h2 { font-size: 1.2em; color: #333; margin-top: 0; }
 h3 { font-size: 1em; color: #1a3a8f; margin: 0; }
 label { display: block; margin-top: 10px; font-weight: bold; font-size: 0.85em; }
-input[type="text"], input[type="number"], select { width: 100%; padding: 9px; margin-top: 4px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
+input[type="text"], input[type="number"], input[type="date"], select { width: 100%; padding: 9px; margin-top: 4px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
+/* iOS Safari は日付欄の高さが他の入力欄とずれるので、行の高さを揃える。 */
+input[type="date"] { min-height: 40px; }
 /* スピナー（数値の増減ボタン）は不要なので非表示にする。狭い欄でも数値が隠れない。 */
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }

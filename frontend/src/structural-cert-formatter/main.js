@@ -17,6 +17,7 @@ import {
   applyFormData,
   buildForm as buildFormInto,
   collectFormData as collectFormDataFrom,
+  syncFieldsFromPicker,
 } from './form-dom.js';
 import {
   canOverwrite,
@@ -229,16 +230,37 @@ async function uploadPickerFile(event) {
 
 // --- フォームの組み立て -----------------------------------------------------
 
+function sectionsRoot() {
+  return document.getElementById('sections');
+}
+
 function buildForm() {
-  buildFormInto(document.getElementById('sections'), config);
+  buildFormInto(sectionsRoot(), config);
+  // 日付ピッカーの選択は、証明書に刷る和暦の欄へその都度書き戻す。
+  const picker = sectionsRoot().querySelector('[data-date-picker]');
+  if (picker) {
+    picker.addEventListener('change', () => syncFieldsFromPicker(sectionsRoot()));
+  }
 }
 
 function collectFormData() {
-  return collectFormDataFrom(document.getElementById('sections'), config);
+  return collectFormDataFrom(sectionsRoot(), config);
 }
 
 function applyToForm(data) {
-  applyFormData(document.getElementById('sections'), data);
+  applyFormData(sectionsRoot(), data);
+}
+
+// 証明日は当日であることがほとんどなので、新規作成では今日を入れておく。
+function prefillToday() {
+  const root = sectionsRoot();
+  const picker = root.querySelector('[data-date-picker]');
+  if (!picker || picker.value) return;
+  const now = new Date();
+  picker.value =
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` +
+    `-${String(now.getDate()).padStart(2, '0')}`;
+  syncFieldsFromPicker(root);
 }
 
 function currentSaveMode() {
@@ -303,6 +325,7 @@ function setSourceFile(file, parsed) {
 
 function resetToNew() {
   applyToForm(emptyFormData(config));
+  prefillToday();
   setSourceFile(null, null);
   fileNameEdited = false;
   refreshFileNameSuggestion();
@@ -406,6 +429,7 @@ async function start() {
   }
 
   buildForm();
+  prefillToday();
   // 既定のファイル名に使う欄（雛形マッピングの file_name_template が参照する欄）を
   // 入力したら、ファイル名の候補も追従させる。
   (config.file_name_template.match(/\{([a-z_]+)\}/g) || []).forEach((token) => {

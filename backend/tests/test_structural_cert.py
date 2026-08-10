@@ -44,6 +44,18 @@ def strip_metadata(pdf_bytes: bytes) -> bytes:
 
 # --- フォーム定義 -----------------------------------------------------------
 
+def fields_of(item) -> list[str]:
+    """画面の 1 項目が受け持つ記入欄のキー。
+
+    日付ピッカー（date）は年号年・月・日の 3 欄をまとめて入力する。
+    """
+    if "field" in item:
+        return [item["field"]]
+    if "date" in item:
+        return [item["date"][key] for key in ("era_year", "month", "day")]
+    return []
+
+
 def test_form_config_covers_every_field_and_choice():
     config = structural_cert.form_config()
 
@@ -60,19 +72,22 @@ def test_form_config_covers_every_field_and_choice():
     # 画面の並び（sections）が参照するキーはすべて定義済みでなければならない。
     for section in config["sections"]:
         for item in section["items"]:
-            if "field" in item:
-                assert item["field"] in field_keys
-            else:
+            if "choice" in item:
                 assert item["choice"] in choice_keys
+            else:
+                keys = fields_of(item)
+                assert keys, f"未知の項目です: {item}"
+                for key in keys:
+                    assert key in field_keys
 
 
 def test_form_config_lists_every_field_in_some_section():
     config = structural_cert.form_config()
     placed = {
-        item["field"]
+        key
         for section in config["sections"]
         for item in section["items"]
-        if "field" in item
+        for key in fields_of(item)
     }
 
     assert placed == {f["key"] for f in config["text_fields"]}

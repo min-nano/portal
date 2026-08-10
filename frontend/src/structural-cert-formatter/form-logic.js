@@ -67,6 +67,101 @@ export function validateFormData(config, data) {
   return missing;
 }
 
+// --- 証明日 -----------------------------------------------------------------
+//
+// 証明書には和暦（{{年号年}} 年 {{月}} 月 {{日}} 日）で刷るが、入力は日付
+// ピッカー（input[type=date]）で受け取る。西暦 → 和暦は Intl の和暦カレンダー
+// に任せる（改元も「元年」の表記もブラウザ側が正しく扱う）。逆向きは年号ごとの
+// 起点だけあれば足りるので、こちらで表を持つ。
+
+const ERA_BASE_YEARS = {
+  令和: 2018,
+  平成: 1988,
+  昭和: 1925,
+  大正: 1911,
+  明治: 1867,
+};
+
+// 和暦の最初の年は「元年」と書く。Intl もその表記で返す。
+const FIRST_YEAR = '元';
+
+const eraYearFormatter = new Intl.DateTimeFormat('ja-JP-u-ca-japanese', {
+  era: 'long',
+  year: 'numeric',
+});
+
+function toHalfWidth(value) {
+  return String(value == null ? '' : value)
+    .normalize('NFKC')
+    .trim();
+}
+
+/** "2026-08-10" のような値を Date にする。日付として成立しなければ null。 */
+function parseIsoDate(iso) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || '').trim());
+  if (!match) return null;
+  const [, year, month, day] = match.map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  // 2026-02-30 のような存在しない日付は、繰り上がって別の日になる。
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return date;
+}
+
+/** 日付ピッカーの値から、証明書に刷る 3 つの欄の値を作る。 */
+export function dateFieldsFromIso(iso) {
+  const date = parseIsoDate(iso);
+  if (!date) return null;
+  return {
+    // Intl は "令和8年" / "令和元年" を返す。雛形が「年」を刷るので落とす。
+    era_year: eraYearFormatter.format(date).replace(/年$/, ''),
+    month: String(date.getUTCMonth() + 1),
+    day: String(date.getUTCDate()),
+  };
+}
+
+/** 証明書の 3 つの欄から、日付ピッカーに戻せる値を作る。戻せなければ空文字。 */
+export function isoFromDateFields(fields) {
+  const eraYear = toHalfWidth(fields && fields.era_year);
+  const month = Number(toHalfWidth(fields && fields.month));
+  const day = Number(toHalfWidth(fields && fields.day));
+  if (!eraYear || !Number.isInteger(month) || !Number.isInteger(day)) return '';
+
+  const match = /^(令和|平成|昭和|大正|明治)?\s*(元|\d+)$/.exec(eraYear);
+  if (!match) return '';
+  const [, era, rawYear] = match;
+  const yearInEra = rawYear === FIRST_YEAR ? 1 : Number(rawYear);
+
+  let year;
+  if (era) {
+    year = ERA_BASE_YEARS[era] + yearInEra;
+  } else if (yearInEra >= 1868) {
+    // 年号なしで書かれていた場合は西暦とみなす。
+    year = yearInEra;
+  } else {
+    return '';
+  }
+
+  const iso =
+    `${String(year).padStart(4, '0')}-` +
+    `${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  return parseIsoDate(iso) ? iso : '';
+}
+
+/** 証明書に刷られる日付の文字列（画面での確認用）。 */
+export function formatCertificateDate(fields) {
+  const eraYear = String((fields && fields.era_year) || '').trim();
+  const month = String((fields && fields.month) || '').trim();
+  const day = String((fields && fields.day) || '').trim();
+  if (!eraYear || !month || !day) return '';
+  return `${eraYear}年${month}月${day}日`;
+}
+
 /** ファイル名に使えない文字を落とす。バックエンドの整形と同じ規則。 */
 export function sanitizeFileName(name) {
   return String(name || '')

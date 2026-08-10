@@ -8,12 +8,14 @@ import {
   applyFormData,
   buildForm,
   collectFormData,
+  syncFieldsFromPicker,
 } from '../src/structural-cert-formatter/form-dom.js';
 
 const config = {
   text_fields: [
     { key: 'era_year', label: '年号・年', required: true, unit: '', hint: '例: 令和7' },
     { key: 'month', label: '月', required: true, unit: '月', hint: '' },
+    { key: 'day', label: '日', required: true, unit: '日', hint: '' },
     { key: 'building_area', label: '建築面積', required: true, unit: 'm²', hint: '' },
     { key: 'other_calc_type', label: 'その他の構造計算の種類', required: false, unit: '', hint: '' },
   ],
@@ -38,7 +40,12 @@ const config = {
     },
   ],
   sections: [
-    { title: '証明日', items: [{ field: 'era_year' }, { field: 'month' }] },
+    {
+      title: '証明日',
+      items: [
+        { date: { label: '証明日', era_year: 'era_year', month: 'month', day: 'day' } },
+      ],
+    },
     { title: '建築物', items: [{ field: 'building_area' }] },
     {
       title: '構造計算の種類',
@@ -55,6 +62,12 @@ beforeEach(() => {
   root = document.getElementById('sections');
   buildForm(root, config);
 });
+
+/** 日付ピッカーを操作したときと同じ状態にする。 */
+function setDate(node, iso) {
+  node.querySelector('[data-date-picker]').value = iso;
+  syncFieldsFromPicker(node);
+}
 
 describe('buildForm', () => {
   it('sections の並びどおりにセクションを作る', () => {
@@ -75,15 +88,15 @@ describe('buildForm', () => {
   });
 
   it('数値だけの欄は数字キーパッドを出す', () => {
-    expect(root.querySelector('#field-month').inputMode).toBe('numeric');
-    // 年号は文字を含むので通常のキーボード。
-    expect(root.querySelector('#field-era_year').inputMode).toBe('');
-    expect(root.querySelector('#field-era_year').placeholder).toBe('例: 令和7');
+    expect(root.querySelector('#field-building_area').inputMode).toBe('decimal');
+    // 自由入力の欄は通常のキーボード。
+    expect(root.querySelector('#field-other_calc_type').inputMode).toBe('');
   });
 
   it('入力欄は文字列のまま扱う（数値入力欄にしない）', () => {
     root.querySelectorAll('[data-field]').forEach((input) => {
-      expect(input.type).toBe('text');
+      // 証明日の 3 欄は日付ピッカーが埋めるので隠し入力。
+      expect(['text', 'hidden']).toContain(input.type);
     });
   });
 
@@ -120,13 +133,74 @@ describe('buildForm', () => {
   it('作り直しても項目が重複しない', () => {
     buildForm(root, config);
 
-    expect(root.querySelectorAll('#field-month').length).toBe(1);
+    expect(root.querySelectorAll('#field-building_area').length).toBe(1);
+    expect(root.querySelectorAll('[data-date-picker]').length).toBe(1);
+  });
+});
+
+describe('証明日（日付ピッカー）', () => {
+  it('日付ピッカーひとつで、和暦の 3 欄は隠し入力になる', () => {
+    const picker = root.querySelector('[data-date-picker]');
+
+    expect(picker.type).toBe('date');
+    expect(root.querySelector('label[for="certDate"]').textContent).toBe('証明日 *');
+    ['era_year', 'month', 'day'].forEach((key) => {
+      expect(root.querySelector(`[data-field="${key}"]`).type).toBe('hidden');
+    });
+  });
+
+  it('選んだ日付を和暦に直して 3 欄へ入れる', () => {
+    setDate(root, '2026-08-10');
+
+    const fields = collectFormData(root, config).fields;
+    expect(fields).toMatchObject({ era_year: '令和8', month: '8', day: '10' });
+  });
+
+  it('証明書に印字される日付を確認欄に出す', () => {
+    setDate(root, '2026-08-10');
+
+    expect(root.querySelector('[data-date-preview]').textContent).toContain(
+      '令和8年8月10日'
+    );
+  });
+
+  it('読み込んだ和暦から日付ピッカーの表示を復元する', () => {
+    applyFormData(root, {
+      fields: { era_year: '令和7', month: '8', day: '10' },
+      choices: {},
+    });
+
+    expect(root.querySelector('[data-date-picker]').value).toBe('2025-08-10');
+  });
+
+  it('和暦として読めない日付でも、元の値は失われない', () => {
+    // 他所で作られた PDF から、想定外の表記が読み込まれた場合。
+    applyFormData(root, {
+      fields: { era_year: '不明', month: '8', day: '10' },
+      choices: {},
+    });
+
+    // ピッカーは空のままだが、保存すれば元の値がそのまま出る。
+    expect(root.querySelector('[data-date-picker]').value).toBe('');
+    expect(collectFormData(root, config).fields.era_year).toBe('不明');
+    // 何が印字されるのかは確認欄で分かる。
+    expect(root.querySelector('[data-date-preview]').textContent).toContain(
+      '不明年8月10日'
+    );
+  });
+
+  it('日付が未入力なら確認欄で促す', () => {
+    applyFormData(root, { fields: {}, choices: {} });
+
+    expect(root.querySelector('[data-date-preview]').textContent).toBe(
+      '日付を選択してください。'
+    );
   });
 });
 
 describe('collectFormData / applyFormData', () => {
   it('入力した内容をそのまま取り出せる', () => {
-    root.querySelector('#field-era_year').value = '令和7';
+    setDate(root, '2025-08-10');
     root.querySelector('#field-building_area').value = '62.10';
     root.querySelector('[name="choice-calc_type"][value="6"]').checked = true;
     root.querySelector('[name="choice-program_certified"][value="無"]').checked = true;
@@ -134,15 +208,16 @@ describe('collectFormData / applyFormData', () => {
     const data = collectFormData(root, config);
 
     expect(data.fields.era_year).toBe('令和7');
+    expect(data.fields.month).toBe('8');
+    expect(data.fields.day).toBe('10');
     expect(data.fields.building_area).toBe('62.10');
-    expect(data.fields.month).toBe('');
     expect(data.choices).toEqual({ calc_type: '6', program_certified: '無' });
   });
 
   it('前後の空白は落とす', () => {
-    root.querySelector('#field-era_year').value = '  令和7  ';
+    root.querySelector('#field-building_area').value = '  62.10  ';
 
-    expect(collectFormData(root, config).fields.era_year).toBe('令和7');
+    expect(collectFormData(root, config).fields.building_area).toBe('62.10');
   });
 
   it('流し込んだ内容を取り出すと元に戻る（読み込み → 編集の往復）', () => {
@@ -150,6 +225,7 @@ describe('collectFormData / applyFormData', () => {
       fields: {
         era_year: '令和7',
         month: '8',
+        day: '10',
         building_area: '62.10',
         other_calc_type: '限界耐力計算',
       },

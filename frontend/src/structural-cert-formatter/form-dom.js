@@ -5,7 +5,12 @@
 // この画面には項目を持たないので、雛形の改訂にはマッピングの編集だけで
 // 追従できる。
 
-import { emptyFormData } from './form-logic.js';
+import {
+  dateFieldsFromIso,
+  emptyFormData,
+  formatCertificateDate,
+  isoFromDateFields,
+} from './form-logic.js';
 
 // 単位から入力モード（スマートフォンのキーパッド）を決める。値は文字列の
 // まま扱う（"62.10" の末尾 0 や全角入力をそのまま雛形へ差し込むため、
@@ -40,6 +45,98 @@ export function buildField(doc, field) {
   }
   wrap.appendChild(row);
   return wrap;
+}
+
+/**
+ * 証明日の入力欄。見えているのは日付ピッカーひとつで、証明書に刷る和暦の
+ * 3 欄（年号年 / 月 / 日）は隠し入力に持たせる。
+ *
+ * 3 欄を実体にしているのは、読み込んだ PDF の日付が和暦として解釈できない
+ * ときでも中身を失わないため。その場合ピッカーは空のままだが、保存すれば
+ * 元の値がそのまま出る（何が刷られるかは下の確認欄に出す）。
+ */
+export function buildDateField(doc, spec, fieldsByKey) {
+  const wrap = doc.createElement('div');
+  wrap.className = 'cert-field cert-date';
+
+  const required = [spec.era_year, spec.month, spec.day].some(
+    (key) => fieldsByKey.get(key) && fieldsByKey.get(key).required
+  );
+  const label = doc.createElement('label');
+  label.setAttribute('for', 'certDate');
+  label.textContent = (spec.label || '日付') + (required ? ' *' : '');
+  wrap.appendChild(label);
+
+  const picker = doc.createElement('input');
+  picker.type = 'date';
+  picker.id = 'certDate';
+  picker.dataset.datePicker = '';
+  picker.dataset.eraYearField = spec.era_year;
+  picker.dataset.monthField = spec.month;
+  picker.dataset.dayField = spec.day;
+  wrap.appendChild(picker);
+
+  [spec.era_year, spec.month, spec.day].forEach((key) => {
+    const hidden = doc.createElement('input');
+    hidden.type = 'hidden';
+    hidden.dataset.field = key;
+    wrap.appendChild(hidden);
+  });
+
+  const preview = doc.createElement('p');
+  preview.className = 'hint';
+  preview.dataset.datePreview = '';
+  wrap.appendChild(preview);
+  return wrap;
+}
+
+/** 日付ピッカーの選択を、証明書に刷る和暦の 3 欄へ反映する。 */
+export function syncFieldsFromPicker(root) {
+  const picker = root.querySelector('[data-date-picker]');
+  if (!picker) return;
+  const fields = dateFieldsFromIso(picker.value);
+  if (!fields) return;
+  setFieldValue(root, picker.dataset.eraYearField, fields.era_year);
+  setFieldValue(root, picker.dataset.monthField, fields.month);
+  setFieldValue(root, picker.dataset.dayField, fields.day);
+  refreshDatePreview(root);
+}
+
+/** 和暦の 3 欄から日付ピッカーの表示を復元する（戻せなければ空のまま）。 */
+export function syncPickerFromFields(root) {
+  const picker = root.querySelector('[data-date-picker]');
+  if (!picker) return;
+  picker.value = isoFromDateFields({
+    era_year: getFieldValue(root, picker.dataset.eraYearField),
+    month: getFieldValue(root, picker.dataset.monthField),
+    day: getFieldValue(root, picker.dataset.dayField),
+  });
+  refreshDatePreview(root);
+}
+
+/** 証明書に刷られる日付を確認欄に出す。 */
+export function refreshDatePreview(root) {
+  const picker = root.querySelector('[data-date-picker]');
+  const preview = root.querySelector('[data-date-preview]');
+  if (!picker || !preview) return;
+  const printed = formatCertificateDate({
+    era_year: getFieldValue(root, picker.dataset.eraYearField),
+    month: getFieldValue(root, picker.dataset.monthField),
+    day: getFieldValue(root, picker.dataset.dayField),
+  });
+  preview.textContent = printed
+    ? `証明書には「${printed}」と印字されます。`
+    : '日付を選択してください。';
+}
+
+function getFieldValue(root, key) {
+  const input = root.querySelector(`[data-field="${key}"]`);
+  return input ? input.value : '';
+}
+
+function setFieldValue(root, key, value) {
+  const input = root.querySelector(`[data-field="${key}"]`);
+  if (input) input.value = value;
 }
 
 export function buildChoiceGroup(doc, group) {
@@ -92,6 +189,8 @@ export function buildForm(root, config) {
     section.items.forEach((item) => {
       if (item.field) {
         wrap.appendChild(buildField(doc, fieldsByKey.get(item.field)));
+      } else if (item.date) {
+        wrap.appendChild(buildDateField(doc, item.date, fieldsByKey));
       } else {
         wrap.appendChild(buildChoiceGroup(doc, groupsByKey.get(item.choice)));
       }
@@ -121,4 +220,6 @@ export function applyFormData(root, data) {
   root.querySelectorAll('[data-choice]').forEach((radio) => {
     radio.checked = radio.value === (data.choices[radio.dataset.choice] || '');
   });
+  // 隠し入力に入れた和暦から、日付ピッカーの表示を合わせ直す。
+  syncPickerFromFields(root);
 }

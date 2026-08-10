@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   canOverwrite,
   confirmSaveMessage,
+  dateFieldsFromIso,
   emptyFormData,
   ensurePdfExtension,
+  formatCertificateDate,
+  isoFromDateFields,
   mergeFormData,
   sanitizeFileName,
   suggestedFileName,
@@ -136,6 +139,73 @@ describe('validateFormData', () => {
     const filled = data({ building_name: '   ', building_area: '1' }, { calc_type: '1' });
 
     expect(validateFormData(config, filled)).toEqual(['建築物の名称']);
+  });
+});
+
+describe('dateFieldsFromIso', () => {
+  it.each([
+    ['2026-08-10', { era_year: '令和8', month: '8', day: '10' }],
+    // 改元の当日と前日。
+    ['2019-05-01', { era_year: '令和元', month: '5', day: '1' }],
+    ['2019-04-30', { era_year: '平成31', month: '4', day: '30' }],
+    ['1989-01-08', { era_year: '平成元', month: '1', day: '8' }],
+    ['1989-01-07', { era_year: '昭和64', month: '1', day: '7' }],
+  ])('%s → 和暦', (iso, expected) => {
+    expect(dateFieldsFromIso(iso)).toEqual(expected);
+  });
+
+  it.each(['', '2026-08', '2026/08/10', '2026-02-30', '2026-13-01', null])(
+    '日付として成立しない %s は null',
+    (iso) => {
+      expect(dateFieldsFromIso(iso)).toBeNull();
+    }
+  );
+});
+
+describe('isoFromDateFields', () => {
+  it.each([
+    [{ era_year: '令和8', month: '8', day: '10' }, '2026-08-10'],
+    [{ era_year: '令和元', month: '5', day: '1' }, '2019-05-01'],
+    [{ era_year: '令和1', month: '5', day: '1' }, '2019-05-01'],
+    [{ era_year: '平成31', month: '4', day: '30' }, '2019-04-30'],
+    [{ era_year: '昭和64', month: '1', day: '7' }, '1989-01-07'],
+    // 全角で入っていても読める（携帯の日本語入力対策）。
+    [{ era_year: '令和８', month: '８', day: '１０' }, '2026-08-10'],
+    // 年号なしは西暦とみなす。
+    [{ era_year: '2026', month: '8', day: '10' }, '2026-08-10'],
+  ])('%o → %s', (fields, expected) => {
+    expect(isoFromDateFields(fields)).toBe(expected);
+  });
+
+  it.each([
+    {},
+    { era_year: '', month: '8', day: '10' },
+    { era_year: '令和8', month: '', day: '10' },
+    { era_year: '令和8', month: '2', day: '30' },
+    { era_year: '不明8', month: '8', day: '10' },
+    // 年号なしで西暦にしては小さすぎる値は、取り違えを避けて戻さない。
+    { era_year: '8', month: '8', day: '10' },
+  ])('戻せない %o は空文字', (fields) => {
+    expect(isoFromDateFields(fields)).toBe('');
+  });
+
+  it('日付ピッカーとの往復で値が変わらない', () => {
+    for (const iso of ['2026-08-10', '2019-05-01', '2000-12-31']) {
+      expect(isoFromDateFields(dateFieldsFromIso(iso))).toBe(iso);
+    }
+  });
+});
+
+describe('formatCertificateDate', () => {
+  it('証明書に刷られる形で組み立てる', () => {
+    expect(formatCertificateDate({ era_year: '令和8', month: '8', day: '10' })).toBe(
+      '令和8年8月10日'
+    );
+  });
+
+  it('欠けている項目があれば空文字', () => {
+    expect(formatCertificateDate({ era_year: '令和8', month: '', day: '10' })).toBe('');
+    expect(formatCertificateDate({})).toBe('');
   });
 });
 
