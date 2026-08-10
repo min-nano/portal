@@ -102,7 +102,7 @@ export function confirmSaveMessage(mode, fileName, sourceFile) {
     const target = (sourceFile && sourceFile.name) || fileName;
     return (
       `Google Drive 上の「${target}」を上書きします。\n` +
-      '（上書き前の内容は Drive の版履歴から復元できます）\n\nよろしいですか？'
+      '（上書き前の内容は、しばらくの間は Drive の版履歴から復元できます）\n\nよろしいですか？'
     );
   }
   return `「${fileName}」という名前で新しく保存します。\n\nよろしいですか？`;

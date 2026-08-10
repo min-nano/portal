@@ -263,9 +263,7 @@ def create_file(
     _raise_for_status(resp, "ファイルの作成")
     file_id = resp.json()["id"]
     try:
-        return update_file_content(
-            session, file_id, content, mime_type, keep_revision=False
-        )
+        return update_file_content(session, file_id, content, mime_type)
     except Exception:
         # 本体のアップロードに失敗したら、中身の無いファイルを残さない。
         try:
@@ -283,24 +281,21 @@ def update_file_content(
     file_id: str,
     content: bytes,
     mime_type: str,
-    keep_revision: bool = True,
 ) -> dict:
     """既存ファイルの内容を差し替える。
 
     Drive はファイル本体を差し替えると新しいリビジョンを作るため、上書き
-    保存でも過去の版は版履歴から復元できる。keepRevisionForever を付けて、
-    自動整理で古い版が消えないようにする。
+    保存をしても直前の内容は版履歴から復元できる。keepRevisionForever は
+    付けない（古い版は Drive の自動整理に任せ、一定期間が過ぎたら最新の
+    ものだけが残ればよいという運用）。
     """
-    params = {
-        "uploadType": "media",
-        "fields": "id, name, webViewLink, modifiedTime",
-        "supportsAllDrives": "true",
-    }
-    if keep_revision:
-        params["keepRevisionForever"] = "true"
     resp = session.patch(
         f"{_UPLOAD_URL}/{file_id}",
-        params=params,
+        params={
+            "uploadType": "media",
+            "fields": "id, name, webViewLink, modifiedTime",
+            "supportsAllDrives": "true",
+        },
         data=content,
         headers={"Content-Type": mime_type},
     )

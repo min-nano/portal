@@ -277,10 +277,11 @@ def test_create_certificate_overwrites_with_version_history(client, drive):
 
     assert resp.status_code == 200
     assert resp.json()["mode"] == "overwrite"
-    file_id, content, mime, keep_revision = drive.updated[0]
+    # 上書きは「同じファイルの内容差し替え」で行う。Drive はこれで新しい
+    # リビジョンを作るため、直前の内容は版履歴から復元できる（作り直して
+    # 置き換えると版履歴が途切れてしまう）。
+    file_id, content, mime = drive.updated[0]
     assert (file_id, mime) == ("old-pdf", PDF_MIME)
-    # 上書きでも過去の版が版履歴に残るようにする。
-    assert keep_revision is True
     assert content.startswith(b"%PDF-")
     assert drive.created == []
 
@@ -458,7 +459,6 @@ def test_edit_round_trip_overwrites_the_source_file(client, drive):
 
     assert resp.status_code == 200
     assert drive.updated[0][0] == "pdf-1"
-    assert drive.updated[0][3] is True
     stored = json.loads(
         structural_cert.pdf_tools.read_metadata_value(
             drive.updated[0][1], structural_cert.load_mapping()["metadata_key"]

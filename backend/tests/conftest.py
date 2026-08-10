@@ -42,7 +42,7 @@ class FakeDrive:
         self.copies = []  # (元 file_id, 複製名)
         self.deleted = []  # 完全削除された file_id
         self.created = []  # (folder_id, name, bytes, mime)
-        self.updated = []  # (file_id, bytes, mime, keep_revision)
+        self.updated = []  # (file_id, bytes, mime)
         self.replaced = []  # replace_all_text に渡された置換表
 
     def configure_template(self, folder_id="folder-1", file_name="雛形.xlsx"):
@@ -177,8 +177,8 @@ def drive(monkeypatch):
 
     monkeypatch.setattr(main.google_drive, "create_file", create_file)
 
-    def update_file_content(session, file_id, content, mime_type, keep_revision=True):
-        fake.updated.append((file_id, content, mime_type, keep_revision))
+    def update_file_content(session, file_id, content, mime_type):
+        fake.updated.append((file_id, content, mime_type))
         return {
             "id": file_id,
             "name": fake.metadata.get(file_id, {}).get("name", ""),

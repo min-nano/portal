@@ -460,7 +460,7 @@ async def create_certificate(request: Request, user: User = Depends(require_user
 
     if mode == "overwrite":
         saved = google_drive.update_file_content(
-            session, file_id, pdf_bytes, google_drive.PDF_MIME, keep_revision=True
+            session, file_id, pdf_bytes, google_drive.PDF_MIME
         )
     else:
         saved = google_drive.create_file(
