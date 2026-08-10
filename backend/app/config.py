@@ -58,6 +58,35 @@ def firestore_database() -> str:
     return os.environ.get("FIRESTORE_DATABASE", "(default)")
 
 
+# 環境変数が未設定のときに使うチャンネル。本番ではなく development を
+# 指しているのは意図的（下の settings_channel_path を参照）。
+DEFAULT_SETTINGS_CHANNEL_PATH = "static-channels/development"
+
+
+def settings_channel_path() -> str:
+    """共有設定を置くチャンネルの Firestore ドキュメントパス。
+
+    同じデータベース内をチャンネル単位で分割し、本番・開発・PR プレビューが
+    互いのデータを踏まないようにする:
+
+      static-channels/production   本番（main）
+      static-channels/development  既定・ローカル開発
+      preview-channels/pr-<番号>   PR プレビュー
+
+    環境ごとに変わるのはここまでで、この下にどんなコレクションを置くかは
+    アプリ側の都合（settings_store を参照）。
+
+    既定を development にしているのは、環境変数の設定漏れ・ローカル開発・
+    壊れたワークフローのいずれもが本番データに到達しないようにするため。
+    本番の Cloud Run にだけ SETTINGS_CHANNEL_PATH を明示的に設定する運用に
+    することで、「本番を汚す」は起こらず、設定ミスの症状は必ず「設定が空に
+    見える」になる。
+    """
+    return os.environ.get(
+        "SETTINGS_CHANNEL_PATH", DEFAULT_SETTINGS_CHANNEL_PATH
+    ).strip("/")
+
+
 def cors_allowed_origins() -> list[str]:
     """CORS を許可するオリジン。
 
