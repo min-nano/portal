@@ -3,7 +3,8 @@
     "構造計算によって建築物の安全性を確かめた旨の証明書（第四号書式）の雛形マッピング。",
     "雛形は Google ドキュメントで、記入欄は {{…}} のプレースホルダーになっている。",
     "text_fields.placeholders に書いた文字列をフォームの入力値で置換し、PDF へ書き出したうえで、",
-    "choice_groups の選択された選択肢の anchor（行の先頭にある番号）へ ○ を描き込む。",
+    "choice_groups の選択された選択肢の anchor（行の先頭にある番号や □）へ印を描き込む。",
+    "印の種類は mark で選ぶ: circle は正円で囲む（番号向け）、check は □ の中にレ点を入れる。",
     "雛形のレイアウトが改訂されたときは、原則このファイルを直すだけで追従できる。",
     "anchor と parse_rules の label は雛形の見た目どおりに書いてよい（読み込み時に空白除去と",
     "1 文字ずつの NFKC 正規化を掛けて比較する）。parse_rules の pattern だけは正規表現のため",
@@ -15,9 +16,10 @@
   "output_file_name_template": "構造計算安全証明書_{building_name}.pdf",
   "metadata_key": "/PortalStructuralCert",
 
-  "circle": {
-    "padding_x": 2.4,
-    "padding_y": 1.4,
+  "mark": {
+    "_comment": "circle_padding は正円の半径に足す余白、check_padding は □ に対するレ点の余白。",
+    "circle_padding": 1.4,
+    "check_padding": 0.2,
     "line_width": 0.9
   },
 
@@ -130,25 +132,25 @@
           "value": "1",
           "label": "建築基準法（以下「法」という。）第20条第1項第1号に掲げる建築物",
           "anchor": "１建築基準法(以下",
-          "circle_length": 1
+          "mark_length": 1
         },
         {
           "value": "2",
           "label": "法第20条第1項第2号に掲げる建築物",
           "anchor": "２法第20条第1項第2号",
-          "circle_length": 1
+          "mark_length": 1
         },
         {
           "value": "3",
           "label": "法第20条第1項第3号に掲げる建築物",
           "anchor": "３法第20条第1項第3号",
-          "circle_length": 1
+          "mark_length": 1
         },
         {
           "value": "4",
           "label": "法第20条第1項第4号に掲げる建築物",
           "anchor": "４法第20条第1項第4号",
-          "circle_length": 1
+          "mark_length": 1
         }
       ]
     },
@@ -161,37 +163,37 @@
           "value": "1",
           "label": "建築基準法施行令（以下「令」という。）第81条第1項に定める基準に従った構造計算",
           "anchor": "１建築基準法施行令",
-          "circle_length": 1
+          "mark_length": 1
         },
         {
           "value": "2",
           "label": "令第81条第2項第1号イに規定する構造計算",
           "anchor": "２令第81条第2項第1号イ",
-          "circle_length": 1
+          "mark_length": 1
         },
         {
           "value": "3",
           "label": "令第81条第2項第1号ロに規定する構造計算",
           "anchor": "３令第81条第2項第1号ロ",
-          "circle_length": 1
+          "mark_length": 1
         },
         {
           "value": "4",
           "label": "令第81条第2項第2号イに規定する構造計算",
           "anchor": "４令第81条第2項第2号イ",
-          "circle_length": 1
+          "mark_length": 1
         },
         {
           "value": "5",
           "label": "令第81条第3項に定める基準に従った構造計算",
           "anchor": "５令第81条第3項",
-          "circle_length": 1
+          "mark_length": 1
         },
         {
           "value": "6",
           "label": "その他",
           "anchor": "６その他(",
-          "circle_length": 1,
+          "mark_length": 1,
           "requires_field": "other_calc_type"
         }
       ]
@@ -205,13 +207,13 @@
           "value": "1",
           "label": "国土交通大臣が定めた方法によるもの",
           "anchor": "１国土交通大臣が定めた方法",
-          "circle_length": 1
+          "mark_length": 1
         },
         {
           "value": "2",
           "label": "国土交通大臣の認定を受けたプログラムによるもの",
           "anchor": "２国土交通大臣の認定を受けた",
-          "circle_length": 1
+          "mark_length": 1
         }
       ]
     },
@@ -219,8 +221,8 @@
       "key": "program_certified",
       "label": "当該構造計算に用いたプログラムの国土交通大臣の認定",
       "options": [
-        { "value": "有", "label": "有", "anchor": "□有", "circle_length": 2 },
-        { "value": "無", "label": "無", "anchor": "□無", "circle_length": 2 }
+        { "value": "有", "label": "有", "anchor": "□有", "mark": "check", "mark_length": 1 },
+        { "value": "無", "label": "無", "anchor": "□無", "mark": "check", "mark_length": 1 }
       ]
     }
   ],

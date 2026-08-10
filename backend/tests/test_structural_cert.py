@@ -221,6 +221,30 @@ def test_finalize_marks_only_the_selected_options():
     assert not any(curve.contains(other, tolerance=0.5) for curve in page.curves)
 
 
+def test_finalize_circles_numbers_and_checks_the_box():
+    """番号は正円で囲み、□ にはレ点を入れる。"""
+    pdf = make_certificate_pdf()
+    data = sample_data(choices={"building_category": "2", "program_certified": "有"})
+
+    page = pdf_tools.read_layout(structural_cert.finalize_pdf(pdf, data))[0]
+
+    number = page.line_equal("2法第20条第1項第2号に掲げる建築物").box_for(0, 1)
+    circle = next(c for c in page.curves if c.contains(number, tolerance=0.5))
+    # 文字の外接矩形は縦長でも、○ は正円になる。
+    assert circle.width == pytest.approx(circle.height, abs=0.3)
+    assert circle.width > number.width
+
+    checkbox_line = page.line_equal("2国土交通大臣の認定□有□無")
+    checkbox = checkbox_line.box_for(checkbox_line.text.index("□有"), 1)
+    check = next(c for c in page.curves if checkbox.contains(c, tolerance=1.0))
+    # レ点は □ の中に収まる（○ のように文字を囲まない）。
+    assert not check.contains(checkbox)
+
+    # 「無」の □ には何も付けない。
+    unchecked = checkbox_line.box_for(checkbox_line.text.index("□無"), 1)
+    assert not any(unchecked.contains(c, tolerance=1.0) for c in page.curves)
+
+
 def test_finalize_marks_nothing_when_no_option_is_selected():
     pdf = make_certificate_pdf()
     data = structural_cert.normalize_data({"fields": {}, "choices": {}})
@@ -339,7 +363,7 @@ def test_parse_rejects_non_pdf_input():
 
 
 def test_parse_ignores_broken_metadata_and_reads_the_body():
-    pdf = pdf_tools.stamp_ellipses(
+    pdf = pdf_tools.stamp_marks(
         make_certificate_pdf(),
         {},
         metadata={structural_cert.load_mapping()["metadata_key"]: "壊れた JSON"},

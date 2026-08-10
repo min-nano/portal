@@ -64,7 +64,7 @@ export function buildChoiceGroup(doc, group) {
     radio.value = option.value;
     radio.dataset.choice = group.key;
     const text = doc.createElement('span');
-    // 証明書と同じ番号を添えて、どの選択肢に ○ が付くのかを分かりやすくする。
+    // 証明書と同じ番号を添えて、どの選択肢に印が付くのかを分かりやすくする。
     // 「有 / 無」のように値そのものが表示名になっている選択肢は、そのまま出す。
     text.textContent =
       option.value && option.value !== option.label

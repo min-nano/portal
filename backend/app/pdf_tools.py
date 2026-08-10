@@ -2,15 +2,15 @@
 
 構造計算安全証明書は Google ドキュメントの雛形から PDF へ書き出す。
 プレースホルダー（{{…}}）の差し替えは Docs API で行えるが、「該当する
-選択肢に ○ を付ける」だけは Docs API では表現できないため、書き出した
-PDF に後からベクターの楕円を重ねる。
+選択肢に ○ を付ける」「□ にレ点を入れる」は Docs API では表現できない
+ため、書き出した PDF に後からベクターの図形を重ねる。
 
 そのために必要なのは次の 2 つだけで、どちらも外部の描画ライブラリを
 使わずに済ませている:
 
   * 文字の座標を得る … pdfminer.six。行単位で「空白を除いた正規化済み
     テキスト」と、その 1 文字ずつの矩形を持つ TextLine を組み立てる。
-  * 楕円を描く …… 楕円だけを描いた 1 ページの PDF をバイト列として
+  * 図形を描く …… ○ とレ点だけを描いた 1 ページの PDF をバイト列として
     その場で組み立て、pypdf でページに重ねる（フォントを一切使わない
     ので、これで十分かつ環境に依存しない）。
 
@@ -203,8 +203,25 @@ def read_layout(pdf_bytes: bytes) -> list[PageLayout]:
     return pages
 
 
-def _ellipse_ops(box: Box, line_width: float) -> str:
-    """box に外接する楕円を描く PDF の内容ストリーム片を返す。"""
+CIRCLE = "circle"
+CHECK = "check"
+
+
+def square_around(box: Box, padding: float) -> Box:
+    """box を包む正方形を返す（中心はそのまま）。
+
+    文字の外接矩形は縦横比が 1 ではないため、そのまま楕円にすると
+    横長・縦長に見える。手書きの ○ と同じく正円にするため、長い方の辺に
+    合わせた正方形を作ってからそこに内接する円を描く。
+    """
+    cx = (box.x0 + box.x1) / 2
+    cy = (box.y0 + box.y1) / 2
+    half = max(box.width, box.height) / 2 + padding
+    return Box(cx - half, cy - half, cx + half, cy + half)
+
+
+def _circle_ops(box: Box, line_width: float) -> str:
+    """box に内接する楕円（box が正方形なら正円）を描く内容ストリーム片。"""
     cx = (box.x0 + box.x1) / 2
     cy = (box.y0 + box.y1) / 2
     rx = box.width / 2
@@ -222,14 +239,41 @@ def _ellipse_ops(box: Box, line_width: float) -> str:
     )
 
 
-def build_overlay_pdf(page_box: Box, ellipses: list[Box], line_width: float) -> bytes:
-    """楕円だけを描いた 1 ページの PDF をその場で組み立てる。
+def _check_ops(box: Box, line_width: float) -> str:
+    """box の中にレ点（チェックマーク）を描く内容ストリーム片。
 
-    フォントも画像も使わないため、外部の PDF 生成ライブラリを増やさずに
-    済ませられる。MediaBox は重ねる先のページと同じにし、座標はページの
-    ユーザー空間そのままで受け取る。
+    短く下ろしてから右上へ長く跳ね上げる 2 画。□ の中に収まりつつ、
+    右上だけわずかに飛び出すと手書きのレ点に近い見た目になる。
     """
-    content = "".join(_ellipse_ops(box, line_width) for box in ellipses).encode("ascii")
+    x, y = box.x0, box.y0
+    w, h = box.width, box.height
+    return (
+        f"q 0 0 0 RG {line_width * 1.15:.2f} w 1 J 1 j\n"
+        f"{x + w * 0.20:.2f} {y + h * 0.52:.2f} m\n"
+        f"{x + w * 0.42:.2f} {y + h * 0.22:.2f} l\n"
+        f"{x + w * 0.86:.2f} {y + h * 0.88:.2f} l\n"
+        "S Q\n"
+    )
+
+
+def _mark_ops(kind: str, box: Box, line_width: float) -> str:
+    return (
+        _check_ops(box, line_width)
+        if kind == CHECK
+        else _circle_ops(box, line_width)
+    )
+
+
+def build_overlay_pdf(page_box: Box, marks: list[tuple], line_width: float) -> bytes:
+    """印（○ とレ点）だけを描いた 1 ページの PDF をその場で組み立てる。
+
+    marks は ("circle" | "check", 外接矩形) の並び。フォントも画像も使わない
+    ため、外部の PDF 生成ライブラリを増やさずに済ませられる。MediaBox は
+    重ねる先のページと同じにし、座標はページのユーザー空間そのままで受け取る。
+    """
+    content = "".join(
+        _mark_ops(kind, box, line_width) for kind, box in marks
+    ).encode("ascii")
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -261,17 +305,17 @@ def build_overlay_pdf(page_box: Box, ellipses: list[Box], line_width: float) -> 
     return bytes(out)
 
 
-def stamp_ellipses(
+def stamp_marks(
     pdf_bytes: bytes,
-    ellipses_by_page: dict[int, list[Box]],
+    marks_by_page: dict[int, list[tuple]],
     line_width: float = 0.9,
     metadata: dict[str, str] | None = None,
 ) -> bytes:
-    """ページごとの楕円を重ね、必要なら文書情報を差し替えて書き出す。"""
+    """ページごとの印を重ね、必要なら文書情報を差し替えて書き出す。"""
     writer = PdfWriter(clone_from=io.BytesIO(pdf_bytes))
     for index, page in enumerate(writer.pages):
-        boxes = ellipses_by_page.get(index) or []
-        if not boxes:
+        marks = marks_by_page.get(index) or []
+        if not marks:
             continue
         media = page.mediabox
         page_box = Box(
@@ -280,7 +324,7 @@ def stamp_ellipses(
             float(media.right),
             float(media.top),
         )
-        overlay = PdfReader(io.BytesIO(build_overlay_pdf(page_box, boxes, line_width)))
+        overlay = PdfReader(io.BytesIO(build_overlay_pdf(page_box, marks, line_width)))
         page.merge_page(overlay.pages[0])
 
     if metadata:

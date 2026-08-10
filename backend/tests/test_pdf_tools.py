@@ -72,28 +72,63 @@ def test_lines_in_container_is_ordered_top_down():
     assert [ln.text for ln in page.lines_in_container(container)] == ["上の行", "下の行"]
 
 
-# --- ○ の描き込み -----------------------------------------------------------
+# --- 印（○ / レ点）の描き込み ------------------------------------------------
 
-def test_stamp_ellipses_draws_a_curve_at_the_requested_place():
+def test_square_around_makes_a_circle_not_an_ellipse():
+    # 文字の外接矩形は縦横比が 1 ではない（ここでは横長）。
+    box = Box(10.0, 100.0, 25.0, 110.0)
+
+    square = pdf_tools.square_around(box, padding=2.0)
+
+    # 長い辺に合わせた正方形になるので、内接させれば正円になる。
+    assert square.width == pytest.approx(square.height)
+    assert square.width == pytest.approx(15.0 + 2 * 2.0)
+    # 中心は動かさない（文字の真ん中を囲む）。
+    assert (square.x0 + square.x1) / 2 == pytest.approx((box.x0 + box.x1) / 2)
+    assert (square.y0 + square.y1) / 2 == pytest.approx((box.y0 + box.y1) / 2)
+
+
+def test_stamp_marks_draws_a_circle_at_the_requested_place():
     pdf = make_pdf([("１法第20条", 250.0, 700.0)])
     page = pdf_tools.read_layout(pdf)[0]
-    target = page.line_equal("1法第20条").box_for(0, 1)
+    target = pdf_tools.square_around(page.line_equal("1法第20条").box_for(0, 1), 1.4)
 
-    stamped = pdf_tools.stamp_ellipses(pdf, {0: [target]})
+    stamped = pdf_tools.stamp_marks(pdf, {0: [(pdf_tools.CIRCLE, target)]})
 
     after = pdf_tools.read_layout(stamped)[0]
     assert len(after.curves) == 1
     curve = after.curves[0]
     assert curve.x0 == pytest.approx(target.x0, abs=0.5)
     assert curve.y1 == pytest.approx(target.y1, abs=0.5)
+    # 正方形に内接させているので、描かれた円も縦横が等しい。
+    assert curve.width == pytest.approx(curve.height, abs=0.5)
     # 元のテキストは失われない。
     assert after.line_equal("1法第20条") is not None
 
 
-def test_stamp_ellipses_without_targets_keeps_the_page_unchanged():
+def test_stamp_marks_draws_a_check_inside_the_box():
+    pdf = make_pdf([("□有", 250.0, 700.0)])
+    page = pdf_tools.read_layout(pdf)[0]
+    target = page.line_equal("□有").box_for(0, 1)
+
+    stamped = pdf_tools.stamp_marks(pdf, {0: [(pdf_tools.CHECK, target)]})
+
+    after = pdf_tools.read_layout(stamped)[0]
+    assert len(after.curves) == 1
+    check = after.curves[0]
+    # レ点は □ の中に収まる（隣の「有」にはみ出さない）。
+    assert target.contains(check, tolerance=0.5)
+    # 小さすぎて見えない、ということがない程度の大きさはある。
+    assert check.width > target.width * 0.5
+    assert check.height > target.height * 0.5
+    # 右上へ跳ね上げる形なので、右端のほうが上まで届く。
+    assert check.y1 > (target.y0 + target.y1) / 2
+
+
+def test_stamp_marks_without_targets_keeps_the_page_unchanged():
     pdf = make_pdf([("１法第20条", 250.0, 700.0)])
 
-    stamped = pdf_tools.stamp_ellipses(pdf, {})
+    stamped = pdf_tools.stamp_marks(pdf, {})
 
     after = pdf_tools.read_layout(stamped)[0]
     assert after.curves == []
@@ -103,7 +138,7 @@ def test_stamp_ellipses_without_targets_keeps_the_page_unchanged():
 def test_metadata_round_trip():
     pdf = make_pdf([("本文", 100.0, 700.0)])
 
-    stamped = pdf_tools.stamp_ellipses(pdf, {}, metadata={"/Portal": '{"a": 1}'})
+    stamped = pdf_tools.stamp_marks(pdf, {}, metadata={"/Portal": '{"a": 1}'})
 
     assert pdf_tools.read_metadata_value(stamped, "/Portal") == '{"a": 1}'
     assert pdf_tools.read_metadata_value(stamped, "/Missing") is None

@@ -243,11 +243,11 @@ def _selected_options(data: dict) -> list[tuple[dict, dict]]:
 
 
 def _locate_anchor(pages: list, group: dict, option: dict) -> tuple[int, Box]:
-    """選択肢の番号（○ を付ける文字）の位置を探す。"""
+    """選択肢の印を付ける文字（番号や □）の位置を探す。"""
     hits = []
     for page in pages:
         for line, start in page.find(option["anchor"]):
-            hits.append((page.index, line.box_for(start, option.get("circle_length", 1))))
+            hits.append((page.index, line.box_for(start, option.get("mark_length", 1))))
     if not hits:
         raise CertificateError(
             f"雛形の中に「{group['label']}」の選択肢「{option['label']}」が"
@@ -265,29 +265,40 @@ def _locate_anchor(pages: list, group: dict, option: dict) -> tuple[int, Box]:
     return hits[0]
 
 
+def _mark_box(option: dict, anchor_box: Box) -> tuple[str, Box]:
+    """選択肢の印の種類と、その外接矩形を決める。
+
+    番号は正円で囲む（文字の外接矩形は縦横比が 1 ではないため、そのまま
+    楕円にすると横長に見える）。□ はレ点を中に入れる。
+    """
+    mark = load_mapping()["mark"]
+    kind = option.get("mark", pdf_tools.CIRCLE)
+    if kind == pdf_tools.CHECK:
+        padding = mark["check_padding"]
+        return kind, Box(
+            anchor_box.x0 - padding,
+            anchor_box.y0 - padding,
+            anchor_box.x1 + padding,
+            anchor_box.y1 + padding,
+        )
+    return kind, pdf_tools.square_around(anchor_box, mark["circle_padding"])
+
+
 def finalize_pdf(pdf_bytes: bytes, data: dict) -> bytes:
-    """書き出した PDF に ○ を描き込み、フォーム入力を文書情報へ埋め込む。"""
+    """書き出した PDF に印を描き込み、フォーム入力を文書情報へ埋め込む。"""
     mapping = load_mapping()
-    circle = mapping["circle"]
     pages = pdf_tools.read_layout(pdf_bytes)
 
-    ellipses: dict[int, list[Box]] = {}
+    marks: dict[int, list[tuple]] = {}
     for group, option in _selected_options(data):
-        page_index, box = _locate_anchor(pages, group, option)
-        ellipses.setdefault(page_index, []).append(
-            Box(
-                box.x0 - circle["padding_x"],
-                box.y0 - circle["padding_y"],
-                box.x1 + circle["padding_x"],
-                box.y1 + circle["padding_y"],
-            )
-        )
+        page_index, anchor_box = _locate_anchor(pages, group, option)
+        marks.setdefault(page_index, []).append(_mark_box(option, anchor_box))
 
     # 再編集のためにフォーム入力そのものを残す。ensure_ascii=True のままにして
     # 文書情報が ASCII に収まるようにし、PDF の文字コードの差異を避ける。
     metadata = {mapping["metadata_key"]: json.dumps(data, sort_keys=True)}
-    return pdf_tools.stamp_ellipses(
-        pdf_bytes, ellipses, line_width=circle["line_width"], metadata=metadata
+    return pdf_tools.stamp_marks(
+        pdf_bytes, marks, line_width=mapping["mark"]["line_width"], metadata=metadata
     )
 
 
@@ -349,28 +360,41 @@ def _apply_right_of(page, rule: dict) -> str | None:
     return "".join(texts) if texts else None
 
 
-def _detect_choices(pages: list, data: dict, warnings: list):
-    """本文に描かれた ○ の位置から、選ばれている選択肢を復元する。
+def _is_mark_on(curve: Box, anchor_box: Box) -> bool:
+    """曲線が、その文字に付けられた印（○ / レ点）かどうかを判定する。
 
-    ○ は選択肢の番号を囲むベクター図形なので、番号の外接矩形をちょうど
-    包む小さな曲線があるかどうかで判定できる（表の罫線は直線・矩形として
-    別に扱われるため誤検出しない）。
+    印は対象の文字を中心に描かれる小さな図形なので、「中心が文字の矩形の
+    中にあり、かつ文字まわりに収まるサイズ」で見分けられる。○ は文字より
+    ひと回り大きく、レ点は □ の中に収まるため、包含関係ではなく中心の
+    位置で見るほうが両方を素直に拾える。表の罫線は直線・矩形として別に
+    扱われるため、そもそもここには来ない。
+    """
+    center_x = (curve.x0 + curve.x1) / 2
+    center_y = (curve.y0 + curve.y1) / 2
+    inside = (
+        anchor_box.x0 - 2 <= center_x <= anchor_box.x1 + 2
+        and anchor_box.y0 - 2 <= center_y <= anchor_box.y1 + 2
+    )
+    small = (
+        curve.width <= anchor_box.width + 14 and curve.height <= anchor_box.height + 14
+    )
+    return inside and small
+
+
+def _detect_choices(pages: list, data: dict, warnings: list):
+    """本文に描かれた印の位置から、選ばれている選択肢を復元する。
+
+    ○ もレ点もベクター図形として残っているため、対象の文字の位置に印が
+    あるかどうかで判定できる。
     """
     for group in load_mapping()["choice_groups"]:
         found = []
         for option in group["options"]:
             for page in pages:
                 for line, start in page.find(option["anchor"]):
-                    anchor_box = line.box_for(start, option.get("circle_length", 1))
+                    anchor_box = line.box_for(start, option.get("mark_length", 1))
                     for curve in page.curves:
-                        if not curve.contains(anchor_box, tolerance=0.5):
-                            continue
-                        # 大きな図形（囲み枠など）を ○ と誤認しないよう、
-                        # 番号まわりに収まるサイズのものだけを採用する。
-                        if (
-                            curve.width <= anchor_box.width + 14
-                            and curve.height <= anchor_box.height + 14
-                        ):
+                        if _is_mark_on(curve, anchor_box):
                             found.append(option["value"])
                             break
         unique = list(dict.fromkeys(found))

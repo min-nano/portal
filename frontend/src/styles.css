@@ -102,7 +102,7 @@ button:disabled { background-color: #aaa; }
 .cert-field .field-row input { flex: 1; }
 .cert-field .unit { font-size: 0.85em; color: #555; white-space: nowrap; }
 
-/* 選択肢（証明書上では該当する番号に ○ が付く）。 */
+/* 選択肢（証明書上では該当する番号に ○、□ にはレ点が付く）。 */
 .cert-choices { border: 1px solid #e3e3ef; border-radius: 6px; padding: 6px 10px 10px; margin-top: 12px; }
 .cert-choices legend { font-size: 0.85em; font-weight: bold; color: #1a3a8f; padding: 0 4px; }
 .choice-option { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; font-weight: normal; font-size: 0.85em; line-height: 1.4; }
