@@ -10,7 +10,7 @@ Drive と同じく実行ユーザーの代理トークンで呼ぶため、雛�
 
 from google.auth.transport.requests import AuthorizedSession
 
-from .google_drive import DriveError
+from .google_drive import DriveError, api_error_detail
 
 _DOCUMENTS_URL = "https://docs.googleapis.com/v1/documents"
 
@@ -40,15 +40,21 @@ def replace_all_text(
     resp = session.post(
         f"{_DOCUMENTS_URL}/{document_id}:batchUpdate", json={"requests": requests}
     )
-    if resp.status_code in (401, 403):
-        raise DriveError(
-            f"雛形の書き換えが拒否されました (HTTP {resp.status_code})。"
-            "domain-wide delegation に Google ドキュメントのスコープ "
-            "(https://www.googleapis.com/auth/documents) が登録されているか確認してください。",
-            502,
-        )
     if not resp.ok:
-        raise DriveError(f"雛形の書き換えに失敗しました (HTTP {resp.status_code})。", 502)
+        detail = api_error_detail(resp)
+        message = f"雛形の書き換えに失敗しました (HTTP {resp.status_code})。"
+        if resp.status_code in (401, 403):
+            # 403 は「スコープが無い」だけでなく「GCP プロジェクトで Google Docs
+            # API が有効になっていない」でも起きる。どちらかは Google の応答に
+            # しか書かれていないため、必ずそれを添える。
+            message = (
+                f"雛形の書き換えが拒否されました (HTTP {resp.status_code})。"
+                "GCP プロジェクトで Google Docs API (docs.googleapis.com) が"
+                "有効になっているか、domain-wide delegation に Google ドキュメントの"
+                "スコープ (https://www.googleapis.com/auth/documents) が登録されて"
+                "いるかを確認してください。"
+            )
+        raise DriveError(f"{message}（Google からの応答: {detail}）" if detail else message, 502)
 
     replies = resp.json().get("replies") or []
     counts = {}

@@ -102,6 +102,15 @@ describe('buildForm', () => {
     expect(radios[0].checked).toBe(true);
   });
 
+  it('値そのものが表示名の選択肢は、番号を前置きせずそのまま出す', () => {
+    const labels = [...root.querySelectorAll('[name="choice-program_certified"]')].map(
+      (radio) => radio.parentElement.textContent
+    );
+
+    // 「有　有」のように重複させない。
+    expect(labels).toEqual(['（指定しない）', '有', '無']);
+  });
+
   it('必須のグループは既定で未選択', () => {
     const radios = [...root.querySelectorAll('[name="choice-calc_type"]')];
 

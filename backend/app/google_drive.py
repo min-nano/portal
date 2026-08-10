@@ -105,18 +105,53 @@ def _escape_query_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def api_error_detail(resp) -> str:
+    """Google API のエラー応答から、原因を示す文言を取り出す。
+
+    拒否の理由は「スコープが足りない」「API が有効化されていない」「本人に
+    権限が無い」など複数ありうる。こちらで推測した案内だけを出すと利用者を
+    誤った調査へ誘導してしまうため、Google 自身の説明を必ず添える。
+    """
+    try:
+        error = (resp.json() or {}).get("error")
+    except Exception:
+        return ""
+    if isinstance(error, str):
+        message = error
+    elif isinstance(error, dict):
+        message = error.get("message") or ""
+    else:
+        return ""
+    message = " ".join(str(message).split())
+    # 長い説明（有効化用の URL を含むことがある）は途中で切る。
+    return message if len(message) <= 300 else message[:300] + "…"
+
+
+def _with_detail(message: str, resp) -> str:
+    detail = api_error_detail(resp)
+    return f"{message}（Google からの応答: {detail}）" if detail else message
+
+
 def _raise_for_status(resp, context: str):
     if resp.status_code == 401 or resp.status_code == 403:
         raise DriveError(
-            f"{context}が拒否されました (HTTP {resp.status_code})。"
-            "domain-wide delegation の設定（クライアント ID とスコープの登録）と、"
-            "ファイルへのアクセス権を確認してください。",
+            _with_detail(
+                f"{context}が拒否されました (HTTP {resp.status_code})。"
+                "GCP プロジェクトでの API の有効化、domain-wide delegation の設定"
+                "（クライアント ID とスコープの登録）、ファイルへのアクセス権を"
+                "確認してください。",
+                resp,
+            ),
             502,
         )
     if resp.status_code == 404:
-        raise DriveError(f"{context}に失敗しました（ファイルが見つかりません）。", 404)
+        raise DriveError(
+            _with_detail(f"{context}に失敗しました（ファイルが見つかりません）。", resp), 404
+        )
     if not resp.ok:
-        raise DriveError(f"{context}に失敗しました (HTTP {resp.status_code})。", 502)
+        raise DriveError(
+            _with_detail(f"{context}に失敗しました (HTTP {resp.status_code})。", resp), 502
+        )
 
 
 def get_file_metadata(session: AuthorizedSession, file_id: str) -> dict:

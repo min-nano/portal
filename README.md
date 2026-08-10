@@ -122,8 +122,11 @@ PROJECT_ID=<your-gcp-project-id>
 REGION=asia-northeast1
 
 # 必要な API を有効化
+# docs.googleapis.com は構造計算安全証明書 作成ツール（雛形の Google ドキュメントの
+# プレースホルダー置換）で使う。有効化を忘れると、スコープを正しく登録していても
+# 置換の呼び出しが HTTP 403（SERVICE_DISABLED）で失敗する。
 gcloud services enable run.googleapis.com iamcredentials.googleapis.com \
-  drive.googleapis.com firestore.googleapis.com \
+  drive.googleapis.com docs.googleapis.com firestore.googleapis.com \
   cloudbuild.googleapis.com artifactregistry.googleapis.com \
   --project "$PROJECT_ID"
 
@@ -165,6 +168,8 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
    | `drive` + `documents` | 構造計算安全証明書の生成。雛形の複製・プレースホルダー置換・PDF 書き出し・複製の削除・Drive への保存 |
 
    ※ 書き込みスコープは代理するユーザー本人の権限の範囲でしか効きません（本人が書けない場所へは保存できません）。証明書ツールを使わない場合は `drive.readonly` だけの登録で構いません。
+
+   **スコープを登録したのに HTTP 403 になる場合**: スコープ不足ではなく、GCP プロジェクトで API 自体が有効になっていない（`SERVICE_DISABLED`）ことがあります。特に Google Docs API は有効化を忘れやすいので、「2. GCP プロジェクト」の `gcloud services enable` に `docs.googleapis.com` が含まれているか確認してください。画面に出るエラーには Google からの応答がそのまま添えられるので、そちらでどちらの原因かを判別できます。
 
 ### 4. 共有設定（Firestore）
 
