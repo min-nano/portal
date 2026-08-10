@@ -15,8 +15,14 @@ name: Preview cleanup
 # if で振り分けると、push のたびに削除ジョブが「スキップ」としてチェック一覧に
 # 出てしまうため。
 #
-# 各ステップは既に消えている場合でも失敗にしない（|| true）。1 つの後片付けが
-# 失敗しても残りを続けられるよう、ステップを分けている。
+# 各ステップは「もともと無い」と「消せなかった」を区別する。前者（既に失効・
+# 削除済み）は正常として続行し、後者（権限不足など）はジョブを失敗させる。
+# 以前は一律に || true としていたが、それでは恒久的な失敗も握り潰され、
+# ゴミが溜まり続けても誰も気付かない。
+#
+# 「もともと無い」を正常扱いにしたことで、このワークフローは冪等になった。
+# 途中のステップで失敗しても、原因を直して再実行すれば残りが片付く
+# （既に消えた分は正常として素通りする）。
 
 on:
   pull_request:
@@ -48,28 +54,60 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
       - name: Delete Hosting channel
+        # チャンネルは最終デプロイから 7 日で自動失効するため、クローズ時点で
+        # 既に無いことが普通にある。
         run: |
-          npx firebase-tools@latest hosting:channel:delete "pr-$PR" \
-            --project '${{ vars.PROJECT_ID }}' \
-            --force || true
+          if out="$(npx firebase-tools@latest hosting:channel:delete "pr-$PR" \
+              --project '${{ vars.PROJECT_ID }}' --force 2>&1)"; then
+            echo "$out"
+          elif grep -qiE '404|not found|does not exist' <<<"$out"; then
+            echo "$out"
+            echo "チャンネル pr-$PR は既にありません（失効済みなど。正常）"
+          else
+            echo "$out"
+            echo "::error::Hosting チャンネル pr-$PR を削除できませんでした"
+            exit 1
+          fi
       - name: Delete Cloud Run service
         run: |
-          gcloud run services delete "portal-api-pr-$PR" \
-            --region asia-northeast1 \
-            --project '${{ vars.PROJECT_ID }}' \
-            --quiet || true
+          if out="$(gcloud run services delete "portal-api-pr-$PR" \
+              --region asia-northeast1 \
+              --project '${{ vars.PROJECT_ID }}' \
+              --quiet 2>&1)"; then
+            echo "$out"
+          elif grep -qiE 'NOT_FOUND|Cannot find service|could not be found' <<<"$out"; then
+            echo "$out"
+            echo "サービス portal-api-pr-$PR は既にありません（正常）"
+          else
+            echo "$out"
+            echo "::error::Cloud Run サービス portal-api-pr-$PR を削除できませんでした"
+            exit 1
+          fi
       - name: Delete container images
         # ソースデプロイのイメージはサービス名ごとのパスに積まれるため、
         # このパスを消せばこの PR の分だけが消える。
         run: |
-          gcloud artifacts docker images delete \
-            "asia-northeast1-docker.pkg.dev/${{ vars.PROJECT_ID }}/cloud-run-source-deploy/portal-api-pr-$PR" \
-            --delete-tags \
-            --quiet || true
+          image="asia-northeast1-docker.pkg.dev/${{ vars.PROJECT_ID }}/cloud-run-source-deploy/portal-api-pr-$PR"
+          if out="$(gcloud artifacts docker images delete "$image" --delete-tags --quiet 2>&1)"; then
+            echo "$out"
+          elif grep -qiE 'NOT_FOUND|not found|does not exist' <<<"$out"; then
+            echo "$out"
+            echo "イメージ $image は既にありません（正常）"
+          else
+            echo "$out"
+            echo "::error::コンテナイメージ $image を削除できませんでした"
+            exit 1
+          fi
       - name: Delete preview settings in Firestore
         # ドキュメントを消してもサブコレクションは消えないため再帰削除する。
+        #
+        # ここだけ「もともと無い」の判定が要らない。--recursive 指定時、
+        # firestore:delete は対象が無くても終了コード 0 で終わる（Firestore の
+        # 削除自体が冪等で、削除対象が 0 件なら何もせず完了する）。一方、権限
+        # 不足はコレクションの列挙に失敗して非ゼロになる。つまり非ゼロは常に
+        # 本物の失敗であり、そのままジョブを落としてよい。
         run: |
           npx firebase-tools@latest firestore:delete "preview-channels/pr-$PR" \
             --recursive \
             --force \
-            --project '${{ vars.PROJECT_ID }}' || true
+            --project '${{ vars.PROJECT_ID }}'
