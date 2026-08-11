@@ -120,6 +120,9 @@ export function syncPickerFromFields(root) {
     month: getFieldValue(root, picker.dataset.monthField),
     day: getFieldValue(root, picker.dataset.dayField),
   });
+  // 読み取れた日付は、このツールの表記（「令和 8」）に揃えてから保存する。
+  // 読み取れなかった場合は手を触れない（元の値をそのまま残す）。
+  if (picker.value) syncFieldsFromPicker(root);
   refreshDatePreview(root);
 }
 

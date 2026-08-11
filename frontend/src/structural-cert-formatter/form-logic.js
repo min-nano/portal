@@ -117,9 +117,14 @@ function parseIsoDate(iso) {
 export function dateFieldsFromIso(iso) {
   const date = parseIsoDate(iso);
   if (!date) return null;
+  // Intl は "令和8年" / "令和元年" を返す。雛形が「年」を刷るのでそれは落とし、
+  // 元号と年数の間には半角スペースを入れる（「令和 8」）。
+  const eraYear = eraYearFormatter
+    .format(date)
+    .replace(/年$/, '')
+    .replace(/^(.+?)(元|\d+)$/, '$1 $2');
   return {
-    // Intl は "令和8年" / "令和元年" を返す。雛形が「年」を刷るので落とす。
-    era_year: eraYearFormatter.format(date).replace(/年$/, ''),
+    era_year: eraYear,
     month: String(date.getUTCMonth() + 1),
     day: String(date.getUTCDate()),
   };

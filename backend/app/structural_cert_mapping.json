@@ -35,7 +35,7 @@
       "key": "era_year",
       "label": "年号・年",
       "placeholders": ["{{年号年}}"],
-      "hint": "例: 令和7",
+      "hint": "例: 令和 7",
       "required": true
     },
     { "key": "month", "label": "月", "placeholders": ["{{月}}"], "unit": "月", "required": true },

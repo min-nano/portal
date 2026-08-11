@@ -188,14 +188,14 @@ describe('証明日（日付ピッカー）', () => {
     setDate(root, '2026-08-10');
 
     const fields = collectFormData(root, config).fields;
-    expect(fields).toMatchObject({ era_year: '令和8', month: '8', day: '10' });
+    expect(fields).toMatchObject({ era_year: '令和 8', month: '8', day: '10' });
   });
 
   it('証明書に印字される日付を確認欄に出す', () => {
     setDate(root, '2026-08-10');
 
     expect(root.querySelector('[data-date-preview]').textContent).toContain(
-      '令和8年8月10日'
+      '令和 8年8月10日'
     );
   });
 
@@ -206,6 +206,8 @@ describe('証明日（日付ピッカー）', () => {
     });
 
     expect(root.querySelector('[data-date-picker]').value).toBe('2025-08-10');
+    // 区切りの無い表記で読み込んでも、保存時はこのツールの表記に揃える。
+    expect(collectFormData(root, config).fields.era_year).toBe('令和 7');
   });
 
   it('和暦として読めない日付でも、元の値は失われない', () => {
@@ -242,7 +244,7 @@ describe('collectFormData / applyFormData', () => {
 
     const data = collectFormData(root, config);
 
-    expect(data.fields.era_year).toBe('令和7');
+    expect(data.fields.era_year).toBe('令和 7');
     expect(data.fields.month).toBe('8');
     expect(data.fields.day).toBe('10');
     expect(data.fields.building_area).toBe('62.10');
@@ -258,7 +260,7 @@ describe('collectFormData / applyFormData', () => {
   it('流し込んだ内容を取り出すと元に戻る（読み込み → 編集の往復）', () => {
     const loaded = {
       fields: {
-        era_year: '令和7',
+        era_year: '令和 7',
         month: '8',
         day: '10',
         building_area: '62.10',

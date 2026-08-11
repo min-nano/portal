@@ -144,12 +144,14 @@ describe('validateFormData', () => {
 
 describe('dateFieldsFromIso', () => {
   it.each([
-    ['2026-08-10', { era_year: '令和8', month: '8', day: '10' }],
+    // 元号と年数の間は半角スペースで区切る。
+    ['2026-08-10', { era_year: '令和 8', month: '8', day: '10' }],
+    ['2044-01-01', { era_year: '令和 26', month: '1', day: '1' }],
     // 改元の当日と前日。
-    ['2019-05-01', { era_year: '令和元', month: '5', day: '1' }],
-    ['2019-04-30', { era_year: '平成31', month: '4', day: '30' }],
-    ['1989-01-08', { era_year: '平成元', month: '1', day: '8' }],
-    ['1989-01-07', { era_year: '昭和64', month: '1', day: '7' }],
+    ['2019-05-01', { era_year: '令和 元', month: '5', day: '1' }],
+    ['2019-04-30', { era_year: '平成 31', month: '4', day: '30' }],
+    ['1989-01-08', { era_year: '平成 元', month: '1', day: '8' }],
+    ['1989-01-07', { era_year: '昭和 64', month: '1', day: '7' }],
   ])('%s → 和暦', (iso, expected) => {
     expect(dateFieldsFromIso(iso)).toEqual(expected);
   });
@@ -164,6 +166,8 @@ describe('dateFieldsFromIso', () => {
 
 describe('isoFromDateFields', () => {
   it.each([
+    [{ era_year: '令和 8', month: '8', day: '10' }, '2026-08-10'],
+    // 区切りが無い書き方も読める（他所で作られた PDF 対策）。
     [{ era_year: '令和8', month: '8', day: '10' }, '2026-08-10'],
     [{ era_year: '令和元', month: '5', day: '1' }, '2019-05-01'],
     [{ era_year: '令和1', month: '5', day: '1' }, '2019-05-01'],
@@ -198,13 +202,13 @@ describe('isoFromDateFields', () => {
 
 describe('formatCertificateDate', () => {
   it('証明書に刷られる形で組み立てる', () => {
-    expect(formatCertificateDate({ era_year: '令和8', month: '8', day: '10' })).toBe(
-      '令和8年8月10日'
+    expect(formatCertificateDate({ era_year: '令和 8', month: '8', day: '10' })).toBe(
+      '令和 8年8月10日'
     );
   });
 
   it('欠けている項目があれば空文字', () => {
-    expect(formatCertificateDate({ era_year: '令和8', month: '', day: '10' })).toBe('');
+    expect(formatCertificateDate({ era_year: '令和 8', month: '', day: '10' })).toBe('');
     expect(formatCertificateDate({})).toBe('');
   });
 });
