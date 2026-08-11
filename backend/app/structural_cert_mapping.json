@@ -90,7 +90,8 @@
       "key": "eaves_height",
       "label": "最高の軒の高さ",
       "placeholders": ["{{軒高さ}}"],
-      "unit": "m"
+      "unit": "m",
+      "required": true
     },
     {
       "key": "floors_above",
@@ -126,7 +127,8 @@
       "key": "program_cert_number",
       "label": "プログラムの認定番号",
       "placeholders": ["{{プログラム認定番号}}"]
-    }
+    },
+    { "key": "remarks", "label": "備考", "placeholders": ["{{備考}}"] }
   ],
 
   "choice_groups": [
@@ -279,7 +281,8 @@
         { "choice": "program_certified" },
         { "field": "program_cert_number" }
       ]
-    }
+    },
+    { "title": "備考", "items": [{ "field": "remarks" }] }
   ],
 
   "parse_rules": [
@@ -319,6 +322,7 @@
     { "type": "right_of", "label": "一部", "field": "structure_part", "strip_suffix": "造" },
     { "type": "line_regex", "pattern": "^6その他\\((?P<other_calc_type>.*?)\\)?$" },
     { "type": "line_regex", "pattern": "^1名称\\((?P<program_name>.*?)\\)?$" },
-    { "type": "line_regex", "pattern": "^3認定番号\\((?P<program_cert_number>.*?)\\)?$" }
+    { "type": "line_regex", "pattern": "^3認定番号\\((?P<program_cert_number>.*?)\\)?$" },
+    { "type": "right_of", "label": "備考", "field": "remarks" }
   ]
 }

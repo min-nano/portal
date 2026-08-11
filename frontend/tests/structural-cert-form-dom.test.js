@@ -18,6 +18,7 @@ const config = {
     { key: 'day', label: '日', required: true, unit: '日', hint: '' },
     { key: 'building_area', label: '建築面積', required: true, unit: 'm²', hint: '' },
     { key: 'other_calc_type', label: 'その他の構造計算の種類', required: false, unit: '', hint: '' },
+    { key: 'remarks', label: '備考', required: false, unit: '', hint: '' },
   ],
   choice_groups: [
     {
@@ -55,6 +56,7 @@ const config = {
       title: '当該構造計算に用いたプログラム',
       items: [{ choice: 'program_certified' }],
     },
+    { title: '備考', items: [{ field: 'remarks' }] },
   ],
 };
 
@@ -82,7 +84,18 @@ describe('buildForm', () => {
       '建築物',
       '構造計算の種類 *',
       '当該構造計算に用いたプログラム',
+      '備考',
     ]);
+  });
+
+  it('見出しと同じ名前の記入欄は、名前を重ねない', () => {
+    const input = root.querySelector('#field-remarks');
+
+    expect(root.querySelector('label[for="field-remarks"]')).toBeNull();
+    // 名前は見出しが担う（読み上げでも同じ結び付きになる）。
+    expect(input.getAttribute('aria-labelledby')).toBe(
+      input.closest('.cert-section').querySelector('h3').id
+    );
   });
 
   it('記入欄には単位とラベルを付ける', () => {
@@ -235,6 +248,67 @@ describe('証明日（日付ピッカー）', () => {
   });
 });
 
+describe('選択肢に紐づく記入欄', () => {
+  /** 利用者が選択肢を選んだときと同じ状態にする。 */
+  function choose(value) {
+    const radio = root.querySelector(`[name="choice-calc_type"][value="${value}"]`);
+    radio.checked = true;
+    radio.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  it('その選択肢を選ぶまでは入力できない', () => {
+    const input = root.querySelector('#field-other_calc_type');
+
+    expect(input.disabled).toBe(true);
+    expect(input.closest('.cert-field').classList.contains('disabled')).toBe(true);
+    // いつ入力できるようになるのかを画面にも書いておく。
+    expect(input.closest('.cert-field').querySelector('.hint').textContent).toBe(
+      '「6　その他」を選んだときに入力できます。'
+    );
+  });
+
+  it('紐づかない記入欄はいつでも入力できる', () => {
+    expect(root.querySelector('#field-building_area').disabled).toBe(false);
+    expect(root.querySelector('#field-remarks').disabled).toBe(false);
+  });
+
+  it('その選択肢を選ぶと入力できるようになる', () => {
+    choose('6');
+
+    const input = root.querySelector('#field-other_calc_type');
+    expect(input.disabled).toBe(false);
+    expect(input.closest('.cert-field').classList.contains('disabled')).toBe(false);
+  });
+
+  it('別の選択肢へ移すと、入力した内容は残さない', () => {
+    choose('6');
+    root.querySelector('#field-other_calc_type').value = '限界耐力計算';
+
+    choose('1');
+
+    // 証明書に載らない内容なので、画面にも残さない（バックエンドも空にする）。
+    expect(root.querySelector('#field-other_calc_type').value).toBe('');
+    expect(collectFormData(root, config).fields.other_calc_type).toBe('');
+  });
+
+  it('読み込んだ内容の選択に合わせて、入力の可否も決め直す', () => {
+    applyFormData(root, {
+      fields: { other_calc_type: '限界耐力計算' },
+      choices: { calc_type: '6' },
+    });
+    expect(root.querySelector('#field-other_calc_type').disabled).toBe(false);
+
+    applyFormData(root, {
+      fields: { other_calc_type: '限界耐力計算' },
+      choices: { calc_type: '1' },
+    });
+
+    const input = root.querySelector('#field-other_calc_type');
+    expect(input.disabled).toBe(true);
+    expect(input.value).toBe('');
+  });
+});
+
 describe('collectFormData / applyFormData', () => {
   it('入力した内容をそのまま取り出せる', () => {
     setDate(root, '2025-08-10');
@@ -265,6 +339,7 @@ describe('collectFormData / applyFormData', () => {
         day: '10',
         building_area: '62.10',
         other_calc_type: '限界耐力計算',
+        remarks: '特記事項なし',
       },
       choices: { calc_type: '6', program_certified: '有' },
     };

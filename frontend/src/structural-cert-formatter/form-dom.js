@@ -18,14 +18,23 @@ import {
 const NUMERIC_UNITS = ['月', '日', '階'];
 const DECIMAL_UNITS = ['m', 'm²'];
 
-export function buildField(doc, field) {
+/**
+ * 記入欄。
+ *
+ * dependency を渡した欄は、その選択肢が選ばれているときだけ入力できる
+ * （「６ その他」の内容など。refreshDependentFields を参照）。
+ */
+export function buildField(doc, field, { hideLabel, labelledBy, dependency } = {}) {
   const wrap = doc.createElement('div');
   wrap.className = 'cert-field';
 
-  const label = doc.createElement('label');
-  label.setAttribute('for', `field-${field.key}`);
-  label.textContent = field.label + (field.required ? ' *' : '');
-  wrap.appendChild(label);
+  // セクションの見出しと同じ名前なら、ラベルは出さない（見出しが名前を担う）。
+  if (!hideLabel) {
+    const label = doc.createElement('label');
+    label.setAttribute('for', `field-${field.key}`);
+    label.textContent = field.label + (field.required ? ' *' : '');
+    wrap.appendChild(label);
+  }
 
   const row = doc.createElement('div');
   row.className = 'field-row';
@@ -33,9 +42,14 @@ export function buildField(doc, field) {
   input.type = 'text';
   input.id = `field-${field.key}`;
   input.dataset.field = field.key;
+  if (hideLabel && labelledBy) input.setAttribute('aria-labelledby', labelledBy);
   if (field.hint) input.placeholder = field.hint;
   if (NUMERIC_UNITS.includes(field.unit)) input.inputMode = 'numeric';
   if (DECIMAL_UNITS.includes(field.unit)) input.inputMode = 'decimal';
+  if (dependency) {
+    input.dataset.requiresChoice = dependency.choice;
+    input.dataset.requiresValue = dependency.option.value;
+  }
   row.appendChild(input);
   if (field.unit) {
     const unit = doc.createElement('span');
@@ -44,7 +58,34 @@ export function buildField(doc, field) {
     row.appendChild(unit);
   }
   wrap.appendChild(row);
+
+  if (dependency) {
+    const hint = doc.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = `「${optionText(dependency.option)}」を選んだときに入力できます。`;
+    wrap.appendChild(hint);
+  }
   return wrap;
+}
+
+/**
+ * 選択肢に紐づく記入欄の有効・無効を、今の選択に合わせる。
+ *
+ * その選択肢を選んでいない間の入力は証明書に載らない（バックエンドが
+ * 空にする）ため、入力そのものをさせない。選択が外れたときは、前の入力が
+ * 残らないように消す。
+ */
+export function refreshDependentFields(root) {
+  root.querySelectorAll('[data-requires-choice]').forEach((input) => {
+    const selected = root.querySelector(
+      `[data-choice="${input.dataset.requiresChoice}"]:checked`
+    );
+    const active = Boolean(selected) && selected.value === input.dataset.requiresValue;
+    input.disabled = !active;
+    if (!active) input.value = '';
+    const wrap = input.closest('.cert-field');
+    if (wrap) wrap.classList.toggle('disabled', !active);
+  });
 }
 
 /** 日付ピッカーが受け持つ 3 欄のうち、ひとつでも必須なら必須扱いにする。 */
@@ -159,6 +200,18 @@ function setFieldValue(root, key, value) {
  * 二重になるだけなので legend を出さず、枠も付けない。名前はセクションの
  * 見出しが担う（読み上げ用に aria-labelledby で結び付ける）。
  */
+/**
+ * 選択肢の表示名。
+ *
+ * 証明書と同じ番号を添えて、どの選択肢に印が付くのかを分かりやすくする。
+ * 「有 / 無」のように値そのものが表示名になっている選択肢は、そのまま出す。
+ */
+function optionText(option) {
+  return option.value && option.value !== option.label
+    ? `${option.value}　${option.label}`
+    : option.label;
+}
+
 export function buildChoiceGroup(doc, group, { hideLegend, labelledBy } = {}) {
   const wrap = doc.createElement('fieldset');
   wrap.className = hideLegend ? 'cert-choices bare' : 'cert-choices';
@@ -184,12 +237,7 @@ export function buildChoiceGroup(doc, group, { hideLegend, labelledBy } = {}) {
     radio.value = option.value;
     radio.dataset.choice = group.key;
     const text = doc.createElement('span');
-    // 証明書と同じ番号を添えて、どの選択肢に印が付くのかを分かりやすくする。
-    // 「有 / 無」のように値そのものが表示名になっている選択肢は、そのまま出す。
-    text.textContent =
-      option.value && option.value !== option.label
-        ? `${option.value}　${option.label}`
-        : option.label;
+    text.textContent = optionText(option);
     label.append(radio, text);
     wrap.appendChild(label);
   });
@@ -202,6 +250,16 @@ export function buildForm(root, config) {
   root.innerHTML = '';
   const fieldsByKey = new Map(config.text_fields.map((f) => [f.key, f]));
   const groupsByKey = new Map(config.choice_groups.map((g) => [g.key, g]));
+
+  // 「その選択肢を選んだときだけ入力できる欄」の対応表（記入欄 → 選択肢）。
+  const dependencyByField = new Map();
+  config.choice_groups.forEach((group) => {
+    group.options.forEach((option) => {
+      if (option.requires_field) {
+        dependencyByField.set(option.requires_field, { choice: group.key, option });
+      }
+    });
+  });
 
   config.sections.forEach((section, index) => {
     const wrap = doc.createElement('section');
@@ -216,10 +274,14 @@ export function buildForm(root, config) {
     const mergedDate = section.items.find(
       (item) => item.date && item.date.label === section.title
     );
+    const mergedField = section.items.find(
+      (item) => item.field && fieldsByKey.get(item.field).label === section.title
+    );
 
     const required =
       (mergedGroup && mergedGroup.required) ||
-      (mergedDate && isDateRequired(mergedDate.date, fieldsByKey));
+      (mergedDate && isDateRequired(mergedDate.date, fieldsByKey)) ||
+      (mergedField && fieldsByKey.get(mergedField.field).required);
     const heading = doc.createElement('h3');
     heading.id = `cert-section-${index}`;
     heading.textContent = section.title + (required ? ' *' : '');
@@ -227,7 +289,13 @@ export function buildForm(root, config) {
 
     section.items.forEach((item) => {
       if (item.field) {
-        wrap.appendChild(buildField(doc, fieldsByKey.get(item.field)));
+        wrap.appendChild(
+          buildField(doc, fieldsByKey.get(item.field), {
+            hideLabel: item === mergedField,
+            labelledBy: heading.id,
+            dependency: dependencyByField.get(item.field),
+          })
+        );
       } else if (item.date) {
         wrap.appendChild(
           buildDateField(doc, item.date, fieldsByKey, {
@@ -246,6 +314,11 @@ export function buildForm(root, config) {
       }
     });
     root.appendChild(wrap);
+  });
+
+  // 選択に紐づく記入欄は、選び直されるたびに有効・無効を切り替える。
+  root.querySelectorAll('[data-choice]').forEach((radio) => {
+    radio.addEventListener('change', () => refreshDependentFields(root));
   });
 
   // 未選択を既定にする（必須でないグループの「（指定しない）」を選んでおく）。
@@ -270,6 +343,8 @@ export function applyFormData(root, data) {
   root.querySelectorAll('[data-choice]').forEach((radio) => {
     radio.checked = radio.value === (data.choices[radio.dataset.choice] || '');
   });
+  // 選択に紐づく記入欄は、流し込んだ選択に合わせて有効・無効を決め直す。
+  refreshDependentFields(root);
   // 隠し入力に入れた和暦から、日付ピッカーの表示を合わせ直す。
   syncPickerFromFields(root);
 }

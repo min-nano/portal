@@ -135,6 +135,19 @@ def test_validate_reports_every_missing_item_at_once():
     assert "構造計算の種類" in message
 
 
+def test_validate_requires_the_eaves_height():
+    data = sample_data(fields={"eaves_height": ""})
+
+    with pytest.raises(CertificateError) as excinfo:
+        structural_cert.validate(data)
+
+    assert "最高の軒の高さ" in str(excinfo.value)
+
+
+def test_validate_allows_an_empty_remarks():
+    structural_cert.validate(sample_data(fields={"remarks": ""}))
+
+
 def test_validate_requires_the_field_of_the_selected_option():
     data = sample_data(choices={"calc_type": "6"}, fields={"other_calc_type": ""})
 
@@ -156,6 +169,7 @@ def test_build_replacements_covers_all_placeholders_including_empty_fields():
     replacements = structural_cert.build_replacements(data)
 
     assert replacements["{{建物名称}}"] == "サンプル邸"
+    assert replacements["{{備考}}"] == "特記事項なし"
     # 未入力でも置換対象にする（プレースホルダーが証明書に残らないように）。
     assert replacements["{{プログラム名}}"] == ""
     # 雛形の表記ゆれ（波括弧 1 つ）にも両方対応する。
@@ -335,6 +349,7 @@ def test_parse_falls_back_to_the_document_body():
     assert fields["structure_part"] == "鉄筋コンクリート"
     assert fields["program_name"] == "サンプル構造計算"
     assert fields["program_cert_number"] == "TPRG-1234"
+    assert fields["remarks"] == "特記事項なし"
     # ○ はベクター図形なので、位置から選択を復元できる。
     assert parsed["choices"] == data["choices"]
 
