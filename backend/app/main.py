@@ -99,6 +99,41 @@ async def me(user: User = Depends(require_user)):
     return {"email": user.email}
 
 
+@app.get("/api/picker/config")
+async def get_picker_config(user: User = Depends(require_user)):
+    """公式 Google Picker の初期化に必要な設定を返す（全ツール共通）。
+
+    ページに埋め込まれる公開情報だが、環境（本番 / PR プレビュー / ローカル）
+    ごとに違うため、ビルドに焼き込まずここから配る。未設定でもエラーには
+    せず configured: false を返し、画面側が「Picker が未設定」と案内する
+    （設定漏れの症状を、正体不明の失敗ではなく明示的な案内にする）。
+    """
+    api_key = config.picker_api_key()
+    return {
+        "configured": bool(api_key),
+        "apiKey": api_key,
+        "appId": config.picker_app_id(),
+    }
+
+
+@app.get("/api/picker/token")
+async def get_picker_token(response: Response, user: User = Depends(require_user)):
+    """Picker が選択画面を描くための、本人の読み取り専用トークンを発行する。
+
+    ブラウザで OAuth の同意を取る方式ではなく、既にある代理アクセス
+    （domain-wide delegation）を使う理由は google_drive.delegated_access_token
+    のコメントを参照（PR プレビューのように URL が毎回変わる環境でも、
+    OAuth クライアントへの登録なしに動かすため）。
+
+    渡すのは本人が Drive で見られる範囲の読み取り権限だけで、書き込みは
+    従来どおりサーバー側でしか行わない。
+    """
+    token, expires_in = google_drive.delegated_access_token(user.email)
+    # 短命とはいえ資格情報なので、経路のどこにも残さない。
+    response.headers["Cache-Control"] = "no-store"
+    return {"token": token, "expiresIn": expires_in}
+
+
 @app.get(f"{_TOOL_PREFIX}/config")
 async def get_form_config(user: User = Depends(require_user)):
     """フォーム定義（計測点・選択肢・バリデーション）を mapping.json から配信する。"""
@@ -114,36 +149,15 @@ async def get_template_status(user: User = Depends(require_user)):
     return {"configured": bool(folder_id and file_name), "fileName": file_name}
 
 
-@app.get(f"{_TOOL_PREFIX}/template/candidates")
-async def search_template_candidates(q: str = "", user: User = Depends(require_user)):
-    """雛形候補（.xlsx）をファイル名で検索する（Google Picker の代替）。
-
-    実行ユーザーの代理で検索するため、本人に閲覧権限のあるファイルだけが返る。
-    """
-    query = q.strip()
-    if not query:
-        return {"files": []}
-    files = google_drive.search_xlsx_files(
-        google_drive.delegated_session(user.email), query
-    )
-    return {
-        "files": [
-            {
-                "id": f.get("id", ""),
-                "name": f.get("name", ""),
-                "modifiedTime": f.get("modifiedTime", ""),
-            }
-            for f in files
-        ]
-    }
-
-
 @app.put(f"{_TOOL_PREFIX}/template")
 async def save_template_selection(request: Request, user: User = Depends(require_user)):
-    """選択された雛形ファイルの親フォルダ ID とファイル名を共有設定に保存する。
+    """公式 Google Picker で選ばれた雛形の親フォルダ ID とファイル名を保存する。
 
+    Picker はブラウザ側でファイルを選ぶだけなので、種類の確認はここで行う。
     GAS 版 saveTemplateSelection と同じルール: ネイティブ .xlsx のみ許可し、
     親フォルダを特定できないファイル（マイドライブ直下など）は拒否する。
+    メタデータの取得は実行ユーザーの代理で行うため、本人に閲覧権限の無い
+    ファイル ID を送っても通らない。
     """
     try:
         body = await request.json()
@@ -263,44 +277,6 @@ async def get_certificate_settings(user: User = Depends(require_user)):
             "folderName": settings.get("output_folder_name", ""),
         },
     }
-
-
-def _search_candidates(user: User, q: str, mime_type: str, context: str) -> dict:
-    """種類を絞って Drive を検索する（雛形・保存先フォルダ・編集する PDF 共通）。"""
-    query = q.strip()
-    if not query:
-        return {"files": []}
-    files = google_drive.search_files_by_name(
-        google_drive.delegated_session(user.email), query, mime_type, context
-    )
-    return {
-        "files": [
-            {
-                "id": f.get("id", ""),
-                "name": f.get("name", ""),
-                "modifiedTime": f.get("modifiedTime", ""),
-            }
-            for f in files
-        ]
-    }
-
-
-@app.get(f"{_CERT_PREFIX}/template/candidates")
-async def search_certificate_templates(q: str = "", user: User = Depends(require_user)):
-    """雛形候補（Google ドキュメント）をファイル名で検索する。"""
-    return _search_candidates(user, q, google_drive.GOOGLE_DOC_MIME, "雛形候補の検索")
-
-
-@app.get(f"{_CERT_PREFIX}/output-folder/candidates")
-async def search_output_folders(q: str = "", user: User = Depends(require_user)):
-    """保存先フォルダの候補を名前で検索する。"""
-    return _search_candidates(user, q, google_drive.FOLDER_MIME, "保存先フォルダの検索")
-
-
-@app.get(f"{_CERT_PREFIX}/pdf/candidates")
-async def search_certificate_pdfs(q: str = "", user: User = Depends(require_user)):
-    """編集する証明書（PDF）の候補をファイル名で検索する。"""
-    return _search_candidates(user, q, google_drive.PDF_MIME, "PDF の検索")
 
 
 @app.put(f"{_CERT_PREFIX}/template")

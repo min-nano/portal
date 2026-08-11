@@ -26,8 +26,13 @@
       <span class="label">使用中の Excel 雛形: </span>
       <span id="templateName" class="name">確認中...</span>
       <div>
+        <!-- Google Drive のファイル選択は公式の Google Picker で行う
+             （frontend/src/google-picker.js）。 -->
         <button type="button" id="templateBtn">雛形を設定</button>
       </div>
+      <p class="hint">
+        Excel 形式 (.xlsx) のファイルだけを選べます（Google スプレッドシート形式は選択できません）。
+      </p>
     </div>
 
     <form id="reportForm" onsubmit="return false;">
@@ -41,24 +46,6 @@
       <button type="button" id="submitBtn" disabled>Excel出力</button>
     </form>
     <div id="message"></div>
-  </div>
-
-  <!-- 雛形選択ダイアログ（Google Picker の代替）。実行ユーザーの権限で
-       Drive を検索するため、本人に閲覧権限のあるファイルだけが候補になる。 -->
-  <div id="templateDialog" class="dialog-backdrop" hidden>
-    <div class="dialog">
-      <h3>Excel 雛形を設定</h3>
-      <p class="hint">
-        Google Drive 上の雛形ファイル (.xlsx) をファイル名で検索して選択します。
-        Google スプレッドシート形式は選択できません。
-      </p>
-      <div class="search-row">
-        <input type="text" id="templateSearchInput" placeholder="ファイル名の一部を入力">
-        <button type="button" id="templateSearchBtn">検索</button>
-      </div>
-      <div id="templateResults" class="template-results"></div>
-      <button type="button" class="close" id="templateDialogClose">閉じる</button>
-    </div>
   </div>
 
   <script type="module" src="/src/excel-report-formatter/main.js"></script>

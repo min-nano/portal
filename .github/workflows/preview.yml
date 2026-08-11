@@ -55,10 +55,17 @@ jobs:
           RUNTIME_SA_EMAIL: '${{ vars.RUNTIME_SA_EMAIL }}'
           CLERK_PUBLISHABLE_KEY_TEST: '${{ vars.CLERK_PUBLISHABLE_KEY_TEST }}'
           ALLOWED_EMAIL_DOMAINS: '${{ vars.ALLOWED_EMAIL_DOMAINS }}'
+          GOOGLE_PICKER_API_KEY: '${{ vars.GOOGLE_PICKER_API_KEY }}'
         run: |
           .github/scripts/require-vars.sh \
             PROJECT_ID WIF_PROVIDER SA_EMAIL SITE_ID RUNTIME_SA_EMAIL \
             CLERK_PUBLISHABLE_KEY_TEST ALLOWED_EMAIL_DOMAINS
+          # Google Picker の API キーだけは、未設定でもジョブを落とさず警告に
+          # とどめる。上の変数と違って「壊れ方が黙って隠れる」ことがないため
+          # （渡さなければバックエンドが configured: false を返し、画面が
+          # 環境変数名を挙げて「Google Picker が未設定です」と案内する）。
+          # ファイル選択以外はそのまま試せるので、プレビューの作成は続ける。
+          [ -n "$GOOGLE_PICKER_API_KEY" ] || echo "::warning::リポジトリ変数 GOOGLE_PICKER_API_KEY が未設定のため、このプレビューでは Google Drive のファイル選択（Google Picker）を使えません（README「4. Google Picker」参照）。"
       - name: Derive the Clerk issuer from the publishable key
         # バックエンドの CLERK_ISSUER は Publishable Key から一意に決まるため、
         # 別のリポジトリ変数として二重管理せず導出する（導出の詳細と、開発
@@ -111,14 +118,30 @@ jobs:
         # Clerk JWT 検証で行うため、JWT が無ければ 401 で弾かれる。
         #
         # 値にカンマ（複数指定）を含むため、区切り文字を ; に変える ^;^ 記法を使う。
+        env:
+          GOOGLE_PICKER_API_KEY: '${{ vars.GOOGLE_PICKER_API_KEY }}'
+          GOOGLE_PICKER_APP_ID: '${{ vars.GOOGLE_PICKER_APP_ID }}'
         run: |
+          env_vars="CLERK_ISSUER=$CLERK_ISSUER_TEST"
+          env_vars="$env_vars;CLERK_AUTHORIZED_PARTIES=https://${{ vars.SITE_ID }}--pr-$PR-*.web.app"
+          env_vars="$env_vars;ALLOWED_EMAIL_DOMAINS=${{ vars.ALLOWED_EMAIL_DOMAINS }}"
+          env_vars="$env_vars;DWD_SERVICE_ACCOUNT_EMAIL=${{ vars.RUNTIME_SA_EMAIL }}"
+          env_vars="$env_vars;SETTINGS_CHANNEL_PATH=preview-channels/pr-$PR"
+          # Google Picker の設定は、リポジトリ変数がある場合だけ渡す（空の環境
+          # 変数を作らない。未設定なら画面が「未設定です」と案内する）。
+          if [ -n "$GOOGLE_PICKER_API_KEY" ]; then
+            env_vars="$env_vars;GOOGLE_PICKER_API_KEY=$GOOGLE_PICKER_API_KEY"
+          fi
+          if [ -n "$GOOGLE_PICKER_APP_ID" ]; then
+            env_vars="$env_vars;GOOGLE_PICKER_APP_ID=$GOOGLE_PICKER_APP_ID"
+          fi
           gcloud run deploy "portal-api-pr-$PR" \
             --source backend \
             --region asia-northeast1 \
             --project '${{ vars.PROJECT_ID }}' \
             --service-account '${{ vars.RUNTIME_SA_EMAIL }}' \
             --no-invoker-iam-check \
-            --set-env-vars "^;^CLERK_ISSUER=$CLERK_ISSUER_TEST;CLERK_AUTHORIZED_PARTIES=https://${{ vars.SITE_ID }}--pr-$PR-*.web.app;ALLOWED_EMAIL_DOMAINS=${{ vars.ALLOWED_EMAIL_DOMAINS }};DWD_SERVICE_ACCOUNT_EMAIL=${{ vars.RUNTIME_SA_EMAIL }};SETTINGS_CHANNEL_PATH=preview-channels/pr-$PR" \
+            --set-env-vars "^;^$env_vars" \
             --quiet
       - name: Point /api/** at the preview backend
         # チャンネルのデプロイはそのときの firebase.json をリリースに焼き込む

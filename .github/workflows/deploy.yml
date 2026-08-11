@@ -50,6 +50,8 @@ jobs:
           ALLOWED_EMAIL_DOMAINS: '${{ vars.ALLOWED_EMAIL_DOMAINS }}'
           RUNTIME_SA_EMAIL: '${{ vars.RUNTIME_SA_EMAIL }}'
           FIRESTORE_DATABASE: '${{ vars.FIRESTORE_DATABASE }}'
+          GOOGLE_PICKER_API_KEY: '${{ vars.GOOGLE_PICKER_API_KEY }}'
+          GOOGLE_PICKER_APP_ID: '${{ vars.GOOGLE_PICKER_APP_ID }}'
         run: |
           # pk_test_ を誤って設定すると、本番が開発（テスト）インスタンスの
           # トークンを受け付けてしまう。本番インスタンスのキーであることを
@@ -75,6 +77,17 @@ jobs:
           # 任意。既定の "(default)" 以外を使う場合だけリポジトリ変数を設定する。
           if [ -n "$FIRESTORE_DATABASE" ]; then
             env_vars="$env_vars;FIRESTORE_DATABASE=$FIRESTORE_DATABASE"
+          fi
+          # Google Picker の設定。API キーが無いと画面からファイルを選べないが、
+          # 他の機能は動くのでデプロイは止めない（警告だけ出す。画面側も
+          # 「Google Picker が未設定です」と案内する）。アプリ ID は任意。
+          if [ -n "$GOOGLE_PICKER_API_KEY" ]; then
+            env_vars="$env_vars;GOOGLE_PICKER_API_KEY=$GOOGLE_PICKER_API_KEY"
+          else
+            echo "::warning::リポジトリ変数 GOOGLE_PICKER_API_KEY が未設定のため、Google Drive のファイル選択（Google Picker）を使えません（README「4. Google Picker」参照）。"
+          fi
+          if [ -n "$GOOGLE_PICKER_APP_ID" ]; then
+            env_vars="$env_vars;GOOGLE_PICKER_APP_ID=$GOOGLE_PICKER_APP_ID"
           fi
           echo "RUN_ENV_VARS=^;^$env_vars" >> "$GITHUB_ENV"
       - id: auth

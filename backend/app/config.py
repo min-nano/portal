@@ -55,6 +55,26 @@ def delegated_sa_email() -> str:
     return os.environ.get("DWD_SERVICE_ACCOUNT_EMAIL", "")
 
 
+def picker_api_key() -> str:
+    """公式 Google Picker に渡す API キー（ブラウザキー）。
+
+    ページに埋め込まれる公開情報で、悪用の防止はキー側の HTTP リファラー
+    制限で行う（こちらはワイルドカードが使えるので、PR プレビューの URL も
+    まとめて許可できる）。Picker の表示に使うアクセストークンは、この鍵とは
+    別にバックエンドが代理発行する（google_drive.delegated_access_token）。
+    """
+    return os.environ.get("GOOGLE_PICKER_API_KEY", "").strip()
+
+
+def picker_app_id() -> str:
+    """（任意）Picker に渡すアプリ ID（＝ GCP のプロジェクト番号）。
+
+    drive.file スコープでは必須だが、こちらは drive.readonly のトークンを
+    渡すため無くても動く。未設定なら Picker には渡さない。
+    """
+    return os.environ.get("GOOGLE_PICKER_APP_ID", "").strip()
+
+
 def firestore_database() -> str:
     """共有設定の保存先 Firestore データベース名。通常は既定の "(default)"。"""
     return os.environ.get("FIRESTORE_DATABASE", "(default)")

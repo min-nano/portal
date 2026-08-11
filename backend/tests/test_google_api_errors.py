@@ -6,10 +6,12 @@
 画面まで届ける。
 """
 
+import datetime
 import json
 import re
 
 import pytest
+from google.auth.exceptions import RefreshError
 
 from app import google_docs, google_drive
 from app.google_drive import DriveError
@@ -97,6 +99,73 @@ def test_drive_error_without_a_usable_body_keeps_the_plain_message():
         )
 
     assert str(excinfo.value) == "ファイルの保存に失敗しました (HTTP 500)。"
+
+
+# --- 代理アクセストークン（Google Picker 用） --------------------------------
+
+class FakeCredentials:
+    """refresh() でトークンを得る資格情報の代役。"""
+
+    def __init__(self, error=None, lifetime_seconds=3600):
+        self._error = error
+        self._lifetime = lifetime_seconds
+        self.token = None
+        self.expiry = None
+
+    def refresh(self, request):
+        if self._error:
+            raise self._error
+        self.token = "ya29.test"
+        # google-auth は UTC の naive datetime を入れる。
+        self.expiry = datetime.datetime.now(datetime.timezone.utc).replace(
+            tzinfo=None
+        ) + datetime.timedelta(seconds=self._lifetime)
+
+
+def fake_credentials(monkeypatch, creds):
+    monkeypatch.setattr(
+        google_drive, "_credentials", lambda scopes, subject: creds
+    )
+
+
+def test_access_token_reports_the_remaining_lifetime(monkeypatch):
+    fake_credentials(monkeypatch, FakeCredentials(lifetime_seconds=3600))
+
+    token, expires_in = google_drive.delegated_access_token("user@example.co.jp")
+
+    assert token == "ya29.test"
+    # 端数の切り捨てだけがずれる。
+    assert 3595 <= expires_in <= 3600
+
+
+def test_access_token_failure_points_at_delegation_and_quotes_google(monkeypatch):
+    # 代理を許可していないと unauthorized_client で拒否される。原因は Google の
+    # 応答にしか書かれていないので、そのまま画面まで届ける。
+    error = RefreshError(
+        "('unauthorized_client: Client is unauthorized to retrieve access "
+        "tokens using this method', {'error': 'unauthorized_client'})"
+    )
+    fake_credentials(monkeypatch, FakeCredentials(error=error))
+
+    with pytest.raises(DriveError) as excinfo:
+        google_drive.delegated_access_token("user@example.co.jp")
+
+    message = str(excinfo.value)
+    assert "domain-wide delegation" in message
+    assert "unauthorized_client" in message
+    assert excinfo.value.status == 502
+
+
+def test_access_token_without_an_expiry_is_treated_as_expired(monkeypatch):
+    # 期限が分からないトークンは使い回さない（画面側が毎回取り直す）。
+    creds = FakeCredentials()
+    creds.refresh = lambda request: setattr(creds, "token", "ya29.test")
+    fake_credentials(monkeypatch, creds)
+
+    assert google_drive.delegated_access_token("user@example.co.jp") == (
+        "ya29.test",
+        0,
+    )
 
 
 # --- Docs --------------------------------------------------------------------

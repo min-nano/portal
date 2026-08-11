@@ -2,7 +2,7 @@
 //
 // GAS 版 gas/index.html のフォームロジックを移植したもの。
 //   - google.script.run → Clerk トークン付きの fetch（/api/**）
-//   - Google Picker → 実行ユーザー代理の Drive 検索ダイアログ
+//   - Google Picker → GAS 版と同じ公式 Picker（../google-picker.js）
 //   - フォーム定義（MEASUREMENT_GROUPS / VALIDATION）→ /config API から取得
 //     （mapping.json が単一の情報源になり、手動同期が不要になった）
 
@@ -10,9 +10,15 @@ import '../styles.css';
 import { requireSignIn } from '../auth.js';
 import { redirectToCanonicalHost } from '../canonical-host.js';
 import { apiGet, apiPostForBlob, apiSendJson } from '../api.js';
+import { pickFile, preloadPicker } from '../google-picker.js';
 import { collectWarnings, selectFocusTarget } from './form-logic.js';
 
 const TOOL_API = '/api/tools/excel-report-formatter';
+
+// 雛形はネイティブの .xlsx のみ（Google スプレッドシートは openpyxl が
+// 読めないため、Picker の時点で選べないようにする）。
+const XLSX_MIME =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 let config = null; // /config の応答（measurement_groups / validation / max_rooms）
 let templateConfigured = false;
@@ -49,62 +55,19 @@ async function refreshTemplateStatus() {
   updateSubmitState();
 }
 
-function openTemplateDialog() {
-  document.getElementById('templateDialog').hidden = false;
-  document.getElementById('templateResults').innerHTML =
-    '<p class="status">ファイル名（の一部）を入力して検索してください。</p>';
-  document.getElementById('templateSearchInput').focus();
-}
-
-function closeTemplateDialog() {
-  document.getElementById('templateDialog').hidden = true;
-}
-
-async function searchTemplates() {
-  const query = document.getElementById('templateSearchInput').value.trim();
-  const resultsEl = document.getElementById('templateResults');
-  if (!query) {
-    resultsEl.innerHTML = '<p class="status">検索キーワードを入力してください。</p>';
-    return;
-  }
-  resultsEl.innerHTML = '<p class="status">検索中...</p>';
+async function chooseTemplate() {
+  let file;
   try {
-    const { files } = await apiGet(
-      `${TOOL_API}/template/candidates?q=${encodeURIComponent(query)}`
-    );
-    if (files.length === 0) {
-      resultsEl.innerHTML =
-        '<p class="status">見つかりませんでした。あなたに閲覧権限のある .xlsx ファイルだけが対象です。</p>';
-      return;
-    }
-    resultsEl.innerHTML = '';
-    files.forEach((file) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'template-result';
-      const nameEl = document.createElement('div');
-      nameEl.className = 'file-name';
-      nameEl.textContent = file.name;
-      const metaEl = document.createElement('div');
-      metaEl.className = 'file-meta';
-      metaEl.textContent = file.modifiedTime
-        ? '更新: ' + new Date(file.modifiedTime).toLocaleString('ja-JP')
-        : '';
-      btn.append(nameEl, metaEl);
-      btn.addEventListener('click', () => selectTemplate(file));
-      resultsEl.appendChild(btn);
+    file = await pickFile({
+      title: '雛形（Excel ファイル）を選択',
+      mimeTypes: XLSX_MIME,
     });
   } catch (error) {
-    resultsEl.innerHTML = '';
-    const p = document.createElement('p');
-    p.className = 'status';
-    p.textContent = error.message;
-    resultsEl.appendChild(p);
+    showMessage(error.message, 'red');
+    return;
   }
-}
+  if (!file) return; // Picker をキャンセルした。
 
-async function selectTemplate(file) {
-  closeTemplateDialog();
   showMessage('雛形を保存しています...', '#333');
   try {
     const result = await apiSendJson(`${TOOL_API}/template`, 'PUT', {
@@ -367,15 +330,11 @@ async function start() {
   const clerk = await requireSignIn();
   if (!clerk) return; // サインイン画面を表示中。
 
-  document.getElementById('templateBtn').addEventListener('click', openTemplateDialog);
-  document.getElementById('templateDialogClose').addEventListener('click', closeTemplateDialog);
-  document.getElementById('templateSearchBtn').addEventListener('click', searchTemplates);
-  document.getElementById('templateSearchInput').addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      searchTemplates();
-    }
-  });
+  // Picker の準備（設定の取得と Google のスクリプトの読み込み）は、ボタンが
+  // 押される前に始めておく（google-picker.js のコメント参照）。
+  preloadPicker();
+
+  document.getElementById('templateBtn').addEventListener('click', chooseTemplate);
   document.getElementById('addRoomBtn').addEventListener('click', addRoom);
   document.getElementById('submitBtn').addEventListener('click', submitForm);
   bindStickyHeadWorkarounds();

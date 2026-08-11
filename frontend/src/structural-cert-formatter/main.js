@@ -13,6 +13,7 @@ import '../styles.css';
 import { requireSignIn } from '../auth.js';
 import { redirectToCanonicalHost } from '../canonical-host.js';
 import { apiGet, apiPostFile, apiSendJson } from '../api.js';
+import { pickFile, preloadPicker } from '../google-picker.js';
 import {
   applyFormData,
   buildForm as buildFormInto,
@@ -30,6 +31,9 @@ import {
 } from './form-logic.js';
 
 const TOOL_API = '/api/tools/structural-cert-formatter';
+
+const GOOGLE_DOC_MIME = 'application/vnd.google-apps.document';
+const PDF_MIME = 'application/pdf';
 
 let config = null; // /config の応答（text_fields / choice_groups / sections）
 let settings = null; // /settings の応答（雛形・保存先の設定状態）
@@ -100,18 +104,14 @@ async function refreshSettings() {
   updateSubmitState();
 }
 
-// --- Drive 選択ダイアログ ---------------------------------------------------
+// --- Drive からの選択（公式 Google Picker） ---------------------------------
 
-// 雛形・保存先フォルダ・編集する PDF の 3 用途で同じダイアログを使い回す。
-let picker = null;
-
+// 雛形・保存先フォルダ・編集する PDF の 3 用途。選ぶ画面は Picker に任せ、
+// ここでは「何を選ばせるか」と「選ばれた後に何をするか」だけを持つ。
 const PICKERS = {
   template: {
-    title: '雛形（Google ドキュメント）を設定',
-    hint:
-      'Google Drive 上の雛形を名前で検索して選択します。記入欄が {{…}} の' +
-      'プレースホルダーになっている Google ドキュメントを選んでください。',
-    search: (q) => apiGet(`${TOOL_API}/template/candidates?q=${encodeURIComponent(q)}`),
+    title: '雛形（Google ドキュメント）を選択',
+    mimeTypes: GOOGLE_DOC_MIME,
     select: async (file) => {
       const result = await apiSendJson(`${TOOL_API}/template`, 'PUT', {
         fileId: file.id,
@@ -121,10 +121,8 @@ const PICKERS = {
     },
   },
   outputFolder: {
-    title: 'PDF の保存先フォルダを設定',
-    hint: '作成した証明書 PDF を保存する Google Drive 上のフォルダを選択します。',
-    search: (q) =>
-      apiGet(`${TOOL_API}/output-folder/candidates?q=${encodeURIComponent(q)}`),
+    title: 'PDF の保存先フォルダを選択',
+    selectFolder: true,
     select: async (file) => {
       const result = await apiSendJson(`${TOOL_API}/output-folder`, 'PUT', {
         folderId: file.id,
@@ -134,10 +132,8 @@ const PICKERS = {
     },
   },
   source: {
-    title: '編集する証明書 PDF を読み込む',
-    hint: 'Google Drive 上の PDF を名前で検索して選択します。',
-    upload: true,
-    search: (q) => apiGet(`${TOOL_API}/pdf/candidates?q=${encodeURIComponent(q)}`),
+    title: '編集する証明書 PDF を選択',
+    mimeTypes: PDF_MIME,
     select: async (file) => {
       const parsed = await apiSendJson(`${TOOL_API}/certificates/parse-drive`, 'POST', {
         fileId: file.id,
@@ -147,78 +143,36 @@ const PICKERS = {
   },
 };
 
-function openPicker(kind) {
-  picker = PICKERS[kind];
-  document.getElementById('pickerTitle').textContent = picker.title;
-  document.getElementById('pickerHint').textContent = picker.hint;
-  document.getElementById('pickerUpload').hidden = !picker.upload;
-  document.getElementById('pickerFile').value = '';
-  document.getElementById('pickerResults').innerHTML =
-    '<p class="status">名前（の一部）を入力して検索してください。</p>';
-  document.getElementById('pickerDialog').hidden = false;
-  document.getElementById('pickerInput').focus();
-}
-
-function closePicker() {
-  document.getElementById('pickerDialog').hidden = true;
-}
-
-async function searchPicker() {
-  const query = document.getElementById('pickerInput').value.trim();
-  const resultsEl = document.getElementById('pickerResults');
-  if (!query) {
-    resultsEl.innerHTML = '<p class="status">検索キーワードを入力してください。</p>';
-    return;
-  }
-  resultsEl.innerHTML = '<p class="status">検索中...</p>';
+async function chooseFromDrive(kind) {
+  const target = PICKERS[kind];
+  let file;
   try {
-    const { files } = await picker.search(query);
-    if (files.length === 0) {
-      resultsEl.innerHTML =
-        '<p class="status">見つかりませんでした。あなたに閲覧権限のあるファイルだけが対象です。</p>';
-      return;
-    }
-    resultsEl.innerHTML = '';
-    files.forEach((file) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'template-result';
-      const nameEl = document.createElement('div');
-      nameEl.className = 'file-name';
-      nameEl.textContent = file.name;
-      const metaEl = document.createElement('div');
-      metaEl.className = 'file-meta';
-      metaEl.textContent = file.modifiedTime
-        ? '更新: ' + new Date(file.modifiedTime).toLocaleString('ja-JP')
-        : '';
-      btn.append(nameEl, metaEl);
-      btn.addEventListener('click', () => choosePickerFile(file));
-      resultsEl.appendChild(btn);
+    file = await pickFile({
+      title: target.title,
+      mimeTypes: target.mimeTypes,
+      selectFolder: target.selectFolder,
     });
   } catch (error) {
-    resultsEl.innerHTML = '';
-    const p = document.createElement('p');
-    p.className = 'status';
-    p.textContent = error.message;
-    resultsEl.appendChild(p);
+    showMessage(error.message, 'red');
+    return;
   }
-}
+  if (!file) return; // Picker をキャンセルした。
 
-async function choosePickerFile(file) {
-  const chosen = picker;
-  closePicker();
   showMessage('読み込んでいます...', '#333');
   try {
-    await chosen.select(file);
+    await target.select(file);
   } catch (error) {
     showMessage(error.message, 'red');
   }
 }
 
-async function uploadPickerFile(event) {
+// Drive ではなく手元の PDF から読み込む経路。Picker の「アップロード」は
+// Drive へ保存してしまうため、解析するだけのこちらは別に用意する。
+async function uploadFile(event) {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
-  closePicker();
+  // 同じファイルを選び直したときも change が起きるようにしておく。
+  event.target.value = '';
   showMessage('PDF を解析しています...', '#333');
   try {
     const parsed = await apiPostFile(`${TOOL_API}/certificates/parse`, file);
@@ -396,19 +350,17 @@ async function start() {
   const clerk = await requireSignIn();
   if (!clerk) return; // サインイン画面を表示中。
 
-  document.getElementById('templateBtn').addEventListener('click', () => openPicker('template'));
-  document.getElementById('outputFolderBtn').addEventListener('click', () => openPicker('outputFolder'));
-  document.getElementById('loadBtn').addEventListener('click', () => openPicker('source'));
+  // Picker の準備（設定の取得と Google のスクリプトの読み込み）は、ボタンが
+  // 押される前に始めておく（google-picker.js のコメント参照）。
+  preloadPicker();
+
+  document.getElementById('templateBtn').addEventListener('click', () => chooseFromDrive('template'));
+  document.getElementById('outputFolderBtn').addEventListener('click', () => chooseFromDrive('outputFolder'));
+  document.getElementById('loadBtn').addEventListener('click', () => chooseFromDrive('source'));
   document.getElementById('resetBtn').addEventListener('click', resetToNew);
-  document.getElementById('pickerCloseBtn').addEventListener('click', closePicker);
-  document.getElementById('pickerSearchBtn').addEventListener('click', searchPicker);
-  document.getElementById('pickerInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      searchPicker();
-    }
-  });
-  document.getElementById('pickerFile').addEventListener('change', uploadPickerFile);
+  const uploadInput = document.getElementById('uploadInput');
+  document.getElementById('uploadBtn').addEventListener('click', () => uploadInput.click());
+  uploadInput.addEventListener('change', uploadFile);
   document.getElementById('submitBtn').addEventListener('click', submitForm);
   document.getElementById('fileName').addEventListener('input', () => {
     fileNameEdited = true;
