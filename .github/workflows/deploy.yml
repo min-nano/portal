@@ -57,11 +57,10 @@ jobs:
           issuer="$(.github/scripts/clerk-issuer.sh "$KEY" pk_live_ CLERK_PUBLISHABLE_KEY)"
           echo "本番の Clerk issuer: $issuer"
 
-          # Hosting は <サイトID>.web.app と <サイトID>.firebaseapp.com の
-          # 両方で配信されるため、どちらから来た JWT の azp も許可する
-          # （カスタムドメインへの寄せ替えはフロントエンドの JS で行うので、
-          # リダイレクトが走る前にサインイン済みの状態で来ることがある）。
-          parties="https://$SITE_ID.web.app,https://$SITE_ID.firebaseapp.com"
+          # Hosting は <サイトID>.firebaseapp.com でも同じアプリを配信するが、
+          # 許可するのは .web.app（とカスタムドメイン）だけにする。使う入口を
+          # 絞り、azp の許可リストを実際に案内している URL に留めるため。
+          parties="https://$SITE_ID.web.app"
           if [ -n "$CANONICAL_HOST" ]; then
             parties="https://$CANONICAL_HOST,$parties"
           fi

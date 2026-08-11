@@ -264,7 +264,7 @@ gcloud run deploy portal-api \
 | 環境変数 | 用途 | 本番（`deploy.yml`）での値 |
 | --- | --- | --- |
 | `CLERK_ISSUER` | 許可する Clerk の Frontend API URL（JWT の `iss`。カンマ区切りで複数可）。本番サービスには **本番インスタンスのみ**（プレビューは PR ごとの別サービスが開発インスタンスを受け持つ） | `CLERK_PUBLISHABLE_KEY` から導出 |
-| `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り、`*` ワイルドカード可） | `CANONICAL_HOST`（設定時のみ）と `SITE_ID` から組み立て。`https://<カスタムドメイン>,https://<サイトID>.web.app,https://<サイトID>.firebaseapp.com` |
+| `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り、`*` ワイルドカード可） | `CANONICAL_HOST`（設定時のみ）と `SITE_ID` から組み立て。`https://<カスタムドメイン>,https://<サイトID>.web.app` |
 | `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り） | 同名のリポジトリ変数 |
 | `DWD_SERVICE_ACCOUNT_EMAIL` | 代理トークンに使う SA のメール（省略時は ADC から推定） | `RUNTIME_SA_EMAIL` |
 | `SETTINGS_CHANNEL_PATH` | 共有設定を置くチャンネルの Firestore ドキュメントパス。**未設定だと development チャンネルを指す**（「共有設定（Firestore）」参照） | `static-channels/production` 固定（環境の別はワークフローが決めるので変数にしない） |
@@ -272,6 +272,8 @@ gcloud run deploy portal-api \
 | `CORS_ALLOWED_ORIGINS` | （任意）CORS 許可オリジン。既定 `http://localhost:5173` | 渡さない（Hosting のリライトで同一オリジンになるため本番では不要。ローカル開発用） |
 
 `CLERK_ISSUER` と `CLERK_AUTHORIZED_PARTIES` に専用の変数を作らないのは、**同じ事実を 2 か所に書かない** ためです。issuer は Publishable Key から一意に決まり（`pk_<live|test>_<base64>` をデコードすると Frontend API のホスト名になる。`.github/scripts/clerk-issuer.sh`）、許可オリジンはフロントエンドが配信されるホスト名そのものです。プレフィックス（`pk_live_` / `pk_test_`）が期待と違えば、デプロイはエラーで止まります — 本番が開発インスタンスのトークンを受け付けたり、プレビューが本番インスタンスを向いたりしないように。
+
+Hosting は `https://<サイトID>.firebaseapp.com` でも同じアプリを配信しますが、**許可オリジンには含めません**（使う入口を絞り、許可リストを実際に案内している URL に留めるため）。カスタムドメインを設定していれば、そちらへ来たアクセスは Clerk のロード前にリダイレクトされます（`frontend/src/canonical-host.js`）。設定していない場合、`.firebaseapp.com` から入るとサインインが `azp` の検証で弾かれます — `.web.app` を案内してください。
 
 > **`--set-env-vars` は既存の環境変数を置き換えます。** そのため GCP コンソールや `gcloud run services update` で足した変数は、次のデプロイで消えます。値を変えるときは必ずリポジトリ変数側を直してください（`gh variable set <名前> --body <値>` の後、`main` に push するか `deploy.yml` を再実行）。
 >
