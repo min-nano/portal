@@ -130,6 +130,37 @@ def test_compute_pattern_matches_the_reference_example():
     assert steps["変形割合 αx"] == "0.750834"
 
 
+@pytest.mark.parametrize(
+    "pattern,expected",
+    [
+        # 釘が無い / 面材の寸法が入っていない。
+        ({"width": 610, "height": 910}, "釘座標が入力されていません"),
+        (
+            {"width": 0, "height": 910, "gridX": "0, 445", "gridY": "0, 295"},
+            "面材の幅 W と高さ H に正の数値",
+        ),
+        # 釘が 1 点に集中している（Ix + Iy = 0）。
+        (
+            {"width": 610, "height": 910, "gridX": "100", "gridY": "200"},
+            "1 点に集中している",
+        ),
+        # 釘が 1 直線上に並ぶ（Zx もしくは Zy が 0 → Zxy = 0）。
+        (
+            {"width": 610, "height": 910, "gridX": "0, 445", "gridY": "295"},
+            "1 直線上に並んでいる",
+        ),
+    ],
+)
+def test_unusable_patterns_are_explained_in_the_words_of_the_form(pattern, expected):
+    """計算できない理由は、式の言葉ではなく入力欄の言葉で伝える。"""
+    data = panel_shear.normalize_data({"patterns": [pattern]})
+
+    report = panel_shear.compute_all(data)[0]
+
+    assert report["ok"] is False
+    assert expected in report["error"]
+
+
 def test_compute_all_reports_a_broken_pattern_without_losing_the_others():
     data = panel_shear.normalize_data(
         {"patterns": [dict(EXAMPLE), {"patternId": "p2", "width": 610, "height": 910}]}

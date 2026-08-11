@@ -18,7 +18,7 @@ import math
 import re
 
 from . import nail_array, pdf_tools, pdf_write
-from .nail_array import Nail, NailArrayError
+from .nail_array import Nail
 
 # 文書情報に入れる独自キー（このツールが作った PDF の目印にもなる）。
 METADATA_KEY = "/PortalTimberPanelShear"
@@ -179,28 +179,71 @@ def parse_coord_lines(text: str) -> list[Nail]:
     return nails
 
 
-def nails_of(pattern: dict) -> list[Nail]:
-    """パターンの入力方式に応じて釘リストを組み立てる。"""
+def panel_area_of(pattern: dict) -> float:
+    return pattern["width"] * pattern["height"]
+
+
+def _unusable_reason(pattern: dict, nails: list[Nail]) -> str:
+    """このパターンを計算できない理由を返す（計算できるなら空文字）。
+
+    nail_array 側にも同じ状況を弾く guard があるが、あちらは計算式が壊れた
+    入力を受け取らないための最終防衛線で、文言も式の言葉（「Ix + Iy が 0」）で
+    書かれている。画面に出すのは、入力欄の言葉で書いたこちらの理由。
+
+    ここで挙げる 3 つが、入力から到達しうる計算不能のすべて:
+      - 釘が無い / 面積が 0     … nail_array.validate_input
+      - 釘が 1 点に集中している … Ix + Iy = 0
+      - 釘が 1 直線上に並ぶ     … Zx もしくは Zy が 0 → Zxy = 0
+    """
+    if not nails:
+        return "釘座標が入力されていません。少なくとも 1 本の釘が必要です。"
+    if panel_area_of(pattern) <= 0:
+        return "面材の幅 W と高さ H に正の数値を入力してください。"
+
+    xs = {nail.x for nail in nails}
+    ys = {nail.y for nail in nails}
+    if len(xs) == 1 and len(ys) == 1:
+        return "釘が 1 点に集中しているため、釘配列諸定数を求められません。"
+    if len(xs) == 1 or len(ys) == 1:
+        return (
+            "釘が 1 直線上に並んでいるため、釘配列諸定数を求められません。"
+            "X 方向・Y 方向のどちらにも広がりが必要です。"
+        )
+    return ""
+
+
+def _nails_and_reason(pattern: dict) -> tuple[list[Nail], str]:
+    """釘リストと、計算できない理由（計算できるなら空文字）を返す。
+
+    理由を例外ではなく戻り値にしているのは、入力途中のパターンを画面へ
+    そのまま出すため（例外の文字列を応答に混ぜない）。
+    """
     if pattern["mode"] == "grid":
         xs = parse_number_list(pattern["gridX"])
         ys = parse_number_list(pattern["gridY"])
+        # 格子は組み合わせの数で増えるので、作る前に本数を確かめる。
         if len(xs) * len(ys) > MAX_NAILS:
-            raise PanelShearError(
+            return [], (
                 f"釘の本数が多すぎます（{len(xs)} × {len(ys)} 本）。"
                 f"1 パターンあたり {MAX_NAILS} 本までにしてください。"
             )
-        return nail_array.build_rectangular_grid(xs, ys)
-    nails = parse_coord_lines(pattern["coords"])
-    if len(nails) > MAX_NAILS:
-        raise PanelShearError(
-            f"釘の本数が多すぎます（{len(nails)} 本）。"
-            f"1 パターンあたり {MAX_NAILS} 本までにしてください。"
-        )
+        nails = nail_array.build_rectangular_grid(xs, ys)
+    else:
+        nails = parse_coord_lines(pattern["coords"])
+        if len(nails) > MAX_NAILS:
+            return [], (
+                f"釘の本数が多すぎます（{len(nails)} 本）。"
+                f"1 パターンあたり {MAX_NAILS} 本までにしてください。"
+            )
+    return nails, _unusable_reason(pattern, nails)
+
+
+def nails_of(pattern: dict) -> list[Nail]:
+    """パターンの入力方式に応じて釘リストを組み立てる。"""
+    nails, reason = _nails_and_reason(pattern)
+    if reason:
+        raise PanelShearError(reason)
     return nails
-
-
-def panel_area_of(pattern: dict) -> float:
-    return pattern["width"] * pattern["height"]
 
 
 # --- 計算（画面と PDF が共有する表示用データ） ------------------------------
@@ -218,12 +261,20 @@ def compute_pattern(pattern: dict) -> dict:
     表示用の文字列（有効桁・単位）まで組み立てて返すことで、画面と計算書で
     桁の丸め方が食い違わないようにしている。
     """
-    nails = nails_of(pattern)
+    nails, reason = _nails_and_reason(pattern)
+    if reason:
+        raise PanelShearError(reason)
+    return _build_report(pattern, nails)
+
+
+def _build_report(pattern: dict, nails: list[Nail]) -> dict:
+    """計算できると分かっているパターンの結果を組み立てる。
+
+    ここへ来る入力は _unusable_reason を通っているので、nail_array 側の
+    guard に掛かることはない（掛かるなら判定漏れという不具合）。
+    """
     area = panel_area_of(pattern)
-    try:
-        result = nail_array.compute(nails, area)
-    except NailArrayError as error:
-        raise PanelShearError(str(error)) from error
+    result = nail_array.compute(nails, area)
 
     return {
         "patternId": pattern["patternId"],
@@ -317,17 +368,18 @@ def compute_all(data: dict) -> list[dict]:
     """
     reports = []
     for pattern in data["patterns"]:
-        try:
-            reports.append({"ok": True, **compute_pattern(pattern)})
-        except PanelShearError as error:
+        nails, reason = _nails_and_reason(pattern)
+        if reason:
             reports.append(
                 {
                     "ok": False,
                     "patternId": pattern["patternId"],
                     "patternName": pattern["patternName"],
-                    "error": str(error),
+                    "error": reason,
                 }
             )
+        else:
+            reports.append({"ok": True, **_build_report(pattern, nails)})
     return reports
 
 
@@ -335,11 +387,11 @@ def validate(data: dict) -> list[dict]:
     """保存できる状態か確かめ、全パターンの計算結果を返す。"""
     reports = []
     for index, pattern in enumerate(data["patterns"], start=1):
-        name = pattern["patternName"] or f"パターン{index}"
-        try:
-            reports.append(compute_pattern(pattern))
-        except PanelShearError as error:
-            raise PanelShearError(f"「{name}」を計算できません: {error}") from error
+        nails, reason = _nails_and_reason(pattern)
+        if reason:
+            name = pattern["patternName"] or f"パターン{index}"
+            raise PanelShearError(f"「{name}」を計算できません: {reason}")
+        reports.append(_build_report(pattern, nails))
     return reports
 
 
