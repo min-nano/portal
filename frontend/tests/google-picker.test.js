@@ -94,6 +94,13 @@ function setViewport(width, height) {
   Object.defineProperty(window, 'innerHeight', { value: height, configurable: true });
 }
 
+// 実際のページと同じ viewport の指定を置く。
+const VIEWPORT = 'width=device-width, initial-scale=1';
+
+function viewportMeta() {
+  return document.querySelector('meta[name="viewport"]');
+}
+
 beforeEach(() => {
   apiGet.mockReset();
   respondWith();
@@ -101,6 +108,7 @@ beforeEach(() => {
   document.documentElement.style.overflow = '';
   document.body.style.overflow = '';
   document.body.style.paddingRight = '';
+  document.head.innerHTML = `<meta name="viewport" content="${VIEWPORT}">`;
 });
 
 afterEach(() => {
@@ -296,6 +304,62 @@ describe('pickFile', () => {
 
     expect(document.body.style.overflow).toBe('');
     expect(document.documentElement.style.overflow).toBe('');
+  });
+
+  it('開いている間は自動ズームを止め、閉じたら元に戻す', async () => {
+    let whileOpen = null;
+    installGoogleFakes({
+      respond: () => {
+        whileOpen = viewportMeta().getAttribute('content');
+        return PICKED();
+      },
+    });
+    const { pickFile } = await loadModule();
+
+    await pickFile({ title: '雛形を選択' });
+
+    // iOS が検索窓へのフォーカスで勝手に拡大するのを止める指定。
+    expect(whileOpen).toBe(`${VIEWPORT}, maximum-scale=1`);
+    expect(viewportMeta().getAttribute('content')).toBe(VIEWPORT);
+  });
+
+  it('もともとの maximum-scale は重ねずに置き換える', async () => {
+    let whileOpen = null;
+    installGoogleFakes({
+      respond: () => {
+        whileOpen = viewportMeta().getAttribute('content');
+        return PICKED();
+      },
+    });
+    viewportMeta().setAttribute(
+      'content',
+      'width=device-width, initial-scale=1, maximum-scale=5'
+    );
+    const { pickFile } = await loadModule();
+
+    await pickFile({ title: '雛形を選択' });
+
+    expect(whileOpen).toBe('width=device-width, initial-scale=1, maximum-scale=1');
+    expect(viewportMeta().getAttribute('content')).toBe(
+      'width=device-width, initial-scale=1, maximum-scale=5'
+    );
+  });
+
+  it('エラーで閉じたときも自動ズームの抑止を解く', async () => {
+    installGoogleFakes({ respond: () => ({ action: 'error' }) });
+    const { pickFile } = await loadModule();
+
+    await expect(pickFile({ title: '雛形を選択' })).rejects.toThrow(/Picker/);
+
+    expect(viewportMeta().getAttribute('content')).toBe(VIEWPORT);
+  });
+
+  it('viewport の指定が無いページでも開ける', async () => {
+    installGoogleFakes({ respond: PICKED });
+    document.head.innerHTML = '';
+    const { pickFile } = await loadModule();
+
+    expect(await pickFile({ title: '雛形を選択' })).not.toBeNull();
   });
 
   it('未設定なら、設定すべき環境変数を示して失敗する', async () => {

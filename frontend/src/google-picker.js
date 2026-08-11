@@ -183,6 +183,30 @@ function lockPageScroll() {
   };
 }
 
+/**
+ * Picker を開いている間、iOS の自動ズームを止める。
+ *
+ * iOS Safari は文字が 16px 未満の入力欄にフォーカスすると、勝手に拡大する。
+ * Picker の検索窓は Google 側の（別ドメインの）iframe の中なので、こちらから
+ * 文字サイズは変えられない。拡大されると表示領域だけが狭くなり、画面に固定
+ * したダイアログの端（選択・キャンセル）がはみ出して押せなくなる。しかも
+ * Picker の一覧の上ではピンチが効かず、元の倍率に戻すのも難しい。
+ *
+ * maximum-scale を 1 にすると、この自動ズームだけが止まる（利用者が自分で
+ * ピンチして拡大する操作は iOS 10 以降そのまま使える）。閉じたら元に戻す。
+ */
+function lockZoom() {
+  const meta = document.querySelector('meta[name="viewport"]');
+  if (!meta) return () => {};
+  const previous = meta.getAttribute('content') || '';
+  const kept = previous
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part && !/^(maximum-scale|user-scalable)\s*=/i.test(part));
+  meta.setAttribute('content', [...kept, 'maximum-scale=1'].join(', '));
+  return () => meta.setAttribute('content', previous);
+}
+
 function selectedFile(data) {
   const doc = (data.docs || [])[0];
   if (!doc) return null;
@@ -192,13 +216,13 @@ function selectedFile(data) {
 function showPicker(config, oauthToken, options) {
   const api = window.google.picker;
   const { width, height } = pickerSize();
-  const unlockPageScroll = lockPageScroll();
+  const restorePage = [lockPageScroll(), lockZoom()];
   return new Promise((resolve, reject) => {
     let instance = null;
     // 選択・キャンセルのたびに DOM ごと片付ける（開き直すたびに前回の
-    // Picker が残らないように）。ページのスクロールもここで戻す。
+    // Picker が残らないように）。ページ側に掛けた制限もここで戻す。
     const close = () => {
-      unlockPageScroll();
+      restorePage.forEach((restore) => restore());
       if (instance) instance.dispose();
     };
     const builder = new api.PickerBuilder()
