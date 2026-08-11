@@ -135,6 +135,78 @@ function buildView(api, { mimeTypes, selectFolder }, sharedDrives) {
   return view;
 }
 
+// Picker の既定の大きさ（Google 側の既定値と同じ）。表示領域がこれより
+// 狭いときは、余白 PICKER_MARGIN_PX を残して縮める。
+const PICKER_MAX_WIDTH_PX = 1051;
+const PICKER_MAX_HEIGHT_PX = 650;
+const PICKER_MIN_SIDE_PX = 320;
+const PICKER_MARGIN_PX = 24;
+
+/**
+ * 表示領域に収まるダイアログの大きさ。
+ *
+ * Picker は指定しないとウィンドウより大きな箱を作ることがあり、画面の
+ * 中央に置いても端がはみ出して、閉じるボタンや一覧の一部が押せなくなる。
+ */
+function pickerSize() {
+  const fit = (available, max) =>
+    Math.max(PICKER_MIN_SIDE_PX, Math.min(max, available - PICKER_MARGIN_PX));
+  return {
+    width: fit(window.innerWidth || PICKER_MAX_WIDTH_PX, PICKER_MAX_WIDTH_PX),
+    height: fit(window.innerHeight || PICKER_MAX_HEIGHT_PX, PICKER_MAX_HEIGHT_PX),
+  };
+}
+
+/**
+ * Picker を開いている間、後ろのページを動かないようにする。
+ *
+ * Picker は画面全体を覆うダイアログで、ホイールはその中の一覧に吸われる。
+ * 後ろのページだけが動くと、閉じたときに元居た場所が分からなくなるため、
+ * 開いている間は固定する。戻す関数を返す。
+ */
+function lockPageScroll() {
+  const { documentElement: html, body } = document;
+  const previous = { html: html.style.overflow, body: body.style.overflow };
+  // スクロールバーが消えた分だけ内容が右にずれるので、その幅を埋める。
+  const scrollbar = window.innerWidth - html.clientWidth;
+  const previousPadding = body.style.paddingRight;
+  html.style.overflow = 'hidden';
+  body.style.overflow = 'hidden';
+  if (scrollbar > 0) {
+    const current = parseFloat(getComputedStyle(body).paddingRight) || 0;
+    body.style.paddingRight = `${current + scrollbar}px`;
+  }
+  return () => {
+    html.style.overflow = previous.html;
+    body.style.overflow = previous.body;
+    body.style.paddingRight = previousPadding;
+  };
+}
+
+/**
+ * Picker を開いている間、iOS の自動ズームを止める。
+ *
+ * iOS Safari は文字が 16px 未満の入力欄にフォーカスすると、勝手に拡大する。
+ * Picker の検索窓は Google 側の（別ドメインの）iframe の中なので、こちらから
+ * 文字サイズは変えられない。拡大されると表示領域だけが狭くなり、画面に固定
+ * したダイアログの端（選択・キャンセル）がはみ出して押せなくなる。しかも
+ * Picker の一覧の上ではピンチが効かず、元の倍率に戻すのも難しい。
+ *
+ * maximum-scale を 1 にすると、この自動ズームだけが止まる（利用者が自分で
+ * ピンチして拡大する操作は iOS 10 以降そのまま使える）。閉じたら元に戻す。
+ */
+function lockZoom() {
+  const meta = document.querySelector('meta[name="viewport"]');
+  if (!meta) return () => {};
+  const previous = meta.getAttribute('content') || '';
+  const kept = previous
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part && !/^(maximum-scale|user-scalable)\s*=/i.test(part));
+  meta.setAttribute('content', [...kept, 'maximum-scale=1'].join(', '));
+  return () => meta.setAttribute('content', previous);
+}
+
 function selectedFile(data) {
   const doc = (data.docs || [])[0];
   if (!doc) return null;
@@ -143,11 +215,14 @@ function selectedFile(data) {
 
 function showPicker(config, oauthToken, options) {
   const api = window.google.picker;
+  const { width, height } = pickerSize();
+  const restorePage = [lockPageScroll(), lockZoom()];
   return new Promise((resolve, reject) => {
     let instance = null;
     // 選択・キャンセルのたびに DOM ごと片付ける（開き直すたびに前回の
-    // Picker が残らないように）。
+    // Picker が残らないように）。ページ側に掛けた制限もここで戻す。
     const close = () => {
+      restorePage.forEach((restore) => restore());
       if (instance) instance.dispose();
     };
     const builder = new api.PickerBuilder()
@@ -155,6 +230,7 @@ function showPicker(config, oauthToken, options) {
       .setOAuthToken(oauthToken)
       .setLocale('ja')
       .setTitle(options.title || '')
+      .setSize(width, height)
       .addView(buildView(api, options, false))
       .addView(buildView(api, options, true))
       .setCallback((data) => {
@@ -173,8 +249,14 @@ function showPicker(config, oauthToken, options) {
       });
     // アプリ ID は drive.file スコープで必須のもの。設定されていれば渡す。
     if (config.appId) builder.setAppId(config.appId);
-    instance = builder.build();
-    instance.setVisible(true);
+    try {
+      instance = builder.build();
+      instance.setVisible(true);
+    } catch (error) {
+      // 開けなかったときにページを固定したままにしない。
+      close();
+      throw error;
+    }
   });
 }
 
