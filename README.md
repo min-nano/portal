@@ -305,6 +305,7 @@ gcloud run deploy portal-api \
 | `CLERK_PUBLISHABLE_KEY` | 本番ビルドに埋め込む Clerk Publishable Key（**本番インスタンス** `pk_live_...`） |
 | `CLERK_PUBLISHABLE_KEY_TEST` | プレビュービルドに埋め込む Clerk Publishable Key（**開発インスタンス** `pk_test_...`） |
 | `CANONICAL_HOST` | 本番のカスタムドメイン（例 `portal.example.com`）。`.web.app` へのアクセスをここへリダイレクトする。未設定ならリダイレクトしない |
+| `PORTAL_TITLE` | ポータルの表示名（各ページのヘッダーと、トップページのタブ名）。ビルド時に `VITE_PORTAL_TITLE` として渡され HTML に埋め込まれる。未設定なら `社内ポータル` |
 | `SITE_ID` | Hosting のサイト ID。プレビュー用 Cloud Run の許可オリジン `https://<サイトID>--pr-<番号>-*.web.app` の組み立てに使う |
 | `RUNTIME_SA_EMAIL` | Cloud Run のランタイム SA のメール（本番の `portal-api` と同じもの）。プレビュー用サービスの作成時に渡す |
 | `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り）。プレビュー用バックエンドに渡す（本番はサービスに設定済みの値を使う） |
@@ -428,6 +429,7 @@ GOOGLE_APPLICATION_CREDENTIALS=~/keys/portal-api-dev.json \
 # フロントエンド（/api は vite が localhost:8080 へプロキシ）
 cd frontend
 cp .env.example .env   # VITE_CLERK_PUBLISHABLE_KEY を設定
+                       # 表示名を変えるなら VITE_PORTAL_TITLE も（省略可）
 npm install
 npm run dev
 ```

@@ -52,6 +52,8 @@ jobs:
       - name: Build
         env:
           VITE_CLERK_PUBLISHABLE_KEY: '${{ vars.CLERK_PUBLISHABLE_KEY }}'
+          # ポータルの表示名（未設定なら「社内ポータル」）。
+          VITE_PORTAL_TITLE: '${{ vars.PORTAL_TITLE }}'
           # 本番のみ。.web.app へのアクセスをカスタムドメインへ寄せる
           # （未設定ならリダイレクトしない）。プレビューには渡さない。
           VITE_CANONICAL_HOST: '${{ vars.CANONICAL_HOST }}'
