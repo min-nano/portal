@@ -107,6 +107,8 @@ jobs:
       - name: Build (Clerk test instance)
         env:
           VITE_CLERK_PUBLISHABLE_KEY: '${{ vars.CLERK_PUBLISHABLE_KEY_TEST }}'
+          # 表示名は本番と揃える（未設定なら「社内ポータル」）。
+          VITE_PORTAL_TITLE: '${{ vars.PORTAL_TITLE }}'
         run: |
           cd frontend
           npm ci
