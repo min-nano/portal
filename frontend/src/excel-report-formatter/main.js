@@ -10,7 +10,7 @@ import '../styles.css';
 import { requireSignIn } from '../auth.js';
 import { redirectToCanonicalHost } from '../canonical-host.js';
 import { apiGet, apiPostForBlob, apiSendJson } from '../api.js';
-import { collectWarnings } from './form-logic.js';
+import { collectWarnings, selectFocusTarget } from './form-logic.js';
 
 const TOOL_API = '/api/tools/excel-report-formatter';
 
@@ -310,14 +310,29 @@ async function submitForm() {
 // --- 初期化 -----------------------------------------------------------------
 
 function bindStickyHeadWorkarounds() {
-  // 方向選択後、同じ行の水平器入力欄へ自動フォーカスする。
+  // 方向選択後、同じ行の水平器入力欄へ自動フォーカスする。ただし「傾斜無」「―」など
+  // 計測値を入力しない選択肢のときは、数値欄を飛ばして次の計測点の選択欄へ送る。
   document.getElementById('rooms').addEventListener('change', function (e) {
-    if (e.target.tagName === 'SELECT' && e.target.dataset.field === 'select') {
+    if (e.target.tagName !== 'SELECT' || e.target.dataset.field !== 'select') return;
+    const noValueOptions =
+      (config && config.validation && config.validation.no_value_select_options) || [];
+    const target = selectFocusTarget(e.target.value, noValueOptions);
+    if (target === 'none') return;
+
+    if (target === 'value') {
       const levelInput = e.target
         .closest('tr')
         .querySelector('input[data-field="digital_level"]');
       if (levelInput) levelInput.focus();
+      return;
     }
+
+    // 同じ部屋の中の次の選択欄へ。最後の計測点ならフォーカスは動かさない。
+    const selects = Array.prototype.slice.call(
+      e.target.closest('.room').querySelectorAll('select[data-field="select"]')
+    );
+    const next = selects[selects.indexOf(e.target) + 1];
+    if (next) next.focus();
   });
 
   // キーボード出現時に sticky の room-head が上に抜ける問題への対処。
