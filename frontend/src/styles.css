@@ -47,7 +47,30 @@ button:disabled { background-color: #aaa; }
 .template-bar button { margin-top: 8px; width: auto; padding: 6px 12px; font-size: 0.85em; background-color: #5f6368; }
 
 /* Drive のファイル選択は公式の Google Picker（Google が提供する iframe）が
-   描画するため、こちら側にダイアログのスタイルは無い。 */
+   描画する。中身は Google 側の作りなので触らないが、置き場所だけは直す。
+   Picker は自分のダイアログを position: absolute（＝ページ座標）で置き、
+   その位置を開いた瞬間に一度決めるだけなので、ページ下部までスクロール
+   した状態で開くと画面の外（ページ上部）に置かれ、何も出ていないように
+   見える。画面座標（position: fixed）に固定して、常に表示領域の中央に
+   出す。left/top は Picker がインラインで書き込むため !important で覆す。 */
+.picker-dialog-bg {
+  position: fixed !important;
+  left: 0 !important;
+  top: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+.picker-dialog {
+  position: fixed !important;
+  left: 50% !important;
+  top: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  margin: 0 !important;
+  /* 大きさは pickFile 側で表示領域に合わせるが、開いたあとに画面が狭く
+     なった場合の保険として、はみ出さない上限も入れておく。 */
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+}
 
 /* 部屋ブロック */
 .room { border: 1px solid #d6d6e0; border-radius: 8px; padding: 10px; margin-top: 14px; background: #fafbff; }
