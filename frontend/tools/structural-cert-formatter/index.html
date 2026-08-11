@@ -43,8 +43,12 @@
         <span id="sourceName" class="name">なし（新規作成）</span>
       </div>
       <div>
-        <button type="button" id="loadBtn">既存の PDF を読み込む</button>
+        <button type="button" id="loadBtn">Drive の PDF を読み込む</button>
+        <button type="button" id="uploadBtn">手元の PDF を読み込む</button>
         <button type="button" id="resetBtn">新規作成に戻す</button>
+        <!-- アップロードは解析するだけで Drive には保存しないため、Picker の
+             アップロード画面ではなくブラウザのファイル選択を使う。 -->
+        <input type="file" id="uploadInput" accept="application/pdf,.pdf" hidden>
       </div>
       <p class="hint" id="sourceNote" hidden></p>
     </div>
@@ -79,26 +83,6 @@
       <a id="resultLink" target="_blank" rel="noopener"></a>
     </div>
     <ul id="warnings" class="warnings" hidden></ul>
-  </div>
-
-  <!-- 雛形・保存先・既存 PDF の選択ダイアログ（Google Picker の代替）。
-       実行ユーザーの権限で Drive を検索するため、本人に閲覧権限のある
-       ファイルだけが候補になる。 -->
-  <div id="pickerDialog" class="dialog-backdrop" hidden>
-    <div class="dialog">
-      <h3 id="pickerTitle"></h3>
-      <p class="hint" id="pickerHint"></p>
-      <div class="search-row">
-        <input type="text" id="pickerInput" placeholder="名前の一部を入力">
-        <button type="button" id="pickerSearchBtn">検索</button>
-      </div>
-      <div id="pickerResults" class="template-results"></div>
-      <div id="pickerUpload" hidden>
-        <p class="hint">または、手元の PDF ファイルをアップロードして読み込みます。</p>
-        <input type="file" id="pickerFile" accept="application/pdf,.pdf">
-      </div>
-      <button type="button" class="close" id="pickerCloseBtn">閉じる</button>
-    </div>
   </div>
 
   <script type="module" src="/src/structural-cert-formatter/main.js"></script>

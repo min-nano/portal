@@ -2,16 +2,21 @@
 
 Clerk JWT で確認したメールアドレスのユーザーとして Drive を読み書きする。
 GAS 版の「実行ユーザーの権限で DriveApp を読む」に相当し、雛形ファイルに
-アクセス権のあるユーザーだけが雛形を取得・検索できるという権限モデルを
-そのまま維持する。
+アクセス権のあるユーザーだけが雛形を取得できるという権限モデルをそのまま
+維持する。ファイルを選ぶ操作自体はブラウザ側の公式 Google Picker が担うが、
+選ばれた ID を実際に開けるかどうかはここでの代理アクセスで決まる。
 
 スコープは用途で 2 段階に分けている:
 
-  * delegated_session() …… drive.readonly。雛形の検索・取得だけを行う
-    （現況検査レポート作成ツールはこちらだけで完結する）。
+  * delegated_session() …… drive.readonly。雛形の取得と、選ばれたファイルの
+    確認だけを行う（現況検査レポート作成ツールはこちらだけで完結する）。
   * delegated_write_session() … drive + documents。構造計算安全証明書
     作成ツールが、雛形の Google ドキュメントを複製して差し替え、PDF を
     Drive へ保存するために使う。書き込みが必要な操作だけこちらを使う。
+
+同じ仕組みで、ブラウザの Google Picker に渡す読み取り専用トークンも発行する
+（delegated_access_token）。サーバーが API を呼ぶのではなくトークンだけを
+返す点だけが違う。
 
 JSON 鍵ファイルなしで動作するよう、Cloud Run 上ではランタイム
 サービスアカウントの IAM Credentials API（signJwt）で署名する。この方式には
@@ -19,6 +24,8 @@ JSON 鍵ファイルなしで動作するよう、Cloud Run 上ではランタ�
 持っている必要がある（README 参照）。ローカル開発では
 GOOGLE_APPLICATION_CREDENTIALS に JSON 鍵を指定すればそのまま動く。
 """
+
+import datetime
 
 import google.auth
 from google.auth import iam
@@ -101,6 +108,51 @@ def delegated_write_session(user_email: str) -> AuthorizedSession:
     )
 
 
+def _seconds_until(expiry) -> int:
+    """トークンの残り有効秒数。
+
+    google-auth の expiry は UTC の naive datetime だが、実装が変わっても
+    壊れないよう aware も受け付ける。
+    """
+    if not expiry:
+        return 0
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=datetime.timezone.utc)
+    remaining = (expiry - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+    return max(0, int(remaining))
+
+
+def delegated_access_token(user_email: str) -> tuple[str, int]:
+    """user_email 本人の読み取り専用アクセストークンを発行する。
+
+    ブラウザの公式 Google Picker へ渡すためのもの。Picker は選択画面を描く
+    ために Drive を読むトークンを要求する。ブラウザ側で OAuth の同意を取る
+    方式（Google Identity Services）もあるが、それだと画面の URL を OAuth
+    クライアントの「承認済みの JavaScript 生成元」へ登録する必要があり、
+    URL が毎回変わる PR プレビューでは使えない（この欄はワイルドカードが
+    使えず、追加するための API も無い）。ここでは既にある代理アクセスの
+    仕組みで本人のトークンを発行する。
+
+    渡すのは drive.readonly のトークンで、本人が既に Drive で見られる範囲を
+    超えない。書き込みは従来どおりサーバー側でしか行わない。
+    """
+    creds = _credentials([DRIVE_READONLY_SCOPE], subject=user_email)
+    try:
+        creds.refresh(Request())
+    except Exception as error:  # RefreshError など。原因は Google の応答にある。
+        detail = " ".join(str(error).split())
+        if len(detail) > 300:
+            detail = detail[:300] + "…"
+        raise DriveError(
+            "Google Drive のアクセストークンを取得できませんでした。"
+            "domain-wide delegation の設定（クライアント ID とスコープの登録）を"
+            "確認してください。"
+            + (f"（Google からの応答: {detail}）" if detail else ""),
+            502,
+        )
+    return creds.token, _seconds_until(creds.expiry)
+
+
 def _escape_query_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
@@ -164,39 +216,6 @@ def get_file_metadata(session: AuthorizedSession, file_id: str) -> dict:
     )
     _raise_for_status(resp, "ファイル情報の取得")
     return resp.json()
-
-
-def search_files_by_name(
-    session: AuthorizedSession, name_query: str, mime_type: str, context: str
-) -> list[dict]:
-    """ファイル名で特定の種類のファイルを検索する（Google Picker の代替）。
-
-    実行ユーザーの代理で検索するため、本人に閲覧権限のあるファイルだけが
-    候補に挙がる。
-    """
-    q = (
-        f"name contains '{_escape_query_value(name_query)}' "
-        f"and mimeType = '{mime_type}' and trashed = false"
-    )
-    resp = session.get(
-        _FILES_URL,
-        params={
-            "q": q,
-            "orderBy": "modifiedTime desc",
-            "pageSize": "20",
-            "fields": "files(id, name, modifiedTime, parents)",
-            "supportsAllDrives": "true",
-            "includeItemsFromAllDrives": "true",
-            "corpora": "allDrives",
-        },
-    )
-    _raise_for_status(resp, context)
-    return resp.json().get("files", [])
-
-
-def search_xlsx_files(session: AuthorizedSession, name_query: str) -> list[dict]:
-    """雛形候補（.xlsx）をファイル名で検索する。"""
-    return search_files_by_name(session, name_query, XLSX_MIME, "雛形候補の検索")
 
 
 def find_latest_file(

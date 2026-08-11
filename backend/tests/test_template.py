@@ -1,13 +1,13 @@
-"""雛形設定 API（GET/PUT template, GET template/candidates）のテスト。
+"""雛形設定 API（GET/PUT template）のテスト。
 
-GAS 版の getTemplateStatus / saveTemplateSelection / Google Picker に相当する
-機能。選択は Picker の代わりに、実行ユーザー代理の Drive 検索で行う。
+GAS 版の getTemplateStatus / saveTemplateSelection に相当する機能。ファイルを
+選ぶ操作はブラウザ側の公式 Google Picker が担い、ここには選ばれたファイル ID
+だけが届く。そのため、種類・ゴミ箱・親フォルダの確認はすべてこちら側で行う。
 """
 
 from tests.conftest import TEST_EMAIL, TOOL
 
 TEMPLATE_URL = "/api/tools/excel-report-formatter/template"
-CANDIDATES_URL = "/api/tools/excel-report-formatter/template/candidates"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
@@ -103,25 +103,19 @@ def test_save_template_unknown_file_returns_404(client, drive):
     assert resp.status_code == 404
 
 
-# --- 候補検索 ---------------------------------------------------------------
+def test_save_template_reads_the_file_as_the_signed_in_user(client, drive):
+    """Picker から届くのはファイル ID だけなので、確認もサーバー側で行う。
 
-def test_candidates_search_uses_delegated_session(client, drive):
-    drive.search_results = [
-        {"id": "f1", "name": "IP_230901_11.xlsx", "modifiedTime": "2026-01-01T00:00:00Z"},
-        {"id": "f2", "name": "IP_230901_10.xlsx", "modifiedTime": "2025-06-01T00:00:00Z"},
-    ]
-    resp = client.get(CANDIDATES_URL, params={"q": "IP_"})
+    メタデータの取得は実行ユーザーの代理セッションで行うため、本人に閲覧権限の
+    無いファイル ID を送りつけても雛形には設定できない（GAS 版と同じ境界）。
+    """
+    drive.metadata["file-1"] = {
+        "id": "file-1",
+        "name": "IP_230901_11.xlsx",
+        "mimeType": XLSX_MIME,
+        "parents": ["folder-9"],
+    }
+    resp = client.put(TEMPLATE_URL, json={"fileId": "file-1"})
 
     assert resp.status_code == 200
-    files = resp.json()["files"]
-    assert [f["id"] for f in files] == ["f1", "f2"]
-    # 検索は実行ユーザーの代理セッションで行われる（本人に見えるファイルだけが候補になる）。
     assert drive.delegated_emails == [TEST_EMAIL]
-
-
-def test_candidates_with_empty_query_returns_empty_list(client, drive):
-    resp = client.get(CANDIDATES_URL, params={"q": "  "})
-
-    assert resp.status_code == 200
-    assert resp.json() == {"files": []}
-    assert drive.delegated_emails == []

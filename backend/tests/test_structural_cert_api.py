@@ -184,24 +184,19 @@ def test_save_output_folder_rejects_a_file(client, drive):
     assert "フォルダ" in resp.json()["error"]
 
 
-def test_candidate_search_uses_the_delegated_session(client, drive):
-    drive.search_results = [
-        {"id": "d1", "name": "安全証明書 雛形", "modifiedTime": "2026-01-01T00:00:00Z"}
-    ]
+def test_save_output_folder_checks_the_folder_as_the_signed_in_user(client, drive):
+    # 選択は公式 Picker が行うが、届くのは ID だけなので、それが本当にフォルダ
+    # なのか・本人に見えるのかは実行ユーザーの代理セッションで確かめる。
+    drive.metadata["folder-1"] = {
+        "id": "folder-1",
+        "name": "証明書",
+        "mimeType": FOLDER_MIME,
+    }
 
-    resp = client.get(f"{TEMPLATE_URL}/candidates", params={"q": "証明書"})
+    resp = client.put(OUTPUT_FOLDER_URL, json={"folderId": "folder-1"})
 
     assert resp.status_code == 200
-    assert [f["id"] for f in resp.json()["files"]] == ["d1"]
     assert drive.delegated_emails == [TEST_EMAIL]
-
-
-def test_candidate_search_with_empty_query_returns_nothing(client, drive):
-    resp = client.get(f"{OUTPUT_FOLDER_URL}/candidates", params={"q": "  "})
-
-    assert resp.status_code == 200
-    assert resp.json() == {"files": []}
-    assert drive.delegated_emails == []
 
 
 # --- 生成と保存 -------------------------------------------------------------

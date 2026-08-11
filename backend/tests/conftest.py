@@ -28,11 +28,12 @@ class FakeDrive:
         self.settings = {}  # tool 名 -> 設定 dict
         self.template_bytes = None  # fetch_latest_template が返すバイト列
         self.metadata = {}  # file_id -> files.get のメタデータ
-        self.search_results = []
         self.saved = []  # set_tool_settings の呼び出し記録
         self.fetch_calls = []  # fetch_latest_template の呼び出し記録
         self.delegated_emails = []  # 読み取り代理セッションを要求されたメール
         self.write_emails = []  # 書き込み代理セッションを要求されたメール
+        self.token_emails = []  # Picker 用トークンを要求されたメール
+        self.access_token = ("picker-token", 3600)  # (トークン, 残り秒数)
 
         # 構造計算安全証明書ツール用。
         self.doc_template = None  # find_latest_file が返すメタデータ
@@ -89,6 +90,14 @@ def drive(monkeypatch):
 
     monkeypatch.setattr(main.google_drive, "delegated_session", delegated_session)
 
+    def delegated_access_token(email):
+        fake.token_emails.append(email)
+        return fake.access_token
+
+    monkeypatch.setattr(
+        main.google_drive, "delegated_access_token", delegated_access_token
+    )
+
     monkeypatch.setattr(
         main.settings_store,
         "get_tool_settings",
@@ -119,9 +128,6 @@ def drive(monkeypatch):
         return fake.metadata[file_id]
 
     monkeypatch.setattr(main.google_drive, "get_file_metadata", get_file_metadata)
-    monkeypatch.setattr(
-        main.google_drive, "search_xlsx_files", lambda session, q: fake.search_results
-    )
 
     # --- 構造計算安全証明書ツールが使う Drive / Docs 操作 -------------------
 
@@ -131,11 +137,6 @@ def drive(monkeypatch):
 
     monkeypatch.setattr(
         main.google_drive, "delegated_write_session", delegated_write_session
-    )
-    monkeypatch.setattr(
-        main.google_drive,
-        "search_files_by_name",
-        lambda session, q, mime_type, context: fake.search_results,
     )
 
     def find_latest_file(session, folder_id, file_name):
