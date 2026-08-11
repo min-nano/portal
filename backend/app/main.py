@@ -20,12 +20,14 @@ from . import (
     excel_report,
     google_docs,
     google_drive,
+    panel_shear,
     settings_store,
     structural_cert,
 )
 from .clerk_auth import AuthError, User
 from .excel_report import ReportError
 from .google_drive import XLSX_MIME, DriveError
+from .panel_shear import PanelShearError
 from .settings_store import SettingsError
 from .structural_cert import CertificateError
 
@@ -34,6 +36,9 @@ _TOOL_PREFIX = f"/api/tools/{TOOL_EXCEL_REPORT}"
 
 TOOL_STRUCTURAL_CERT = "structural-cert-formatter"
 _CERT_PREFIX = f"/api/tools/{TOOL_STRUCTURAL_CERT}"
+
+TOOL_PANEL_SHEAR = "timber-panel-shear-calculator"
+_PANEL_PREFIX = f"/api/tools/{TOOL_PANEL_SHEAR}"
 
 # アップロードされた PDF の上限。証明書は 1 ページなので十分に余裕がある。
 _MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -72,6 +77,11 @@ async def _report_error_handler(_request: Request, exc: ReportError):
 
 @app.exception_handler(CertificateError)
 async def _certificate_error_handler(_request: Request, exc: CertificateError):
+    return _error_response(exc.status, str(exc))
+
+
+@app.exception_handler(PanelShearError)
+async def _panel_shear_error_handler(_request: Request, exc: PanelShearError):
     return _error_response(exc.status, str(exc))
 
 
@@ -251,6 +261,70 @@ async def _json_body(request: Request) -> dict:
     return body if isinstance(body, dict) else {}
 
 
+# --- PDF を Drive へ保存する（証明書・計算書の共通処理） ----------------------
+#
+# どちらのツールも、通常のアプリと同じ「保存」／「別名で保存」で PDF を
+# Drive へ書き出す。保存先の確かめ方（上書き先が PDF か・保存先がフォルダか）
+# は同じなので、ここにまとめてツールごとのエラー型とファイル名の既定値だけを
+# 渡す。届くのは ID だけなので、種類・ゴミ箱の確認は必ず実行ユーザーの代理
+# セッションから行う。
+
+
+def _resolve_pdf_destination(session, save, error, ensure_name, default_name) -> dict:
+    """body.save から保存先を決め、実際に使えるかを確かめる。
+
+    error はツールごとの例外クラス、ensure_name は拡張子の補正、default_name は
+    ファイル名が指定されなかったときの既定値を作る関数。
+    """
+    save = save if isinstance(save, dict) else {}
+    mode = save.get("mode") or "new"
+    if mode not in ("new", "overwrite"):
+        raise error("保存方法が不正です。")
+
+    if mode == "overwrite":
+        file_id = save.get("fileId")
+        if not file_id or not isinstance(file_id, str):
+            raise error("上書きするファイルが指定されていません。")
+        meta = google_drive.get_file_metadata(session, file_id)
+        if meta.get("trashed"):
+            raise error("上書き先のファイルはゴミ箱に入っています。")
+        if meta.get("mimeType") != google_drive.PDF_MIME:
+            raise error("上書きできるのは PDF ファイルだけです。")
+        return {"mode": mode, "fileId": file_id}
+
+    # 新規保存の保存先は、そのつど画面の Picker で選ばれたフォルダ。
+    folder_id = save.get("folderId")
+    if not folder_id or not isinstance(folder_id, str):
+        raise error("保存先のフォルダが選択されていません。")
+    folder = google_drive.get_file_metadata(session, folder_id)
+    if folder.get("trashed"):
+        raise error("保存先のフォルダはゴミ箱に入っています。")
+    if folder.get("mimeType") != google_drive.FOLDER_MIME:
+        raise error("保存先にはフォルダを選択してください。")
+    return {
+        "mode": mode,
+        "folderId": folder_id,
+        "fileName": ensure_name(save.get("fileName") or default_name()),
+    }
+
+
+def _save_pdf(session, destination: dict, pdf_bytes: bytes) -> tuple[str, dict]:
+    """PDF を保存し、(保存方法, Drive のファイル情報) を返す。"""
+    if destination["mode"] == "overwrite":
+        saved = google_drive.update_file_content(
+            session, destination["fileId"], pdf_bytes, google_drive.PDF_MIME
+        )
+    else:
+        saved = google_drive.create_file(
+            session,
+            destination["folderId"],
+            destination["fileName"],
+            pdf_bytes,
+            google_drive.PDF_MIME,
+        )
+    return destination["mode"], saved
+
+
 def _cert_settings() -> dict:
     return settings_store.get_tool_settings(TOOL_STRUCTURAL_CERT)
 
@@ -374,57 +448,24 @@ async def create_certificate(request: Request, user: User = Depends(require_user
     data = structural_cert.normalize_data(body)
     structural_cert.validate(data)
 
-    save = body.get("save") if isinstance(body.get("save"), dict) else {}
-    mode = save.get("mode") or "new"
-    if mode not in ("new", "overwrite"):
-        raise CertificateError("保存方法が不正です。")
-
     # 設定は 1 リクエストにつき 1 回だけ読む。
     settings = _cert_settings()
     _require_certificate_template(settings)
 
     session = google_drive.delegated_write_session(user.email)
 
-    # 保存先の確認も生成の前に済ませる。保存できない指定のために雛形を複製・
+    # 保存先の確認は生成の前に済ませる。保存できない指定のために雛形を複製・
     # 書き出しするのは無駄なうえ、後片付けの機会も増えるため。
-    file_id = ""
-    folder_id = ""
-    file_name = ""
-    if mode == "overwrite":
-        file_id = save.get("fileId")
-        if not file_id or not isinstance(file_id, str):
-            raise CertificateError("上書きするファイルが指定されていません。")
-        meta = google_drive.get_file_metadata(session, file_id)
-        if meta.get("trashed"):
-            raise CertificateError("上書き先のファイルはゴミ箱に入っています。")
-        if meta.get("mimeType") != google_drive.PDF_MIME:
-            raise CertificateError("上書きできるのは PDF ファイルだけです。")
-    else:
-        # 新規保存の保存先は、そのつど画面の Picker で選ばれたフォルダ。
-        # 届くのは ID だけなので、本当にフォルダなのか・本人に見えるのかは
-        # ここで実行ユーザーの代理セッションから確かめる。
-        folder_id = save.get("folderId")
-        if not folder_id or not isinstance(folder_id, str):
-            raise CertificateError("保存先のフォルダが選択されていません。")
-        folder = google_drive.get_file_metadata(session, folder_id)
-        if folder.get("trashed"):
-            raise CertificateError("保存先のフォルダはゴミ箱に入っています。")
-        if folder.get("mimeType") != google_drive.FOLDER_MIME:
-            raise CertificateError("保存先にはフォルダを選択してください。")
-        file_name = structural_cert.ensure_pdf_extension(
-            save.get("fileName") or structural_cert.default_file_name(data)
-        )
+    destination = _resolve_pdf_destination(
+        session,
+        body.get("save"),
+        CertificateError,
+        structural_cert.ensure_pdf_extension,
+        lambda: structural_cert.default_file_name(data),
+    )
 
     pdf_bytes, warnings = _render_certificate(session, data, settings)
-
-    if mode == "overwrite":
-        saved = google_drive.update_file_content(
-            session, file_id, pdf_bytes, google_drive.PDF_MIME
-        )
-    else:
-        saved = google_drive.create_file(
-            session, folder_id, file_name, pdf_bytes, google_drive.PDF_MIME
-        )
+    mode, saved = _save_pdf(session, destination, pdf_bytes)
 
     return {
         "mode": mode,
@@ -476,6 +517,109 @@ async def parse_drive_certificate(
     parsed = structural_cert.parse_pdf(content)
     return {
         **parsed,
+        "file": {"id": file_id, "name": meta.get("name", "")},
+        "suggestedFileName": meta.get("name", ""),
+    }
+
+
+# --- 面材張り耐力要素 釘配列諸定数 計算ツール --------------------------------
+#
+# GAS 版はスプレッドシートへ現在値と履歴を書き出していたが、ここでは証明書と
+# 同じく「成果物の PDF そのものが保存形式」になる。フォーム入力を PDF の
+# 文書情報へ埋め込むため、保存した PDF を開き直せば続きを編集できる。
+# 雛形は使わない（計算書はバックエンドが直接組み立てる）ので、このツールには
+# 共有設定が無い。
+
+
+@app.get(f"{_PANEL_PREFIX}/config")
+async def get_panel_shear_config(user: User = Depends(require_user)):
+    """既定のファイル名とグレー本の計算例を配信する。"""
+    return panel_shear.form_config()
+
+
+@app.post(f"{_PANEL_PREFIX}/calculations")
+async def calculate_panel_shear(request: Request, user: User = Depends(require_user)):
+    """入力中のフォームを計算し、画面に出す値をそのまま返す。
+
+    計算も表示用の桁揃えもサーバ側の唯一の実装（nail_array / panel_shear）で
+    行うため、画面の数値と計算書 PDF の数値が食い違うことがない。入力途中の
+    不備は 400 にせず、パターンごとに ok: false として返す（他のパターンの
+    結果まで消さないため）。
+    """
+    data = panel_shear.normalize_data(await _json_body(request))
+    return {"patterns": panel_shear.compute_all(data)}
+
+
+@app.post(f"{_PANEL_PREFIX}/reports")
+async def create_panel_shear_report(
+    request: Request, user: User = Depends(require_user)
+):
+    """フォームデータから計算書 PDF を作り、Drive へ保存する。
+
+    保存方法は証明書と同じく body.save.mode（overwrite / new）で切り替える。
+    """
+    body = await _json_body(request)
+    data = panel_shear.normalize_data(body)
+    reports = panel_shear.validate(data)
+
+    session = google_drive.delegated_write_session(user.email)
+    destination = _resolve_pdf_destination(
+        session,
+        body.get("save"),
+        PanelShearError,
+        panel_shear.ensure_pdf_extension,
+        lambda: panel_shear.default_file_name(data),
+    )
+
+    mode, saved = _save_pdf(session, destination, panel_shear.build_pdf(data, reports))
+    return {
+        "mode": mode,
+        "fileId": saved.get("id", ""),
+        "fileName": saved.get("name", ""),
+        "webViewLink": saved.get("webViewLink", ""),
+    }
+
+
+@app.post(f"{_PANEL_PREFIX}/reports/parse")
+async def parse_uploaded_panel_shear_report(
+    file: UploadFile = File(...), user: User = Depends(require_user)
+):
+    """アップロードされた計算書 PDF を読み、フォームデータへ戻す。"""
+    if file.size is not None and file.size > _MAX_UPLOAD_BYTES:
+        raise PanelShearError("ファイルが大きすぎます（20MB まで）。", 413)
+    content = await file.read()
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise PanelShearError("ファイルが大きすぎます（20MB まで）。", 413)
+    return {
+        **panel_shear.parse_pdf(content),
+        # アップロードした PDF は Drive 上のファイルではないので上書き先にできない。
+        "file": {"id": "", "name": file.filename or ""},
+        "suggestedFileName": file.filename or "",
+    }
+
+
+@app.post(f"{_PANEL_PREFIX}/reports/parse-drive")
+async def parse_drive_panel_shear_report(
+    request: Request, user: User = Depends(require_user)
+):
+    """Drive 上の計算書 PDF を読み、フォームデータへ戻す。
+
+    ここで返す file.id が、そのまま「上書き保存」の対象になる。
+    """
+    file_id = (await _json_body(request)).get("fileId")
+    if not file_id or not isinstance(file_id, str):
+        raise PanelShearError("ファイルが選択されていません。")
+
+    session = google_drive.delegated_session(user.email)
+    meta = google_drive.get_file_metadata(session, file_id)
+    if meta.get("trashed"):
+        raise PanelShearError("選択したファイルはゴミ箱に入っています。")
+    if meta.get("mimeType") != google_drive.PDF_MIME:
+        raise PanelShearError("PDF ファイルを選択してください。")
+
+    content = google_drive.download_file(session, file_id, context="PDF のダウンロード")
+    return {
+        **panel_shear.parse_pdf(content),
         "file": {"id": file_id, "name": meta.get("name", "")},
         "suggestedFileName": meta.get("name", ""),
     }

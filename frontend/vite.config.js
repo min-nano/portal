@@ -42,6 +42,10 @@ export default defineConfig(({ mode }) => ({
           import.meta.dirname,
           'tools/structural-cert-formatter/index.html'
         ),
+        'timber-panel-shear-calculator': resolve(
+          import.meta.dirname,
+          'tools/timber-panel-shear-calculator/index.html'
+        ),
       },
     },
   },

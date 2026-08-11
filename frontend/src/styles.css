@@ -153,3 +153,41 @@ button.secondary:disabled { background-color: #aaa; }
 #result { margin-top: 10px; text-align: center; font-size: 0.9em; }
 .warnings { margin: 12px 0 0; padding: 10px 12px 10px 28px; background: #fff6e5; border: 1px solid #f0d9a8; border-radius: 6px; font-size: 0.8em; color: #7a5b12; }
 .warnings li + li { margin-top: 6px; }
+
+/* --- 面材張り耐力要素 釘配列諸定数 計算ツール --- */
+
+/* 1 物件の中の複数パターン（面材の配置ちがい）をページ送りで切り替える。 */
+.pattern-bar { border: 1px solid #d6d6e0; border-radius: 8px; padding: 8px 10px 10px; margin-top: 14px; background: #f7f7fb; }
+.pattern-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 0.85em; }
+.pattern-nav button { margin-top: 0; width: auto; padding: 6px 10px; font-size: 0.85em; }
+.pattern-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.pattern-tabs .tab { margin-top: 0; width: auto; padding: 4px 10px; font-size: 0.8em; background-color: #e3e3ef; color: #333; }
+.pattern-tabs .tab.current { background-color: #1a3a8f; color: #fff; }
+
+/* 面材寸法（幅・高さ）と、その場で掛けた面積の目安。 */
+.panel-size { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; }
+.panel-size label { flex: 1; min-width: 7em; }
+.panel-size .area { font-size: 0.85em; color: #333; padding-bottom: 9px; }
+.panel-size .area .label { color: #555; margin-right: 6px; }
+
+/* セクション見出しの右に置く補助ボタン（計算例の読み込み）。 */
+.section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.section-head button { margin-top: 0; width: auto; padding: 5px 10px; font-size: 0.78em; }
+
+/* 釘配列諸定数（Ixy・Zxy・Cxy）。計算書 PDF の並びに合わせる。 */
+.result-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.result-box { flex: 1; min-width: 8em; border: 1px solid #d3e0ff; border-radius: 6px; background: #eef3ff; padding: 8px; text-align: center; }
+.result-box .key { display: block; font-size: 0.72em; color: #555; }
+.result-box .value { display: block; margin-top: 2px; font-size: 1.05em; color: #1a3a8f; font-variant-numeric: tabular-nums; }
+.result-error { margin-top: 8px; padding: 8px 10px; background: #fdecea; border: 1px solid #f5c6c2; border-radius: 6px; font-size: 0.82em; color: #a3281f; }
+
+/* 計算の途中経過（式番号つきで白箱化する）。 */
+.steps-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 0.82em; }
+.steps-table td { border-bottom: 1px solid #e3e3ef; padding: 4px 2px; }
+.steps-table .step-label { color: #333; }
+.steps-table .step-eq { color: #888; font-size: 0.9em; white-space: nowrap; }
+.steps-table .step-value { text-align: right; font-weight: bold; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* 釘配列図。狭い画面でも縮めて収める。 */
+.diagram-box { margin-top: 12px; overflow-x: auto; }
+.diagram-box svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }

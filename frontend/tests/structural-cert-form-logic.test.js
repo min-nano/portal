@@ -2,19 +2,21 @@ import { describe, expect, it } from 'vitest';
 import {
   canOverwrite,
   confirmSaveMessage,
+  ensurePdfExtension,
+  sanitizeFileName,
+  saveHintMessage,
+  saveModeFor,
+  unsavedPromptMessage,
+} from '../src/pdf-file-ops.js';
+import {
   dateFieldsFromIso,
   defaultSaveName,
   emptyFormData,
-  ensurePdfExtension,
   formSignature,
   formatCertificateDate,
   isoFromDateFields,
   mergeFormData,
-  sanitizeFileName,
-  saveHintMessage,
-  saveModeFor,
   suggestedFileName,
-  unsavedPromptMessage,
   validateFormData,
 } from '../src/structural-cert-formatter/form-logic.js';
 

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>釘配列諸定数 計算ツール</title>
+</head>
+<body>
+  <header class="portal-header">
+    <span class="title"><a href="/">%PORTAL_TITLE%</a></span>
+    <span class="account" id="accountArea" hidden>
+      <span id="accountEmail"></span>
+      <button type="button" id="signOutBtn">サインアウト</button>
+    </span>
+  </header>
+
+  <div id="authGate" class="auth-gate" hidden>
+    <p class="note">社内の Google アカウントでサインインしてください。</p>
+    <div class="clerk-mount"></div>
+  </div>
+
+  <div id="app" class="container" hidden>
+    <div class="page-head">
+      <h2>面材張り耐力要素 釘配列諸定数の計算</h2>
+    </div>
+    <p class="hint">
+      グレー本『木造軸組工法住宅の許容応力度設計』 3.2 節（式 3.2.1〜3.2.7）に準拠し、
+      釘配列諸定数 Ixy・Zxy・Cxy を求めます。計算書は PDF で保存し、
+      入力内容は PDF に埋め込まれるので、保存したファイルを開き直せば続きを編集できます。
+    </p>
+
+    <!-- 開いているファイルと、その切り替え操作。通常のアプリの「新規作成 /
+         開く」と同じ並びにする。 -->
+    <div class="edit-bar">
+      <div>
+        <span class="label">編集中のファイル: </span>
+        <span id="sourceName" class="name">なし（新規作成）</span>
+      </div>
+      <div class="file-actions">
+        <button type="button" id="newBtn">新規作成</button>
+        <button type="button" id="loadBtn">Drive から開く</button>
+        <button type="button" id="uploadBtn">手元の PDF を開く</button>
+        <!-- 読み込むだけで Drive には保存しないため、Picker のアップロード
+             画面ではなくブラウザのファイル選択を使う。 -->
+        <input type="file" id="uploadInput" accept="application/pdf,.pdf" hidden>
+      </div>
+      <p class="hint" id="sourceNote" hidden></p>
+    </div>
+
+    <form id="calcForm" onsubmit="return false;">
+      <!-- 1 ファイル = 1 物件。物件の情報はパターンによらず共通。 -->
+      <div class="cert-section">
+        <h3>物件</h3>
+        <label for="projectName">物件名</label>
+        <input type="text" id="projectName" placeholder="○○邸 新築工事">
+        <label for="issuedOn">作成日</label>
+        <input type="date" id="issuedOn">
+      </div>
+
+      <!-- 1 物件の中の複数パターン（面材の配置ちがい）をページ送りで編集する。 -->
+      <div class="pattern-bar">
+        <div class="pattern-nav">
+          <button type="button" id="prevBtn" class="secondary">‹</button>
+          <span id="patternPosition">パターン 1 / 1</span>
+          <button type="button" id="nextBtn" class="secondary">›</button>
+          <button type="button" id="addPatternBtn">＋ パターン追加</button>
+          <button type="button" id="removePatternBtn" class="secondary">このパターンを削除</button>
+        </div>
+        <div id="patternTabs" class="pattern-tabs"></div>
+      </div>
+
+      <div class="cert-section">
+        <div class="section-head">
+          <h3>入力</h3>
+          <button type="button" id="exampleBtn" class="secondary">グレー本の計算例を読み込む</button>
+        </div>
+
+        <label for="patternName">パターン名（この物件内での識別名）</label>
+        <input type="text" id="patternName" placeholder="南面 耐力壁 など">
+
+        <div class="panel-size">
+          <label>幅 W [mm]
+            <input type="number" id="patternWidth" inputmode="numeric">
+          </label>
+          <label>高さ H [mm]
+            <input type="number" id="patternHeight" inputmode="numeric">
+          </label>
+          <div class="area">
+            <span class="label">面積 Aw</span>
+            <span id="panelArea">-</span>
+          </div>
+        </div>
+
+        <fieldset class="cert-choices">
+          <legend>釘配列の入力方法</legend>
+          <label class="choice-option">
+            <input type="radio" name="nailMode" value="grid" checked>
+            格子（グリッド）― X と Y の全組合せに釘を 1 本ずつ配置します
+          </label>
+          <label class="choice-option">
+            <input type="radio" name="nailMode" value="coords">
+            座標を直接入力
+          </label>
+        </fieldset>
+
+        <div id="gridInputs">
+          <label for="gridX">X 座標のリスト [mm]（カンマ区切り）</label>
+          <input type="text" id="gridX" placeholder="0, 445, 890">
+          <label for="gridY">Y 座標のリスト [mm]（カンマ区切り）</label>
+          <input type="text" id="gridY" placeholder="0, 145, 295, 445, 590">
+        </div>
+
+        <div id="coordsInputs" hidden>
+          <label for="coords">釘座標「x, y」を 1 行に 1 本ずつ [mm]</label>
+          <textarea id="coords" rows="6" placeholder="0, 0&#10;0, 145&#10;445, 295"></textarea>
+        </div>
+      </div>
+
+      <!-- 計算・丸めはすべてサーバ側で行い、ここは返ってきた値を並べるだけ。 -->
+      <div class="cert-section">
+        <h3>計算結果</h3>
+        <p class="hint" id="resultNote">面材寸法と釘配列を入力すると、ここに結果が表示されます。</p>
+        <div id="resultError" class="result-error" hidden></div>
+        <div id="summary" class="result-summary"></div>
+
+        <table class="steps-table">
+          <tbody id="stepsBody"></tbody>
+        </table>
+
+        <div class="diagram-box">
+          <svg id="diagram" role="img" aria-label="釘配列図" hidden></svg>
+        </div>
+        <p class="hint">
+          原点 (0, 0) は面材の左下。破線は弾性中立軸（x0 / y0）です。
+          釘にカーソルを合わせると座標を表示します。
+        </p>
+      </div>
+
+      <!-- 保存先は「編集中のファイル」そのもの。ファイル名と保存する場所は、
+           新規保存・別名保存のときだけ下の保存ダイアログで指定する。 -->
+      <div class="save-bar">
+        <h3>保存</h3>
+        <p class="hint" id="saveHint"></p>
+        <div class="save-actions">
+          <button type="button" id="submitBtn">保存</button>
+          <button type="button" id="saveAsBtn" class="secondary">別名で保存</button>
+        </div>
+      </div>
+    </form>
+
+    <div id="message"></div>
+    <div id="result" hidden>
+      <a id="resultLink" target="_blank" rel="noopener"></a>
+    </div>
+  </div>
+
+  <!-- 未保存の入力があるまま新規作成・読み込みへ移るときの確認。 -->
+  <dialog id="unsavedDialog" class="app-dialog">
+    <p id="unsavedMessage"></p>
+    <div class="dialog-actions">
+      <button type="button" data-choice="save">保存する</button>
+      <button type="button" data-choice="discard" class="secondary">保存しない</button>
+      <button type="button" data-choice="cancel" class="secondary">キャンセル</button>
+    </div>
+  </dialog>
+
+  <!-- 新規保存・別名保存のときの保存ダイアログ（「名前を付けて保存」）。 -->
+  <dialog id="saveAsDialog" class="app-dialog">
+    <h3 id="saveAsTitle">別名で保存</h3>
+    <label for="saveAsName">ファイル名</label>
+    <input type="text" id="saveAsName" placeholder="釘配列諸定数計算書.pdf">
+    <label for="saveAsFolderBtn">保存先フォルダ</label>
+    <div class="folder-row">
+      <span id="saveAsFolderName" class="unset">未選択</span>
+      <button type="button" id="saveAsFolderBtn" class="secondary">選択</button>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" id="saveAsConfirmBtn" disabled>保存</button>
+      <button type="button" id="saveAsCancelBtn" class="secondary">キャンセル</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="/src/timber-panel-shear-calculator/main.js"></script>
+</body>
+</html>
