@@ -336,6 +336,12 @@ Hosting は `https://<サイトID>.firebaseapp.com` でも同じアプリを配�
 
 `firebase.json` の `rewrites` により `/api/**` が Cloud Run の `portal-api`（asia-northeast1）へ転送されます。サービス名やリージョンを変えた場合はここも合わせてください。
 
+#### キャッシュの寿命（`firebase.json` の `headers`）
+
+ビルドされた JS / CSS はファイル名に内容のハッシュが入る（中身が変われば URL も変わる）ため、`/assets/**` は 1 年 + `immutable` で配信します。一方、入口の HTML（`/` と `/tools/**`）は URL が固定で、その中に読み込む資産のハッシュが書かれています。ここが長くキャッシュされると、配信し直しても古い HTML が古い資産を指し続け、画面だけ古いまま API が新しい、という食い違いが起きます。そのため入口の HTML だけ `max-age=60` にしてあります（デプロイ後、最大 1 分で新しい画面に入れ替わります）。
+
+`cleanUrls` で URL から拡張子が落ちるため、`headers` の `source` は拡張子ではなくページの場所（`/` と `/tools/**`）で指定しています。ページを増やす場所を変えたときは、ここも合わせてください。
+
 ### 8. GitHub Actions（CI/CD）
 
 `main` への push で本番デプロイ（`.github/workflows/deploy.yml`）、PR で Hosting のプレビューデプロイ（`.github/workflows/preview.yml`。後述）が走ります。Settings → Secrets and variables → Actions に以下の **Variables** を設定してください。**Secrets は使いません**（理由は「ランタイム環境変数の出どころ」）。
