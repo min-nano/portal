@@ -13,6 +13,10 @@ export default defineConfig({
           import.meta.dirname,
           'tools/excel-report-formatter/index.html'
         ),
+        'structural-cert-formatter': resolve(
+          import.meta.dirname,
+          'tools/structural-cert-formatter/index.html'
+        ),
       },
     },
   },

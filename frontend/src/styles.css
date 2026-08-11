@@ -10,7 +10,9 @@ body { font-family: sans-serif; padding: 16px; background-color: #f4f4f9; margin
 h2 { font-size: 1.2em; color: #333; margin-top: 0; }
 h3 { font-size: 1em; color: #1a3a8f; margin: 0; }
 label { display: block; margin-top: 10px; font-weight: bold; font-size: 0.85em; }
-input[type="text"], input[type="number"], select { width: 100%; padding: 9px; margin-top: 4px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
+input[type="text"], input[type="number"], input[type="date"], select { width: 100%; padding: 9px; margin-top: 4px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
+/* iOS Safari は日付欄の高さが他の入力欄とずれるので、行の高さを揃える。 */
+input[type="date"] { min-height: 40px; }
 /* スピナー（数値の増減ボタン）は不要なので非表示にする。狭い欄でも数値が隠れない。 */
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
@@ -82,3 +84,40 @@ button:disabled { background-color: #aaa; }
 .measure-table select, .measure-table input { width: 100%; padding: 5px 2px; margin-top: 0; box-sizing: border-box; border: 1px solid #ccc; border-radius: 3px; font-size: 1rem; text-align: center; scroll-margin-top: 72px; }
 .add-room { background-color: #34a853; }
 .hint { font-size: 0.78em; color: #777; margin-top: 4px; }
+
+/* --- 構造計算安全証明書 作成ツール --- */
+
+/* 設定バーの中にボタンを 2 つ並べる（雛形 / 保存先、読み込み / 新規に戻す）。 */
+.template-bar button + button, .edit-bar button + button { margin-left: 8px; }
+.template-bar > div + div { margin-top: 4px; }
+
+/* 編集元の表示。作成中か編集中かがひと目で分かるよう色を変える。 */
+.edit-bar { background: #f3f8f3; border: 1px solid #cfe3cf; border-radius: 6px; padding: 10px 12px; margin-bottom: 16px; font-size: 0.85em; }
+.edit-bar .label { color: #555; }
+.edit-bar .name { font-weight: bold; color: #1e7a3c; word-break: break-all; }
+.edit-bar button { margin-top: 8px; width: auto; padding: 6px 12px; font-size: 0.85em; background-color: #5f6368; }
+
+/* 証明書の記載順どおりに項目を並べたセクション。 */
+.cert-section { border: 1px solid #d6d6e0; border-radius: 8px; padding: 10px 12px 14px; margin-top: 14px; background: #fafbff; }
+.cert-section h3 { margin-bottom: 4px; }
+.cert-field .field-row { display: flex; align-items: center; gap: 6px; }
+.cert-field .field-row input { flex: 1; }
+.cert-field .unit { font-size: 0.85em; color: #555; white-space: nowrap; }
+
+/* 選択肢（証明書上では該当する番号に ○、□ にはレ点が付く）。 */
+.cert-choices { border: 1px solid #e3e3ef; border-radius: 6px; padding: 6px 10px 10px; margin-top: 12px; }
+.cert-choices legend { font-size: 0.85em; font-weight: bold; color: #1a3a8f; padding: 0 4px; }
+/* セクションの見出しがそのまま名前になっている選択肢は、囲みを重ねない。 */
+.cert-choices.bare { border: none; padding: 0; margin-top: 2px; }
+.choice-option { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; font-weight: normal; font-size: 0.85em; line-height: 1.4; }
+.choice-option input[type="radio"] { width: auto; margin: 2px 0 0; flex: none; }
+
+/* 保存欄 */
+.save-bar { border: 1px solid #d3e0ff; border-radius: 8px; padding: 10px 12px 14px; margin-top: 18px; background: #eef3ff; }
+.save-modes { margin-top: 8px; }
+.save-modes .choice-option input:disabled + span { color: #999; }
+
+/* 生成結果・注意書き */
+#result { margin-top: 10px; text-align: center; font-size: 0.9em; }
+.warnings { margin: 12px 0 0; padding: 10px 12px 10px 28px; background: #fff6e5; border: 1px solid #f0d9a8; border-radius: 6px; font-size: 0.8em; color: #7a5b12; }
+.warnings li + li { margin-top: 6px; }

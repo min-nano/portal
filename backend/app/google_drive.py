@@ -1,9 +1,17 @@
 """Google Drive へのアクセス（ユーザー代理 / domain-wide delegation）。
 
-Clerk JWT で確認したメールアドレスのユーザーとして Drive を読む。
+Clerk JWT で確認したメールアドレスのユーザーとして Drive を読み書きする。
 GAS 版の「実行ユーザーの権限で DriveApp を読む」に相当し、雛形ファイルに
 アクセス権のあるユーザーだけが雛形を取得・検索できるという権限モデルを
-そのまま維持する。スコープは読み取り専用（drive.readonly）に限定。
+そのまま維持する。
+
+スコープは用途で 2 段階に分けている:
+
+  * delegated_session() …… drive.readonly。雛形の検索・取得だけを行う
+    （現況検査レポート作成ツールはこちらだけで完結する）。
+  * delegated_write_session() … drive + documents。構造計算安全証明書
+    作成ツールが、雛形の Google ドキュメントを複製して差し替え、PDF を
+    Drive へ保存するために使う。書き込みが必要な操作だけこちらを使う。
 
 JSON 鍵ファイルなしで動作するよう、Cloud Run 上ではランタイム
 サービスアカウントの IAM Credentials API（signJwt）で署名する。この方式には
@@ -20,11 +28,17 @@ from google.oauth2 import service_account
 from . import config
 
 DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
+DOCUMENTS_SCOPE = "https://www.googleapis.com/auth/documents"
 
 _TOKEN_URI = "https://oauth2.googleapis.com/token"
 _FILES_URL = "https://www.googleapis.com/drive/v3/files"
+_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+GOOGLE_DOC_MIME = "application/vnd.google-apps.document"
+FOLDER_MIME = "application/vnd.google-apps.folder"
+PDF_MIME = "application/pdf"
 
 
 class DriveError(Exception):
@@ -75,29 +89,76 @@ def delegated_session(user_email: str) -> AuthorizedSession:
     return AuthorizedSession(_credentials([DRIVE_READONLY_SCOPE], subject=user_email))
 
 
+def delegated_write_session(user_email: str) -> AuthorizedSession:
+    """user_email の代理で Drive へ書き込み、Docs を編集できるセッション。
+
+    証明書の生成は「雛形の複製 → プレースホルダー置換 → PDF 書き出し →
+    複製の削除 → Drive へ保存」という流れで、いずれも実行ユーザー本人の
+    権限で行う。本人が書き込めない場所には保存できない。
+    """
+    return AuthorizedSession(
+        _credentials([DRIVE_SCOPE, DOCUMENTS_SCOPE], subject=user_email)
+    )
+
+
 def _escape_query_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def api_error_detail(resp) -> str:
+    """Google API のエラー応答から、原因を示す文言を取り出す。
+
+    拒否の理由は「スコープが足りない」「API が有効化されていない」「本人に
+    権限が無い」など複数ありうる。こちらで推測した案内だけを出すと利用者を
+    誤った調査へ誘導してしまうため、Google 自身の説明を必ず添える。
+    """
+    try:
+        error = (resp.json() or {}).get("error")
+    except Exception:
+        return ""
+    if isinstance(error, str):
+        message = error
+    elif isinstance(error, dict):
+        message = error.get("message") or ""
+    else:
+        return ""
+    message = " ".join(str(message).split())
+    # 長い説明（有効化用の URL を含むことがある）は途中で切る。
+    return message if len(message) <= 300 else message[:300] + "…"
+
+
+def _with_detail(message: str, resp) -> str:
+    detail = api_error_detail(resp)
+    return f"{message}（Google からの応答: {detail}）" if detail else message
 
 
 def _raise_for_status(resp, context: str):
     if resp.status_code == 401 or resp.status_code == 403:
         raise DriveError(
-            f"{context}が拒否されました (HTTP {resp.status_code})。"
-            "domain-wide delegation の設定（クライアント ID とスコープの登録）と、"
-            "ファイルへのアクセス権を確認してください。",
+            _with_detail(
+                f"{context}が拒否されました (HTTP {resp.status_code})。"
+                "GCP プロジェクトでの API の有効化、domain-wide delegation の設定"
+                "（クライアント ID とスコープの登録）、ファイルへのアクセス権を"
+                "確認してください。",
+                resp,
+            ),
             502,
         )
     if resp.status_code == 404:
-        raise DriveError(f"{context}に失敗しました（ファイルが見つかりません）。", 404)
+        raise DriveError(
+            _with_detail(f"{context}に失敗しました（ファイルが見つかりません）。", resp), 404
+        )
     if not resp.ok:
-        raise DriveError(f"{context}に失敗しました (HTTP {resp.status_code})。", 502)
+        raise DriveError(
+            _with_detail(f"{context}に失敗しました (HTTP {resp.status_code})。", resp), 502
+        )
 
 
 def get_file_metadata(session: AuthorizedSession, file_id: str) -> dict:
     resp = session.get(
         f"{_FILES_URL}/{file_id}",
         params={
-            "fields": "id, name, mimeType, parents, trashed",
+            "fields": "id, name, mimeType, parents, trashed, webViewLink",
             "supportsAllDrives": "true",
         },
     )
@@ -105,15 +166,17 @@ def get_file_metadata(session: AuthorizedSession, file_id: str) -> dict:
     return resp.json()
 
 
-def search_xlsx_files(session: AuthorizedSession, name_query: str) -> list[dict]:
-    """ファイル名で .xlsx を検索する（Google Picker の代替となる選択 UI 用）。
+def search_files_by_name(
+    session: AuthorizedSession, name_query: str, mime_type: str, context: str
+) -> list[dict]:
+    """ファイル名で特定の種類のファイルを検索する（Google Picker の代替）。
 
     実行ユーザーの代理で検索するため、本人に閲覧権限のあるファイルだけが
     候補に挙がる。
     """
     q = (
         f"name contains '{_escape_query_value(name_query)}' "
-        f"and mimeType = '{XLSX_MIME}' and trashed = false"
+        f"and mimeType = '{mime_type}' and trashed = false"
     )
     resp = session.get(
         _FILES_URL,
@@ -127,14 +190,19 @@ def search_xlsx_files(session: AuthorizedSession, name_query: str) -> list[dict]
             "corpora": "allDrives",
         },
     )
-    _raise_for_status(resp, "雛形候補の検索")
+    _raise_for_status(resp, context)
     return resp.json().get("files", [])
 
 
-def fetch_latest_template(
+def search_xlsx_files(session: AuthorizedSession, name_query: str) -> list[dict]:
+    """雛形候補（.xlsx）をファイル名で検索する。"""
+    return search_files_by_name(session, name_query, XLSX_MIME, "雛形候補の検索")
+
+
+def find_latest_file(
     session: AuthorizedSession, folder_id: str, file_name: str
-) -> bytes:
-    """フォルダ内の同名ファイルのうち最新のものをダウンロードする。
+) -> dict:
+    """フォルダ内の同名ファイルのうち最新のもののメタデータを返す。
 
     GAS 版 fetchTemplateBase64_ と同じ追従ルール: フォーマットが同じフォルダに
     同名で差し替えられても、最終更新日時が最も新しいもの（ゴミ箱は除く）を
@@ -150,7 +218,7 @@ def fetch_latest_template(
             "q": q,
             "orderBy": "modifiedTime desc",
             "pageSize": "1",
-            "fields": "files(id, name)",
+            "fields": "files(id, name, mimeType)",
             "supportsAllDrives": "true",
             "includeItemsFromAllDrives": "true",
         },
@@ -163,7 +231,111 @@ def fetch_latest_template(
             "フォーマットが差し替えられた可能性があります。「雛形を設定」から選び直してください。",
             404,
         )
-    return download_file(session, files[0]["id"], context="雛形のダウンロード")
+    return files[0]
+
+
+def fetch_latest_template(
+    session: AuthorizedSession, folder_id: str, file_name: str
+) -> bytes:
+    """フォルダ内の同名ファイルのうち最新のものをダウンロードする。"""
+    latest = find_latest_file(session, folder_id, file_name)
+    return download_file(session, latest["id"], context="雛形のダウンロード")
+
+
+def copy_file(session: AuthorizedSession, file_id: str, name: str) -> dict:
+    """ファイルを複製する（複製先は実行ユーザーのマイドライブ）。
+
+    雛形そのものを書き換えないよう、置換は必ず複製に対して行う。
+    """
+    resp = session.post(
+        f"{_FILES_URL}/{file_id}/copy",
+        params={"fields": "id, name", "supportsAllDrives": "true"},
+        json={"name": name},
+    )
+    _raise_for_status(resp, "雛形の複製")
+    return resp.json()
+
+
+def export_file(session: AuthorizedSession, file_id: str, mime_type: str) -> bytes:
+    """Google ドキュメント等を指定の形式へ書き出す。"""
+    resp = session.get(
+        f"{_FILES_URL}/{file_id}/export",
+        params={"mimeType": mime_type},
+    )
+    _raise_for_status(resp, "PDF への書き出し")
+    return resp.content
+
+
+def delete_file(session: AuthorizedSession, file_id: str):
+    """ファイルを完全に削除する（ゴミ箱に残さない）。"""
+    resp = session.delete(
+        f"{_FILES_URL}/{file_id}", params={"supportsAllDrives": "true"}
+    )
+    # 既に消えている場合は成功扱いにする（後片付けのための呼び出しのため）。
+    if resp.status_code == 404:
+        return
+    _raise_for_status(resp, "一時ファイルの削除")
+
+
+def create_file(
+    session: AuthorizedSession,
+    folder_id: str,
+    name: str,
+    content: bytes,
+    mime_type: str,
+) -> dict:
+    """フォルダに新しいファイルを作成して内容をアップロードする。
+
+    Drive のマルチパートアップロードは multipart/related を要求し、
+    requests の files= が送る multipart/form-data とは別物のため、
+    「メタデータだけ作成 → 本体を差し替え」の 2 段階で行う。
+    """
+    resp = session.post(
+        _FILES_URL,
+        params={"fields": "id", "supportsAllDrives": "true"},
+        json={"name": name, "parents": [folder_id], "mimeType": mime_type},
+    )
+    _raise_for_status(resp, "ファイルの作成")
+    file_id = resp.json()["id"]
+    try:
+        return update_file_content(session, file_id, content, mime_type)
+    except Exception:
+        # 本体のアップロードに失敗したら、中身の無いファイルを残さない。
+        try:
+            delete_file(session, file_id)
+        except DriveError:
+            # 後片付けの失敗は握りつぶす。利用者に伝えるべきなのは
+            # 「アップロードに失敗した」ことであり、下の raise で送出する
+            # 元の例外をこちらで置き換えてしまわないようにする。
+            pass
+        raise
+
+
+def update_file_content(
+    session: AuthorizedSession,
+    file_id: str,
+    content: bytes,
+    mime_type: str,
+) -> dict:
+    """既存ファイルの内容を差し替える。
+
+    Drive はファイル本体を差し替えると新しいリビジョンを作るため、上書き
+    保存をしても直前の内容は版履歴から復元できる。keepRevisionForever は
+    付けない（古い版は Drive の自動整理に任せ、一定期間が過ぎたら最新の
+    ものだけが残ればよいという運用）。
+    """
+    resp = session.patch(
+        f"{_UPLOAD_URL}/{file_id}",
+        params={
+            "uploadType": "media",
+            "fields": "id, name, webViewLink, modifiedTime",
+            "supportsAllDrives": "true",
+        },
+        data=content,
+        headers={"Content-Type": mime_type},
+    )
+    _raise_for_status(resp, "ファイルの保存")
+    return resp.json()
 
 
 def download_file(

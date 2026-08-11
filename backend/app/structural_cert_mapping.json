@@ -1,0 +1,324 @@
+{
+  "_about": [
+    "構造計算によって建築物の安全性を確かめた旨の証明書（第四号書式）の雛形マッピング。",
+    "雛形は Google ドキュメントで、記入欄は {{…}} のプレースホルダーになっている。",
+    "text_fields.placeholders に書いた文字列をフォームの入力値で置換し、PDF へ書き出したうえで、",
+    "choice_groups の選択された選択肢の anchor（行の先頭にある番号や □）へ印を描き込む。",
+    "印の種類は mark で選ぶ: circle は正円で囲む（番号向け）、check は □ の中にレ点を入れる。",
+    "sections の項目は field（記入欄）・choice（選択肢）・date（日付ピッカー。和暦の 3 欄をまとめて入力）。",
+    "雛形のレイアウトが改訂されたときは、原則このファイルを直すだけで追従できる。",
+    "anchor と parse_rules の label は雛形の見た目どおりに書いてよい（読み込み時に空白除去と",
+    "1 文字ずつの NFKC 正規化を掛けて比較する）。parse_rules の pattern だけは正規表現のため",
+    "正規化後の表記（半角数字・半角括弧）で書くこと。"
+  ],
+
+  "template_mime_type": "application/vnd.google-apps.document",
+  "output_mime_type": "application/pdf",
+  "output_file_name_template": "構造計算安全証明書_{building_name}.pdf",
+  "metadata_key": "/PortalStructuralCert",
+
+  "mark": {
+    "_comment": [
+      "circle_padding は正円の半径に足す余白、check_padding は □ に対するレ点の余白。",
+      "lift_ratio は印を持ち上げる量（文字の高さに対する比）。PDF の文字の外接矩形は",
+      "ディセンダの分だけ下に広く、数字や □ の字面は上寄りにある。そのまま矩形の中心に",
+      "合わせると印が下にずれるため、字面の中心へ寄せる。雛形の書き出しで実測した値。"
+    ],
+    "circle_padding": 1.4,
+    "check_padding": 0.2,
+    "lift_ratio": 0.133,
+    "line_width": 0.9
+  },
+
+  "text_fields": [
+    {
+      "key": "era_year",
+      "label": "年号・年",
+      "placeholders": ["{{年号年}}"],
+      "hint": "例: 令和 7",
+      "required": true
+    },
+    { "key": "month", "label": "月", "placeholders": ["{{月}}"], "unit": "月", "required": true },
+    { "key": "day", "label": "日", "placeholders": ["{{日}}"], "unit": "日", "required": true },
+    {
+      "key": "client_name",
+      "label": "委託者名",
+      "placeholders": ["{{委託者名}}"],
+      "required": true
+    },
+    {
+      "key": "building_address",
+      "label": "建築物の所在地",
+      "placeholders": ["{{建物所在地}}"],
+      "required": true
+    },
+    {
+      "key": "building_name",
+      "label": "建築物の名称",
+      "placeholders": ["{{建物名称}}"],
+      "required": true
+    },
+    {
+      "key": "building_use",
+      "label": "建築物の用途",
+      "placeholders": ["{{建物用途}}"],
+      "hint": "例: 共同住宅",
+      "required": true
+    },
+    {
+      "key": "building_area",
+      "label": "建築面積",
+      "placeholders": ["{{建築面積}}"],
+      "unit": "m²",
+      "required": true
+    },
+    {
+      "key": "total_floor_area",
+      "label": "延べ面積",
+      "placeholders": ["{{延べ面積}}"],
+      "unit": "m²",
+      "required": true
+    },
+    {
+      "key": "max_height",
+      "label": "最高の高さ",
+      "placeholders": ["{{最高高さ}}"],
+      "unit": "m",
+      "required": true
+    },
+    {
+      "key": "eaves_height",
+      "label": "最高の軒の高さ",
+      "placeholders": ["{{軒高さ}}"],
+      "unit": "m"
+    },
+    {
+      "key": "floors_above",
+      "label": "階数（地上）",
+      "placeholders": ["{{地上}}"],
+      "unit": "階",
+      "required": true
+    },
+    { "key": "floors_below", "label": "階数（地下）", "placeholders": ["{{地下}}"], "unit": "階" },
+    {
+      "key": "structure",
+      "label": "構造",
+      "placeholders": ["{{構造種別}}"],
+      "hint": "例: 木",
+      "unit": "造",
+      "required": true
+    },
+    {
+      "key": "structure_part",
+      "label": "構造（一部）",
+      "placeholders": ["{{部分種別}}"],
+      "hint": "例: 鉄筋コンクリート",
+      "unit": "造"
+    },
+    {
+      "key": "other_calc_type",
+      "label": "その他の構造計算の種類",
+      "_comment": "雛形では波括弧が 1 つのため、両方の表記を置換対象にしている。",
+      "placeholders": ["{{その他の構造計算の種類}}", "{その他の構造計算の種類}"]
+    },
+    { "key": "program_name", "label": "プログラムの名称", "placeholders": ["{{プログラム名}}"] },
+    {
+      "key": "program_cert_number",
+      "label": "プログラムの認定番号",
+      "placeholders": ["{{プログラム認定番号}}"]
+    }
+  ],
+
+  "choice_groups": [
+    {
+      "key": "building_category",
+      "label": "建築物の区分",
+      "required": true,
+      "options": [
+        {
+          "value": "1",
+          "label": "建築基準法（以下「法」という。）第20条第1項第1号に掲げる建築物",
+          "anchor": "１建築基準法(以下",
+          "mark_length": 1
+        },
+        {
+          "value": "2",
+          "label": "法第20条第1項第2号に掲げる建築物",
+          "anchor": "２法第20条第1項第2号",
+          "mark_length": 1
+        },
+        {
+          "value": "3",
+          "label": "法第20条第1項第3号に掲げる建築物",
+          "anchor": "３法第20条第1項第3号",
+          "mark_length": 1
+        },
+        {
+          "value": "4",
+          "label": "法第20条第1項第4号に掲げる建築物",
+          "anchor": "４法第20条第1項第4号",
+          "mark_length": 1
+        }
+      ]
+    },
+    {
+      "key": "calc_type",
+      "label": "別添の構造計算書に係る構造計算の種類",
+      "required": true,
+      "options": [
+        {
+          "value": "1",
+          "label": "建築基準法施行令（以下「令」という。）第81条第1項に定める基準に従った構造計算",
+          "anchor": "１建築基準法施行令",
+          "mark_length": 1
+        },
+        {
+          "value": "2",
+          "label": "令第81条第2項第1号イに規定する構造計算",
+          "anchor": "２令第81条第2項第1号イ",
+          "mark_length": 1
+        },
+        {
+          "value": "3",
+          "label": "令第81条第2項第1号ロに規定する構造計算",
+          "anchor": "３令第81条第2項第1号ロ",
+          "mark_length": 1
+        },
+        {
+          "value": "4",
+          "label": "令第81条第2項第2号イに規定する構造計算",
+          "anchor": "４令第81条第2項第2号イ",
+          "mark_length": 1
+        },
+        {
+          "value": "5",
+          "label": "令第81条第3項に定める基準に従った構造計算",
+          "anchor": "５令第81条第3項",
+          "mark_length": 1
+        },
+        {
+          "value": "6",
+          "label": "その他",
+          "anchor": "６その他(",
+          "mark_length": 1,
+          "requires_field": "other_calc_type"
+        }
+      ]
+    },
+    {
+      "key": "calc_method",
+      "label": "別添の構造計算書に係る構造計算の方法",
+      "required": true,
+      "options": [
+        {
+          "value": "1",
+          "label": "国土交通大臣が定めた方法によるもの",
+          "anchor": "１国土交通大臣が定めた方法",
+          "mark_length": 1
+        },
+        {
+          "value": "2",
+          "label": "国土交通大臣の認定を受けたプログラムによるもの",
+          "anchor": "２国土交通大臣の認定を受けた",
+          "mark_length": 1
+        }
+      ]
+    },
+    {
+      "key": "program_certified",
+      "label": "国土交通大臣の認定",
+      "options": [
+        { "value": "有", "label": "有", "anchor": "□有", "mark": "check", "mark_length": 1 },
+        { "value": "無", "label": "無", "anchor": "□無", "mark": "check", "mark_length": 1 }
+      ]
+    }
+  ],
+
+  "sections": [
+    {
+      "_comment": "証明日は日付ピッカーで入力し、画面側で和暦に直して 3 つの欄へ入れる。",
+      "title": "証明日",
+      "items": [
+        {
+          "date": {
+            "label": "証明日",
+            "era_year": "era_year",
+            "month": "month",
+            "day": "day"
+          }
+        }
+      ]
+    },
+    { "title": "委託者", "items": [{ "field": "client_name" }] },
+    {
+      "title": "建築物",
+      "items": [
+        { "field": "building_address" },
+        { "field": "building_name" },
+        { "field": "building_use" },
+        { "field": "building_area" },
+        { "field": "total_floor_area" },
+        { "field": "max_height" },
+        { "field": "eaves_height" },
+        { "field": "floors_above" },
+        { "field": "floors_below" },
+        { "field": "structure" },
+        { "field": "structure_part" }
+      ]
+    },
+    { "title": "建築物の区分", "items": [{ "choice": "building_category" }] },
+    {
+      "title": "別添の構造計算書に係る構造計算の種類",
+      "items": [{ "choice": "calc_type" }, { "field": "other_calc_type" }]
+    },
+    { "title": "別添の構造計算書に係る構造計算の方法", "items": [{ "choice": "calc_method" }] },
+    {
+      "title": "当該構造計算に用いたプログラム",
+      "items": [
+        { "field": "program_name" },
+        { "choice": "program_certified" },
+        { "field": "program_cert_number" }
+      ]
+    }
+  ],
+
+  "parse_rules": [
+    {
+      "_comment": "証明日。pattern は正規化後（半角数字）の表記で書く。",
+      "type": "line_regex",
+      "pattern": "^(?P<era_year>.+?)年(?P<month>[0-9]+)月(?P<day>[0-9]+)日$"
+    },
+    { "type": "line_regex", "pattern": "^委託者(?P<client_name>.*)殿$" },
+    { "type": "right_of", "label": "建築物の所在地", "field": "building_address" },
+    {
+      "_comment": "名称と用途は雛形上で同じ行に並ぶため、本文からは分離できない（メタデータがあればそちらが優先される）。",
+      "type": "right_of",
+      "label": "建築物の名称及び用途",
+      "field": "building_name",
+      "ambiguous_with": ["building_use"]
+    },
+    {
+      "type": "right_of",
+      "label": "建築面積",
+      "field": "building_area",
+      "drop_lines": ["2"],
+      "strip_suffix": "m"
+    },
+    {
+      "type": "right_of",
+      "label": "延べ面積",
+      "field": "total_floor_area",
+      "drop_lines": ["2"],
+      "strip_suffix": "m"
+    },
+    { "type": "right_of", "label": "１最高の高さ", "field": "max_height", "strip_suffix": "m" },
+    { "type": "right_of", "label": "２最高の軒の高さ", "field": "eaves_height", "strip_suffix": "m" },
+    { "type": "right_of", "label": "地上", "field": "floors_above", "strip_suffix": "階" },
+    { "type": "right_of", "label": "地下", "field": "floors_below", "strip_suffix": "階" },
+    { "type": "right_of", "label": "構造", "field": "structure", "strip_suffix": "造" },
+    { "type": "right_of", "label": "一部", "field": "structure_part", "strip_suffix": "造" },
+    { "type": "line_regex", "pattern": "^6その他\\((?P<other_calc_type>.*?)\\)?$" },
+    { "type": "line_regex", "pattern": "^1名称\\((?P<program_name>.*?)\\)?$" },
+    { "type": "line_regex", "pattern": "^3認定番号\\((?P<program_cert_number>.*?)\\)?$" }
+  ]
+}

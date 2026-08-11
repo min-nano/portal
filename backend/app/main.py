@@ -10,18 +10,33 @@
 
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Header, Request
+from fastapi import Depends, FastAPI, File, Header, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from . import clerk_auth, config, excel_report, google_drive, settings_store
+from . import (
+    clerk_auth,
+    config,
+    excel_report,
+    google_docs,
+    google_drive,
+    settings_store,
+    structural_cert,
+)
 from .clerk_auth import AuthError, User
 from .excel_report import ReportError
 from .google_drive import XLSX_MIME, DriveError
 from .settings_store import SettingsError
+from .structural_cert import CertificateError
 
 TOOL_EXCEL_REPORT = "excel-report-formatter"
 _TOOL_PREFIX = f"/api/tools/{TOOL_EXCEL_REPORT}"
+
+TOOL_STRUCTURAL_CERT = "structural-cert-formatter"
+_CERT_PREFIX = f"/api/tools/{TOOL_STRUCTURAL_CERT}"
+
+# アップロードされた PDF の上限。証明書は 1 ページなので十分に余裕がある。
+_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 app = FastAPI(title="portal-api", docs_url=None, redoc_url=None)
 
@@ -52,6 +67,11 @@ async def _drive_error_handler(_request: Request, exc: DriveError):
 
 @app.exception_handler(ReportError)
 async def _report_error_handler(_request: Request, exc: ReportError):
+    return _error_response(exc.status, str(exc))
+
+
+@app.exception_handler(CertificateError)
+async def _certificate_error_handler(_request: Request, exc: CertificateError):
     return _error_response(exc.status, str(exc))
 
 
@@ -199,3 +219,304 @@ async def create_report(request: Request, user: User = Depends(require_user)):
             )
         },
     )
+
+
+# --- 構造計算安全証明書 作成ツール -------------------------------------------
+#
+# 雛形（Google ドキュメント）と保存先フォルダを Drive から選び、設定を
+# Firestore に保存する点は excel-report-formatter と同じ。生成は雛形を
+# 複製 → プレースホルダー置換 → PDF 書き出し → 選択肢へ ○ を描き込み →
+# Drive へ保存、という流れで、すべて実行ユーザー本人の代理権限で行う。
+
+
+async def _json_body(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    return body if isinstance(body, dict) else {}
+
+
+def _cert_settings() -> dict:
+    return settings_store.get_tool_settings(TOOL_STRUCTURAL_CERT)
+
+
+@app.get(f"{_CERT_PREFIX}/config")
+async def get_certificate_config(user: User = Depends(require_user)):
+    """フォーム定義（記入欄・選択肢・並び順）をマッピングから配信する。"""
+    return structural_cert.form_config()
+
+
+@app.get(f"{_CERT_PREFIX}/settings")
+async def get_certificate_settings(user: User = Depends(require_user)):
+    """雛形と保存先フォルダの設定状態を返す。UI の初期表示で使う。"""
+    settings = _cert_settings()
+    template_name = settings.get("template_file_name", "")
+    folder_id = settings.get("output_folder_id", "")
+    return {
+        "template": {
+            "configured": bool(settings.get("template_folder_id") and template_name),
+            "fileName": template_name,
+        },
+        "outputFolder": {
+            "configured": bool(folder_id),
+            "folderName": settings.get("output_folder_name", ""),
+        },
+    }
+
+
+def _search_candidates(user: User, q: str, mime_type: str, context: str) -> dict:
+    """種類を絞って Drive を検索する（雛形・保存先フォルダ・編集する PDF 共通）。"""
+    query = q.strip()
+    if not query:
+        return {"files": []}
+    files = google_drive.search_files_by_name(
+        google_drive.delegated_session(user.email), query, mime_type, context
+    )
+    return {
+        "files": [
+            {
+                "id": f.get("id", ""),
+                "name": f.get("name", ""),
+                "modifiedTime": f.get("modifiedTime", ""),
+            }
+            for f in files
+        ]
+    }
+
+
+@app.get(f"{_CERT_PREFIX}/template/candidates")
+async def search_certificate_templates(q: str = "", user: User = Depends(require_user)):
+    """雛形候補（Google ドキュメント）をファイル名で検索する。"""
+    return _search_candidates(user, q, google_drive.GOOGLE_DOC_MIME, "雛形候補の検索")
+
+
+@app.get(f"{_CERT_PREFIX}/output-folder/candidates")
+async def search_output_folders(q: str = "", user: User = Depends(require_user)):
+    """保存先フォルダの候補を名前で検索する。"""
+    return _search_candidates(user, q, google_drive.FOLDER_MIME, "保存先フォルダの検索")
+
+
+@app.get(f"{_CERT_PREFIX}/pdf/candidates")
+async def search_certificate_pdfs(q: str = "", user: User = Depends(require_user)):
+    """編集する証明書（PDF）の候補をファイル名で検索する。"""
+    return _search_candidates(user, q, google_drive.PDF_MIME, "PDF の検索")
+
+
+@app.put(f"{_CERT_PREFIX}/template")
+async def save_certificate_template(
+    request: Request, user: User = Depends(require_user)
+):
+    """雛形の Google ドキュメントを選択し、親フォルダとファイル名を保存する。
+
+    excel-report-formatter と同じく「フォルダ + ファイル名」で覚えるので、
+    同じフォルダに同名で差し替えれば自動的に最新版が使われる。
+    """
+    file_id = (await _json_body(request)).get("fileId")
+    if not file_id or not isinstance(file_id, str):
+        raise CertificateError("ファイルが選択されていません。")
+
+    meta = google_drive.get_file_metadata(
+        google_drive.delegated_session(user.email), file_id
+    )
+    if meta.get("trashed"):
+        raise CertificateError(
+            "選択したファイルはゴミ箱に入っています。別のファイルを選択してください。"
+        )
+    if meta.get("mimeType") != google_drive.GOOGLE_DOC_MIME:
+        raise CertificateError(
+            "雛形は Google ドキュメントである必要があります。"
+            "Word 形式などをアップロードしている場合は、Google ドキュメント形式へ変換してください。"
+        )
+    parents = meta.get("parents") or []
+    if not parents:
+        raise CertificateError(
+            "選択したファイルの親フォルダを特定できませんでした。"
+            "マイドライブ直下ではなくフォルダ内に雛形を置いてください。"
+        )
+
+    settings = dict(_cert_settings())
+    settings.update(
+        {"template_folder_id": parents[0], "template_file_name": meta.get("name", "")}
+    )
+    settings_store.set_tool_settings(TOOL_STRUCTURAL_CERT, settings)
+    return {"fileName": meta.get("name", ""), "folderId": parents[0]}
+
+
+@app.put(f"{_CERT_PREFIX}/output-folder")
+async def save_output_folder(request: Request, user: User = Depends(require_user)):
+    """生成した PDF の保存先フォルダを共有設定に保存する。"""
+    folder_id = (await _json_body(request)).get("folderId")
+    if not folder_id or not isinstance(folder_id, str):
+        raise CertificateError("フォルダが選択されていません。")
+
+    meta = google_drive.get_file_metadata(
+        google_drive.delegated_session(user.email), folder_id
+    )
+    if meta.get("trashed"):
+        raise CertificateError("選択したフォルダはゴミ箱に入っています。")
+    if meta.get("mimeType") != google_drive.FOLDER_MIME:
+        raise CertificateError("フォルダを選択してください。")
+
+    settings = dict(_cert_settings())
+    settings.update(
+        {"output_folder_id": folder_id, "output_folder_name": meta.get("name", "")}
+    )
+    settings_store.set_tool_settings(TOOL_STRUCTURAL_CERT, settings)
+    return {"folderId": folder_id, "folderName": meta.get("name", "")}
+
+
+def _require_certificate_template(settings: dict) -> tuple[str, str]:
+    folder_id = settings.get("template_folder_id", "")
+    file_name = settings.get("template_file_name", "")
+    if not folder_id or not file_name:
+        raise CertificateError(
+            "雛形が未設定です。画面の「雛形を設定」から、Google Drive 上の"
+            "証明書の雛形（Google ドキュメント）を選択してください。",
+            409,
+        )
+    return folder_id, file_name
+
+
+def _render_certificate(session, data: dict, settings: dict) -> tuple[bytes, list]:
+    """雛形からフォーム入力を差し込んだ PDF を作る。
+
+    雛形そのものは触らず、複製に対して置換 → PDF 書き出し → 複製を削除。
+    最後に該当する選択肢へ ○ を描き込み、再編集用にフォーム入力を
+    文書情報として埋め込む。
+    """
+    folder_id, file_name = _require_certificate_template(settings)
+    template = google_drive.find_latest_file(session, folder_id, file_name)
+    copy = google_drive.copy_file(session, template["id"], f"[一時] {file_name}")
+    try:
+        counts = google_docs.replace_all_text(
+            session, copy["id"], structural_cert.build_replacements(data)
+        )
+        exported = google_drive.export_file(session, copy["id"], google_drive.PDF_MIME)
+    finally:
+        try:
+            google_drive.delete_file(session, copy["id"])
+        except DriveError:
+            # 後片付けの失敗で生成そのものを失敗させない。一時ファイルが
+            # 残るだけで証明書は正しく作れているうえ、finally の中で
+            # 送出すると本来のエラー（置換・書き出しの失敗）を覆い隠して
+            # しまうため、ここで握りつぶす。
+            pass
+
+    warnings = structural_cert.missing_placeholder_warnings(counts, data)
+    return structural_cert.finalize_pdf(exported, data), warnings
+
+
+@app.post(f"{_CERT_PREFIX}/certificates")
+async def create_certificate(request: Request, user: User = Depends(require_user)):
+    """フォームデータから証明書 PDF を作り、Drive へ保存する。
+
+    保存方法は body.save.mode で切り替える:
+      new       … 保存先フォルダに新しいファイルとして作る（別名で保存）
+      overwrite … 既存ファイルの内容を差し替える（Drive の版履歴が残る）
+    """
+    body = await _json_body(request)
+    data = structural_cert.normalize_data(body)
+    structural_cert.validate(data)
+
+    save = body.get("save") if isinstance(body.get("save"), dict) else {}
+    mode = save.get("mode") or "new"
+    if mode not in ("new", "overwrite"):
+        raise CertificateError("保存方法が不正です。")
+
+    # 設定は 1 リクエストにつき 1 回だけ読む。
+    settings = _cert_settings()
+    _require_certificate_template(settings)
+
+    session = google_drive.delegated_write_session(user.email)
+
+    # 保存先の確認も生成の前に済ませる。保存できない指定のために雛形を複製・
+    # 書き出しするのは無駄なうえ、後片付けの機会も増えるため。
+    file_id = ""
+    folder_id = ""
+    file_name = ""
+    if mode == "overwrite":
+        file_id = save.get("fileId")
+        if not file_id or not isinstance(file_id, str):
+            raise CertificateError("上書きするファイルが指定されていません。")
+        meta = google_drive.get_file_metadata(session, file_id)
+        if meta.get("trashed"):
+            raise CertificateError("上書き先のファイルはゴミ箱に入っています。")
+        if meta.get("mimeType") != google_drive.PDF_MIME:
+            raise CertificateError("上書きできるのは PDF ファイルだけです。")
+    else:
+        folder_id = settings.get("output_folder_id", "")
+        if not folder_id:
+            raise CertificateError(
+                "保存先フォルダが未設定です。画面の「保存先を設定」から、"
+                "Google Drive 上のフォルダを選択してください。",
+                409,
+            )
+        file_name = structural_cert.ensure_pdf_extension(
+            save.get("fileName") or structural_cert.default_file_name(data)
+        )
+
+    pdf_bytes, warnings = _render_certificate(session, data, settings)
+
+    if mode == "overwrite":
+        saved = google_drive.update_file_content(
+            session, file_id, pdf_bytes, google_drive.PDF_MIME
+        )
+    else:
+        saved = google_drive.create_file(
+            session, folder_id, file_name, pdf_bytes, google_drive.PDF_MIME
+        )
+
+    return {
+        "mode": mode,
+        "fileId": saved.get("id", ""),
+        "fileName": saved.get("name", ""),
+        "webViewLink": saved.get("webViewLink", ""),
+        "warnings": warnings,
+    }
+
+
+@app.post(f"{_CERT_PREFIX}/certificates/parse")
+async def parse_uploaded_certificate(
+    file: UploadFile = File(...), user: User = Depends(require_user)
+):
+    """アップロードされた証明書 PDF を解析してフォームデータへ変換する。"""
+    if file.size is not None and file.size > _MAX_UPLOAD_BYTES:
+        raise CertificateError("ファイルが大きすぎます（20MB まで）。", 413)
+    content = await file.read()
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise CertificateError("ファイルが大きすぎます（20MB まで）。", 413)
+    parsed = structural_cert.parse_pdf(content)
+    return {
+        **parsed,
+        "file": {"id": "", "name": file.filename or ""},
+        "suggestedFileName": file.filename or structural_cert.default_file_name(parsed),
+    }
+
+
+@app.post(f"{_CERT_PREFIX}/certificates/parse-drive")
+async def parse_drive_certificate(
+    request: Request, user: User = Depends(require_user)
+):
+    """Drive 上の証明書 PDF を解析してフォームデータへ変換する。
+
+    ここで返す file.id が、そのまま「上書き保存」の対象になる。
+    """
+    file_id = (await _json_body(request)).get("fileId")
+    if not file_id or not isinstance(file_id, str):
+        raise CertificateError("ファイルが選択されていません。")
+
+    session = google_drive.delegated_session(user.email)
+    meta = google_drive.get_file_metadata(session, file_id)
+    if meta.get("trashed"):
+        raise CertificateError("選択したファイルはゴミ箱に入っています。")
+    if meta.get("mimeType") != google_drive.PDF_MIME:
+        raise CertificateError("PDF ファイルを選択してください。")
+
+    content = google_drive.download_file(session, file_id, context="PDF のダウンロード")
+    parsed = structural_cert.parse_pdf(content)
+    return {
+        **parsed,
+        "file": {"id": file_id, "name": meta.get("name", "")},
+        "suggestedFileName": meta.get("name", ""),
+    }

@@ -1,6 +1,12 @@
 fastapi>=0.141.1,<1
 uvicorn[standard]>=0.52.1,<1
 openpyxl==3.1.5
+# 構造計算安全証明書（PDF）の読み書き。pdfminer.six は文字の座標取得（○ を
+# 付ける位置の特定と、既存 PDF の解析）に、pypdf は ○ の重ね合わせと文書情報の
+# 読み書きに使う。python-multipart は PDF アップロードの受け取りに必要。
+pypdf>=6.6.1,<7
+pdfminer.six>=20250506
+python-multipart>=0.0.20,<1
 PyJWT[crypto]>=2.13.0,<3
 google-auth>=2.56.3,<3
 google-cloud-firestore>=2.28.1,<3
