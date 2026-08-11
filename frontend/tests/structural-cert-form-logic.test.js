@@ -5,11 +5,15 @@ import {
   dateFieldsFromIso,
   emptyFormData,
   ensurePdfExtension,
+  formSignature,
   formatCertificateDate,
   isoFromDateFields,
   mergeFormData,
   sanitizeFileName,
+  saveHintMessage,
+  saveModeFor,
   suggestedFileName,
+  unsavedPromptMessage,
   validateFormData,
 } from '../src/structural-cert-formatter/form-logic.js';
 
@@ -273,5 +277,59 @@ describe('canOverwrite / confirmSaveMessage', () => {
 
   it('新規保存の確認文はファイル名を示す', () => {
     expect(confirmSaveMessage('new', '証明書.pdf', null)).toContain('証明書.pdf');
+  });
+});
+
+describe('saveModeFor / saveHintMessage', () => {
+  it('編集中のファイルがあれば「保存」はそこへの上書きになる', () => {
+    expect(saveModeFor({ id: 'f1', name: 'a.pdf' })).toBe('overwrite');
+  });
+
+  it('新規作成・アップロードした PDF は保存先をそのつど選ぶ', () => {
+    expect(saveModeFor(null)).toBe('new');
+    expect(saveModeFor({ id: '', name: 'a.pdf' })).toBe('new');
+  });
+
+  it('案内文は「保存」を押したときに起きることを書く', () => {
+    expect(saveHintMessage({ id: 'f1', name: '既存の証明書.pdf' })).toContain(
+      '既存の証明書.pdf'
+    );
+    expect(saveHintMessage(null)).toContain('フォルダ');
+  });
+});
+
+describe('formSignature', () => {
+  const data = { fields: { a: '1' }, choices: { b: '2' } };
+
+  it('同じ内容なら同じ指紋になる', () => {
+    expect(formSignature(data, 'x.pdf')).toBe(
+      formSignature({ fields: { a: '1' }, choices: { b: '2' } }, 'x.pdf')
+    );
+  });
+
+  it('入力が変われば指紋も変わる', () => {
+    expect(formSignature({ ...data, fields: { a: '9' } }, 'x.pdf')).not.toBe(
+      formSignature(data, 'x.pdf')
+    );
+    expect(formSignature({ ...data, choices: { b: '9' } }, 'x.pdf')).not.toBe(
+      formSignature(data, 'x.pdf')
+    );
+  });
+
+  it('ファイル名も保存すれば残る内容なので指紋に含める', () => {
+    expect(formSignature(data, 'y.pdf')).not.toBe(formSignature(data, 'x.pdf'));
+  });
+});
+
+describe('unsavedPromptMessage', () => {
+  it('編集中のファイルがあれば、その名前で尋ねる', () => {
+    const message = unsavedPromptMessage({ id: 'f1', name: '既存の証明書.pdf' }, '新規作成');
+
+    expect(message).toContain('既存の証明書.pdf');
+    expect(message).toContain('新規作成');
+  });
+
+  it('新規作成中なら入力内容として尋ねる', () => {
+    expect(unsavedPromptMessage(null, '読み込み')).toContain('入力した内容');
   });
 });

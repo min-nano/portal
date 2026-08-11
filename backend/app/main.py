@@ -263,18 +263,18 @@ async def get_certificate_config(user: User = Depends(require_user)):
 
 @app.get(f"{_CERT_PREFIX}/settings")
 async def get_certificate_settings(user: User = Depends(require_user)):
-    """雛形と保存先フォルダの設定状態を返す。UI の初期表示で使う。"""
+    """雛形の設定状態を返す。UI の初期表示で使う。
+
+    保存先はここでは持たない。証明書の保存先は「編集中のファイル」そのもの
+    （上書き保存）か、新規保存のたびに Picker で選ぶフォルダで、共有設定と
+    して固定するものではないため。
+    """
     settings = _cert_settings()
     template_name = settings.get("template_file_name", "")
-    folder_id = settings.get("output_folder_id", "")
     return {
         "template": {
             "configured": bool(settings.get("template_folder_id") and template_name),
             "fileName": template_name,
-        },
-        "outputFolder": {
-            "configured": bool(folder_id),
-            "folderName": settings.get("output_folder_name", ""),
         },
     }
 
@@ -286,7 +286,8 @@ async def save_certificate_template(
     """雛形の Google ドキュメントを選択し、親フォルダとファイル名を保存する。
 
     excel-report-formatter と同じく「フォルダ + ファイル名」で覚えるので、
-    同じフォルダに同名で差し替えれば自動的に最新版が使われる。
+    同じフォルダに同名で差し替えれば自動的に最新版が使われる。雛形は滅多に
+    変わらないため、画面ではタイトル横の小さな設定ボタンから設定する。
     """
     file_id = (await _json_body(request)).get("fileId")
     if not file_id or not isinstance(file_id, str):
@@ -311,35 +312,11 @@ async def save_certificate_template(
             "マイドライブ直下ではなくフォルダ内に雛形を置いてください。"
         )
 
-    settings = dict(_cert_settings())
-    settings.update(
-        {"template_folder_id": parents[0], "template_file_name": meta.get("name", "")}
+    settings_store.set_tool_settings(
+        TOOL_STRUCTURAL_CERT,
+        {"template_folder_id": parents[0], "template_file_name": meta.get("name", "")},
     )
-    settings_store.set_tool_settings(TOOL_STRUCTURAL_CERT, settings)
     return {"fileName": meta.get("name", ""), "folderId": parents[0]}
-
-
-@app.put(f"{_CERT_PREFIX}/output-folder")
-async def save_output_folder(request: Request, user: User = Depends(require_user)):
-    """生成した PDF の保存先フォルダを共有設定に保存する。"""
-    folder_id = (await _json_body(request)).get("folderId")
-    if not folder_id or not isinstance(folder_id, str):
-        raise CertificateError("フォルダが選択されていません。")
-
-    meta = google_drive.get_file_metadata(
-        google_drive.delegated_session(user.email), folder_id
-    )
-    if meta.get("trashed"):
-        raise CertificateError("選択したフォルダはゴミ箱に入っています。")
-    if meta.get("mimeType") != google_drive.FOLDER_MIME:
-        raise CertificateError("フォルダを選択してください。")
-
-    settings = dict(_cert_settings())
-    settings.update(
-        {"output_folder_id": folder_id, "output_folder_name": meta.get("name", "")}
-    )
-    settings_store.set_tool_settings(TOOL_STRUCTURAL_CERT, settings)
-    return {"folderId": folder_id, "folderName": meta.get("name", "")}
 
 
 def _require_certificate_template(settings: dict) -> tuple[str, str]:
@@ -387,9 +364,11 @@ def _render_certificate(session, data: dict, settings: dict) -> tuple[bytes, lis
 async def create_certificate(request: Request, user: User = Depends(require_user)):
     """フォームデータから証明書 PDF を作り、Drive へ保存する。
 
-    保存方法は body.save.mode で切り替える:
-      new       … 保存先フォルダに新しいファイルとして作る（別名で保存）
-      overwrite … 既存ファイルの内容を差し替える（Drive の版履歴が残る）
+    保存方法は body.save.mode で切り替える。一般的なアプリの「保存」／
+    「別名で保存」と同じ考え方で、保存先はそのつど決まる:
+      overwrite … 編集中のファイルの内容を差し替える（Drive の版履歴が残る）
+      new       … save.folderId（画面の Picker で選ばれたフォルダ）に
+                   新しいファイルとして作る
     """
     body = await _json_body(request)
     data = structural_cert.normalize_data(body)
@@ -421,13 +400,17 @@ async def create_certificate(request: Request, user: User = Depends(require_user
         if meta.get("mimeType") != google_drive.PDF_MIME:
             raise CertificateError("上書きできるのは PDF ファイルだけです。")
     else:
-        folder_id = settings.get("output_folder_id", "")
-        if not folder_id:
-            raise CertificateError(
-                "保存先フォルダが未設定です。画面の「保存先を設定」から、"
-                "Google Drive 上のフォルダを選択してください。",
-                409,
-            )
+        # 新規保存の保存先は、そのつど画面の Picker で選ばれたフォルダ。
+        # 届くのは ID だけなので、本当にフォルダなのか・本人に見えるのかは
+        # ここで実行ユーザーの代理セッションから確かめる。
+        folder_id = save.get("folderId")
+        if not folder_id or not isinstance(folder_id, str):
+            raise CertificateError("保存先のフォルダが選択されていません。")
+        folder = google_drive.get_file_metadata(session, folder_id)
+        if folder.get("trashed"):
+            raise CertificateError("保存先のフォルダはゴミ箱に入っています。")
+        if folder.get("mimeType") != google_drive.FOLDER_MIME:
+            raise CertificateError("保存先にはフォルダを選択してください。")
         file_name = structural_cert.ensure_pdf_extension(
             save.get("fileName") or structural_cert.default_file_name(data)
         )
