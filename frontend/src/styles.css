@@ -112,12 +112,19 @@ button:disabled { background-color: #aaa; }
 button.secondary { background-color: #5f6368; }
 button.secondary:disabled { background-color: #aaa; }
 
-/* 未保存の変更があるときの確認ダイアログ（保存する / 保存しない / キャンセル）。 */
-.app-dialog { border: none; border-radius: 8px; padding: 16px; max-width: 22em; box-shadow: 0 4px 16px rgba(0,0,0,0.2); color: #333; font-size: 0.9em; }
+/* ダイアログ（未保存の変更の確認、名前を付けて保存）。 */
+.app-dialog { border: none; border-radius: 8px; padding: 16px; width: 22em; max-width: calc(100vw - 32px); box-shadow: 0 4px 16px rgba(0,0,0,0.2); color: #333; font-size: 0.9em; }
 .app-dialog::backdrop { background: rgba(0,0,0,0.35); }
 .app-dialog p { margin: 0; line-height: 1.5; }
+.app-dialog h3 { margin-bottom: 4px; }
 .dialog-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
 .dialog-actions button { margin-top: 0; }
+
+/* 保存ダイアログの「保存先フォルダ」行（選択中のフォルダ名 + 選択ボタン）。 */
+.folder-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.folder-row .name { font-weight: bold; color: #1a3a8f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-row .unset { color: #777; }
+.folder-row button { margin-top: 0; width: auto; flex: none; margin-left: auto; padding: 6px 12px; font-size: 0.9em; }
 
 /* 生成結果・注意書き */
 #result { margin-top: 10px; text-align: center; font-size: 0.9em; }

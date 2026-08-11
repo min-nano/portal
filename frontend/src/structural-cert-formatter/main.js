@@ -8,8 +8,12 @@
 // 作成だけでなく編集にも対応する。ファイル操作の考え方は通常のアプリと同じで、
 // 「新規作成 / 開く / 保存 / 別名で保存」の 4 つ。開いているファイルがあれば
 // 保存はそこへの上書き（Drive の版履歴が残る）、新規保存・別名保存のときだけ
-// 保存する場所を Picker で選ぶ。未保存のまま別のファイルへ移ろうとしたときは、
-// 保存するかどうかを尋ねる。
+// 保存ダイアログでファイル名と保存先フォルダを指定する。未保存のまま別の
+// ファイルへ移ろうとしたときは、保存するかどうかを尋ねる。
+//
+// Google Picker は「ファイルを選ぶ」画面で、保存する名前を入力させることは
+// できない。そのため保存ダイアログは自前で持ち、場所（フォルダ）の選択だけを
+// Picker に任せている。
 
 import '../styles.css';
 import { requireSignIn } from '../auth.js';
@@ -25,13 +29,13 @@ import {
 import {
   canOverwrite,
   confirmSaveMessage,
+  defaultSaveName,
   emptyFormData,
   ensurePdfExtension,
   formSignature,
   mergeFormData,
   saveHintMessage,
   saveModeFor,
-  suggestedFileName,
   unsavedPromptMessage,
   validateFormData,
 } from './form-logic.js';
@@ -44,8 +48,10 @@ const PDF_MIME = 'application/pdf';
 let config = null; // /config の応答（text_fields / choice_groups / sections）
 let settings = null; // /settings の応答（雛形の設定状態）
 let sourceFile = null; // 開いているファイル（Drive 上の PDF）。{ id, name }
-// ファイル名を利用者が触ったら、以降は自動更新しない。
-let fileNameEdited = false;
+// 今開いている文書の名前。保存ダイアログの初期値に使う（空ならフォームから作る）。
+let documentName = '';
+// 直前に保存したフォルダ。続けて保存するときに選び直さずに済むよう覚えておく。
+let lastFolder = null; // { id, name }
 // 最後に保存・読み込みした時点のフォーム内容。今の内容と違えば未保存の変更がある。
 let savedSignature = '';
 
@@ -226,25 +232,13 @@ function prefillToday() {
   syncFieldsFromPicker(root);
 }
 
-function refreshFileNameSuggestion() {
-  if (fileNameEdited) return;
-  const input = document.getElementById('fileName');
-  input.value = suggestedFileName(
-    config.file_name_template,
-    collectFormData(),
-    config.default_file_name
-  );
-}
-
 // --- 開いているファイル -----------------------------------------------------
 
 function applyParsed(parsed) {
   applyToForm(mergeFormData(config, parsed));
   setSourceFile(parsed.file && parsed.file.id ? parsed.file : null, parsed);
-  if (parsed.suggestedFileName) {
-    document.getElementById('fileName').value = parsed.suggestedFileName;
-    fileNameEdited = true;
-  }
+  // 開いたファイルの名前を、そのまま次の保存の既定にする。
+  documentName = parsed.suggestedFileName || '';
   showWarnings(parsed.warnings);
   showResult('', '');
   showMessage('読み込みました。内容を編集して保存してください。', 'green');
@@ -286,18 +280,12 @@ function refreshSaveButtons() {
 
 /** 今の内容を「保存済み」として覚える（以降の変更が未保存の変更になる）。 */
 function markSaved() {
-  savedSignature = formSignature(
-    collectFormData(),
-    document.getElementById('fileName').value
-  );
+  savedSignature = formSignature(collectFormData());
 }
 
 function hasUnsavedChanges() {
   if (!config) return false;
-  return (
-    formSignature(collectFormData(), document.getElementById('fileName').value) !==
-    savedSignature
-  );
+  return formSignature(collectFormData()) !== savedSignature;
 }
 
 /**
@@ -354,8 +342,7 @@ async function newDocument() {
   applyToForm(emptyFormData(config));
   prefillToday();
   setSourceFile(null, null);
-  fileNameEdited = false;
-  refreshFileNameSuggestion();
+  documentName = '';
   showWarnings([]);
   showResult('', '');
   showMessage('新規作成にしました。', '#333');
@@ -379,26 +366,90 @@ async function save(mode) {
     return false;
   }
 
-  const fileName = ensurePdfExtension(
-    document.getElementById('fileName').value,
-    config.default_file_name
-  );
-  document.getElementById('fileName').value = fileName;
-
-  const saveSpec = { mode, fileName };
   if (mode === 'overwrite') {
-    // 上書きは取り消しづらいので、対象を明示して確認する。
+    // 上書きは同じファイルへの書き戻しなので、名前も場所も尋ねない。
+    // 取り消しづらい操作ではあるので、対象だけ明示して確認する。
+    const fileName = sourceFile.name;
     if (!window.confirm(confirmSaveMessage(mode, fileName, sourceFile))) return false;
-    saveSpec.fileId = sourceFile.id;
-  } else {
-    // 新規保存・別名保存は、通常のアプリの「保存ダイアログ」にあたる Picker で
-    // 保存する場所をそのつど選ぶ（設定として固定しない）。
-    const folder = await chooseFromDrive('destination');
-    if (!folder) return false; // Picker をキャンセルした。
-    saveSpec.folderId = folder.id;
+    return sendSaveRequest(data, { mode, fileName, fileId: sourceFile.id });
   }
 
-  return sendSaveRequest(data, saveSpec);
+  // 新規保存・別名保存は、通常のアプリの「名前を付けて保存」と同じように
+  // ファイル名と保存先フォルダを尋ねる。
+  const chosen = await askSaveAs(defaultSaveName(config, data, documentName));
+  if (!chosen) return false; // ダイアログをキャンセルした。
+  return sendSaveRequest(data, {
+    mode: 'new',
+    fileName: chosen.fileName,
+    folderId: chosen.folder.id,
+  });
+}
+
+/**
+ * 保存ダイアログ。ファイル名と保存先フォルダが決まったら
+ * { fileName, folder } を返す。キャンセルなら null。
+ *
+ * フォルダを選ぶ Picker は Google 側の重ね表示で、モーダルダイアログ
+ * （最前面レイヤー）の下に隠れてしまう。そのため Picker を出す間だけ
+ * ダイアログを閉じ、選び終えたら開き直す（入力中の名前はそのまま残る）。
+ */
+function askSaveAs(defaultName) {
+  const dialog = document.getElementById('saveAsDialog');
+  const nameInput = document.getElementById('saveAsName');
+  const folderEl = document.getElementById('saveAsFolderName');
+  const confirmBtn = document.getElementById('saveAsConfirmBtn');
+
+  document.getElementById('saveAsTitle').textContent = canOverwrite(sourceFile)
+    ? '別名で保存'
+    : '保存';
+  nameInput.value = defaultName;
+  let folder = lastFolder;
+
+  const showFolder = () => {
+    folderEl.textContent = folder ? folder.name : '未選択';
+    folderEl.className = folder ? 'name' : 'unset';
+    // 名前と場所の両方が決まるまでは保存できない。
+    confirmBtn.disabled = !folder || !nameInput.value.trim();
+  };
+  showFolder();
+
+  return new Promise((resolve) => {
+    const listening = new AbortController();
+    const on = (el, type, handler) =>
+      el.addEventListener(type, handler, { signal: listening.signal });
+    const finish = (value) => {
+      listening.abort();
+      dialog.close();
+      resolve(value);
+    };
+
+    on(nameInput, 'input', showFolder);
+    on(nameInput, 'keydown', (event) => {
+      if (event.key === 'Enter' && !confirmBtn.disabled) confirmBtn.click();
+    });
+    on(document.getElementById('saveAsFolderBtn'), 'click', async () => {
+      dialog.close();
+      const picked = await chooseFromDrive('destination');
+      if (picked) folder = picked;
+      showFolder();
+      dialog.showModal();
+    });
+    on(confirmBtn, 'click', () => {
+      const fileName = ensurePdfExtension(nameInput.value, config.default_file_name);
+      lastFolder = folder;
+      finish({ fileName, folder });
+    });
+    on(document.getElementById('saveAsCancelBtn'), 'click', () => finish(null));
+    // Esc キーで閉じたときは「キャンセル」と同じ扱いにする。
+    on(dialog, 'cancel', (event) => {
+      event.preventDefault();
+      finish(null);
+    });
+
+    dialog.showModal();
+    nameInput.focus();
+    nameInput.select();
+  });
 }
 
 async function sendSaveRequest(data, saveSpec) {
@@ -429,6 +480,7 @@ async function sendSaveRequest(data, saveSpec) {
     // 保存したファイルを、そのまま「開いているファイル」として続けて編集できる
     // ようにする（次の「保存」はこのファイルへの上書きになる）。
     setSourceFile({ id: result.fileId, name: result.fileName }, null);
+    documentName = result.fileName;
     markSaved();
     return true;
   } catch (error) {
@@ -465,9 +517,6 @@ async function start() {
   document.getElementById('uploadInput').addEventListener('change', uploadFile);
   document.getElementById('submitBtn').addEventListener('click', saveCurrent);
   document.getElementById('saveAsBtn').addEventListener('click', () => save('new'));
-  document.getElementById('fileName').addEventListener('input', () => {
-    fileNameEdited = true;
-  });
 
   // ページを閉じる・再読み込みするときも、未保存の入力があれば引き止める。
   window.addEventListener('beforeunload', (event) => {
@@ -490,13 +539,6 @@ async function start() {
 
   buildForm();
   prefillToday();
-  // 既定のファイル名に使う欄（雛形マッピングの file_name_template が参照する欄）を
-  // 入力したら、ファイル名の候補も追従させる。
-  (config.file_name_template.match(/\{([a-z_]+)\}/g) || []).forEach((token) => {
-    const input = document.getElementById(`field-${token.slice(1, -1)}`);
-    if (input) input.addEventListener('input', refreshFileNameSuggestion);
-  });
-  refreshFileNameSuggestion();
   setSourceFile(null, null);
   // 組み立て直後の状態を基準にする（これ以降の入力が「未保存の変更」）。
   markSaved();

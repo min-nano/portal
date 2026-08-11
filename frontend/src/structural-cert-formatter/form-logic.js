@@ -233,21 +233,29 @@ export function saveHintMessage(sourceFile) {
       '別の名前・別の場所に保存するときは「別名で保存」を使ってください。'
     );
   }
-  return '「保存」を押すと、保存する場所（Google Drive のフォルダ）を選ぶ画面が開きます。';
+  return 'まだ保存していません。「保存」を押すと、ファイル名と保存先フォルダを指定する画面が開きます。';
+}
+
+/**
+ * 保存ダイアログに最初から入れておくファイル名。
+ *
+ * 既に名前が決まっている（Drive から開いた・手元の PDF を開いた・一度保存した）
+ * ならその名前、まだ無ければフォームの入力から組み立てた候補を使う。
+ */
+export function defaultSaveName(config, data, documentName) {
+  return (
+    documentName ||
+    suggestedFileName(config.file_name_template, data, config.default_file_name)
+  );
 }
 
 /**
  * 未保存の入力があるかを判定するための、フォーム内容の指紋。
  *
  * 読み込み直後・保存直後の値と比べて、変わっていれば「編集中」とみなす。
- * ファイル名も保存すれば残る内容なので、比較に含める。
  */
-export function formSignature(data, fileName) {
-  return JSON.stringify({
-    fields: data.fields,
-    choices: data.choices,
-    fileName: String(fileName || ''),
-  });
+export function formSignature(data) {
+  return JSON.stringify({ fields: data.fields, choices: data.choices });
 }
 
 /** 未保存のまま新規作成・読み込みへ移ろうとしたときの確認文。 */

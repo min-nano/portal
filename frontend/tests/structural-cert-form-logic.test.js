@@ -3,6 +3,7 @@ import {
   canOverwrite,
   confirmSaveMessage,
   dateFieldsFromIso,
+  defaultSaveName,
   emptyFormData,
   ensurePdfExtension,
   formSignature,
@@ -298,26 +299,37 @@ describe('saveModeFor / saveHintMessage', () => {
   });
 });
 
+describe('defaultSaveName', () => {
+  const data = {
+    fields: { building_name: 'サンプル邸' },
+    choices: {},
+  };
+
+  it('名前が決まっていれば、それを保存ダイアログの初期値にする', () => {
+    expect(defaultSaveName(config, data, '既存の証明書.pdf')).toBe('既存の証明書.pdf');
+  });
+
+  it('まだ名前が無ければ、フォームの入力から組み立てる', () => {
+    expect(defaultSaveName(config, data, '')).toBe('構造計算安全証明書_サンプル邸.pdf');
+  });
+});
+
 describe('formSignature', () => {
   const data = { fields: { a: '1' }, choices: { b: '2' } };
 
   it('同じ内容なら同じ指紋になる', () => {
-    expect(formSignature(data, 'x.pdf')).toBe(
-      formSignature({ fields: { a: '1' }, choices: { b: '2' } }, 'x.pdf')
+    expect(formSignature(data)).toBe(
+      formSignature({ fields: { a: '1' }, choices: { b: '2' } })
     );
   });
 
   it('入力が変われば指紋も変わる', () => {
-    expect(formSignature({ ...data, fields: { a: '9' } }, 'x.pdf')).not.toBe(
-      formSignature(data, 'x.pdf')
+    expect(formSignature({ ...data, fields: { a: '9' } })).not.toBe(
+      formSignature(data)
     );
-    expect(formSignature({ ...data, choices: { b: '9' } }, 'x.pdf')).not.toBe(
-      formSignature(data, 'x.pdf')
+    expect(formSignature({ ...data, choices: { b: '9' } })).not.toBe(
+      formSignature(data)
     );
-  });
-
-  it('ファイル名も保存すれば残る内容なので指紋に含める', () => {
-    expect(formSignature(data, 'y.pdf')).not.toBe(formSignature(data, 'x.pdf'));
   });
 });
 

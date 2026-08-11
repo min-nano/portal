@@ -55,12 +55,10 @@
     <form id="certForm" onsubmit="return false;">
       <div id="sections"></div>
 
-      <!-- 保存先は「編集中のファイル」そのもの。新規保存・別名保存のときだけ、
-           保存する場所をそのつど Picker で選ぶ。 -->
+      <!-- 保存先は「編集中のファイル」そのもの。ファイル名と保存する場所は、
+           新規保存・別名保存のときだけ下の保存ダイアログで指定する。 -->
       <div class="save-bar">
         <h3>保存</h3>
-        <label for="fileName">ファイル名</label>
-        <input type="text" id="fileName" placeholder="構造計算安全証明書.pdf">
         <p class="hint" id="saveHint"></p>
         <div class="save-actions">
           <button type="button" id="submitBtn" disabled>保存</button>
@@ -84,6 +82,25 @@
       <button type="button" data-choice="save">保存する</button>
       <button type="button" data-choice="discard" class="secondary">保存しない</button>
       <button type="button" data-choice="cancel" class="secondary">キャンセル</button>
+    </div>
+  </dialog>
+
+  <!-- 新規保存・別名保存のときの保存ダイアログ。通常のアプリの「名前を付けて
+       保存」にあたる。Google Picker はファイルを選ぶ画面で、保存する名前を
+       入力させることはできないため、名前はここで受け取り、場所の選択だけを
+       Picker に任せる。 -->
+  <dialog id="saveAsDialog" class="app-dialog">
+    <h3 id="saveAsTitle">別名で保存</h3>
+    <label for="saveAsName">ファイル名</label>
+    <input type="text" id="saveAsName" placeholder="構造計算安全証明書.pdf">
+    <label for="saveAsFolderBtn">保存先フォルダ</label>
+    <div class="folder-row">
+      <span id="saveAsFolderName" class="unset">未選択</span>
+      <button type="button" id="saveAsFolderBtn" class="secondary">選択</button>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" id="saveAsConfirmBtn" disabled>保存</button>
+      <button type="button" id="saveAsCancelBtn" class="secondary">キャンセル</button>
     </div>
   </dialog>
 
