@@ -47,6 +47,7 @@ function installGoogleFakes({ respond }) {
     setAppId(v) { recorded.builder.appId = v; return this; }
     setLocale(v) { recorded.builder.locale = v; return this; }
     setTitle(v) { recorded.builder.title = v; return this; }
+    setSize(width, height) { recorded.builder.size = { width, height }; return this; }
     addView(view) { (recorded.builder.views ||= []).push(view); return this; }
     setCallback(fn) { this.callback = fn; return this; }
     build() {
@@ -87,9 +88,19 @@ async function loadModule() {
   return import('../src/google-picker.js');
 }
 
+// 表示領域の広さ。jsdom の既定は 1024x768。
+function setViewport(width, height) {
+  Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
+  Object.defineProperty(window, 'innerHeight', { value: height, configurable: true });
+}
+
 beforeEach(() => {
   apiGet.mockReset();
   respondWith();
+  setViewport(1024, 768);
+  document.documentElement.style.overflow = '';
+  document.body.style.overflow = '';
+  document.body.style.paddingRight = '';
 });
 
 afterEach(() => {
@@ -223,6 +234,68 @@ describe('pickFile', () => {
     await pickFile({ title: '雛形を選択' });
 
     expect(recorded.disposed).toBe(1);
+  });
+
+  it('表示領域に収まる大きさで開く（画面からはみ出させない）', async () => {
+    const recorded = installGoogleFakes({ respond: PICKED });
+    setViewport(500, 600);
+    const { pickFile } = await loadModule();
+
+    await pickFile({ title: '雛形を選択' });
+
+    expect(recorded.builder.size.width).toBeLessThanOrEqual(500);
+    expect(recorded.builder.size.height).toBeLessThanOrEqual(600);
+  });
+
+  it('広い画面では大きくしすぎない', async () => {
+    const recorded = installGoogleFakes({ respond: PICKED });
+    setViewport(2560, 1440);
+    const { pickFile } = await loadModule();
+
+    await pickFile({ title: '雛形を選択' });
+
+    expect(recorded.builder.size).toEqual({ width: 1051, height: 650 });
+  });
+
+  it('開いている間はページを固定し、閉じたら元に戻す', async () => {
+    let whileOpen = null;
+    installGoogleFakes({
+      respond: () => {
+        whileOpen = document.body.style.overflow;
+        return PICKED();
+      },
+    });
+    document.body.style.overflow = 'auto';
+    const { pickFile } = await loadModule();
+
+    await pickFile({ title: '雛形を選択' });
+
+    expect(whileOpen).toBe('hidden');
+    expect(document.body.style.overflow).toBe('auto');
+    expect(document.documentElement.style.overflow).toBe('');
+  });
+
+  it('エラーで閉じたときもページの固定を解く', async () => {
+    installGoogleFakes({ respond: () => ({ action: 'error' }) });
+    const { pickFile } = await loadModule();
+
+    await expect(pickFile({ title: '雛形を選択' })).rejects.toThrow(/Picker/);
+
+    expect(document.body.style.overflow).toBe('');
+    expect(document.documentElement.style.overflow).toBe('');
+  });
+
+  it('Picker を開けなかったときもページの固定を解く', async () => {
+    installGoogleFakes({ respond: PICKED });
+    globalThis.google.picker.PickerBuilder.prototype.build = () => {
+      throw new Error('build に失敗');
+    };
+    const { pickFile } = await loadModule();
+
+    await expect(pickFile({ title: '雛形を選択' })).rejects.toThrow(/build/);
+
+    expect(document.body.style.overflow).toBe('');
+    expect(document.documentElement.style.overflow).toBe('');
   });
 
   it('未設定なら、設定すべき環境変数を示して失敗する', async () => {
