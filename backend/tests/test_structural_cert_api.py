@@ -10,7 +10,6 @@ import json
 from app import structural_cert
 from tests.conftest import (
     CERT_TOOL,
-    FOLDER_MIME,
     GOOGLE_DOC_MIME,
     PDF_MIME,
     TEST_EMAIL,
@@ -21,7 +20,6 @@ BASE = "/api/tools/structural-cert-formatter"
 CONFIG_URL = f"{BASE}/config"
 SETTINGS_URL = f"{BASE}/settings"
 TEMPLATE_URL = f"{BASE}/template"
-OUTPUT_FOLDER_URL = f"{BASE}/output-folder"
 CERTIFICATES_URL = f"{BASE}/certificates"
 PARSE_URL = f"{BASE}/certificates/parse"
 PARSE_DRIVE_URL = f"{BASE}/certificates/parse-drive"
@@ -34,8 +32,16 @@ VALID_CHOICES = {
 }
 
 
+# 新規保存の保存先は、そのつど画面の Picker で選ばれたフォルダが送られてくる。
+NEW_SAVE = {"mode": "new", "folderId": "out-folder"}
+
+
 def valid_body(**overrides):
-    body = {"fields": dict(SAMPLE_FIELDS), "choices": dict(VALID_CHOICES)}
+    body = {
+        "fields": dict(SAMPLE_FIELDS),
+        "choices": dict(VALID_CHOICES),
+        "save": dict(NEW_SAVE),
+    }
     body.update(overrides)
     return body
 
@@ -66,19 +72,16 @@ def test_settings_unconfigured(client, drive):
     resp = client.get(SETTINGS_URL)
 
     assert resp.status_code == 200
-    assert resp.json() == {
-        "template": {"configured": False, "fileName": ""},
-        "outputFolder": {"configured": False, "folderName": ""},
-    }
+    # 設定として持つのは雛形だけ（保存先は保存のたびに決まる）。
+    assert resp.json() == {"template": {"configured": False, "fileName": ""}}
 
 
 def test_settings_configured(client, drive):
-    drive.configure_certificate(file_name="安全証明書 雛形", output_folder_name="証明書")
+    drive.configure_certificate(file_name="安全証明書 雛形")
 
     body = client.get(SETTINGS_URL).json()
 
     assert body["template"] == {"configured": True, "fileName": "安全証明書 雛形"}
-    assert body["outputFolder"] == {"configured": True, "folderName": "証明書"}
 
 
 # --- 雛形の選択 -------------------------------------------------------------
@@ -101,23 +104,6 @@ def test_save_template_records_folder_and_name(client, drive):
             {"template_folder_id": "folder-9", "template_file_name": "安全証明書 雛形"},
         )
     ]
-
-
-def test_save_template_keeps_the_output_folder_setting(client, drive):
-    drive.configure_certificate()
-    drive.metadata["doc-2"] = {
-        "id": "doc-2",
-        "name": "新しい雛形",
-        "mimeType": GOOGLE_DOC_MIME,
-        "parents": ["folder-9"],
-    }
-
-    client.put(TEMPLATE_URL, json={"fileId": "doc-2"})
-
-    saved = drive.saved[-1][1]
-    assert saved["template_file_name"] == "新しい雛形"
-    # 雛形を選び直しても保存先フォルダの設定は消えない。
-    assert saved["output_folder_id"] == "out-folder"
 
 
 def test_save_template_rejects_non_google_doc(client, drive):
@@ -153,50 +139,6 @@ def test_save_template_without_file_id_returns_400(client, drive):
     resp = client.put(TEMPLATE_URL, json={})
 
     assert resp.status_code == 400
-
-
-# --- 保存先フォルダの選択 ---------------------------------------------------
-
-def test_save_output_folder(client, drive):
-    drive.metadata["folder-1"] = {
-        "id": "folder-1",
-        "name": "証明書",
-        "mimeType": FOLDER_MIME,
-    }
-
-    resp = client.put(OUTPUT_FOLDER_URL, json={"folderId": "folder-1"})
-
-    assert resp.status_code == 200
-    assert resp.json() == {"folderId": "folder-1", "folderName": "証明書"}
-    assert drive.saved[-1][1]["output_folder_id"] == "folder-1"
-
-
-def test_save_output_folder_rejects_a_file(client, drive):
-    drive.metadata["not-folder"] = {
-        "id": "not-folder",
-        "name": "証明書.pdf",
-        "mimeType": PDF_MIME,
-    }
-
-    resp = client.put(OUTPUT_FOLDER_URL, json={"folderId": "not-folder"})
-
-    assert resp.status_code == 400
-    assert "フォルダ" in resp.json()["error"]
-
-
-def test_save_output_folder_checks_the_folder_as_the_signed_in_user(client, drive):
-    # 選択は公式 Picker が行うが、届くのは ID だけなので、それが本当にフォルダ
-    # なのか・本人に見えるのかは実行ユーザーの代理セッションで確かめる。
-    drive.metadata["folder-1"] = {
-        "id": "folder-1",
-        "name": "証明書",
-        "mimeType": FOLDER_MIME,
-    }
-
-    resp = client.put(OUTPUT_FOLDER_URL, json={"folderId": "folder-1"})
-
-    assert resp.status_code == 200
-    assert drive.delegated_emails == [TEST_EMAIL]
 
 
 # --- 生成と保存 -------------------------------------------------------------
@@ -240,7 +182,7 @@ def test_create_certificate_honours_an_explicit_file_name(client, drive):
     drive.configure_certificate(export_bytes=make_certificate_pdf())
 
     resp = client.post(
-        CERTIFICATES_URL, json=valid_body(save={"mode": "new", "fileName": "別名の証明書"})
+        CERTIFICATES_URL, json=valid_body(save={**NEW_SAVE, "fileName": "別名の証明書"})
     )
 
     assert resp.status_code == 200
@@ -311,13 +253,40 @@ def test_create_certificate_requires_the_template_setting(client, drive):
     assert "雛形が未設定" in resp.json()["error"]
 
 
-def test_create_certificate_requires_the_output_folder_setting(client, drive):
-    drive.configure_certificate(output_folder_id="", export_bytes=make_certificate_pdf())
+def test_create_certificate_requires_a_destination_folder(client, drive):
+    # 新規保存は保存のたびに Picker でフォルダを選ぶ。選ばずに送られてきたら
+    # 保存しようがないので、雛形を複製する前に断る。
+    drive.configure_certificate(export_bytes=make_certificate_pdf())
+
+    resp = client.post(CERTIFICATES_URL, json=valid_body(save={"mode": "new"}))
+
+    assert resp.status_code == 400
+    assert "保存先のフォルダ" in resp.json()["error"]
+    assert drive.copies == []
+
+
+def test_create_certificate_rejects_a_destination_that_is_not_a_folder(client, drive):
+    drive.configure_certificate(export_bytes=make_certificate_pdf())
+    drive.metadata["a-pdf"] = {"id": "a-pdf", "name": "証明書.pdf", "mimeType": PDF_MIME}
+
+    resp = client.post(
+        CERTIFICATES_URL, json=valid_body(save={"mode": "new", "folderId": "a-pdf"})
+    )
+
+    assert resp.status_code == 400
+    assert "フォルダ" in resp.json()["error"]
+    assert drive.created == []
+
+
+def test_create_certificate_checks_the_destination_as_the_signed_in_user(client, drive):
+    # 選択は公式 Picker が行うが、届くのは ID だけなので、それが本当にフォルダ
+    # なのか・本人が書き込めるのかは実行ユーザーの代理セッションで確かめる。
+    drive.configure_certificate(export_bytes=make_certificate_pdf())
 
     resp = client.post(CERTIFICATES_URL, json=valid_body())
 
-    assert resp.status_code == 409
-    assert "保存先フォルダが未設定" in resp.json()["error"]
+    assert resp.status_code == 200
+    assert drive.write_emails == [TEST_EMAIL]
 
 
 def test_create_certificate_validates_the_form(client, drive):

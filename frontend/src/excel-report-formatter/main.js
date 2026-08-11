@@ -36,21 +36,27 @@ function updateSubmitState() {
 
 // --- 雛形設定 ---------------------------------------------------------------
 
-async function refreshTemplateStatus() {
+// 表示はタイトル横の狭い場所なので、名前は 1 行に収めて省略する
+// （全体は title 属性でホバー時に読める）。
+function showTemplateName(text, configured) {
   const nameEl = document.getElementById('templateName');
+  nameEl.textContent = text;
+  nameEl.title = text;
+  nameEl.className = configured ? 'name' : 'unset';
+}
+
+async function refreshTemplateStatus() {
   try {
     const status = await apiGet(`${TOOL_API}/template`);
     templateConfigured = status.configured;
-    if (status.configured) {
-      nameEl.textContent = status.fileName;
-      nameEl.className = 'name';
-    } else {
-      nameEl.textContent = '未設定（「雛形を設定」から選択してください）';
-      nameEl.className = 'unset';
-    }
+    showTemplateName(
+      status.configured ? status.fileName : '未設定',
+      status.configured
+    );
   } catch (error) {
-    nameEl.textContent = error.message;
-    nameEl.className = 'unset';
+    // 狭い表示欄に長い文言は入らないので、理由は画面下のメッセージ欄に出す。
+    showTemplateName('取得できません', false);
+    showMessage(error.message, 'red');
   }
   updateSubmitState();
 }

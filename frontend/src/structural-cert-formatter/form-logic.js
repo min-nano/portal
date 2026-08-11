@@ -208,7 +208,60 @@ export function confirmSaveMessage(mode, fileName, sourceFile) {
   return `「${fileName}」という名前で新しく保存します。\n\nよろしいですか？`;
 }
 
-/** 上書き保存を選べるのは、Drive 上のファイルを読み込んだときだけ。 */
+/** 上書き保存できるのは、Drive 上のファイルを開いているときだけ。 */
 export function canOverwrite(sourceFile) {
   return Boolean(sourceFile && sourceFile.id);
+}
+
+/**
+ * 「保存」を押したときの動き。
+ *
+ * 通常のアプリと同じで、保存先は基本的に編集中のファイル。まだ Drive 上に
+ * 実体が無い（新規作成・手元の PDF を開いた）ときだけ、別名保存と同じく
+ * 保存する場所をそのつど選ぶ。
+ */
+export function saveModeFor(sourceFile) {
+  return canOverwrite(sourceFile) ? 'overwrite' : 'new';
+}
+
+/** 保存欄の案内文。「保存」を押すと何が起きるかを書く。 */
+export function saveHintMessage(sourceFile) {
+  if (canOverwrite(sourceFile)) {
+    return (
+      `「保存」で Drive 上の「${sourceFile.name}」を上書きします` +
+      '（直前の内容はしばらくの間 Drive の版履歴から復元できます）。' +
+      '別の名前・別の場所に保存するときは「別名で保存」を使ってください。'
+    );
+  }
+  return 'まだ保存していません。「保存」を押すと、ファイル名と保存先フォルダを指定する画面が開きます。';
+}
+
+/**
+ * 保存ダイアログに最初から入れておくファイル名。
+ *
+ * 既に名前が決まっている（Drive から開いた・手元の PDF を開いた・一度保存した）
+ * ならその名前、まだ無ければフォームの入力から組み立てた候補を使う。
+ */
+export function defaultSaveName(config, data, documentName) {
+  return (
+    documentName ||
+    suggestedFileName(config.file_name_template, data, config.default_file_name)
+  );
+}
+
+/**
+ * 未保存の入力があるかを判定するための、フォーム内容の指紋。
+ *
+ * 読み込み直後・保存直後の値と比べて、変わっていれば「編集中」とみなす。
+ */
+export function formSignature(data) {
+  return JSON.stringify({ fields: data.fields, choices: data.choices });
+}
+
+/** 未保存のまま新規作成・読み込みへ移ろうとしたときの確認文。 */
+export function unsavedPromptMessage(sourceFile, action) {
+  const target = canOverwrite(sourceFile)
+    ? `「${sourceFile.name}」への変更`
+    : '入力した内容';
+  return `${target}は保存されていません。${action}の前に保存しますか？`;
 }

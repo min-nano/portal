@@ -39,12 +39,17 @@ button:disabled { background-color: #aaa; }
 .tool-card .name { font-weight: bold; color: #1a3a8f; }
 .tool-card .desc { font-size: 0.85em; color: #555; margin-top: 6px; }
 
-/* 雛形設定バー */
-.template-bar { background: #eef3ff; border: 1px solid #d3e0ff; border-radius: 6px; padding: 10px 12px; margin-bottom: 16px; font-size: 0.85em; }
-.template-bar .label { color: #555; }
-.template-bar .name { font-weight: bold; color: #1a3a8f; word-break: break-all; }
-.template-bar .unset { color: #c0392b; font-weight: bold; }
-.template-bar button { margin-top: 8px; width: auto; padding: 6px 12px; font-size: 0.85em; background-color: #5f6368; }
+/* 見出しの行。雛形の設定は滅多に触らないので、タイトルの右端に小さく添える
+   （幅が足りなければ折り返して、次の行の右端に来る）。 */
+.page-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.page-head h2 { margin: 0; }
+.template-chip { display: flex; align-items: center; gap: 6px; margin-left: auto; min-width: 0; font-size: 0.78em; color: #555; }
+.template-chip .label { white-space: nowrap; }
+/* 長いファイル名で見出しの行を押し広げない。全体は title 属性で読める。 */
+.template-chip .name, .template-chip .unset { font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 18em; }
+.template-chip .name { color: #1a3a8f; }
+.template-chip .unset { color: #c0392b; }
+.template-chip button { margin-top: 0; width: auto; flex: none; padding: 4px 10px; font-size: 1em; background-color: #5f6368; }
 
 /* Drive のファイル選択は公式の Google Picker（Google が提供する iframe）が
    描画する。中身は Google 側の作りなので触らないが、置き場所だけは直す。
@@ -98,11 +103,10 @@ button:disabled { background-color: #aaa; }
 
 /* --- 構造計算安全証明書 作成ツール --- */
 
-/* 設定バーの中にボタンを 2 つ並べる（雛形 / 保存先、読み込み / 新規に戻す）。 */
-.template-bar button + button, .edit-bar button + button { margin-left: 8px; }
-.template-bar > div + div { margin-top: 4px; }
+/* ファイル操作のボタン（新規作成 / 開く）を横に並べ、狭い画面では折り返す。 */
+.file-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
-/* 編集元の表示。作成中か編集中かがひと目で分かるよう色を変える。 */
+/* 開いているファイルの表示。新規作成中か編集中かがひと目で分かるよう色を変える。 */
 .edit-bar { background: #f3f8f3; border: 1px solid #cfe3cf; border-radius: 6px; padding: 10px 12px; margin-bottom: 16px; font-size: 0.85em; }
 .edit-bar .label { color: #555; }
 .edit-bar .name { font-weight: bold; color: #1e7a3c; word-break: break-all; }
@@ -123,10 +127,27 @@ button:disabled { background-color: #aaa; }
 .choice-option { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; font-weight: normal; font-size: 0.85em; line-height: 1.4; }
 .choice-option input[type="radio"] { width: auto; margin: 2px 0 0; flex: none; }
 
-/* 保存欄 */
+/* 保存欄。保存先は「編集中のファイル」か、保存時に Picker で選ぶフォルダ。 */
 .save-bar { border: 1px solid #d3e0ff; border-radius: 8px; padding: 10px 12px 14px; margin-top: 18px; background: #eef3ff; }
-.save-modes { margin-top: 8px; }
-.save-modes .choice-option input:disabled + span { color: #999; }
+.save-actions { display: flex; gap: 8px; }
+.save-actions button { flex: 1; }
+/* 「別名で保存」のような、主たる操作ではないボタン。 */
+button.secondary { background-color: #5f6368; }
+button.secondary:disabled { background-color: #aaa; }
+
+/* ダイアログ（未保存の変更の確認、名前を付けて保存）。 */
+.app-dialog { border: none; border-radius: 8px; padding: 16px; width: 22em; max-width: calc(100vw - 32px); box-shadow: 0 4px 16px rgba(0,0,0,0.2); color: #333; font-size: 0.9em; }
+.app-dialog::backdrop { background: rgba(0,0,0,0.35); }
+.app-dialog p { margin: 0; line-height: 1.5; }
+.app-dialog h3 { margin-bottom: 4px; }
+.dialog-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.dialog-actions button { margin-top: 0; }
+
+/* 保存ダイアログの「保存先フォルダ」行（選択中のフォルダ名 + 選択ボタン）。 */
+.folder-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.folder-row .name { font-weight: bold; color: #1a3a8f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-row .unset { color: #777; }
+.folder-row button { margin-top: 0; width: auto; flex: none; margin-left: auto; padding: 6px 12px; font-size: 0.9em; }
 
 /* 生成結果・注意書き */
 #result { margin-top: 10px; text-align: center; font-size: 0.9em; }

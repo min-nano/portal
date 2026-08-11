@@ -20,32 +20,31 @@
   </div>
 
   <div id="app" class="container" hidden>
-    <h2>構造計算によって建築物の安全性を確かめた旨の証明書</h2>
-
-    <div class="template-bar">
-      <div>
-        <span class="label">使用中の雛形（Google ドキュメント）: </span>
+    <!-- 雛形は滅多に変えないので、タイトル横に小さく置く（画面の幅が足りない
+         ときは折り返して次の行の右端に来る）。 -->
+    <div class="page-head">
+      <h2>構造計算によって建築物の安全性を確かめた旨の証明書</h2>
+      <div class="template-chip">
+        <span class="label">雛形:</span>
         <span id="templateName" class="name">確認中...</span>
-      </div>
-      <div>
-        <span class="label">PDF の保存先フォルダ: </span>
-        <span id="outputFolderName" class="name">確認中...</span>
-      </div>
-      <div>
-        <button type="button" id="templateBtn">雛形を設定</button>
-        <button type="button" id="outputFolderBtn">保存先を設定</button>
+        <button type="button" id="templateBtn"
+                title="証明書の雛形（Google ドキュメント）を Drive から選びます。">
+          設定
+        </button>
       </div>
     </div>
 
+    <!-- 開いているファイルと、その切り替え操作。通常のアプリの「新規作成 /
+         開く」と同じ並びにする。 -->
     <div class="edit-bar">
       <div>
         <span class="label">編集中のファイル: </span>
         <span id="sourceName" class="name">なし（新規作成）</span>
       </div>
-      <div>
-        <button type="button" id="loadBtn">Drive の PDF を読み込む</button>
-        <button type="button" id="uploadBtn">手元の PDF を読み込む</button>
-        <button type="button" id="resetBtn">新規作成に戻す</button>
+      <div class="file-actions">
+        <button type="button" id="newBtn">新規作成</button>
+        <button type="button" id="loadBtn">Drive から開く</button>
+        <button type="button" id="uploadBtn">手元の PDF を開く</button>
         <!-- アップロードは解析するだけで Drive には保存しないため、Picker の
              アップロード画面ではなくブラウザのファイル選択を使う。 -->
         <input type="file" id="uploadInput" accept="application/pdf,.pdf" hidden>
@@ -56,25 +55,15 @@
     <form id="certForm" onsubmit="return false;">
       <div id="sections"></div>
 
+      <!-- 保存先は「編集中のファイル」そのもの。ファイル名と保存する場所は、
+           新規保存・別名保存のときだけ下の保存ダイアログで指定する。 -->
       <div class="save-bar">
         <h3>保存</h3>
-        <label for="fileName">ファイル名</label>
-        <input type="text" id="fileName" placeholder="構造計算安全証明書.pdf">
-        <div class="save-modes">
-          <label class="choice-option">
-            <input type="radio" name="saveMode" value="new" checked>
-            <span>新規保存（別名で保存する）</span>
-          </label>
-          <label class="choice-option">
-            <input type="radio" name="saveMode" value="overwrite" id="overwriteMode" disabled>
-            <span id="overwriteLabel">上書き保存（Drive から読み込んだファイルのみ）</span>
-          </label>
+        <p class="hint" id="saveHint"></p>
+        <div class="save-actions">
+          <button type="button" id="submitBtn" disabled>保存</button>
+          <button type="button" id="saveAsBtn" class="secondary" disabled>別名で保存</button>
         </div>
-        <p class="hint">
-          上書き保存でも、直前の内容はしばらくの間 Google Drive の版履歴から復元できます
-          （古い版は Drive の自動整理で順次消えます）。
-        </p>
-        <button type="button" id="submitBtn" disabled>PDF を作成して保存</button>
       </div>
     </form>
 
@@ -84,6 +73,36 @@
     </div>
     <ul id="warnings" class="warnings" hidden></ul>
   </div>
+
+  <!-- 未保存の入力があるまま新規作成・読み込みへ移るときの確認。通常の
+       アプリと同じ 3 択（保存する / 保存しない / キャンセル）にする。 -->
+  <dialog id="unsavedDialog" class="app-dialog">
+    <p id="unsavedMessage"></p>
+    <div class="dialog-actions">
+      <button type="button" data-choice="save">保存する</button>
+      <button type="button" data-choice="discard" class="secondary">保存しない</button>
+      <button type="button" data-choice="cancel" class="secondary">キャンセル</button>
+    </div>
+  </dialog>
+
+  <!-- 新規保存・別名保存のときの保存ダイアログ。通常のアプリの「名前を付けて
+       保存」にあたる。Google Picker はファイルを選ぶ画面で、保存する名前を
+       入力させることはできないため、名前はここで受け取り、場所の選択だけを
+       Picker に任せる。 -->
+  <dialog id="saveAsDialog" class="app-dialog">
+    <h3 id="saveAsTitle">別名で保存</h3>
+    <label for="saveAsName">ファイル名</label>
+    <input type="text" id="saveAsName" placeholder="構造計算安全証明書.pdf">
+    <label for="saveAsFolderBtn">保存先フォルダ</label>
+    <div class="folder-row">
+      <span id="saveAsFolderName" class="unset">未選択</span>
+      <button type="button" id="saveAsFolderBtn" class="secondary">選択</button>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" id="saveAsConfirmBtn" disabled>保存</button>
+      <button type="button" id="saveAsCancelBtn" class="secondary">キャンセル</button>
+    </div>
+  </dialog>
 
   <script type="module" src="/src/structural-cert-formatter/main.js"></script>
 </body>

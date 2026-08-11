@@ -58,19 +58,26 @@ class FakeDrive:
         self,
         folder_id="doc-folder",
         file_name="安全証明書 雛形",
-        output_folder_id="out-folder",
-        output_folder_name="証明書",
+        save_folder_id="out-folder",
         export_bytes=None,
     ):
-        """雛形（Google ドキュメント）と保存先フォルダを設定済みにする。"""
+        """雛形（Google ドキュメント）を設定済みにする。
+
+        新規保存の保存先は設定ではなく保存時に Picker で選ばれるため、
+        テストからその ID を渡せるよう、選ばれたことにするフォルダの
+        メタデータもここで用意する。
+        """
         settings = {}
         if folder_id and file_name:
             settings["template_folder_id"] = folder_id
             settings["template_file_name"] = file_name
-        if output_folder_id:
-            settings["output_folder_id"] = output_folder_id
-            settings["output_folder_name"] = output_folder_name
         self.settings[CERT_TOOL] = settings
+        if save_folder_id:
+            self.metadata[save_folder_id] = {
+                "id": save_folder_id,
+                "name": "証明書",
+                "mimeType": FOLDER_MIME,
+            }
         self.doc_template = {
             "id": "template-doc",
             "name": file_name,

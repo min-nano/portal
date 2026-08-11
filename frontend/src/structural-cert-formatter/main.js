@@ -5,9 +5,15 @@
 // 描き込んで Drive へ保存する。フォームの項目定義は /config が配信する
 // （雛形マッピングが単一の情報源で、この画面には項目を持たない）。
 //
-// 作成だけでなく編集にも対応する。Drive 上の PDF を選ぶか、手元の PDF を
-// アップロードすると内容を解析してフォームへ流し込み、一部を直して
-// 上書き（版履歴が残る）または別名で保存できる。
+// 作成だけでなく編集にも対応する。ファイル操作の考え方は通常のアプリと同じで、
+// 「新規作成 / 開く / 保存 / 別名で保存」の 4 つ。開いているファイルがあれば
+// 保存はそこへの上書き（Drive の版履歴が残る）、新規保存・別名保存のときだけ
+// 保存ダイアログでファイル名と保存先フォルダを指定する。未保存のまま別の
+// ファイルへ移ろうとしたときは、保存するかどうかを尋ねる。
+//
+// Google Picker は「ファイルを選ぶ」画面で、保存する名前を入力させることは
+// できない。そのため保存ダイアログは自前で持ち、場所（フォルダ）の選択だけを
+// Picker に任せている。
 
 import '../styles.css';
 import { requireSignIn } from '../auth.js';
@@ -23,10 +29,14 @@ import {
 import {
   canOverwrite,
   confirmSaveMessage,
+  defaultSaveName,
   emptyFormData,
   ensurePdfExtension,
+  formSignature,
   mergeFormData,
-  suggestedFileName,
+  saveHintMessage,
+  saveModeFor,
+  unsavedPromptMessage,
   validateFormData,
 } from './form-logic.js';
 
@@ -36,10 +46,14 @@ const GOOGLE_DOC_MIME = 'application/vnd.google-apps.document';
 const PDF_MIME = 'application/pdf';
 
 let config = null; // /config の応答（text_fields / choice_groups / sections）
-let settings = null; // /settings の応答（雛形・保存先の設定状態）
-let sourceFile = null; // 編集元（Drive 上の PDF）。{ id, name }
-// ファイル名を利用者が触ったら、以降は自動更新しない。
-let fileNameEdited = false;
+let settings = null; // /settings の応答（雛形の設定状態）
+let sourceFile = null; // 開いているファイル（Drive 上の PDF）。{ id, name }
+// 今開いている文書の名前。保存ダイアログの初期値に使う（空ならフォームから作る）。
+let documentName = '';
+// 直前に保存したフォルダ。続けて保存するときに選び直さずに済むよう覚えておく。
+let lastFolder = null; // { id, name }
+// 最後に保存・読み込みした時点のフォーム内容。今の内容と違えば未保存の変更がある。
+let savedSignature = '';
 
 function showMessage(text, color) {
   const msg = document.getElementById('message');
@@ -69,98 +83,94 @@ function showResult(link, fileName) {
 }
 
 function updateSubmitState() {
-  const ready =
-    Boolean(config) &&
-    Boolean(settings) &&
-    settings.template.configured &&
-    (settings.outputFolder.configured || currentSaveMode() === 'overwrite');
+  const ready = Boolean(config) && Boolean(settings) && settings.template.configured;
   document.getElementById('submitBtn').disabled = !ready;
+  document.getElementById('saveAsBtn').disabled = !ready;
 }
 
-// --- 設定（雛形・保存先） ---------------------------------------------------
+// --- 設定（雛形） -----------------------------------------------------------
+
+// 表示はタイトル横の狭い場所なので、名前は 1 行に収めて省略する
+// （全体は title 属性でホバー時に読める）。
+function showTemplateName(text, configured) {
+  const el = document.getElementById('templateName');
+  el.textContent = text;
+  el.title = text;
+  el.className = configured ? 'name' : 'unset';
+}
 
 async function refreshSettings() {
-  const templateEl = document.getElementById('templateName');
-  const folderEl = document.getElementById('outputFolderName');
   try {
     settings = await apiGet(`${TOOL_API}/settings`);
   } catch (error) {
-    templateEl.textContent = error.message;
-    templateEl.className = 'unset';
-    folderEl.textContent = '';
+    // 狭い表示欄に長い文言は入らないので、理由は画面下のメッセージ欄に出す。
+    showTemplateName('取得できません', false);
+    showMessage(error.message, 'red');
     updateSubmitState();
     return;
   }
 
-  templateEl.textContent = settings.template.configured
-    ? settings.template.fileName
-    : '未設定（「雛形を設定」から選択してください）';
-  templateEl.className = settings.template.configured ? 'name' : 'unset';
-
-  folderEl.textContent = settings.outputFolder.configured
-    ? settings.outputFolder.folderName
-    : '未設定（「保存先を設定」から選択してください）';
-  folderEl.className = settings.outputFolder.configured ? 'name' : 'unset';
+  showTemplateName(
+    settings.template.configured ? settings.template.fileName : '未設定',
+    settings.template.configured
+  );
   updateSubmitState();
 }
 
 // --- Drive からの選択（公式 Google Picker） ---------------------------------
 
-// 雛形・保存先フォルダ・編集する PDF の 3 用途。選ぶ画面は Picker に任せ、
-// ここでは「何を選ばせるか」と「選ばれた後に何をするか」だけを持つ。
+// 雛形・開く PDF・保存先フォルダの 3 用途。選ぶ画面は Picker に任せ、
+// ここでは「何を選ばせるか」だけを持つ。選ばれた後の処理は呼び出し側。
 const PICKERS = {
   template: {
     title: '雛形（Google ドキュメント）を選択',
     mimeTypes: GOOGLE_DOC_MIME,
-    select: async (file) => {
-      const result = await apiSendJson(`${TOOL_API}/template`, 'PUT', {
-        fileId: file.id,
-      });
-      await refreshSettings();
-      showMessage(`雛形を設定しました: ${result.fileName}`, 'green');
-    },
-  },
-  outputFolder: {
-    title: 'PDF の保存先フォルダを選択',
-    selectFolder: true,
-    select: async (file) => {
-      const result = await apiSendJson(`${TOOL_API}/output-folder`, 'PUT', {
-        folderId: file.id,
-      });
-      await refreshSettings();
-      showMessage(`保存先を設定しました: ${result.folderName}`, 'green');
-    },
   },
   source: {
     title: '編集する証明書 PDF を選択',
     mimeTypes: PDF_MIME,
-    select: async (file) => {
-      const parsed = await apiSendJson(`${TOOL_API}/certificates/parse-drive`, 'POST', {
-        fileId: file.id,
-      });
-      applyParsed(parsed);
-    },
+  },
+  destination: {
+    title: 'PDF の保存先フォルダを選択',
+    selectFolder: true,
   },
 };
 
+/** Picker を開いて選択結果を返す。キャンセル・失敗はどちらも null。 */
 async function chooseFromDrive(kind) {
-  const target = PICKERS[kind];
-  let file;
   try {
-    file = await pickFile({
-      title: target.title,
-      mimeTypes: target.mimeTypes,
-      selectFolder: target.selectFolder,
-    });
+    return await pickFile(PICKERS[kind]);
   } catch (error) {
     showMessage(error.message, 'red');
-    return;
+    return null;
   }
-  if (!file) return; // Picker をキャンセルした。
+}
 
+async function chooseTemplate() {
+  const file = await chooseFromDrive('template');
+  if (!file) return;
+  showMessage('雛形を設定しています...', '#333');
+  try {
+    const result = await apiSendJson(`${TOOL_API}/template`, 'PUT', {
+      fileId: file.id,
+    });
+    await refreshSettings();
+    showMessage(`雛形を設定しました: ${result.fileName}`, 'green');
+  } catch (error) {
+    showMessage(error.message, 'red');
+  }
+}
+
+async function openFromDrive() {
+  if (!(await confirmDiscardChanges('読み込み'))) return;
+  const file = await chooseFromDrive('source');
+  if (!file) return;
   showMessage('読み込んでいます...', '#333');
   try {
-    await target.select(file);
+    const parsed = await apiSendJson(`${TOOL_API}/certificates/parse-drive`, 'POST', {
+      fileId: file.id,
+    });
+    applyParsed(parsed);
   } catch (error) {
     showMessage(error.message, 'red');
   }
@@ -168,6 +178,11 @@ async function chooseFromDrive(kind) {
 
 // Drive ではなく手元の PDF から読み込む経路。Picker の「アップロード」は
 // Drive へ保存してしまうため、解析するだけのこちらは別に用意する。
+async function openUploaded() {
+  if (!(await confirmDiscardChanges('読み込み'))) return;
+  document.getElementById('uploadInput').click();
+}
+
 async function uploadFile(event) {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
@@ -217,49 +232,27 @@ function prefillToday() {
   syncFieldsFromPicker(root);
 }
 
-function currentSaveMode() {
-  const checked = document.querySelector('input[name="saveMode"]:checked');
-  return checked ? checked.value : 'new';
-}
-
-function refreshFileNameSuggestion() {
-  if (fileNameEdited) return;
-  const input = document.getElementById('fileName');
-  input.value = suggestedFileName(
-    config.file_name_template,
-    collectFormData(),
-    config.default_file_name
-  );
-}
-
-// --- 編集元 -----------------------------------------------------------------
+// --- 開いているファイル -----------------------------------------------------
 
 function applyParsed(parsed) {
   applyToForm(mergeFormData(config, parsed));
   setSourceFile(parsed.file && parsed.file.id ? parsed.file : null, parsed);
-  if (parsed.suggestedFileName) {
-    document.getElementById('fileName').value = parsed.suggestedFileName;
-    fileNameEdited = true;
-  }
+  // 開いたファイルの名前を、そのまま次の保存の既定にする。
+  documentName = parsed.suggestedFileName || '';
   showWarnings(parsed.warnings);
   showResult('', '');
   showMessage('読み込みました。内容を編集して保存してください。', 'green');
+  markSaved();
 }
 
 function setSourceFile(file, parsed) {
   sourceFile = file;
-  const nameEl = document.getElementById('sourceName');
   const noteEl = document.getElementById('sourceNote');
-  const overwrite = document.getElementById('overwriteMode');
 
-  nameEl.textContent = file ? file.name : 'なし（新規作成）';
-  overwrite.disabled = !canOverwrite(file);
-  document.getElementById('overwriteLabel').textContent = file
-    ? `上書き保存（${file.name}）`
-    : '上書き保存（Drive から読み込んだファイルのみ）';
-  if (!canOverwrite(file)) {
-    document.querySelector('input[name="saveMode"][value="new"]').checked = true;
-  }
+  document.getElementById('sourceName').textContent = file
+    ? file.name
+    : 'なし（新規作成）';
+  refreshSaveButtons();
 
   if (parsed && parsed.source === 'content') {
     noteEl.hidden = false;
@@ -268,8 +261,8 @@ function setSourceFile(file, parsed) {
   } else if (parsed && !file) {
     noteEl.hidden = false;
     noteEl.textContent =
-      'アップロードした PDF は Drive 上のファイルではないため、上書き保存はできません。' +
-      '別名で保存してください。';
+      'アップロードした PDF は Drive 上のファイルではないため、上書きはできません。' +
+      '「保存」を押すと保存先を選んで新しいファイルとして保存します。';
   } else {
     noteEl.hidden = true;
     noteEl.textContent = '';
@@ -277,65 +270,228 @@ function setSourceFile(file, parsed) {
   updateSubmitState();
 }
 
-function resetToNew() {
+// 保存先は開いているファイルそのものなので、「保存」の意味もそれに合わせる。
+function refreshSaveButtons() {
+  document.getElementById('submitBtn').innerText = canOverwrite(sourceFile)
+    ? '上書き保存'
+    : '保存';
+  document.getElementById('saveHint').textContent = saveHintMessage(sourceFile);
+}
+
+/** 今の内容を「保存済み」として覚える（以降の変更が未保存の変更になる）。 */
+function markSaved() {
+  savedSignature = formSignature(collectFormData());
+}
+
+function hasUnsavedChanges() {
+  if (!config) return false;
+  return formSignature(collectFormData()) !== savedSignature;
+}
+
+/**
+ * 未保存の入力があるまま別のファイルへ移ってよいかを尋ねる。
+ *
+ * 通常のアプリと同じ 3 択で、「保存する」を選んだら保存まで済ませてから進む。
+ * 続けてよければ true、取りやめなら false。
+ */
+async function confirmDiscardChanges(action) {
+  if (!hasUnsavedChanges()) return true;
+  const choice = await askUnsaved(unsavedPromptMessage(sourceFile, action));
+  if (choice === 'cancel') return false;
+  if (choice === 'save') return saveCurrent();
+  return true;
+}
+
+function askUnsaved(message) {
+  const dialog = document.getElementById('unsavedDialog');
+  document.getElementById('unsavedMessage').textContent = message;
+  // <dialog> を開けない環境では、保存の有無までは選べないので破棄の確認だけ行う。
+  if (typeof dialog.showModal !== 'function') {
+    return Promise.resolve(
+      window.confirm(`${message}\n\n（OK で保存せずに進みます）`) ? 'discard' : 'cancel'
+    );
+  }
+  return new Promise((resolve) => {
+    // 選ばれた時点で、この 1 回分の待ち受けをまとめて解除する。
+    const listening = new AbortController();
+    const finish = (choice) => {
+      listening.abort();
+      dialog.close();
+      resolve(choice);
+    };
+    dialog.querySelectorAll('[data-choice]').forEach((button) => {
+      button.addEventListener('click', () => finish(button.dataset.choice), {
+        signal: listening.signal,
+      });
+    });
+    // Esc キーで閉じたときは「キャンセル」と同じ扱いにする。
+    dialog.addEventListener(
+      'cancel',
+      (event) => {
+        event.preventDefault();
+        finish('cancel');
+      },
+      { signal: listening.signal }
+    );
+    dialog.showModal();
+  });
+}
+
+async function newDocument() {
+  if (!(await confirmDiscardChanges('新規作成'))) return;
   applyToForm(emptyFormData(config));
   prefillToday();
   setSourceFile(null, null);
-  fileNameEdited = false;
-  refreshFileNameSuggestion();
+  documentName = '';
   showWarnings([]);
   showResult('', '');
-  showMessage('新規作成に戻しました。', '#333');
+  showMessage('新規作成にしました。', '#333');
+  markSaved();
 }
 
 // --- 保存 -------------------------------------------------------------------
 
-async function submitForm() {
-  const btn = document.getElementById('submitBtn');
+/** 「保存」。開いているファイルがあれば上書き、なければ保存先を選んで新規保存。 */
+function saveCurrent() {
+  return save(saveModeFor(sourceFile));
+}
+
+/** 保存する。保存できたら true。 */
+async function save(mode) {
   const data = collectFormData();
-  const mode = currentSaveMode();
 
   const missing = validateFormData(config, data);
   if (missing.length > 0) {
     showMessage('次の項目を入力してください: ' + missing.join('、'), 'red');
-    return;
+    return false;
   }
 
-  const fileName = ensurePdfExtension(
-    document.getElementById('fileName').value,
-    config.default_file_name
-  );
-  document.getElementById('fileName').value = fileName;
+  if (mode === 'overwrite') {
+    // 上書きは同じファイルへの書き戻しなので、名前も場所も尋ねない。
+    // 取り消しづらい操作ではあるので、対象だけ明示して確認する。
+    const fileName = sourceFile.name;
+    if (!window.confirm(confirmSaveMessage(mode, fileName, sourceFile))) return false;
+    return sendSaveRequest(data, { mode, fileName, fileId: sourceFile.id });
+  }
 
-  if (!window.confirm(confirmSaveMessage(mode, fileName, sourceFile))) return;
+  // 新規保存・別名保存は、通常のアプリの「名前を付けて保存」と同じように
+  // ファイル名と保存先フォルダを尋ねる。
+  const chosen = await askSaveAs(defaultSaveName(config, data, documentName));
+  if (!chosen) return false; // ダイアログをキャンセルした。
+  return sendSaveRequest(data, {
+    mode: 'new',
+    fileName: chosen.fileName,
+    folderId: chosen.folder.id,
+  });
+}
 
-  btn.disabled = true;
-  btn.innerText = '作成中...';
+/**
+ * 保存ダイアログ。ファイル名と保存先フォルダが決まったら
+ * { fileName, folder } を返す。キャンセルなら null。
+ *
+ * フォルダを選ぶ Picker は Google 側の重ね表示で、モーダルダイアログ
+ * （最前面レイヤー）の下に隠れてしまう。そのため Picker を出す間だけ
+ * ダイアログを閉じ、選び終えたら開き直す（入力中の名前はそのまま残る）。
+ */
+function askSaveAs(defaultName) {
+  const dialog = document.getElementById('saveAsDialog');
+  const nameInput = document.getElementById('saveAsName');
+  const folderEl = document.getElementById('saveAsFolderName');
+  const confirmBtn = document.getElementById('saveAsConfirmBtn');
+
+  document.getElementById('saveAsTitle').textContent = canOverwrite(sourceFile)
+    ? '別名で保存'
+    : '保存';
+  nameInput.value = defaultName;
+  let folder = lastFolder;
+
+  const showFolder = () => {
+    folderEl.textContent = folder ? folder.name : '未選択';
+    folderEl.className = folder ? 'name' : 'unset';
+    // 名前と場所の両方が決まるまでは保存できない。
+    confirmBtn.disabled = !folder || !nameInput.value.trim();
+  };
+  showFolder();
+
+  return new Promise((resolve) => {
+    const listening = new AbortController();
+    const on = (el, type, handler) =>
+      el.addEventListener(type, handler, { signal: listening.signal });
+    const finish = (value) => {
+      listening.abort();
+      dialog.close();
+      resolve(value);
+    };
+
+    on(nameInput, 'input', showFolder);
+    on(nameInput, 'keydown', (event) => {
+      if (event.key === 'Enter' && !confirmBtn.disabled) confirmBtn.click();
+    });
+    on(document.getElementById('saveAsFolderBtn'), 'click', async () => {
+      dialog.close();
+      const picked = await chooseFromDrive('destination');
+      if (picked) folder = picked;
+      showFolder();
+      dialog.showModal();
+    });
+    on(confirmBtn, 'click', () => {
+      const fileName = ensurePdfExtension(nameInput.value, config.default_file_name);
+      lastFolder = folder;
+      finish({ fileName, folder });
+    });
+    on(document.getElementById('saveAsCancelBtn'), 'click', () => finish(null));
+    // Esc キーで閉じたときは「キャンセル」と同じ扱いにする。
+    on(dialog, 'cancel', (event) => {
+      event.preventDefault();
+      finish(null);
+    });
+
+    dialog.showModal();
+    nameInput.focus();
+    nameInput.select();
+  });
+}
+
+async function sendSaveRequest(data, saveSpec) {
+  const buttons = [
+    document.getElementById('submitBtn'),
+    document.getElementById('saveAsBtn'),
+  ];
+  buttons.forEach((b) => {
+    b.disabled = true;
+  });
+  buttons[0].innerText = '作成中...';
   showMessage('', '#333');
   showWarnings([]);
   showResult('', '');
   try {
-    const save = { mode, fileName };
-    if (mode === 'overwrite') save.fileId = sourceFile.id;
     const result = await apiSendJson(`${TOOL_API}/certificates`, 'POST', {
       ...data,
-      save,
+      save: saveSpec,
     });
     showMessage(
-      mode === 'overwrite'
+      saveSpec.mode === 'overwrite'
         ? `上書き保存しました: ${result.fileName}`
         : `保存しました: ${result.fileName}`,
       'green'
     );
     showWarnings(result.warnings);
     showResult(result.webViewLink, result.fileName);
-    // 保存したファイルは、そのまま続けて上書き編集できる状態にする。
+    // 保存したファイルを、そのまま「開いているファイル」として続けて編集できる
+    // ようにする（次の「保存」はこのファイルへの上書きになる）。
     setSourceFile({ id: result.fileId, name: result.fileName }, null);
+    documentName = result.fileName;
+    markSaved();
+    return true;
   } catch (error) {
     showMessage('PDF の作成に失敗しました: ' + error.message, 'red');
+    return false;
   } finally {
-    btn.disabled = false;
-    btn.innerText = 'PDF を作成して保存';
+    buttons.forEach((b) => {
+      b.disabled = false;
+    });
+    // 保存に成功していれば、ここでのラベルは「上書き保存」に変わる。
+    refreshSaveButtons();
     updateSubmitState();
   }
 }
@@ -354,19 +510,20 @@ async function start() {
   // 押される前に始めておく（google-picker.js のコメント参照）。
   preloadPicker();
 
-  document.getElementById('templateBtn').addEventListener('click', () => chooseFromDrive('template'));
-  document.getElementById('outputFolderBtn').addEventListener('click', () => chooseFromDrive('outputFolder'));
-  document.getElementById('loadBtn').addEventListener('click', () => chooseFromDrive('source'));
-  document.getElementById('resetBtn').addEventListener('click', resetToNew);
-  const uploadInput = document.getElementById('uploadInput');
-  document.getElementById('uploadBtn').addEventListener('click', () => uploadInput.click());
-  uploadInput.addEventListener('change', uploadFile);
-  document.getElementById('submitBtn').addEventListener('click', submitForm);
-  document.getElementById('fileName').addEventListener('input', () => {
-    fileNameEdited = true;
-  });
-  document.querySelectorAll('input[name="saveMode"]').forEach((radio) => {
-    radio.addEventListener('change', updateSubmitState);
+  document.getElementById('templateBtn').addEventListener('click', chooseTemplate);
+  document.getElementById('newBtn').addEventListener('click', newDocument);
+  document.getElementById('loadBtn').addEventListener('click', openFromDrive);
+  document.getElementById('uploadBtn').addEventListener('click', openUploaded);
+  document.getElementById('uploadInput').addEventListener('change', uploadFile);
+  document.getElementById('submitBtn').addEventListener('click', saveCurrent);
+  document.getElementById('saveAsBtn').addEventListener('click', () => save('new'));
+
+  // ページを閉じる・再読み込みするときも、未保存の入力があれば引き止める。
+  window.addEventListener('beforeunload', (event) => {
+    if (!hasUnsavedChanges()) return;
+    event.preventDefault();
+    // 文面はブラウザが決める（returnValue は古いブラウザ向けの作法）。
+    event.returnValue = '';
   });
 
   try {
@@ -382,13 +539,9 @@ async function start() {
 
   buildForm();
   prefillToday();
-  // 既定のファイル名に使う欄（雛形マッピングの file_name_template が参照する欄）を
-  // 入力したら、ファイル名の候補も追従させる。
-  (config.file_name_template.match(/\{([a-z_]+)\}/g) || []).forEach((token) => {
-    const input = document.getElementById(`field-${token.slice(1, -1)}`);
-    if (input) input.addEventListener('input', refreshFileNameSuggestion);
-  });
-  refreshFileNameSuggestion();
+  setSourceFile(null, null);
+  // 組み立て直後の状態を基準にする（これ以降の入力が「未保存の変更」）。
+  markSaved();
   updateSubmitState();
 }
 
