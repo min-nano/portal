@@ -2,7 +2,11 @@
 // 旧リポジトリで GAS 側の挙動として固定していたバリデーション仕様を引き継ぐ。
 
 import { describe, expect, it } from 'vitest';
-import { collectWarnings, toNumber } from '../src/excel-report-formatter/form-logic.js';
+import {
+  collectWarnings,
+  selectFocusTarget,
+  toNumber,
+} from '../src/excel-report-formatter/form-logic.js';
 import { fileNameFromDisposition } from '../src/content-disposition.js';
 
 // バックエンドの /config が返す形（mapping.json 由来）を模したフォーム定義。
@@ -135,6 +139,29 @@ describe('collectWarnings', () => {
     const warnings = collectWarnings(data, GROUPS, VALIDATION);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('部屋 2');
+  });
+});
+
+describe('selectFocusTarget', () => {
+  const noValue = VALIDATION.no_value_select_options;
+
+  it('方向を選んだら数値欄へ移動する', () => {
+    expect(selectFocusTarget('←', noValue)).toBe('value');
+    expect(selectFocusTarget('上柱', noValue)).toBe('value');
+  });
+
+  it('計測値を入力しない選択肢では次の選択欄へ移動する', () => {
+    expect(selectFocusTarget('―', noValue)).toBe('next-select');
+    expect(selectFocusTarget('傾斜無', noValue)).toBe('next-select');
+  });
+
+  it('未選択に戻したときはフォーカスを動かさない', () => {
+    expect(selectFocusTarget('', noValue)).toBe('none');
+    expect(selectFocusTarget(undefined, noValue)).toBe('none');
+  });
+
+  it('設定が無くても数値欄へのフォーカスは維持する', () => {
+    expect(selectFocusTarget('←', undefined)).toBe('value');
   });
 });
 

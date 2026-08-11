@@ -16,6 +16,24 @@ export function toNumber(value) {
 }
 
 /**
+ * 選択欄（傾斜方向 / 測定した壁・柱）を選んだ後に、フォーカスをどこへ送るかを決める。
+ *
+ *   'value'       … 同じ行の数値欄（水平器）へ移動する。
+ *   'next-select' … 「傾斜無」「―」など計測値を入力しない選択肢。数値欄は飛ばして
+ *                   次の計測点の選択欄へ移動する。
+ *   'none'        … 未選択（「（なし）」）に戻した場合。フォーカスは動かさない。
+ *
+ * @param {string} value 選択された値
+ * @param {string[]} noValueOptions /config の validation.no_value_select_options
+ * @return {'value'|'next-select'|'none'}
+ */
+export function selectFocusTarget(value, noValueOptions) {
+  const text = value === undefined || value === null ? '' : String(value).trim();
+  if (text === '') return 'none';
+  return (noValueOptions || []).indexOf(text) !== -1 ? 'next-select' : 'value';
+}
+
+/**
  * 出力前の簡易バリデーション。入力ミスの可能性を「警告」として集める
  * （ブロックはせず、利用者の確認後にそのまま出力できる）。
  *
