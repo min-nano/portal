@@ -16,6 +16,68 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Check required repository variables
+        # 未設定のリポジトリ変数は空文字として展開され、gcloud はそれを
+        # 「未指定」として受け入れてしまう。壊れた設定が「成功」として本番に
+        # 出来上がらないよう、デプロイの前に落とす（preview.yml と同じ考え方）。
+        env:
+          PROJECT_ID: '${{ vars.PROJECT_ID }}'
+          WIF_PROVIDER: '${{ vars.WIF_PROVIDER }}'
+          SA_EMAIL: '${{ vars.SA_EMAIL }}'
+          SITE_ID: '${{ vars.SITE_ID }}'
+          RUNTIME_SA_EMAIL: '${{ vars.RUNTIME_SA_EMAIL }}'
+          CLERK_PUBLISHABLE_KEY: '${{ vars.CLERK_PUBLISHABLE_KEY }}'
+          ALLOWED_EMAIL_DOMAINS: '${{ vars.ALLOWED_EMAIL_DOMAINS }}'
+        run: |
+          .github/scripts/require-vars.sh \
+            PROJECT_ID WIF_PROVIDER SA_EMAIL SITE_ID RUNTIME_SA_EMAIL \
+            CLERK_PUBLISHABLE_KEY ALLOWED_EMAIL_DOMAINS
+      - name: Assemble the backend runtime configuration
+        # 本番バックエンドのランタイム環境変数をここで組み立て、次のステップで
+        # まとめて渡す。値の出どころはリポジトリ変数だけなので、GCP 側に手で
+        # 設定した値と食い違うことがない。
+        #
+        # CLERK_ISSUER と CLERK_AUTHORIZED_PARTIES は専用の変数を作らず、
+        # すでにフロントエンドのビルドで使っている変数から導出する:
+        #   issuer      ← CLERK_PUBLISHABLE_KEY（キーとインスタンスの食い違いが
+        #                 原理的に起きない。preview.yml と同じ導出）
+        #   許可オリジン ← SITE_ID（Hosting 既定ドメイン）と CANONICAL_HOST
+        #                 （カスタムドメイン。未設定なら既定ドメインのみ）
+        env:
+          KEY: '${{ vars.CLERK_PUBLISHABLE_KEY }}'
+          SITE_ID: '${{ vars.SITE_ID }}'
+          CANONICAL_HOST: '${{ vars.CANONICAL_HOST }}'
+          ALLOWED_EMAIL_DOMAINS: '${{ vars.ALLOWED_EMAIL_DOMAINS }}'
+          RUNTIME_SA_EMAIL: '${{ vars.RUNTIME_SA_EMAIL }}'
+          FIRESTORE_DATABASE: '${{ vars.FIRESTORE_DATABASE }}'
+        run: |
+          # pk_test_ を誤って設定すると、本番が開発（テスト）インスタンスの
+          # トークンを受け付けてしまう。本番インスタンスのキーであることを
+          # 先に確かめる。
+          issuer="$(.github/scripts/clerk-issuer.sh "$KEY" pk_live_ CLERK_PUBLISHABLE_KEY)"
+          echo "本番の Clerk issuer: $issuer"
+
+          # Hosting は <サイトID>.web.app と <サイトID>.firebaseapp.com の
+          # 両方で配信されるため、どちらから来た JWT の azp も許可する
+          # （カスタムドメインへの寄せ替えはフロントエンドの JS で行うので、
+          # リダイレクトが走る前にサインイン済みの状態で来ることがある）。
+          parties="https://$SITE_ID.web.app,https://$SITE_ID.firebaseapp.com"
+          if [ -n "$CANONICAL_HOST" ]; then
+            parties="https://$CANONICAL_HOST,$parties"
+          fi
+          echo "本番の許可オリジン: $parties"
+
+          # 値にカンマ（複数指定）を含むため、区切り文字を ; に変える ^;^ 記法を使う。
+          env_vars="CLERK_ISSUER=$issuer"
+          env_vars="$env_vars;CLERK_AUTHORIZED_PARTIES=$parties"
+          env_vars="$env_vars;ALLOWED_EMAIL_DOMAINS=$ALLOWED_EMAIL_DOMAINS"
+          env_vars="$env_vars;DWD_SERVICE_ACCOUNT_EMAIL=$RUNTIME_SA_EMAIL"
+          env_vars="$env_vars;SETTINGS_CHANNEL_PATH=static-channels/production"
+          # 任意。既定の "(default)" 以外を使う場合だけリポジトリ変数を設定する。
+          if [ -n "$FIRESTORE_DATABASE" ]; then
+            env_vars="$env_vars;FIRESTORE_DATABASE=$FIRESTORE_DATABASE"
+          fi
+          echo "RUN_ENV_VARS=^;^$env_vars" >> "$GITHUB_ENV"
       - id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
@@ -24,13 +86,22 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
       - name: Deploy to Cloud Run
-        # 環境変数・ランタイム SA・公開設定は初回セットアップ（README 参照）で
-        # サービスに設定済みのものが引き継がれるため、ここでは指定しない。
+        # ランタイム SA と環境変数を毎回すべて渡す（preview.yml と同じ）。
+        # --set-env-vars は既存の環境変数を「置き換える」ため、このワークフロー
+        # がサービスの環境変数の唯一の情報源になる。GCP 側で手動追加した変数は
+        # 次のデプロイで消えるので、変更は必ずリポジトリ変数側で行うこと。
+        #
+        # 公開設定（--no-invoker-iam-check）だけはここで渡さない。IAM の
+        # アノテーションを変更するには run.services.setIamPolicy が要るが、
+        # 値は初回セットアップから変わらないため、毎回渡す必要がない
+        # （README「Cloud Run 初回デプロイ」参照）。
         run: |
           gcloud run deploy portal-api \
             --source backend \
             --region asia-northeast1 \
             --project '${{ vars.PROJECT_ID }}' \
+            --service-account '${{ vars.RUNTIME_SA_EMAIL }}' \
+            --set-env-vars "$RUN_ENV_VARS" \
             --quiet
 
   deploy-frontend:

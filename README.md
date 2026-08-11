@@ -98,6 +98,9 @@ firestore/                    # Firestore セキュリティルールとその�
   tests/rules.test.js         # エミュレータでルールを検証
 firebase.json                 # Hosting 設定（/api/** → Cloud Run リライト）・Firestore ルールの参照
 .github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml・preview-cleanup.yml（PR プレビュー）
+.github/scripts/              # ワークフロー間で共有するシェルスクリプト
+  require-vars.sh             # 必須のリポジトリ変数が空でないことの確認
+  clerk-issuer.sh             # Publishable Key から CLERK_ISSUER を導出
 ```
 
 ## ⚙️ セットアップ
@@ -222,19 +225,15 @@ preview-channels/pr-29/tool_settings/excel-report-formatter
 チャンネル分割の前は、共有設定がコレクション `tool_settings` の直下（`tool_settings/<ツール名>`）にありました。新しい配置へ移すには、**本番へデプロイする前に** 次の順で作業します。
 
 1. 既存のドキュメントを `static-channels/production/tool_settings/` 配下へコピーする（ツールごとに 1 ドキュメントなので Firebase コンソールでの手作業で十分）。
-2. 本番の Cloud Run に `SETTINGS_CHANNEL_PATH` を設定する。CI は本番サービスに環境変数を渡さない方針のため、ここは手動で一度だけ行う:
-   ```bash
-   gcloud run services update portal-api \
-     --region "$REGION" --project "$PROJECT_ID" \
-     --update-env-vars SETTINGS_CHANNEL_PATH=static-channels/production
-   ```
-3. その後に PR をマージする。
+2. その後に PR をマージする。`SETTINGS_CHANNEL_PATH=static-channels/production` は `deploy.yml` が本番サービスに渡すため、コードと設定は同じデプロイで同時に切り替わります。
 
-順序が重要です。2 を先に済ませておけば、旧コードは未知の環境変数を無視するだけなので無害で、新コードが出た瞬間から正しいパスを読みます。逆に新コードが先に出ると、本番が既定の development チャンネル（空）を読み、雛形設定が消えたように見えます（データは失われず、`SETTINGS_CHANNEL_PATH` を設定すれば復帰します）。移行が済んだら、旧パスの `tool_settings` コレクションは削除して構いません。
+順序が重要です。1 を先に済ませておけば、新コードが出た瞬間から正しいパスに中身があります。逆にコピーが後になると、本番が空のチャンネルを読み、雛形設定が消えたように見えます（データは失われず、コピーすれば復帰します）。移行が済んだら、旧パスの `tool_settings` コレクションは削除して構いません。
 
 雛形ファイル自体は GAS 版と同じ運用です: ネイティブ .xlsx のままフォルダ内に置き、社内の閲覧可能者だけに共有する（SA への共有は不要。読むのは常に利用者本人の代理トークン）。
 
 ### 5. Cloud Run 初回デプロイ
+
+初回だけ、**サービスの器を作る** ために手で 1 回デプロイします。ランタイム環境変数は CI（`deploy.yml`）が毎回渡すので、ここでは指定しません（「ランタイム環境変数の出どころ」参照）。
 
 ```bash
 # Hosting のサイト ID（https://<SITE_ID>.web.app の <SITE_ID> 部分）。
@@ -242,34 +241,41 @@ preview-channels/pr-29/tool_settings/excel-report-formatter
 # プレビュー URL（https://<SITE_ID>--pr-N-xxxx.web.app）もサイト ID が基準になる。
 SITE_ID=<Hosting のサイト ID>
 
-# 値にカンマ（複数指定）を含むため、区切り文字を ; に変える ^;^ 記法でまとめて渡す。
-# （@ や , は SA のメールアドレス・複数指定の値に含まれるため区切り文字に使えない）
 gcloud run deploy portal-api \
   --source backend \
   --region "$REGION" \
   --project "$PROJECT_ID" \
   --service-account "$SA" \
-  --no-invoker-iam-check \
-  --set-env-vars "^;^CLERK_ISSUER=https://<本番の Clerk Frontend API>;CLERK_AUTHORIZED_PARTIES=https://<your-hosting-domain>,https://$SITE_ID.web.app;ALLOWED_EMAIL_DOMAINS=<your-workspace-domain>;DWD_SERVICE_ACCOUNT_EMAIL=$SA;SETTINGS_CHANNEL_PATH=static-channels/production"
+  --no-invoker-iam-check
 ```
 
 * Firebase Hosting のリライトは Cloud Run を匿名で呼ぶため、呼び出しを許可する設定が要ります。ここでは **`--no-invoker-iam-check`（呼び出し側の IAM チェックの無効化）** を使い、`--allow-unauthenticated`（`allUsers` に `roles/run.invoker` を束縛する方式）は使いません。組織ポリシー `constraints/iam.allowedPolicyMemberDomains`（ドメイン制限共有）がある環境では、IAM ポリシーに `allUsers` を書けず `FAILED_PRECONDITION` で拒否されるためです。この構成では `gcloud run services get-iam-policy` は空（`etag` のみ）になります — バインディングが無いのが正常です。
 * サービスは Cloud Run の URL からも到達できますが、認可はアプリ層の Clerk JWT 検証で行うため、JWT が無ければ 401 です。
-* 2 回目以降のデプロイは CI が `gcloud run deploy --source backend` を実行するだけで、環境変数・SA・呼び出し設定は引き継がれます。
+* この時点ではまだ環境変数が空なので、Clerk の検証設定が無い状態で起動します。**`main` への最初の push で CI が環境変数を設定** し、そこから本番として機能します（認証不要の `/api/healthz` はこの時点でも応答します）。
 * 動作確認:
   ```bash
   curl -s "https://$SITE_ID.web.app/api/healthz"   # → {"status":"ok"}
   ```
 
-| 環境変数 | 用途 |
-| --- | --- |
-| `CLERK_ISSUER` | 許可する Clerk の Frontend API URL（JWT の `iss`。カンマ区切りで複数可）。本番サービスには **本番インスタンスのみ** を設定する（プレビューは PR ごとの別サービスが開発インスタンスを受け持つ） |
-| `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り、`*` ワイルドカード可）。本番サービスには本番のオリジンのみを設定する |
-| `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り） |
-| `DWD_SERVICE_ACCOUNT_EMAIL` | 代理トークンに使う SA のメール（省略時は ADC から推定） |
-| `SETTINGS_CHANNEL_PATH` | 共有設定を置くチャンネルの Firestore ドキュメントパス。本番は `static-channels/production`。**未設定だと development チャンネルを指す**（「共有設定（Firestore）」参照） |
-| `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。既定 `(default)` |
-| `CORS_ALLOWED_ORIGINS` | （任意）CORS 許可オリジン。既定 `http://localhost:5173` |
+#### ランタイム環境変数の出どころ
+
+バックエンドの環境変数は **本番・プレビューとも GitHub のリポジトリ変数を唯一の情報源** とし、デプロイのたびにワークフローが `--set-env-vars` で渡します（`deploy.yml` / `preview.yml`）。GCP 側に手で設定して覚えさせておく値はありません。
+
+| 環境変数 | 用途 | 本番（`deploy.yml`）での値 |
+| --- | --- | --- |
+| `CLERK_ISSUER` | 許可する Clerk の Frontend API URL（JWT の `iss`。カンマ区切りで複数可）。本番サービスには **本番インスタンスのみ**（プレビューは PR ごとの別サービスが開発インスタンスを受け持つ） | `CLERK_PUBLISHABLE_KEY` から導出 |
+| `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り、`*` ワイルドカード可） | `CANONICAL_HOST`（設定時のみ）と `SITE_ID` から組み立て。`https://<カスタムドメイン>,https://<サイトID>.web.app,https://<サイトID>.firebaseapp.com` |
+| `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り） | 同名のリポジトリ変数 |
+| `DWD_SERVICE_ACCOUNT_EMAIL` | 代理トークンに使う SA のメール（省略時は ADC から推定） | `RUNTIME_SA_EMAIL` |
+| `SETTINGS_CHANNEL_PATH` | 共有設定を置くチャンネルの Firestore ドキュメントパス。**未設定だと development チャンネルを指す**（「共有設定（Firestore）」参照） | `static-channels/production` 固定（環境の別はワークフローが決めるので変数にしない） |
+| `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。既定 `(default)` | 同名のリポジトリ変数。未設定なら渡さない |
+| `CORS_ALLOWED_ORIGINS` | （任意）CORS 許可オリジン。既定 `http://localhost:5173` | 渡さない（Hosting のリライトで同一オリジンになるため本番では不要。ローカル開発用） |
+
+`CLERK_ISSUER` と `CLERK_AUTHORIZED_PARTIES` に専用の変数を作らないのは、**同じ事実を 2 か所に書かない** ためです。issuer は Publishable Key から一意に決まり（`pk_<live|test>_<base64>` をデコードすると Frontend API のホスト名になる。`.github/scripts/clerk-issuer.sh`）、許可オリジンはフロントエンドが配信されるホスト名そのものです。プレフィックス（`pk_live_` / `pk_test_`）が期待と違えば、デプロイはエラーで止まります — 本番が開発インスタンスのトークンを受け付けたり、プレビューが本番インスタンスを向いたりしないように。
+
+> **`--set-env-vars` は既存の環境変数を置き換えます。** そのため GCP コンソールや `gcloud run services update` で足した変数は、次のデプロイで消えます。値を変えるときは必ずリポジトリ変数側を直してください（`gh variable set <名前> --body <値>` の後、`main` に push するか `deploy.yml` を再実行）。
+>
+> **シークレット（GitHub の Secrets）は使っていません。** 上記はいずれも秘匿値ではないからです（Clerk の Publishable Key は公開前提でフロントエンドにも埋め込まれ、バックエンドの GCP 認証は WIF とランタイム SA の ADC で行うため API キーの類がありません）。将来どうしても秘匿値が要る場合は、GitHub Secrets から環境変数として渡すのではなく **Secret Manager に置いて `--set-secrets` で参照** してください。Cloud Run の環境変数はサービスの閲覧権限があれば誰でも読めます（`--set-env-vars` は `--set-secrets` の設定を消しません）。
 
 ### 6. Firebase Hosting
 
@@ -295,22 +301,27 @@ gcloud run deploy portal-api \
 
 ### 7. GitHub Actions（CI/CD）
 
-`main` への push で本番デプロイ（`.github/workflows/deploy.yml`）、PR で Hosting のプレビューデプロイ（`.github/workflows/preview.yml`。後述）が走ります。Settings → Secrets and variables → Actions に以下の **Variables** を設定してください。
+`main` への push で本番デプロイ（`.github/workflows/deploy.yml`）、PR で Hosting のプレビューデプロイ（`.github/workflows/preview.yml`。後述）が走ります。Settings → Secrets and variables → Actions に以下の **Variables** を設定してください。**Secrets は使いません**（理由は「ランタイム環境変数の出どころ」）。
 
-| 変数 | 用途 |
-| --- | --- |
-| `PROJECT_ID` | デプロイ先 GCP プロジェクト ID |
-| `WIF_PROVIDER` | Workload Identity プールのプロバイダ名（`projects/.../providers/...`） |
-| `SA_EMAIL` | デプロイ実行用サービスアカウントのメール |
-| `CLERK_PUBLISHABLE_KEY` | 本番ビルドに埋め込む Clerk Publishable Key（**本番インスタンス** `pk_live_...`） |
-| `CLERK_PUBLISHABLE_KEY_TEST` | プレビュービルドに埋め込む Clerk Publishable Key（**開発インスタンス** `pk_test_...`） |
-| `CANONICAL_HOST` | 本番のカスタムドメイン（例 `portal.example.com`）。`.web.app` へのアクセスをここへリダイレクトする。未設定ならリダイレクトしない |
-| `PORTAL_TITLE` | ポータルの表示名（各ページのヘッダーと、トップページのタブ名）。ビルド時に `VITE_PORTAL_TITLE` として渡され HTML に埋め込まれる。未設定なら `社内ポータル` |
-| `SITE_ID` | Hosting のサイト ID。プレビュー用 Cloud Run の許可オリジン `https://<サイトID>--pr-<番号>-*.web.app` の組み立てに使う |
-| `RUNTIME_SA_EMAIL` | Cloud Run のランタイム SA のメール（本番の `portal-api` と同じもの）。プレビュー用サービスの作成時に渡す |
-| `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り）。プレビュー用バックエンドに渡す（本番はサービスに設定済みの値を使う） |
+フロントエンドのビルドとバックエンドのランタイム設定は、本番・プレビューともこの表の値だけから決まります。GCP 側に手で設定しておく値はありません。
 
-> プレビュー用バックエンドの `CLERK_ISSUER` は変数にせず、`CLERK_PUBLISHABLE_KEY_TEST` から導出します。Clerk の Publishable Key は `pk_test_<base64>` の形で、デコードすると Frontend API のホスト名 + `$` になるためです。二重管理をやめることで、鍵とインスタンスの食い違いが原理的に起きなくなります。`pk_live_...` が設定されていればエラーで止まります（プレビューが本番の Clerk インスタンスを向かないように）。
+| 変数 | 用途 | 使う環境 |
+| --- | --- | --- |
+| `PROJECT_ID` | デプロイ先 GCP プロジェクト ID | 両方 |
+| `WIF_PROVIDER` | Workload Identity プールのプロバイダ名（`projects/.../providers/...`） | 両方 |
+| `SA_EMAIL` | デプロイ実行用サービスアカウントのメール | 両方 |
+| `RUNTIME_SA_EMAIL` | Cloud Run のランタイム SA のメール。サービスのランタイム SA と `DWD_SERVICE_ACCOUNT_EMAIL` に渡す | 両方 |
+| `SITE_ID` | Hosting のサイト ID。許可オリジン（本番は `https://<サイトID>.web.app` 等、プレビューは `https://<サイトID>--pr-<番号>-*.web.app`）の組み立てに使う | 両方 |
+| `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り） | 両方 |
+| `CLERK_PUBLISHABLE_KEY` | Clerk Publishable Key（**本番インスタンス** `pk_live_...`）。本番ビルドに埋め込み、バックエンドの `CLERK_ISSUER` もここから導出する | 本番 |
+| `CLERK_PUBLISHABLE_KEY_TEST` | Clerk Publishable Key（**開発インスタンス** `pk_test_...`）。プレビュービルドに埋め込み、プレビュー用バックエンドの `CLERK_ISSUER` もここから導出する | プレビュー |
+| `CANONICAL_HOST` | 本番のカスタムドメイン（例 `portal.example.com`）。`.web.app` へのアクセスをここへリダイレクトし、許可オリジンにも加える。未設定ならどちらも行わない | 本番 |
+| `PORTAL_TITLE` | ポータルの表示名（各ページのヘッダーと、トップページのタブ名）。ビルド時に `VITE_PORTAL_TITLE` として渡され HTML に埋め込まれる。未設定なら `社内ポータル` | 両方 |
+| `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。未設定なら既定の `(default)` | 本番 |
+
+`CLERK_ISSUER` と `CLERK_AUTHORIZED_PARTIES` に対応する変数が無いのは、他の変数から導出しているためです（「ランタイム環境変数の出どころ」参照）。
+
+> **未設定・不正な変数があるとデプロイは失敗します**（設定の壊れに気付けるよう、意図的にスキップしない）。本番・プレビューとも、ワークフローの先頭で必要な変数が揃っているかを確認し、足りなければ変数名を挙げて落とします（`.github/scripts/require-vars.sh`）。**未設定の変数は空文字として展開され、`gcloud` はそれを「未指定」として受け入れてしまう** ためです（`--service-account ''` なら Compute 既定 SA が使われ、`CLERK_ISSUER=` なら認証設定が空のまま起動してしまう）。
 
 JSON キーは使わず WIF（キーレス）で認証します。WIF とデプロイ用 SA は以下のように作成できます（Cloud Shell 等）:
 
@@ -378,7 +389,7 @@ PR を開く・push するたびに、その PR 専用の **プレビュー環�
 `preview.yml` の流れ:
 
 1. フロントエンドを開発インスタンスのキーでビルドする。
-2. **Cloud Run に `portal-api-pr-<番号>` をデプロイする。** 本番（`deploy.yml`）と違い、ランタイム SA・環境変数を毎回すべて渡すので、サービスが無ければ作成・あれば更新となり、**初回に手動でサービスを作る必要はありません**。`SETTINGS_CHANNEL_PATH` にはこの PR 専用のチャンネル（`preview-channels/pr-<番号>`）を渡し、呼び出しは本番と同じく `--no-invoker-iam-check` で許可します。
+2. **Cloud Run に `portal-api-pr-<番号>` をデプロイする。** 本番と同じく、ランタイム SA・環境変数を毎回すべて渡します（環境ごとに違うのは値だけ）。サービスが無ければ作成・あれば更新となるため、**初回に手動でサービスを作る必要はありません**。`SETTINGS_CHANNEL_PATH` にはこの PR 専用のチャンネル（`preview-channels/pr-<番号>`）を渡し、呼び出しは本番と同じく `--no-invoker-iam-check` で許可します。
 3. `firebase.json` の `/api/**` リライト先をこの PR のサービスに書き換える。チャンネルのデプロイはそのときの `firebase.json` をリリースに焼き込むため、この書き換えはこの PR のチャンネルにだけ効きます（リポジトリの `firebase.json` は本番の `portal-api` を指したまま）。
 4. プレビューチャンネル `pr-<番号>` へデプロイし、URL を PR にコメントする（最終デプロイから 7 日で失効）。
 
@@ -398,14 +409,14 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
      -d '{"allowed_origins": ["https://<サイトID>--pr-*.web.app", "http://localhost:5173"]}'
    ```
    （サイト ID は Hosting の既定サイトのサブドメイン。プロジェクト ID と異なる場合がある。）
-2. リポジトリ変数 `CLERK_PUBLISHABLE_KEY_TEST` / `SITE_ID` / `RUNTIME_SA_EMAIL` / `ALLOWED_EMAIL_DOMAINS` を設定する（前掲の表）。バックエンドの `CLERK_ISSUER` はこのうち `CLERK_PUBLISHABLE_KEY_TEST` から導出されるので、別途の設定は不要です。
+2. リポジトリ変数 `CLERK_PUBLISHABLE_KEY_TEST` / `SITE_ID` / `RUNTIME_SA_EMAIL` / `ALLOWED_EMAIL_DOMAINS` を設定する（前掲の表）。本番と同じく、`CLERK_ISSUER` は `CLERK_PUBLISHABLE_KEY_TEST` から導出されるので別途の設定は不要です。
 3. デプロイ用 SA に `roles/run.admin`・`roles/artifactregistry.repoAdmin`・`roles/datastore.user` があること（前掲のコマンドで付与済み）。`run.admin` は `--no-invoker-iam-check` に必要です — **このフラグは `run.services.setIamPolicy` を要求します**（`--allow-unauthenticated` と同じ権限。`roles/run.developer` では新規サービスの作成が `Changes to invoker_iam_disabled require run.services.setIamPolicy permissions` で失敗します）。残り 2 つは PR クローズ時の後片付けに使います。
 
-   > 本番の `deploy.yml` はこのフラグを渡さず、サービスに設定済みの値をそのまま引き継ぎます。アノテーションを変更しないため `setIamPolicy` は不要で、本番デプロイ自体は `run.developer` 相当の権限でも通ります。権限が要るのは値を設定・変更するときだけです。
+   > 本番の `deploy.yml` は環境変数とランタイム SA こそ毎回渡しますが、このフラグだけは渡さず、サービスに設定済みの値をそのまま引き継ぎます（初回セットアップから変わらない値のため）。アノテーションを変更しないので `setIamPolicy` は不要です。
 
 > プレビュー用サービスも本番と同じく `--no-invoker-iam-check` で呼び出しを許可します（「Cloud Run 初回デプロイ」参照）。`--allow-unauthenticated` は組織ポリシー `constraints/iam.allowedPolicyMemberDomains` のある環境では `FAILED_PRECONDITION: One or more users named in the policy do not belong to a permitted customer` で拒否されるため使いません。リライトが実際に届いているかは、ワークフローが毎回 `/api/healthz` への疎通確認で検証します。
 
-> リポジトリ変数が未設定・不正な間は、プレビューのジョブは失敗します（設定の壊れに気付けるよう、意図的にスキップしない）。ワークフローの先頭で必要な変数が揃っているかを確認し、足りなければ変数名を挙げて落とします。**未設定の変数は空文字として展開され、`gcloud` はそれを「未指定」として受け入れてしまう** ためです（`--service-account ''` なら Compute 既定 SA が使われ、`CLERK_ISSUER=` なら認証設定が空のまま起動し、壊れたプレビューが「成功」として出来上がる）。
+> リポジトリ変数が未設定・不正な間は、プレビューのジョブは失敗します（本番と同じ確認。「GitHub Actions（CI/CD）」参照）。壊れたプレビューが「成功」として出来上がるのを防ぐためです。
 
 > 同じ理由で、デプロイの成否だけでなく **プレビュー URL から `/api/healthz` に実際に届くか** を毎回確かめます。`gcloud run deploy` が成功しても、リライト先が届かなければプレビューは使い物になりません。それを URL を渡された人が最初に踏むのではなく、ジョブの失敗として先に出します。
 
