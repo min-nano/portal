@@ -123,6 +123,55 @@ def test_normalize_keeps_fields_of_selected_options():
     assert data["fields"]["other_calc_type"] == "限界耐力計算"
 
 
+def test_normalize_clears_the_certification_without_a_program_name():
+    # プログラムを使っていない（名称が空）なら、認定の有無も認定番号も残さない。
+    data = sample_data(fields={"program_name": ""}, choices={"program_certified": "有"})
+
+    assert data["choices"]["program_certified"] == ""
+    assert data["fields"]["program_cert_number"] == ""
+
+
+def test_normalize_clears_the_certification_number_when_not_certified():
+    data = sample_data(choices={"program_certified": "無"})
+
+    assert data["fields"]["program_cert_number"] == ""
+
+
+def test_normalize_keeps_the_certification_number_when_certified():
+    data = sample_data(choices={"program_certified": "有"})
+
+    assert data["fields"]["program_cert_number"] == "TPRG-1234"
+
+
+def test_validate_requires_the_certification_when_a_program_is_named():
+    data = sample_data(choices={"program_certified": ""})
+
+    with pytest.raises(CertificateError) as excinfo:
+        structural_cert.validate(data)
+
+    assert "国土交通大臣の認定" in str(excinfo.value)
+
+
+def test_validate_skips_the_certification_without_a_program_name():
+    # 名称が空欄なら、認定の有無は選ばなくてよい（選べもしない）。
+    structural_cert.validate(sample_data(fields={"program_name": ""}))
+
+
+def test_validate_requires_the_certification_number_when_certified():
+    data = sample_data(
+        choices={"program_certified": "有"}, fields={"program_cert_number": ""}
+    )
+
+    with pytest.raises(CertificateError) as excinfo:
+        structural_cert.validate(data)
+
+    assert "プログラムの認定番号" in str(excinfo.value)
+
+
+def test_validate_skips_the_certification_number_when_not_certified():
+    structural_cert.validate(sample_data(choices={"program_certified": "無"}))
+
+
 def test_validate_reports_every_missing_item_at_once():
     data = sample_data(fields={"building_name": "", "structure": ""}, choices={"calc_type": ""})
 

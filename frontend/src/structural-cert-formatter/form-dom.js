@@ -8,6 +8,7 @@
 import {
   dateFieldsFromIso,
   emptyFormData,
+  fieldDependencies,
   formatCertificateDate,
   isoFromDateFields,
 } from './form-logic.js';
@@ -22,7 +23,7 @@ const DECIMAL_UNITS = ['m', 'm²'];
  * 記入欄。
  *
  * dependency を渡した欄は、その選択肢が選ばれているときだけ入力できる
- * （「６ その他」の内容など。refreshDependentFields を参照）。
+ * （「６ その他」の内容など。refreshDependencies を参照）。
  */
 export function buildField(doc, field, { hideLabel, labelledBy, dependency } = {}) {
   const wrap = doc.createElement('div');
@@ -69,13 +70,27 @@ export function buildField(doc, field, { hideLabel, labelledBy, dependency } = {
 }
 
 /**
- * 選択肢に紐づく記入欄の有効・無効を、今の選択に合わせる。
+ * 前提のある項目（記入欄・選択肢）の有効・無効を、今の入力に合わせる。
  *
- * その選択肢を選んでいない間の入力は証明書に載らない（バックエンドが
- * 空にする）ため、入力そのものをさせない。選択が外れたときは、前の入力が
- * 残らないように消す。
+ * 前提が外れている間の入力は証明書に載らない（バックエンドも空にする）ため、
+ * 入力そのものをさせず、前提が外れたときは入力・選択を消す。
+ *
+ * 前提は「記入欄 → 選択肢 → 記入欄」（プログラムの名称 → 大臣の認定 →
+ * 認定番号）と連鎖するので、選択肢・記入欄の順に見る。
  */
-export function refreshDependentFields(root) {
+export function refreshDependencies(root) {
+  // 「その欄を入力したときだけ選べる」選択肢。入力が消えていれば選択も外す。
+  root.querySelectorAll('[data-requires-field]').forEach((group) => {
+    const source = root.querySelector(`[data-field="${group.dataset.requiresField}"]`);
+    const active = Boolean(source && source.value.trim());
+    group.classList.toggle('disabled', !active);
+    group.querySelectorAll('[data-choice]').forEach((radio) => {
+      radio.disabled = !active;
+      if (!active) radio.checked = false;
+    });
+  });
+
+  // 「その選択肢を選んだときだけ入力できる」記入欄。
   root.querySelectorAll('[data-requires-choice]').forEach((input) => {
     const selected = root.querySelector(
       `[data-choice="${input.dataset.requiresChoice}"]:checked`
@@ -193,14 +208,6 @@ function setFieldValue(root, key, value) {
 }
 
 /**
- * 選択肢のグループ。
- *
- * セクションの見出しがそのままこのグループの名前になっている場合
- * （建築物の区分など、セクションに選択肢しか無いとき）は、見出しと囲みが
- * 二重になるだけなので legend を出さず、枠も付けない。名前はセクションの
- * 見出しが担う（読み上げ用に aria-labelledby で結び付ける）。
- */
-/**
  * 選択肢の表示名。
  *
  * 証明書と同じ番号を添えて、どの選択肢に印が付くのかを分かりやすくする。
@@ -212,10 +219,22 @@ function optionText(option) {
     : option.label;
 }
 
-export function buildChoiceGroup(doc, group, { hideLegend, labelledBy } = {}) {
+/**
+ * 選択肢のグループ。
+ *
+ * セクションの見出しがそのままこのグループの名前になっている場合
+ * （建築物の区分など、セクションに選択肢しか無いとき）は、見出しと囲みが
+ * 二重になるだけなので legend を出さず、枠も付けない。名前はセクションの
+ * 見出しが担う（読み上げ用に aria-labelledby で結び付ける）。
+ *
+ * gate（前提となる記入欄の定義）を渡したグループは、その欄に入力が
+ * あるときだけ選べる（refreshDependencies を参照）。
+ */
+export function buildChoiceGroup(doc, group, { hideLegend, labelledBy, gate } = {}) {
   const wrap = doc.createElement('fieldset');
   wrap.className = hideLegend ? 'cert-choices bare' : 'cert-choices';
   if (labelledBy) wrap.setAttribute('aria-labelledby', labelledBy);
+  if (gate) wrap.dataset.requiresField = gate.key;
 
   if (!hideLegend) {
     const legend = doc.createElement('legend');
@@ -241,6 +260,13 @@ export function buildChoiceGroup(doc, group, { hideLegend, labelledBy } = {}) {
     label.append(radio, text);
     wrap.appendChild(label);
   });
+
+  if (gate) {
+    const hint = doc.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = `「${gate.label}」を入力したときに選べます。`;
+    wrap.appendChild(hint);
+  }
   return wrap;
 }
 
@@ -252,14 +278,7 @@ export function buildForm(root, config) {
   const groupsByKey = new Map(config.choice_groups.map((g) => [g.key, g]));
 
   // 「その選択肢を選んだときだけ入力できる欄」の対応表（記入欄 → 選択肢）。
-  const dependencyByField = new Map();
-  config.choice_groups.forEach((group) => {
-    group.options.forEach((option) => {
-      if (option.requires_field) {
-        dependencyByField.set(option.requires_field, { choice: group.key, option });
-      }
-    });
-  });
+  const dependencyByField = fieldDependencies(config);
 
   config.sections.forEach((section, index) => {
     const wrap = doc.createElement('section');
@@ -309,6 +328,7 @@ export function buildForm(root, config) {
           buildChoiceGroup(doc, group, {
             hideLegend: group === mergedGroup,
             labelledBy: heading.id,
+            gate: fieldsByKey.get(group.depends_on_field),
           })
         );
       }
@@ -316,9 +336,13 @@ export function buildForm(root, config) {
     root.appendChild(wrap);
   });
 
-  // 選択に紐づく記入欄は、選び直されるたびに有効・無効を切り替える。
+  // 前提のある項目は、その前提（選択・入力）が変わるたびに切り替える。
   root.querySelectorAll('[data-choice]').forEach((radio) => {
-    radio.addEventListener('change', () => refreshDependentFields(root));
+    radio.addEventListener('change', () => refreshDependencies(root));
+  });
+  root.querySelectorAll('[data-requires-field]').forEach((group) => {
+    const source = root.querySelector(`[data-field="${group.dataset.requiresField}"]`);
+    if (source) source.addEventListener('input', () => refreshDependencies(root));
   });
 
   // 未選択を既定にする（必須でないグループの「（指定しない）」を選んでおく）。
@@ -343,8 +367,8 @@ export function applyFormData(root, data) {
   root.querySelectorAll('[data-choice]').forEach((radio) => {
     radio.checked = radio.value === (data.choices[radio.dataset.choice] || '');
   });
-  // 選択に紐づく記入欄は、流し込んだ選択に合わせて有効・無効を決め直す。
-  refreshDependentFields(root);
+  // 前提のある項目は、流し込んだ内容に合わせて有効・無効を決め直す。
+  refreshDependencies(root);
   // 隠し入力に入れた和暦から、日付ピッカーの表示を合わせ直す。
   syncPickerFromFields(root);
 }

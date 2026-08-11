@@ -17,7 +17,15 @@ const config = {
     { key: 'month', label: '月', required: true, unit: '月', hint: '' },
     { key: 'day', label: '日', required: true, unit: '日', hint: '' },
     { key: 'building_area', label: '建築面積', required: true, unit: 'm²', hint: '' },
-    { key: 'other_calc_type', label: 'その他の構造計算の種類', required: false, unit: '', hint: '' },
+    { key: 'other_calc_type', label: 'その他の構造計算の種類', required: true, unit: '', hint: '' },
+    { key: 'program_name', label: 'プログラムの名称', required: false, unit: '', hint: '' },
+    {
+      key: 'program_cert_number',
+      label: 'プログラムの認定番号',
+      required: true,
+      unit: '',
+      hint: '',
+    },
     { key: 'remarks', label: '備考', required: false, unit: '', hint: '' },
   ],
   choice_groups: [
@@ -33,9 +41,10 @@ const config = {
     {
       key: 'program_certified',
       label: '国土交通大臣の認定',
-      required: false,
+      required: true,
+      depends_on_field: 'program_name',
       options: [
-        { value: '有', label: '有', requires_field: '' },
+        { value: '有', label: '有', requires_field: 'program_cert_number' },
         { value: '無', label: '無', requires_field: '' },
       ],
     },
@@ -54,9 +63,32 @@ const config = {
     },
     {
       title: '当該構造計算に用いたプログラム',
-      items: [{ choice: 'program_certified' }],
+      items: [
+        { field: 'program_name' },
+        { choice: 'program_certified' },
+        { field: 'program_cert_number' },
+      ],
     },
     { title: '備考', items: [{ field: 'remarks' }] },
+  ],
+};
+
+// 必須でない選択肢（「（指定しない）」に戻せるグループ）だけの定義。
+const optionalGroupConfig = {
+  text_fields: [],
+  choice_groups: [
+    {
+      key: 'program_certified',
+      label: '国土交通大臣の認定',
+      required: false,
+      options: [
+        { value: '有', label: '有', requires_field: '' },
+        { value: '無', label: '無', requires_field: '' },
+      ],
+    },
+  ],
+  sections: [
+    { title: '当該構造計算に用いたプログラム', items: [{ choice: 'program_certified' }] },
   ],
 };
 
@@ -131,6 +163,7 @@ describe('buildForm', () => {
   });
 
   it('必須でないグループには「指定しない」を足し、既定で選んでおく', () => {
+    buildForm(root, optionalGroupConfig);
     const radios = [...root.querySelectorAll('[name="choice-program_certified"]')];
 
     expect(radios.map((r) => r.value)).toEqual(['', '有', '無']);
@@ -143,7 +176,7 @@ describe('buildForm', () => {
     );
 
     // 「有　有」のように重複させない。
-    expect(labels).toEqual(['（指定しない）', '有', '無']);
+    expect(labels).toEqual(['有', '無']);
   });
 
   it('必須のグループは既定で未選択', () => {
@@ -170,7 +203,7 @@ describe('buildForm', () => {
       .querySelector('[name="choice-program_certified"]')
       .closest('fieldset');
 
-    expect(group.querySelector('legend').textContent).toBe('国土交通大臣の認定');
+    expect(group.querySelector('legend').textContent).toBe('国土交通大臣の認定 *');
     expect(group.classList.contains('bare')).toBe(false);
   });
 
@@ -248,13 +281,22 @@ describe('証明日（日付ピッカー）', () => {
   });
 });
 
-describe('選択肢に紐づく記入欄', () => {
+describe('項目どうしの前提条件', () => {
   /** 利用者が選択肢を選んだときと同じ状態にする。 */
-  function choose(value) {
-    const radio = root.querySelector(`[name="choice-calc_type"][value="${value}"]`);
+  function check(selector) {
+    const radio = root.querySelector(selector);
     radio.checked = true;
     radio.dispatchEvent(new Event('change', { bubbles: true }));
   }
+
+  /** 利用者が記入欄へ打ち込んだときと同じ状態にする。 */
+  function type(selector, value) {
+    const input = root.querySelector(selector);
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  const choose = (value) => check(`[name="choice-calc_type"][value="${value}"]`);
 
   it('その選択肢を選ぶまでは入力できない', () => {
     const input = root.querySelector('#field-other_calc_type');
@@ -289,6 +331,47 @@ describe('選択肢に紐づく記入欄', () => {
     // 証明書に載らない内容なので、画面にも残さない（バックエンドも空にする）。
     expect(root.querySelector('#field-other_calc_type').value).toBe('');
     expect(collectFormData(root, config).fields.other_calc_type).toBe('');
+  });
+
+  it('前提となる欄が空のうちは、その選択肢を選べない', () => {
+    const group = root.querySelector('[name="choice-program_certified"]').closest('fieldset');
+
+    expect([...group.querySelectorAll('[data-choice]')].every((r) => r.disabled)).toBe(true);
+    expect(group.classList.contains('disabled')).toBe(true);
+    // いつ選べるようになるのかを画面にも書いておく。
+    expect(group.querySelector('.hint').textContent).toBe(
+      '「プログラムの名称」を入力したときに選べます。'
+    );
+  });
+
+  it('前提となる欄を入力すると選べるようになる', () => {
+    type('#field-program_name', 'サンプル構造計算');
+
+    const group = root.querySelector('[name="choice-program_certified"]').closest('fieldset');
+    expect([...group.querySelectorAll('[data-choice]')].some((r) => r.disabled)).toBe(false);
+    expect(group.classList.contains('disabled')).toBe(false);
+  });
+
+  it('前提が連鎖する（名称 → 認定の有無 → 認定番号）', () => {
+    type('#field-program_name', 'サンプル構造計算');
+    check('[name="choice-program_certified"][value="有"]');
+    expect(root.querySelector('#field-program_cert_number').disabled).toBe(false);
+
+    root.querySelector('#field-program_cert_number').value = 'TPRG-1234';
+    // 名称を消すと、認定の有無も認定番号もまとめて外れる。
+    type('#field-program_name', '');
+
+    const data = collectFormData(root, config);
+    expect(data.choices.program_certified).toBe('');
+    expect(data.fields.program_cert_number).toBe('');
+    expect(root.querySelector('#field-program_cert_number').disabled).toBe(true);
+  });
+
+  it('認定が「無」なら認定番号は入力できない', () => {
+    type('#field-program_name', 'サンプル構造計算');
+    check('[name="choice-program_certified"][value="無"]');
+
+    expect(root.querySelector('#field-program_cert_number').disabled).toBe(true);
   });
 
   it('読み込んだ内容の選択に合わせて、入力の可否も決め直す', () => {
@@ -339,6 +422,8 @@ describe('collectFormData / applyFormData', () => {
         day: '10',
         building_area: '62.10',
         other_calc_type: '限界耐力計算',
+        program_name: 'サンプル構造計算',
+        program_cert_number: 'TPRG-1234',
         remarks: '特記事項なし',
       },
       choices: { calc_type: '6', program_certified: '有' },
@@ -358,7 +443,14 @@ describe('collectFormData / applyFormData', () => {
     });
 
     expect(collectFormData(root, config).choices.calc_type).toBe('');
-    // 必須でないグループは「指定しない」が選ばれた状態に戻る。
+  });
+
+  it('必須でないグループへ未選択を流し込むと「指定しない」に戻る', () => {
+    buildForm(root, optionalGroupConfig);
+    root.querySelector('[name="choice-program_certified"][value="有"]').checked = true;
+
+    applyFormData(root, { fields: {}, choices: { program_certified: '' } });
+
     expect(root.querySelector('[name="choice-program_certified"][value=""]').checked).toBe(
       true
     );

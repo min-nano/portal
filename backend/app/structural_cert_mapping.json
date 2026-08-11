@@ -6,6 +6,11 @@
     "choice_groups の選択された選択肢の anchor（行の先頭にある番号や □）へ印を描き込む。",
     "印の種類は mark で選ぶ: circle は正円で囲む（番号向け）、check は □ の中にレ点を入れる。",
     "sections の項目は field（記入欄）・choice（選択肢）・date（日付ピッカー。和暦の 3 欄をまとめて入力）。",
+    "項目どうしの前提条件は 2 種類ある（連鎖してもよい）:",
+    "  ・options.requires_field … その選択肢を選んだときだけ意味を持つ記入欄",
+    "  ・choice_groups.depends_on_field … その記入欄に入力があるときだけ意味を持つ選択肢",
+    "前提が外れている項目は入力させず（画面）、送られてきても空にする（サーバー）。",
+    "required は「前提を満たしているときは必ず入力する」という意味で、前提が外れていれば求めない。",
     "雛形のレイアウトが改訂されたときは、原則このファイルを直すだけで追従できる。",
     "anchor と parse_rules の label は雛形の見た目どおりに書いてよい（読み込み時に空白除去と",
     "1 文字ずつの NFKC 正規化を掛けて比較する）。parse_rules の pattern だけは正規表現のため",
@@ -119,14 +124,20 @@
     {
       "key": "other_calc_type",
       "label": "その他の構造計算の種類",
-      "_comment": "雛形では波括弧が 1 つのため、両方の表記を置換対象にしている。",
-      "placeholders": ["{{その他の構造計算の種類}}", "{その他の構造計算の種類}"]
+      "_comment": [
+        "雛形では波括弧が 1 つのため、両方の表記を置換対象にしている。",
+        "「６ その他」を選んだときだけ入力する（calc_type の requires_field）。"
+      ],
+      "placeholders": ["{{その他の構造計算の種類}}", "{その他の構造計算の種類}"],
+      "required": true
     },
     { "key": "program_name", "label": "プログラムの名称", "placeholders": ["{{プログラム名}}"] },
     {
       "key": "program_cert_number",
       "label": "プログラムの認定番号",
-      "placeholders": ["{{プログラム認定番号}}"]
+      "_comment": "大臣の認定が「有」のときだけ入力する（program_certified の requires_field）。",
+      "placeholders": ["{{プログラム認定番号}}"],
+      "required": true
     },
     { "key": "remarks", "label": "備考", "placeholders": ["{{備考}}"] }
   ],
@@ -229,8 +240,21 @@
     {
       "key": "program_certified",
       "label": "国土交通大臣の認定",
+      "_comment": [
+        "認定の有無は、プログラムを使った（名称を入力した）ときにだけ意味を持つ。",
+        "名称が空欄なら選ばせず、入力したときは必ずどちらかを選ぶ。"
+      ],
+      "depends_on_field": "program_name",
+      "required": true,
       "options": [
-        { "value": "有", "label": "有", "anchor": "□有", "mark": "check", "mark_length": 1 },
+        {
+          "value": "有",
+          "label": "有",
+          "anchor": "□有",
+          "mark": "check",
+          "mark_length": 1,
+          "requires_field": "program_cert_number"
+        },
         { "value": "無", "label": "無", "anchor": "□無", "mark": "check", "mark_length": 1 }
       ]
     }
