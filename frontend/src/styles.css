@@ -206,3 +206,26 @@ button.secondary:disabled { background-color: #aaa; }
 /* 釘配列図。狭い画面でも縮めて収める。 */
 .diagram-box { margin-top: 12px; overflow-x: auto; }
 .diagram-box svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+
+/* --- 小規模木造建築物 必要壁量 計算ツール ------------------------------- */
+/* 節・入力欄の骨組みは証明書ツール（.cert-section / .cert-field）と同じもの
+   を使い、ここでは「柱材の表」と「算定方法のチェック」だけを足す。 */
+.wq-field { margin-top: 10px; }
+.wq-field .field-row { display: flex; align-items: center; gap: 6px; }
+.wq-field .field-row select, .wq-field .field-row input { flex: 1; margin-top: 0; }
+.wq-field .unit { font-size: 0.85em; color: #555; white-space: nowrap; }
+.wq-field.required > label::after { content: ' *'; color: #c0392b; }
+.wq-field .hint { margin-top: 2px; }
+.wq-block { margin-top: 14px; }
+.wq-block h4 { margin: 0 0 4px; font-size: 0.9em; color: #1a3a8f; }
+.wq-toggle { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 0.9em; }
+.wq-toggle input { width: auto; margin: 0; flex: none; }
+.cert-section.disabled h3, .cert-section.disabled .hint { color: #999; }
+
+/* 柱材（JAS 規格 → 樹種等 → 等級等）の表。狭い画面では横スクロールさせる。 */
+.wq-table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+.wq-table th, .wq-table td { border: 1px solid #e3e3ef; padding: 2px 4px; vertical-align: middle; }
+.wq-table thead th { background: #eef3ff; color: #1a3a8f; font-size: 0.72em; font-weight: bold; }
+.wq-table th.row-head { background: #fafbff; font-size: 0.8em; width: 2.5em; text-align: center; }
+.wq-table .wq-field { margin-top: 0; }
+.wq-table select { min-width: 7em; }

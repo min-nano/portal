@@ -1,0 +1,158 @@
+name: Worksheet update check
+
+# 必要壁量の表計算ツール（日本住宅・木材技術センターの配布物）が改訂されて
+# いないかを定期的に見る。提出物は配布物そのものなので、古い版のまま配り
+# 続けないよう、気付いた時点で人へ渡すところまでを自動でやる。
+#
+#   配布ページと同じ  → 何もしない（ログだけ）
+#   違うものが出ている → 同梱ファイルを差し替えた PR を出す
+#   ページが読めない   → issue を立てる（取得失敗・リンクを絞れない など）
+#
+# PR には「雛形の番人テスト」（backend/tests/test_wall_quantity_template.py）の
+# 結果を添える。GITHUB_TOKEN で作った PR では CI が自動で走らないため、
+# 差し替えで入力欄の位置がずれていないかは、ここで確かめて本文に書く。
+
+on:
+  schedule:
+    # 毎週月曜 09:05 JST（= 00:05 UTC）。配布物の改訂はまれなので週 1 で十分。
+    - cron: '5 0 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check the distributed worksheet
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
+      - name: Compare with the distribution page
+        id: check
+        # --apply まで済ませ、差し替えがあれば作業ツリーに残す（status が
+        # updated のときだけ差分が出る。同じ・読めないときは何も書き換えない）。
+        run: |
+          python3 .github/scripts/check_howtec_worksheet.py \
+            --report worksheet-check.json --apply
+
+      - name: Run the template guard tests
+        id: guard
+        if: steps.check.outputs.status == 'updated'
+        # 差し替えたファイルに対して、マッピングが指しているセルへ想定どおりの
+        # ラベル・選択肢が入っているかを確かめる。落ちても止めず、結果を PR に書く。
+        continue-on-error: true
+        run: |
+          cd backend
+          pip install -r requirements-dev.txt
+          python -m pytest -q tests/test_wall_quantity_template.py
+
+      - name: Push the replacement to a branch
+        if: steps.check.outputs.status == 'updated'
+        run: |
+          set -euo pipefail
+          sha="$(python3 -c "import json;print(json.load(open('worksheet-check.json'))['sha256'][:8])")"
+          branch="chore/howtec-worksheet-${sha}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "既に $branch がある（前回の実行で作成済み）ので、何もしない。"
+            echo "SKIP_PR=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch"
+          git add backend/app/templates/wall-quantity
+          git commit -m '表計算ツール（必要壁量）を配布ページの最新版へ差し替える'
+          git push -u origin "$branch"
+          echo "BRANCH=$branch" >> "$GITHUB_ENV"
+
+      - name: Create the pull request
+        if: steps.check.outputs.status == 'updated' && env.SKIP_PR != '1'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          GUARD: ${{ steps.guard.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('worksheet-check.json', 'utf8'));
+            const guard = process.env.GUARD === 'success';
+            const body = [
+              '配布ページの表計算ツールが、リポジトリに同梱しているものと違っていたため差し替えます。',
+              '',
+              '| 項目 | 同梱していたもの | 配布ページ |',
+              '| --- | --- | --- |',
+              `| 版 | ${report.oldVersion || '(不明)'} | ${report.version || '(読めず)'} |`,
+              `| sha256 | \`${(report.oldSha256 || '').slice(0, 12)}\` | \`${(report.sha256 || '').slice(0, 12)}\` |`,
+              '',
+              `- 配布ページ: ${report.pageUrl}`,
+              `- ファイル: ${report.fileUrl}`,
+              '',
+              guard
+                ? '✅ **雛形の番人テストは通りました。** マッピングが指しているセルには、これまでと同じラベル・選択肢が入っています。入力欄の位置は変わっていないと考えられます。'
+                : '🔴 **雛形の番人テストが落ちました。** 入力欄の位置か選択肢が変わっています。配布物を開いて読み直し、`backend/app/wall_quantity_mapping.json` を直してからマージしてください（README「表計算ツールが改訂されたときの手順」を参照）。',
+              '',
+              '更新履歴シートに書かれた変更内容も確かめてください。計算方法が変わっている場合、フォームの注意書きの直しが要ることがあります。',
+            ].join('\n');
+            await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '表計算ツール（必要壁量）を配布ページの最新版へ差し替える',
+              head: process.env.BRANCH,
+              base: context.payload.repository.default_branch,
+              body,
+            });
+
+      - name: Open an issue when the page cannot be read
+        if: steps.check.outputs.status == 'problem'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('worksheet-check.json', 'utf8'));
+            const title = '必要壁量の表計算ツール: 配布ページを確認できませんでした';
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: [],
+              per_page: 100,
+            });
+            const body = [
+              '定期確認で、配布ページから表計算ツールを取得できませんでした。',
+              '',
+              '```',
+              report.message,
+              '```',
+              '',
+              `- 配布ページ: ${report.pageUrl}`,
+              '',
+              'ページの構成が変わっている場合は `.github/scripts/check_howtec_worksheet.py` の',
+              '手がかり（`_KEYWORDS`）か、`backend/app/templates/wall-quantity/source.json` の',
+              '`file_url` を直してください。一時的な障害であれば、次回の実行で自動的に解消します。',
+              '',
+              `（実行: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}）`,
+            ].join('\n');
+            const existing = open.find((i) => !i.pull_request && i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+            }
