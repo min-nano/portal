@@ -717,7 +717,8 @@ export function renderWallResult(root, report) {
   report.checks.forEach((check) => {
     appendRow(checks, [
       { text: check.label, className: 'step-label' },
-      { text: check.value, className: 'step-eq' },
+      // 判定の根拠は文章なので、式番号（step-eq）とは別に折り返させる。
+      { text: check.value, className: 'check-value' },
       { text: check.ok ? 'OK' : 'NG', className: check.ok ? 'step-value' : 'step-value ng' },
     ]);
   });

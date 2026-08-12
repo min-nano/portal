@@ -18,6 +18,11 @@ portal-section-controls button { margin-top: 0; width: auto; padding: 4px 10px; 
    セクションごとの見た目（.cert-section h3 など）はそのまま効く。 */
 portal-section > [slot="title"] { margin: 0; min-width: 0; }
 
+/* iOS Safari は、ビューポートより広い塊（横スクロールする表など）の中の
+   文字を勝手に大きくする（自動テキスト拡大）。判定の行だけ文字が飛び抜けて
+   大きくなってしまうので、拡大は行わせない。指でのピンチ拡大は妨げない。 */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
 body { font-family: sans-serif; padding: 16px; background-color: #f4f4f9; margin: 0; }
 .container { background: white; padding: 16px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); max-width: 720px; margin: 0 auto; }
 h2 { font-size: 1.2em; color: #333; margin-top: 0; }
@@ -209,6 +214,8 @@ button.secondary:disabled { background-color: #aaa; }
 .steps-table th.step-label { text-align: left; }
 .steps-table th.step-value { text-align: right; }
 .steps-table .step-value.ng { color: #a3281f; }
+/* 判定の根拠は式番号ではなく文章（面材の名前まで入る）なので、折り返す。 */
+.steps-table .check-value { color: #555; font-size: 0.9em; }
 
 /* 壁を構成する面材。1 枚ごとに面材と釘の仕様・寸法・割り付け・へりあきを
    決め、その場で釘配列諸定数（グレー本 3.2）と釘配列図が出る。壁の中の節と
