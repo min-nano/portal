@@ -55,9 +55,38 @@ def test_query_strings_do_not_hide_the_extension(check):
     assert found and found[0]["url"].endswith("/dl.xlsx?id=3")
 
 
+def test_the_extension_is_found_in_the_query_string_alone(check):
+    # 配布ページの実際の形。経路（/relays/download/…/）には拡張子が無く、
+    # 問い合わせ文字列の file= にだけ .xlsx が出る。
+    href = "/relays/download/441/1511/1312/6351/?file=/files/libs/6351/2025.xlsx"
+    found = links(check, f'<a href="{href}">表計算ツール（多機能版）</a>')
+    assert [link["url"] for link in found] == [
+        "https://www.howtec.or.jp" + href
+    ]
+    assert check.spreadsheet_name(found[0]["url"]) == "2025.xlsx"
+
+
+def test_a_link_without_any_spreadsheet_in_it_is_not_picked_up(check):
+    assert links(check, '<a href="/relays/download/441/?file=/x.pdf">解説</a>') == []
+    assert check.spreadsheet_name("https://www.howtec.or.jp/publics/index/441/") == ""
+
+
 def test_the_same_link_is_not_listed_twice(check):
     html = '<a href="/t.xlsx">1</a><a href="/t.xlsx">2</a>'
     assert len(links(check, html)) == 1
+
+
+def test_the_name_wins_over_the_icon_when_both_link_to_the_file(check):
+    # 配布ページは同じファイルにアイコンと名前の 2 つのリンクを置く。先に
+    # 来るアイコン側は中身が <img> だけで表示文字列が空になるため、それを
+    # 残すと名前で見分けられなくなる。
+    html = (
+        '<a href="/t.xlsx"><img src="/img/xlsx.png" alt="" /></a>'
+        '<a href="/t.xlsx"><p>表計算ツール（多機能版）ver1.2.1</p></a>'
+    )
+    found = links(check, html)
+    assert len(found) == 1
+    assert found[0]["text"] == "表計算ツール（多機能版）ver1.2.1"
 
 
 def test_markup_inside_the_link_text_is_stripped(check):
@@ -88,6 +117,30 @@ def test_keywords_pick_the_worksheet_out_of_several_files(check):
     chosen, problem = check.choose(links(check, html), "")
     assert problem == ""
     assert chosen["url"].endswith("/b.xlsx")
+
+
+def test_the_distribution_page_as_it_is_written_today(check):
+    # 配布ページの実物の作り（アイコンと名前で 2 つのリンク・拡張子は
+    # 問い合わせ文字列の中・在来軸組工法用と多機能版が並ぶ）をそのまま置く。
+    def entry(path, name):
+        href = f"https://www.howtec.or.jp/relays/download/441/{path}"
+        return (
+            f'<a href="{href}"><img src="/img/fileicon/large/xlsx-trance.png" alt="" /></a>'
+            f'<a href="{href}"><p class="record-file_name">{name}</p></a>'
+        )
+
+    html = entry(
+        "1509/1311/6331/?file=/files/libs/6331/202511041009261943.xlsx",
+        "壁量等の基準（令和7年施行）に対応した表計算ツール（在来軸組工法用）ver1.2",
+    ) + entry(
+        "1511/1312/6351/?file=/files/libs/6351/202512171754137467.xlsx",
+        "壁量等の基準（令和7年施行）に対応した表計算ツール（多機能版）ver1.2.1",
+    )
+    found = links(check, html)
+    assert len(found) == 2
+    chosen, problem = check.choose(found, "")
+    assert problem == ""
+    assert chosen["url"].endswith("202512171754137467.xlsx")
 
 
 def test_an_ambiguous_page_is_reported_with_every_candidate(check):

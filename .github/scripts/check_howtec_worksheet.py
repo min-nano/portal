@@ -25,7 +25,7 @@ import sys
 import urllib.error
 import urllib.request
 from html import unescape
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TEMPLATE_DIR = os.path.join(_ROOT, "backend", "app", "templates", "wall-quantity")
@@ -63,27 +63,51 @@ def decode_html(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+def spreadsheet_name(url: str) -> str:
+    """URL が表計算ファイルを指しているならその名前を返す（違えば空文字）。
+
+    配布ページのリンクは経路に拡張子が出ない形もある。実際、多機能版は
+
+      /relays/download/441/1511/1312/6351/?file=/files/libs/6351/….xlsx
+
+    と、拡張子が問い合わせ文字列の側にしか無い。経路だけを見ると
+    「表計算ファイルが 1 つも無いページ」に見えてしまうので、両方を見る。
+    """
+    parts = urlsplit(url)
+    for candidate in [unquote(parts.path), *(v for _, v in parse_qsl(parts.query))]:
+        name = unquote(candidate).rsplit("/", 1)[-1]
+        if name.lower().endswith(_SPREADSHEET_SUFFIXES):
+            return name
+    return ""
+
+
 def find_links(html: str, page_url: str) -> list[dict]:
     """ページの中の表計算ファイルへのリンクを、表示文字列つきで集める。"""
     links = []
-    seen = set()
+    found = {}
     for m in re.finditer(
         r"<a\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", html, re.S | re.I
     ):
         href = unescape(m.group(1)).strip()
-        if not href.lower().split("?")[0].endswith(_SPREADSHEET_SUFFIXES):
-            continue
         url = urljoin(page_url, href)
-        if url in seen:
+        if not spreadsheet_name(url):
             continue
-        seen.add(url)
         text = re.sub(r"<[^>]+>", "", m.group(2))
-        links.append({"url": url, "text": unescape(text).strip()})
+        text = unescape(text).strip()
+        if url in found:
+            # 配布ページは 1 つのファイルにアイコンと名前で 2 つのリンクを
+            # 置いている。先に来るアイコン側は表示文字列が空なので、それを
+            # 残すと名前で見分けられなくなる。空でない方を採る。
+            if text and not found[url]["text"]:
+                found[url]["text"] = text
+            continue
+        found[url] = {"url": url, "text": text}
+        links.append(found[url])
     return links
 
 
 def score(link: dict) -> int:
-    haystack = f"{link['text']} {urllib.request.unquote(link['url'])}"
+    haystack = f"{link['text']} {unquote(link['url'])}"
     return sum(1 for keyword in _KEYWORDS if keyword in haystack)
 
 
@@ -193,7 +217,7 @@ def main() -> int:
     report["sha256"] = digest
     report["size"] = len(data)
     report["version"] = read_version(data)
-    report["fileName"] = os.path.basename(link["url"].split("?")[0])
+    report["fileName"] = spreadsheet_name(link["url"])
 
     if digest == source.get("sha256"):
         report["status"] = "unchanged"
@@ -230,8 +254,10 @@ def write(path: str, report: dict) -> int:
     if step_output:
         with open(step_output, "a", encoding="utf-8") as f:
             f.write(f"status={report['status']}\n")
-    # ここで失敗（非 0）にはしない。「取れなかった」「絞れなかった」も
-    # ワークフローが issue として人に伝える材料であって、CI の赤ではない。
+    # ここでは失敗（非 0）にしない。「取れなかった」ときも issue を立てて
+    # から落としたいので、赤にするのはワークフローの最後の段が行う。
+    # status を見ずにこのスクリプトの終了状態だけを見ると、確認できて
+    # いないことを見落とすので注意（status == "problem" は失敗として扱う）。
     return 0
 
 

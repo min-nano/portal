@@ -6,7 +6,11 @@ name: Worksheet update check
 #
 #   配布ページと同じ  → 何もしない（ログだけ）
 #   違うものが出ている → 同梱ファイルを差し替えた PR を出す
-#   ページが読めない   → issue を立てる（取得失敗・リンクを絞れない など）
+#   ページが読めない   → issue を立てたうえで、この実行自体を失敗にする
+#                        （取得失敗・リンクを絞れない など）
+#
+# 最後のものを成功のまま終えると、確認できていないことに気付けない
+# （「緑だから最新版のままだ」と読めてしまう）。issue と併せて赤にする。
 #
 # PR には「雛形の番人テスト」（backend/tests/test_wall_quantity_template.py）の
 # 結果を添える。GITHUB_TOKEN で作った PR では CI が自動で走らないため、
@@ -156,3 +160,14 @@ jobs:
                 body,
               });
             }
+
+      - name: Fail when the latest version could not be confirmed
+        # 最新版を確認できたとき（同じ・違う）以外は、この実行を失敗にする。
+        # 成功のまま終わると「見に行けなかった」ことが緑に埋もれてしまい、
+        # 古い版を配り続けていても誰も気付かない。issue を立てた後に落とす。
+        if: steps.check.outputs.status != 'unchanged' && steps.check.outputs.status != 'updated'
+        run: |
+          set -euo pipefail
+          message="$(python3 -c "import json; print(json.load(open('worksheet-check.json'))['message'].replace(chr(10), ' / '))")"
+          echo "::error::配布ページの表計算ツールが最新版かどうかを確認できませんでした: ${message}"
+          exit 1
