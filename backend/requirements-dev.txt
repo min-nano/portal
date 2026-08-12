@@ -3,3 +3,5 @@
 -r requirements.txt
 pytest>=9.1.1,<10
 httpx>=0.28.1,<1
+# カバレッジ計測（CI の Backend ジョブと、手元の `pytest --cov=app`）。
+pytest-cov>=7.1.0,<8

@@ -1,12 +1,37 @@
 name: Tests
 
+# 正しさを見る CI。テストを走らせ、そのついでにカバレッジを測り、PR に
+# 1 枚の表として貼る。ジョブは「役割」で分かれていて、テストの実行は
+# 各スイートのジョブで **1 回だけ**、coverage ジョブは何もビルドせず何も
+# 実行しない（測った結果を報告するだけ）:
+#
+#   test-core / test-backend / test-frontend
+#       それぞれのテストを走らせる。カバレッジ計測はテスト実行と同じ 1 回に
+#       相乗りさせ（Rust は cargo-llvm-cov、Python は pytest-cov、画面は
+#       @vitest/coverage-v8）、結果の Cobertura XML を成果物として渡す。
+#       ここが赤いのは **テストが落ちた**（またはカバレッジを測れなかった）
+#       という意味。
+#   test-firestore-rules
+#       エミュレータでルールを検証する。行カバレッジという概念が無いので
+#       （測るのはルールの評価であってコードの行ではない）表には出ない。
+#   coverage
+#       上の 3 つが通ってから、その計測を集計し、この PR が変えた行の
+#       カバレッジ（diff-cover）と合わせて 1 つのコメントにする。
+#       コンパイラもテストランナーも動かさないので、ここが赤いのは
+#       **報告の失敗か、しきい値割れ（表の 🔴）** であってテストの失敗ではない。
+#
+# カバレッジは GitHub Actions の中だけで完結する（Codecov 等の外部サービスに
+# 依存しない）。レポートは貼り替え式の PR コメント 1 つと、成果物として残る
+# XML の 2 か所に出る。
+
 on:
   push:
     branches:
       - main
   pull_request:
 
-# The test jobs only need to read the repository contents.
+# 既定はテストジョブに必要な最小限。coverage ジョブだけが PR コメントの
+# ために pull-requests: write を追加で持つ。
 permissions:
   contents: read
 
@@ -16,14 +41,48 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install cargo-llvm-cov
+        # カバレッジ計測用。ビルド済みバイナリをバージョンと SHA-256 を固定して
+        # 取ってくる（`cargo install` は数分かかるうえ、第三者のアクションを
+        # 増やしたくない）。更新するときは URL のバージョンと下の checksum を
+        # 一緒に差し替えること。
+        env:
+          VERSION: '0.8.7'
+          CHECKSUM: >-
+            9a75fe29538d3800b3da57f6f6efb64cba5c720a257bf0cb8b51f39d495a9168
+        run: |
+          set -euo pipefail
+          url="https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${VERSION}/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL "$url" -o cargo-llvm-cov.tar.gz
+          echo "${CHECKSUM}  cargo-llvm-cov.tar.gz" | sha256sum --check --strict
+          mkdir -p "$HOME/.cargo/bin"
+          tar xzf cargo-llvm-cov.tar.gz -C "$HOME/.cargo/bin"
+          rm cargo-llvm-cov.tar.gz
       - name: Run tests
         # 釘配列諸定数の計算そのものを検証するのはここだけ（グレー本の計算例・
         # 各関数・入力検証）。画面もサーバも、この実装を wasm として動かす。
         # toolchain は core/rust-toolchain.toml で固定してあり、cargo を呼べば
         # rustup がそれを取ってくる。
+        #
+        # cargo llvm-cov は cargo test をカバレッジ計測付きで走らせる（テストの
+        # 実行はこの 1 回だけ）。計測には llvm-tools が要る。
         run: |
+          set -euo pipefail
           cd core
-          cargo test
+          rustup component add llvm-tools-preview
+          cargo llvm-cov --cobertura --output-path coverage.xml
+      - name: Normalize coverage paths
+        # XML 中のパスをリポジトリのルート基準に直す。3 スイートの計測を
+        # 1 つの表と 1 回の diff-cover にまとめるための前処理。
+        run: |
+          python3 .github/scripts/coverage.py normalize core/coverage.xml \
+            --output coverage-core.xml
+      - name: Upload coverage measurement
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-core
+          path: coverage-core.xml
+          if-no-files-found: error
 
   test-backend:
     name: Backend (pytest)
@@ -44,9 +103,25 @@ jobs:
           cd backend
           pip install -r requirements-dev.txt
       - name: Run tests
+        # --cov-branch まで測るのは、分岐（例外処理・条件分岐）の取りこぼしが
+        # 行だけでは見えないため。XML は PR のカバレッジコメント用、term は
+        # このログでファイル別に見るため。
         run: |
           cd backend
-          python -m pytest -q
+          python -m pytest -q \
+            --cov=app --cov-branch \
+            --cov-report=term-missing:skip-covered \
+            --cov-report=xml:coverage.xml
+      - name: Normalize coverage paths
+        run: |
+          python3 .github/scripts/coverage.py normalize backend/coverage.xml \
+            --output coverage-backend.xml
+      - name: Upload coverage measurement
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-backend
+          path: coverage-backend.xml
+          if-no-files-found: error
 
   test-frontend:
     name: Frontend (vitest + build)
@@ -69,9 +144,21 @@ jobs:
           cd frontend
           npm ci
       - name: Run tests
+        # カバレッジの設定（対象・出力形式）は frontend/vite.config.js にある。
         run: |
           cd frontend
-          npm test
+          npm run test:coverage
+      - name: Normalize coverage paths
+        run: |
+          python3 .github/scripts/coverage.py normalize \
+            frontend/coverage/cobertura-coverage.xml \
+            --output coverage-frontend.xml
+      - name: Upload coverage measurement
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-frontend
+          path: coverage-frontend.xml
+          if-no-files-found: error
       - name: Build
         # ビルドが通ること自体をスモークテストとして確認する。キーはダミーでよい。
         env:
@@ -106,3 +193,228 @@ jobs:
         run: |
           cd firestore
           npm test
+
+  coverage:
+    name: Coverage report
+    # 3 つのテストジョブが通ってから走る（それらの計測がこのジョブの入力）。
+    # したがってここの赤は「報告の失敗かしきい値割れ」であって、テストの
+    # 失敗ではない。ここでは何もビルドせず、テストも走らせない。
+    needs: [test-core, test-backend, test-frontend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # カバレッジコメントの投稿・貼り替えに要る。
+      pull-requests: write
+    steps:
+      - name: Checkout
+        # 全履歴（fetch-depth: 0）で取る。diff-cover は「この PR が変えた行」
+        # だけを見るので、ベースブランチとのマージベースが手元に要る。浅い
+        # クローンを後から深めるやり方は、履歴の浅いリポジトリでマージベース
+        # に届かず diff-cover が止まることがあるので採らない。このリポジトリの
+        # 履歴は小さく、全部取っても誤差の範囲。
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Install reporting tools
+        # diff-cover は Python の CLI。pipx（ランナーに同梱）で入れると
+        # PEP 668 の externally-managed-environment を避けられる。
+        # 計測は済んでいるので、コンパイラも計測ツールも要らない。
+        run: pipx install diff-cover
+      - name: Download coverage measurements
+        # 3 つのテストジョブが上げた Cobertura XML（パスはリポジトリ相対に
+        # 正規化済み）を、チェックアウトの隣に展開する。
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+          path: .
+      - name: Summarize coverage
+        run: |
+          python3 .github/scripts/coverage.py summary \
+            --output coverage-summary.json \
+            core=coverage-core.xml \
+            backend=coverage-backend.xml \
+            frontend=coverage-frontend.xml
+      - name: Compute diff coverage vs. base branch
+        # この PR が足した・変えた行だけのカバレッジ。3 つの計測をまとめて
+        # 渡せるのは、パスをリポジトリ相対に正規化してあるため。push（main）の
+        # ときは比べる相手がいないので測らない。
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          # チェックアウトは全履歴なのでマージベースは手元にある。origin/<base>
+          # として解決できるよう、ベースブランチだけ remotes へ写す。
+          git fetch --no-tags origin \
+            "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          diff-cover coverage-core.xml coverage-backend.xml \
+            coverage-frontend.xml \
+            --compare-branch "origin/$BASE_REF" \
+            --total-percent-float \
+            --format "json:diff-cover.json" \
+            --fail-under 0
+      - name: Upload coverage report
+        # 集計と差分。スイートごとの生の計測は各テストジョブの成果物として
+        # すでに残っている。
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-report
+          path: |
+            coverage-summary.json
+            diff-cover.json
+          if-no-files-found: ignore
+      - name: Report coverage & enforce thresholds
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+
+            // 自分の前のコメントを見つけて貼り替えるための目印。PR には
+            // 常に最新のカバレッジコメントが 1 つだけ残る。
+            const marker = '<!-- coverage-report -->';
+
+            const pct = (n) =>
+              (typeof n === 'number') ? `${n.toFixed(1)}%` : '—';
+
+            // 行カバレッジのしきい値（%）。green 以上なら 🟢、yellow 以上なら
+            // 🟡、それ未満は 🔴 でジョブが落ちる。yellow は「ここを割ったら
+            // 落とす」下限、green は「目指す水準」。数字は現状（core 95 /
+            // backend 92 / frontend 47）から、下げ止まりを検出できる位置に
+            // 置いてある。上がったら一緒に上げること。
+            //
+            // 画面（frontend）の下限が低いのは、ブラウザの入口
+            // （各ツールの main.js・auth.js・api.js など）を単体テストが
+            // 読み込まないため。ロジックは form-logic.js / form-dom.js 側へ
+            // 寄せてあり、そちらはほぼ 100% 覆われている。
+            //
+            // 分岐（branches）は参考値なので常に ⚪、しきい値も持たない
+            // （Rust の計測に分岐の情報が無く、3 スイートで足すと意味の違う
+            // 数を混ぜることになるため）。
+            const THRESHOLDS = {
+              core: { green: 95, yellow: 90 },
+              backend: { green: 95, yellow: 85 },
+              frontend: { green: 90, yellow: 45 },
+              overall: { green: 90, yellow: 70 },
+              diff: { green: 100, yellow: 80 },
+            };
+            const badge = (metric, n) => {
+              const t = THRESHOLDS[metric];
+              if (!t || typeof n !== 'number') return '⚪';
+              if (n >= t.green) return '🟢';
+              if (t.yellow !== undefined && n >= t.yellow) return '🟡';
+              return '🔴';
+            };
+
+            // 表は 1 つ。スイートごとの行カバレッジ → 全体 → 参考の分岐 →
+            // 最後にこの PR が変えた行のカバレッジ、の順に積む。
+            const LABELS = {
+              core: 'Core (Rust)',
+              backend: 'Backend (Python)',
+              frontend: 'Frontend (JS)',
+            };
+            const rows = [];
+
+            try {
+              const s = JSON.parse(
+                fs.readFileSync('coverage-summary.json', 'utf8'));
+              for (const suite of s.suites) {
+                rows.push([
+                  `Lines — ${LABELS[suite.name] ?? suite.name}`,
+                  `${badge(suite.name, suite.line_percent)} ` +
+                    `${pct(suite.line_percent)}`,
+                  `${suite.line_covered} / ${suite.line_total}`,
+                ]);
+              }
+              rows.push([
+                'Lines (overall)',
+                `${badge('overall', s.overall.line_percent)} ` +
+                  `${pct(s.overall.line_percent)}`,
+                `${s.overall.line_covered} / ${s.overall.line_total}`,
+              ]);
+              if (s.overall.branch_total > 0) {
+                rows.push([
+                  'Branches (overall)',
+                  `⚪ ${pct(s.overall.branch_percent)}`,
+                  `${s.overall.branch_covered} / ${s.overall.branch_total}`,
+                ]);
+              }
+            } catch (e) {
+              core.warning(`Could not read coverage summary: ${e}`);
+            }
+
+            try {
+              const d = JSON.parse(fs.readFileSync('diff-cover.json', 'utf8'));
+              const total = d.total_num_lines;
+              const covered = total - d.total_num_violations;
+              if (total > 0) {
+                const p = d.total_percent_covered;
+                rows.push([
+                  '**Diff (changed lines)**',
+                  `${badge('diff', p)} **${pct(p)}**`,
+                  `**${covered} / ${total}**`,
+                ]);
+              } else {
+                rows.push([
+                  '**Diff (changed lines)**', '⚪ **—**',
+                  '_no covered lines changed_',
+                ]);
+              }
+            } catch (e) {
+              core.warning(`Could not read diff-cover report: ${e}`);
+            }
+
+            // 🔴 が 1 つでもあれば、しきい値割れ。
+            const hasRed = rows.some((r) => r[1].includes('🔴'));
+
+            const table = rows.length
+              ? [
+                  '| Metric | Coverage | Covered / Total |',
+                  '| --- | ---: | ---: |',
+                  ...rows.map((r) => `| ${r[0]} | ${r[1]} | ${r[2]} |`),
+                ].join('\n')
+              : '_Coverage report unavailable._';
+
+            // コメントは同一リポジトリからの PR にだけ貼る（fork からの PR は
+            // トークンが読み取り専用で貼れない。しきい値の判定は下で必ず走る）。
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const isSameRepoPr =
+              pr && pr.head.repo.full_name === `${owner}/${repo}`;
+
+            if (isSameRepoPr) {
+              const sha = pr.head.sha.slice(0, 7);
+              const body = [
+                marker,
+                '### 🧪 Test coverage report',
+                '',
+                table,
+                '',
+                'スイートごとの行カバレッジと、この PR が変えた行だけの' +
+                  'カバレッジ（ベースブランチとの差分）。' +
+                  'Firestore ルールはエミュレータでの評価であり' +
+                  '行カバレッジを出せないため、この表には含まない。',
+                '',
+                `<sub>Generated by the \`coverage\` job · commit ${sha}</sub>`,
+              ].join('\n');
+
+              const { data: comments } = await github.rest.issues.listComments(
+                { owner, repo, issue_number: pr.number, per_page: 100 });
+              const existing = comments.find(
+                (c) => c.body && c.body.includes(marker));
+
+              if (existing) {
+                await github.rest.issues.updateComment(
+                  { owner, repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment(
+                  { owner, repo, issue_number: pr.number, body });
+              }
+            }
+
+            // 🔴 があればジョブを落とす（表示するだけでなく、CI で守る）。
+            if (hasRed) {
+              core.setFailed(
+                'Coverage below threshold: one or more metrics are 🔴. ' +
+                'See the coverage table above.');
+            }
