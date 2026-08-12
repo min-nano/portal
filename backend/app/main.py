@@ -24,6 +24,7 @@ from . import (
     panel_shear,
     settings_store,
     structural_cert,
+    wall_quantity,
 )
 from .clerk_auth import AuthError, User
 from .excel_report import ReportError
@@ -31,6 +32,7 @@ from .google_drive import XLSX_MIME, DriveError
 from .panel_shear import PanelShearError
 from .settings_store import SettingsError
 from .structural_cert import CertificateError
+from .wall_quantity import WallQuantityError
 
 TOOL_EXCEL_REPORT = "excel-report-formatter"
 _TOOL_PREFIX = f"/api/tools/{TOOL_EXCEL_REPORT}"
@@ -40,6 +42,9 @@ _CERT_PREFIX = f"/api/tools/{TOOL_STRUCTURAL_CERT}"
 
 TOOL_PANEL_SHEAR = "timber-panel-shear-calculator"
 _PANEL_PREFIX = f"/api/tools/{TOOL_PANEL_SHEAR}"
+
+TOOL_WALL_QUANTITY = "wall-quantity-calculator"
+_WALL_PREFIX = f"/api/tools/{TOOL_WALL_QUANTITY}"
 
 # アップロードされた PDF の上限。証明書は 1 ページなので十分に余裕がある。
 _MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -83,6 +88,11 @@ async def _certificate_error_handler(_request: Request, exc: CertificateError):
 
 @app.exception_handler(PanelShearError)
 async def _panel_shear_error_handler(_request: Request, exc: PanelShearError):
+    return _error_response(exc.status, str(exc))
+
+
+@app.exception_handler(WallQuantityError)
+async def _wall_quantity_error_handler(_request: Request, exc: WallQuantityError):
     return _error_response(exc.status, str(exc))
 
 
@@ -640,3 +650,38 @@ async def parse_drive_panel_shear_report(
         "file": {"id": file_id, "name": meta.get("name", "")},
         "suggestedFileName": meta.get("name", ""),
     }
+
+
+# --- 小規模木造建築物 必要壁量 計算ツール --------------------------------------
+#
+# 提出物は「日本住宅・木材技術センターが配布している表計算ツールに値を入れたもの」
+# そのものなので、雛形は Drive ではなくリポジトリに同梱した配布物を使い、
+# Excel 形式のまま返す（Google スプレッドシート等へは変換しない）。共有設定も
+# Drive アクセスも要らないので、このツールにあるのは config と生成の 2 つだけ。
+# 必要壁量の計算は配布物の数式が行う（このツールは計算し直さない）。
+
+
+@app.get(f"{_WALL_PREFIX}/config")
+async def get_wall_quantity_config(user: User = Depends(require_user)):
+    """フォーム定義（節・入力欄・選択肢・条件）と、同梱している配布物の版を配る。"""
+    return wall_quantity.form_config()
+
+
+@app.post(f"{_WALL_PREFIX}/worksheets")
+async def create_wall_quantity_worksheet(
+    request: Request, user: User = Depends(require_user)
+):
+    """フォーム入力を書き込んだ表計算ツール（xlsx）を返す。"""
+    data = wall_quantity.normalize_data(await _json_body(request))
+    wall_quantity.validate(data)
+    xlsx_bytes = wall_quantity.build_worksheet(data)
+
+    return Response(
+        content=xlsx_bytes,
+        media_type=XLSX_MIME,
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename*=UTF-8''{quote(wall_quantity.file_name(data))}"
+            )
+        },
+    )

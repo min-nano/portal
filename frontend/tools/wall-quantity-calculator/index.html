@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>小規模木造建築物 必要壁量 計算ツール</title>
+</head>
+<body>
+  <header class="portal-header">
+    <span class="title"><a href="/">%PORTAL_TITLE%</a></span>
+    <span class="account" id="accountArea" hidden>
+      <span id="accountEmail"></span>
+      <button type="button" id="signOutBtn">サインアウト</button>
+    </span>
+  </header>
+
+  <div id="authGate" class="auth-gate" hidden>
+    <p class="note">社内の Google アカウントでサインインしてください。</p>
+    <div class="clerk-mount"></div>
+  </div>
+
+  <div id="app" class="container" hidden>
+    <!-- 同梱している表計算ツールの版は、雛形と同じくタイトル横に小さく置く。
+         配布元へのリンクも添えて、原本を確かめられるようにする。 -->
+    <div class="page-head">
+      <h2>必要壁量 表計算ツール 入力フォーム</h2>
+      <div class="template-chip">
+        <span class="label">表計算ツール:</span>
+        <span id="worksheetInfo"></span>
+      </div>
+    </div>
+
+    <p class="hint">
+      入力した値を、公益財団法人日本住宅・木材技術センターが配布している
+      「壁量等の基準(令和7年施行)に対応した表計算ツール（多機能版）」へ書き込んだ
+      Excel ファイル (.xlsx) をダウンロードします。提出物は配布物そのものなので、
+      必要壁量・柱の小径の計算は、ダウンロードしたファイルを Excel で開いた時点で
+      配布物の数式が行います。
+    </p>
+
+    <form id="worksheetForm" onsubmit="return false;">
+      <label for="buildingSelect">建物の種別</label>
+      <select id="buildingSelect"></select>
+
+      <div id="formArea"></div>
+
+      <button type="button" id="submitBtn" disabled>Excel出力</button>
+    </form>
+
+    <ul id="errors" class="warnings" hidden></ul>
+    <div id="message"></div>
+  </div>
+
+  <script type="module" src="/src/wall-quantity-calculator/main.js"></script>
+</body>
+</html>

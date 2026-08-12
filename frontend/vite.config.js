@@ -46,6 +46,10 @@ export default defineConfig(({ mode }) => ({
           import.meta.dirname,
           'tools/timber-panel-shear-calculator/index.html'
         ),
+        'wall-quantity-calculator': resolve(
+          import.meta.dirname,
+          'tools/wall-quantity-calculator/index.html'
+        ),
       },
     },
   },

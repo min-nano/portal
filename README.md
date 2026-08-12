@@ -2,7 +2,7 @@
 
 社内向けツールをまとめる Web ポータルです。GAS（Google Apps Script）で運用してきたツールを、デプロイ・URL 管理の制約が少ない構成へ移行していきます。
 
-最初のツールとして、[gas-addon-excel-report-formatter](https://github.com/h-ikeda/gas-addon-excel-report-formatter) と同等の **現況検査レポート作成ツール**（傾斜測定 報告フォーム → Excel 出力）を実装しています。続いて **構造計算安全証明書 作成ツール**（第四号書式の証明書 → PDF を Drive へ保存 / 既存 PDF の編集）、[gas-timber-panel-shear-calculator](https://github.com/min-nano/gas-timber-panel-shear-calculator) から移植した **面材張り耐力要素 釘配列諸定数・大壁 計算ツール**（グレー本 3.2・3.3 の計算 → 計算書 PDF）を追加しました。
+最初のツールとして、[gas-addon-excel-report-formatter](https://github.com/h-ikeda/gas-addon-excel-report-formatter) と同等の **現況検査レポート作成ツール**（傾斜測定 報告フォーム → Excel 出力）を実装しています。続いて **構造計算安全証明書 作成ツール**（第四号書式の証明書 → PDF を Drive へ保存 / 既存 PDF の編集）、[gas-timber-panel-shear-calculator](https://github.com/min-nano/gas-timber-panel-shear-calculator) から移植した **面材張り耐力要素 釘配列諸定数・大壁 計算ツール**（グレー本 3.2・3.3 の計算 → 計算書 PDF）、**小規模木造建築物 必要壁量 計算ツール**（フォーム入力 → 日本住宅・木材技術センターの表計算ツールに記入した Excel を出力）を追加しました。
 
 ## 🏗 システム構成
 
@@ -12,7 +12,7 @@
 | 認証 | **Clerk**（Google ログインのみ有効化） | サインインとセッション JWT の発行 |
 | バックエンド | **Cloud Run**（FastAPI / Python） | Clerk JWT の検証、Excel 生成（openpyxl）、PDF 生成・解析（Docs API + pypdf / pdfminer.six）、Drive アクセス |
 | 計算 | **Rust → wasm**（`core/`） | 釘配列諸定数と大壁の計算・入力の解釈・表示の桁揃え。**同じ .wasm を画面とバックエンドの両方が動かす**（「計算の一元管理（Rust → wasm）」参照） |
-| データ保存 | **Google Workspace の Drive** / Firestore | Drive: Excel 雛形（社外秘フォーマット）・証明書の雛形（Google ドキュメント）・生成した PDF。Firestore: 全利用者共通の設定 |
+| データ保存 | **Google Workspace の Drive** / Firestore / リポジトリ同梱 | Drive: Excel 雛形（社外秘フォーマット）・証明書の雛形（Google ドキュメント）・生成した PDF。Firestore: 全利用者共通の設定。同梱: 一般に配布されている必要壁量の表計算ツール（`backend/app/templates/`。誰でも同じものを配布ページから入手できるので、Drive に置かず版を固定して持つ） |
 
 ### セキュリティ / 権限モデル（GAS 版との対応）
 
@@ -113,6 +113,28 @@ GAS 版の機能をそのまま移植しています。
 
 > **計算書 PDF のフォントについて**: 本文のフォントは **Noto Sans JP**（SIL Open Font License 1.1）を `backend/app/fonts/` に同梱し、**その PDF で実際に使った文字だけを取り出したサブセットを埋め込みます**。閲覧側の環境に日本語フォントがあるかどうかに関係なく、いつでも同じ字形で表示されます。同梱フォントは 5.8MB ありますが、埋め込まれるのは使った文字だけなので計算書 1 通は数十 KB です（切り出しは fontTools が行い、生成 1 回あたり 0.1 秒程度）。
 
+### 小規模木造建築物 必要壁量 計算ツール
+
+公益財団法人日本住宅・木材技術センターが配布している **[壁量等の基準(令和7年施行)に対応した表計算ツール（多機能版）](https://www.howtec.or.jp/publics/index/441/)** に、フォームの入力をそのまま書き込んだ Excel ファイルを作ります。
+
+**このツールは計算をしません。** 必要壁量 Lw と柱の小径は、**配布物の数式**が計算します（ダウンロードした xlsx を Excel で開いた時点で計算されます）。この基準で必要壁量を出すと「その表計算ツールに値を入力して提出してほしい」と求められることがあり、そのときの提出物は**配布物そのもの**です。だからこのツールがやるのは、入力を楽にすることと、入れる場所を間違えないことだけです。
+
+* 平屋建て / 2階建てをページの上で切り替える（配布物のシートに対応）
+* 「0. 設計の用途」（住宅性能表示制度を利用 / 非住宅（事務所建築）/ 左記以外）、「2-1〜2-3」の算定方法は、**配布物のチェックボックスにそのまま反映**する
+* 配布物のプルダウン（屋根・外壁の仕様、断熱材、太陽光発電設備等、標準せん断力係数など）はそのままの選択肢で出す。柱材の **JAS 規格 → 樹種等 → 等級等** は、配布物の `INDIRECT` と同じ連動で候補が絞られる
+* 配布物が「入力が足りないと出力欄が空になる」形で示している条件（多雪区域なら垂直積雪量と積雪単位荷重、太陽光を「あり(任意入力)」にしたなら設備等の質量、断熱材を「任意入力」にしたなら密度と厚さ）を、**出力の前に日本語で確かめる**
+* 入力できない欄（用途を選ぶまで出ない地震地域係数・多雪区域、使わない算定方法の欄）は、配布物の注意書きどおり**空のまま**にする
+
+**ダウンロードするのは Excel 形式（.xlsx）のままです**。Google スプレッドシート等へは変換しません。
+
+**配布物は書き換えません**。リポジトリに同梱した原本（`backend/app/templates/wall-quantity/worksheet.xlsx`）を複製し、その複製の入力欄だけに値を書きます。チェックボックス・図・印刷設定・シート保護を含めて配布物のままなので、受け取る側には見慣れた表計算ツールが届きます。
+
+> **なぜ openpyxl を使わないのか**: この配布物は、フォームコントロールのチェックボックス・EMF の図・VML・印刷設定を含んだブックです。openpyxl で読み書きすると、これらは復元されません（実測で `ctrlProps` / `vmlDrawing` / `drawing` / `media` / `printerSettings` / `sharedStrings` が丸ごと落ち、チェックボックスも図も消えます）。そこで、`backend/app/xlsx_fill.py` が **zip の中の XML を触る場所だけ書き換えます**。出来上がるファイルは、配布物と比べて「入力したシート・チェックボックスの状態・再計算の指示」以外は 1 バイトも変わりません。
+
+**共有設定も Drive アクセスもありません**。雛形は Drive ではなくリポジトリに同梱してあるので、このツールを使うのに設定は要りません。同梱している版は画面のタイトル横に出ます（配布元へのリンク付き）。
+
+**配布物の改訂には自動で気付きます**。`.github/workflows/howtec-worksheet-check.yml` が週に 1 度、配布ページを見に行きます。詳しくは「表計算ツールが改訂されたときの手順」を参照してください。
+
 ## 📁 リポジトリ構成
 
 ```
@@ -121,6 +143,7 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   tools/excel-report-formatter/index.html
   tools/structural-cert-formatter/index.html
   tools/timber-panel-shear-calculator/index.html
+  tools/wall-quantity-calculator/index.html
   src/auth.js                 # Clerk（サインインゲート・トークン取得）
   src/api.js                  # Bearer 付き fetch ラッパー
   src/google-picker.js        # 公式 Google Picker（Drive のファイル選択）
@@ -129,6 +152,7 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   src/excel-report-formatter/ # フォーム本体（GAS 版 index.html の移植）
   src/structural-cert-formatter/  # 構造計算安全証明書のフォーム・編集画面
   src/timber-panel-shear-calculator/  # 釘配列諸定数・大壁の入力・結果表示・釘配列図
+  src/wall-quantity-calculator/   # 必要壁量 表計算ツールの入力フォーム
 backend/                      # Cloud Run サービス (FastAPI)
   app/main.py                 # API ルート
   app/clerk_auth.py           # Clerk JWT 検証
@@ -143,6 +167,10 @@ backend/                      # Cloud Run サービス (FastAPI)
   app/nail_core.py            # 計算（唯一の実装＝wasm）を呼ぶ薄い口
   app/panel_shear.py          # 計算書 PDF の組み立てと読み戻し・保存時の突き合わせ
   app/pdf_write.py            # 日本語まじりの PDF を組み立てる最小限のライター
+  app/wall_quantity.py        # 必要壁量 表計算ツールへの記入（配布物の複製に値を書く）
+  app/wall_quantity_mapping.json  # 表計算ツールの入力欄・選択肢・条件（単一の情報源）
+  app/xlsx_fill.py            # xlsx を壊さずに指定セルだけ書き換える最小限のエディタ
+  app/templates/wall-quantity/  # 配布物の表計算ツールとその出所（source.json）
   app/fonts/                  # 計算書 PDF に埋め込む日本語フォント（Noto Sans JP, OFL 1.1）
   app/wasm/                   # core/ をビルドした .wasm の置き場（コミットしない）
   .gcloudignore               # Cloud Build へ送るものの指定（app/wasm/ を落とさないため）
@@ -160,10 +188,12 @@ firestore/                    # Firestore セキュリティルールとその�
   tests/rules.test.js         # エミュレータでルールを検証
 firebase.json                 # Hosting 設定（/api/** → Cloud Run リライト）・Firestore ルールの参照
 .github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml・preview-cleanup.yml（PR プレビュー）
+                              # howtec-worksheet-check.yml（表計算ツールの改訂の定期確認）
 .github/scripts/              # ワークフロー間で共有するスクリプト
   require-vars.sh             # 必須のリポジトリ変数が空でないことの確認
   clerk-issuer.sh             # Publishable Key から CLERK_ISSUER を導出
   coverage.py                 # カバレッジ XML のパス正規化と集計（テストのカバレッジ）
+  check_howtec_worksheet.py   # 配布ページを見て表計算ツールの改訂を拾う
 ```
 
 ## ⚙️ セットアップ
@@ -575,7 +605,8 @@ cd core && cargo test
 # 無ければ、その旨のエラーで落ちる。
 
 # バックエンド: API 経由の Excel 生成・証明書 PDF の生成と解析・計算書 PDF の往復と
-# 保存時の突き合わせ・雛形設定・JWT 検証
+# 保存時の突き合わせ・雛形設定・JWT 検証、必要壁量ツール（同梱した配布物へ実際に
+# 書き込み、触っていない部品が 1 つも欠けないことまで確かめる）
 # （Drive/Docs/Firestore と認証はテスト内でフェイク）
 cd backend && python -m pytest
 
@@ -691,6 +722,61 @@ for line in pages[0].lines:
 
 テストでは雛形そのものを同梱せず（個人名・登録番号が入るため）、同じレイアウトの PDF を `backend/tests/pdf_util.py` がその場で組み立てています。
 
+## 📐 必要壁量の表計算ツール (`backend/app/wall_quantity_mapping.json`)
+
+必要壁量ツールが扱うのは、**リポジトリに同梱した配布物**（`backend/app/templates/wall-quantity/worksheet.xlsx`）です。書き込み先のセル・選択肢・条件・画面の並びは、すべて `wall_quantity_mapping.json` にあります。バックエンドはこれを `/api/tools/wall-quantity-calculator/config` でそのまま配り、画面はそれを読んでフォームを組み立てるので、**画面側に項目はありません**（`mapping.json` と同じ考え方）。
+
+配布物の出所（配布ページ・版・sha256）は `backend/app/templates/wall-quantity/source.json` に控えてあります。更新の定期確認はこのファイルを基準にします。
+
+### 表計算ツールが改訂されたときの手順
+
+配布物は改訂されます（更新履歴シートに版と内容が載ります）。追従は次の 3 段で行います。
+
+**1. 気付く（自動）**
+
+`.github/workflows/howtec-worksheet-check.yml` が週に 1 度、配布ページを見に行きます。
+
+| 見た結果 | すること |
+| --- | --- |
+| 同梱しているものと同じ | 何もしない（ログだけ） |
+| 違うファイルが公開されている | 同梱ファイルと `source.json` を差し替えた **PR を出す** |
+| ページが読めない・リンクを 1 つに絞れない | **issue を立てる**（同じ題の issue があればコメントを足す） |
+
+**2. 入力欄がずれていないかを見る（自動）**
+
+差し替えの PR には、**雛形の番人テスト**（`backend/tests/test_wall_quantity_template.py`）の結果が本文に書かれます。このテストは、マッピングが指しているセルに記録どおりのラベル・選択肢が入っているかを、新しいファイルに対して確かめます。
+
+* ✅ 通っている → 入力欄の位置は変わっていません。更新履歴シートの内容（計算方法の変更など）だけ確かめてマージできます。
+* 🔴 落ちている → 入力欄か選択肢が動いています。次の 3 を行ってからマージしてください。
+
+> GITHUB_TOKEN で作った PR では CI が自動で走らないため、この確認をワークフローの中で済ませて本文に書いています。
+
+**3. マッピングを読み直す（手作業）**
+
+見た目のラベルで判断すると解釈を誤ります。**配布物の「入力できるセル（保護が外れているセル）」を正として**、入力欄の位置を決めてください。配布物は全シートが保護されていて、**入力欄だけがアンロック**されているので、そこが機械的に分かります。
+
+```python
+# 入力欄（アンロックされているセル）と、その結合範囲・書式を並べる
+import openpyxl
+wb = openpyxl.load_workbook('backend/app/templates/wall-quantity/worksheet.xlsx')
+ws = wb['表計算ツール（平屋建て）']
+merged = {str(m).split(':')[0]: str(m) for m in ws.merged_cells.ranges}
+for row in ws.iter_rows(max_col=23):
+    for c in row:
+        if c.protection.locked is False:
+            print(c.coordinate, merged.get(c.coordinate, ''), c.number_format)
+
+# プルダウン（選択肢の正）。formula1 が選択肢の在り処、sqref が対象のセル。
+for dv in ws.data_validations.dataValidation:
+    print(dv.sqref, dv.type, dv.formula1)
+```
+
+`INDIRECT(...)` を使ったプルダウン（柱材の樹種等・等級等）は、`柱の圧縮基準強度` シートの名前付き範囲を引いています。JAS 規格ごとの範囲は同シートの `I〜M` 列で、番人テストがその中身とマッピングの `species` / `grade` を突き合わせます。
+
+チェックボックス（用途・算定方法）は、リンク先のセル（`W8` など）で見分けます。`xlsx_fill.py` が「リンクセルの値」「`ctrlProps` の `checked`」「VML の `<x:Checked>`」の 3 か所を揃えるので、マッピングに要るのは **リンクセルの参照だけ**です。
+
+読み直したら `wall_quantity_mapping.json` の `guard`（記録しているラベル）も新しい値に直します。ここは「次に配布物が変わったときに気付くための控え」なので、**中身を確かめたうえで**更新してください。
+
 ## 🧮 計算の一元管理（Rust → wasm）
 
 釘配列諸定数と大壁の計算は、**Rust で書いた 1 つの実装（`core/`）を wasm にして、画面とバックエンドの両方が動かします**。
@@ -784,6 +870,7 @@ open("大壁の計算書.pdf", "wb").write(panel_shear.build_pdf(data, panel_she
     面材張り大壁の詳細計算（同 3.3）は完了。続きは真壁・床/屋根の水平構面
     （グレー本 3.4〜3.6）と、面材・釘・枠材のマスタからの選択
     （GAS 版 ROADMAP のフェーズ 1・3）。
+  - 小規模木造建築物 必要壁量 計算ツール（配布物の表計算ツールへの記入）は完了。
 - [ ] **Phase 3: AI（Gemini API）連携による自動化**
   - 手書き図面の画像から計測値を抽出し、フォームに初期値を自動設定。
 - [ ] **Phase 4: 実運用向けチューニング**
