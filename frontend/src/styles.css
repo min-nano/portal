@@ -94,7 +94,7 @@ button:disabled { background-color: #aaa; }
    欄を残すので、閉じたままでも見分けと修正ができる。 */
 .room { border: 1px solid #d6d6e0; border-radius: 8px; padding: 10px; margin-top: 14px; background: #fafbff; }
 /* 計測値の表を追いながらでも部屋の見出しが見えるよう、開閉の行ごと貼り付ける。 */
-.room::part(head) { position: sticky; top: 0; z-index: 10; align-items: flex-start; background: #fafbff; border-radius: 8px 8px 0 0; padding-bottom: 8px; border-bottom: 1px solid #d6d6e0; margin-bottom: 2px; }
+.room::part(head) { position: sticky; top: 0; z-index: 10; background: #fafbff; border-radius: 8px 8px 0 0; padding-bottom: 8px; border-bottom: 1px solid #d6d6e0; margin-bottom: 2px; }
 .room-head { display: flex; flex-direction: column; gap: 8px; }
 .room-title-row { display: flex; align-items: center; justify-content: space-between; }
 .room-title-row h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -26,9 +26,11 @@ const INTERACTIVE = 'a, button, input, select, textarea, label, summary, [conten
 const STYLE = `
   :host { display: block; }
   :host([hidden]) { display: none; }
+  /* 見出しが折り返しても、つまみと操作ボタンは 1 行目の高さに置く
+     （中央に揃えると、2 行以上の見出しでは行の真ん中まで下がってしまう）。 */
   .head {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     cursor: pointer;
   }
@@ -37,8 +39,8 @@ const STYLE = `
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 1.7em;
-    height: 1.7em;
+    width: 1.5em;
+    height: 1.5em;
     margin: 0;
     padding: 0;
     border: none;
@@ -55,7 +57,16 @@ const STYLE = `
   @media (prefers-reduced-motion: reduce) {
     .chevron { transition: none; }
   }
-  .title { flex: 1 1 auto; min-width: 0; }
+  /* 1 行の見出しはつまみと同じ高さの中で中央に置き、折り返したときだけ
+     上から始まるようにする（つまみの位置は 1 行目のまま）。 */
+  .title {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 1.5em;
+  }
   .actions { flex: none; display: flex; align-items: center; gap: 6px; }
   .body { display: block; }
   :host([collapsed]) .body { display: none; }
