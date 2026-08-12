@@ -244,6 +244,21 @@ def test_pdf_prints_the_inputs_and_the_results():
     assert "0.750834" in text
 
 
+def test_pdf_embeds_the_font_it_uses():
+    """閲覧側に日本語フォントが無くても崩れないよう、字形を PDF が持つ。"""
+    from pypdf import PdfReader
+
+    _, pdf_bytes = build_example_pdf()
+
+    page = PdfReader(io.BytesIO(pdf_bytes)).pages[0]
+    descriptor = page["/Resources"]["/Font"]["/F1"]["/DescendantFonts"][0][
+        "/FontDescriptor"
+    ]
+    assert "/FontFile2" in descriptor
+    # 埋め込むのは使った文字だけなので、計算書 1 通は数十 KB に収まる。
+    assert len(pdf_bytes) < 300 * 1024
+
+
 def test_pdf_round_trips_the_form_input():
     """保存した PDF を開き直せば、入力を完全に復元できる（保存形式そのもの）。"""
     data, pdf_bytes = build_example_pdf()

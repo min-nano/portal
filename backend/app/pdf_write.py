@@ -10,23 +10,25 @@
 
 日本語のフォントについて
 ------------------------
-本文の日本語は Adobe-Japan1 の **標準 CJK フォント**（HeiseiKakuGo-W5）を
-埋め込まずに参照する。フォントファイルを同梱・サブセット化しなくて済む
-一方、実際の字形は閲覧側のフォントで代替されるため、日本語フォントの無い
-環境では字形が置き換わることがある。
+本文のフォントは Noto Sans JP（SIL Open Font License 1.1）を app/fonts に
+同梱し、**その PDF で実際に使った文字だけを取り出したサブセットを埋め込む**。
+閲覧側の環境に日本語フォントがあるかどうかに関係なく、いつでも同じ字形で
+表示されるようにするため（埋め込まずに標準 CJK フォントを参照する方法だと、
+日本語フォントの無い環境で字形が置き換わり、表示が崩れる）。
 
-ToUnicode は付けない。文字コードは既定 CMap（UniJIS-UCS2-H）と
-CIDSystemInfo（Adobe-Japan1）から一意に定まるため、閲覧側は検索・コピー・
-テキスト抽出を正しく行える（Distiller が埋め込みなしの CJK に対して作る
-PDF と同じ構成）。
-
-文字送りは、CID 1〜230（欧文プロポーショナル）を一律 500/1000 em として
-宣言し、それ以外（漢字・かななど）は既定の 1000/1000 em とする。計算書は
-数値の桁を揃えて読む書類なので、欧文が等幅になるのはむしろ都合がよく、
-この 2 種類だけならレイアウトの計算も PDF の宣言と厳密に一致させられる。
+同梱フォントは 5.8MB あるが、埋め込まれるのは使った文字だけなので、計算書
+1 通ぶんのサブセットは数十 KB に収まる。切り出しは fontTools が行い、
+グリフの番号（GID）で文字を書く Identity-H 方式にしたうえで、検索・コピー・
+テキスト抽出のために ToUnicode を必ず付ける。
 """
 
+import hashlib
 import io
+import os
+from dataclasses import dataclass
+
+from fontTools.subset import Options, Subsetter
+from fontTools.ttLib import TTFont
 
 # A4 縦（PDF のユーザー空間 = 1/72 インチ）。
 A4_PORTRAIT = (595.28, 841.89)
@@ -34,26 +36,157 @@ A4_PORTRAIT = (595.28, 841.89)
 # 楕円を 4 本の 3 次ベジェ曲線で近似するときの制御点の比率。
 _KAPPA = 0.5522847498
 
-# 埋め込まずに参照する標準 CJK フォント（Adobe-Japan1）。
-_BASE_FONT = "HeiseiKakuGo-W5"
-# UCS-2（UTF-16BE）のコードをそのまま CID へ写す既定 CMap。文字列は
-# UTF-16BE のバイト列として書けばよく、ToUnicode も恒等写像で済む。
-_ENCODING = "UniJIS-UCS2-H"
+FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "NotoSansJP-Regular.ttf")
+
+# フォントに無い文字（.notdef）を置くときの送り幅 [em]。
+_MISSING_ADVANCE = 0.5
 
 
-def char_width(char: str, size: float) -> float:
-    """1 文字の送り幅 [pt]。フォント辞書の /W 宣言と一致させてある。"""
-    return size * (0.5 if ord(char) < 0x100 else 1.0)
+@dataclass(frozen=True)
+class Subset:
+    """埋め込むサブセットフォントと、PDF が必要とするその情報。"""
+
+    data: bytes  # サブセットした TrueType のバイト列
+    gids: dict[str, int]  # 文字 → グリフ ID
+    widths: dict[int, int]  # グリフ ID → 字幅（1000 単位）
+    name: str  # サブセット接頭辞つきのフォント名
+    bbox: tuple[int, int, int, int]
+    ascent: int
+    descent: int
+    cap_height: int
 
 
-def text_width(text: str, size: float) -> float:
-    """文字列の送り幅 [pt]。右寄せ・中央寄せの位置決めに使う。"""
-    return sum(char_width(c, size) for c in text)
+class Font:
+    """同梱フォント。字幅の問い合わせと、サブセットの切り出しを受け持つ。
+
+    字幅は組版（右寄せ・中央寄せ）のために描画のたびに要るので、フォントは
+    プロセス内で 1 度だけ読み込んで使い回す。サブセットの切り出しは
+    fontTools がフォントを書き換えてしまうため、そのつど元のバイト列から
+    読み直す（同梱フォントは壊さない）。
+    """
+
+    def __init__(self, path: str = FONT_PATH):
+        self._path = path
+        self._raw: bytes | None = None
+        self._font: TTFont | None = None
+        self._units_per_em = 1000
+        self._advances: dict[str, float] = {}
+
+    def _raw_bytes(self) -> bytes:
+        if self._raw is None:
+            with open(self._path, "rb") as f:
+                self._raw = f.read()
+        return self._raw
+
+    def _loaded(self) -> TTFont:
+        if self._font is None:
+            self._font = TTFont(io.BytesIO(self._raw_bytes()), lazy=True)
+            self._units_per_em = self._font["head"].unitsPerEm
+        return self._font
+
+    def advance(self, char: str) -> float:
+        """1 文字の送り幅 [em]。フォントに無い文字は既定値を返す。"""
+        cached = self._advances.get(char)
+        if cached is not None:
+            return cached
+
+        font = self._loaded()
+        glyph_name = font.getBestCmap().get(ord(char))
+        if glyph_name is None:
+            width = _MISSING_ADVANCE
+        else:
+            width = font["hmtx"][glyph_name][0] / self._units_per_em
+        self._advances[char] = width
+        return width
+
+    def text_width(self, text: str, size: float) -> float:
+        """文字列の送り幅 [pt]。右寄せ・中央寄せの位置決めに使う。"""
+        return sum(self.advance(c) for c in text) * size
+
+    def subset(self, chars: set[str]) -> Subset:
+        """使った文字だけを取り出したサブセットを作る。"""
+        font = TTFont(io.BytesIO(self._raw_bytes()))
+        options = Options()
+        # 計算書は本文を横組みで置くだけなので、組版機能・縦組み・ヒントは
+        # すべて落として埋め込むバイト数を抑える。
+        options.layout_features = []
+        options.hinting = False
+        options.glyph_names = False
+        options.drop_tables += ["GSUB", "GPOS", "GDEF", "BASE", "vmtx", "vhea", "VORG"]
+        # フォントに無い文字は、黙って消えるより四角が出たほうが気付ける。
+        options.notdef_outline = True
+
+        subsetter = Subsetter(options=options)
+        subsetter.populate(unicodes={ord(c) for c in chars})
+        subsetter.subset(font)
+
+        output = io.BytesIO()
+        font.save(output)
+
+        units_per_em = font["head"].unitsPerEm
+        scale = 1000 / units_per_em
+        cmap = font.getBestCmap()
+        glyph_order = font.getGlyphOrder()
+        gid_of = {name: index for index, name in enumerate(glyph_order)}
+
+        gids: dict[str, int] = {}
+        widths: dict[int, int] = {}
+        for char in chars:
+            name = cmap.get(ord(char))
+            gid = gid_of.get(name, 0) if name else 0
+            gids[char] = gid
+            widths[gid] = round(font["hmtx"][glyph_order[gid]][0] * scale)
+
+        head = font["head"]
+        hhea = font["hhea"]
+        os2 = font["OS/2"] if "OS/2" in font else None
+        return Subset(
+            data=output.getvalue(),
+            gids=gids,
+            widths=widths,
+            name=f"{_subset_tag(chars)}+NotoSansJP",
+            bbox=(
+                round(head.xMin * scale),
+                round(head.yMin * scale),
+                round(head.xMax * scale),
+                round(head.yMax * scale),
+            ),
+            ascent=round(hhea.ascent * scale),
+            descent=round(hhea.descent * scale),
+            cap_height=round(getattr(os2, "sCapHeight", 700) * scale),
+        )
 
 
-def _hex_string(text: str) -> str:
-    """UTF-16BE の 16 進文字列にする（BMP 外の文字は落とす）。"""
-    return "<" + "".join(f"{ord(c):04X}" for c in text if ord(c) <= 0xFFFF) + ">"
+def _subset_tag(chars: set[str]) -> str:
+    """サブセットの接頭辞（英大文字 6 文字）。
+
+    PDF はサブセットしたフォントの名前に接頭辞を求める。同じ文字集合からは
+    同じ接頭辞になるようにして、出力を再現可能にしておく。
+    """
+    digest = hashlib.sha1("".join(sorted(chars)).encode("utf-8")).digest()
+    return "".join(chr(ord("A") + b % 26) for b in digest[:6])
+
+
+# プロセス内で使い回す同梱フォント。
+_FONT: Font | None = None
+
+
+def default_font() -> Font:
+    global _FONT
+    if _FONT is None:
+        _FONT = Font()
+    return _FONT
+
+
+@dataclass(frozen=True)
+class _Text:
+    """置く文字とその位置。グリフ番号はサブセットが決まってから割り当てる。"""
+
+    x: float
+    y: float
+    text: str
+    size: float
+    gray: float
 
 
 def _gray(value: float) -> str:
@@ -63,10 +196,11 @@ def _gray(value: float) -> str:
 class Page:
     """1 ページ分の描画内容。座標は PDF の慣習どおり左下原点。"""
 
-    def __init__(self, width: float, height: float):
+    def __init__(self, width: float, height: float, font: Font):
         self.width = width
         self.height = height
-        self._ops: list[str] = []
+        self.font = font
+        self._ops: list[str | _Text] = []
 
     # --- 文字 ---------------------------------------------------------------
 
@@ -86,15 +220,12 @@ class Page:
         """
         if not text:
             return 0.0
-        width = text_width(text, size)
+        width = self.font.text_width(text, size)
         if align == "right":
             x -= width
         elif align == "center":
             x -= width / 2
-        self._ops.append(
-            f"q {_gray(gray)} g BT /F1 {size:.2f} Tf {x:.2f} {y:.2f} Td "
-            f"{_hex_string(text)} Tj ET Q\n"
-        )
+        self._ops.append(_Text(x, y, text, size, gray))
         return width
 
     # --- 図形 ---------------------------------------------------------------
@@ -158,8 +289,28 @@ class Page:
             f"{painter} Q\n"
         )
 
-    def content(self) -> bytes:
-        return "".join(self._ops).encode("ascii")
+    # --- 書き出し -----------------------------------------------------------
+
+    def used_chars(self) -> set[str]:
+        chars: set[str] = set()
+        for op in self._ops:
+            if isinstance(op, _Text):
+                chars.update(op.text)
+        return chars
+
+    def content(self, subset: Subset) -> bytes:
+        """内容ストリームを組み立てる（文字はグリフ番号で書く）。"""
+        parts: list[str] = []
+        for op in self._ops:
+            if isinstance(op, str):
+                parts.append(op)
+                continue
+            glyphs = "".join(f"{subset.gids.get(c, 0):04X}" for c in op.text)
+            parts.append(
+                f"q {_gray(op.gray)} g BT /F1 {op.size:.2f} Tf "
+                f"{op.x:.2f} {op.y:.2f} Td <{glyphs}> Tj ET Q\n"
+            )
+        return "".join(parts).encode("ascii")
 
 
 def _pdf_string(value: str) -> bytes:
@@ -174,14 +325,61 @@ def _pdf_string(value: str) -> bytes:
     return b"<FEFF" + value.encode("utf-16-be").hex().upper().encode("ascii") + b">"
 
 
+def _width_array(widths: dict[int, int]) -> str:
+    """/W 配列。連続するグリフ番号はまとめて 1 つの並びにする。"""
+    if not widths:
+        return "[]"
+    runs: list[tuple[int, list[int]]] = []
+    for gid in sorted(widths):
+        if runs and gid == runs[-1][0] + len(runs[-1][1]):
+            runs[-1][1].append(widths[gid])
+        else:
+            runs.append((gid, [widths[gid]]))
+    return "[" + " ".join(
+        f"{start} [{' '.join(str(w) for w in values)}]" for start, values in runs
+    ) + "]"
+
+
+def _to_unicode_cmap(subset: Subset) -> bytes:
+    """ToUnicode CMap（グリフ番号 → 文字）。
+
+    Identity-H では文字列に入るのがグリフ番号なので、これが無いと検索も
+    コピーもできない PDF になる。
+    """
+    entries = sorted((gid, char) for char, gid in subset.gids.items())
+    body = [
+        "/CIDInit /ProcSet findresource begin",
+        "12 dict begin",
+        "begincmap",
+        "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def",
+        "/CMapName /Adobe-Identity-UCS def",
+        "/CMapType 2 def",
+        "1 begincodespacerange",
+        "<0000> <FFFF>",
+        "endcodespacerange",
+    ]
+    # 1 ブロックあたり 100 件までという決まりに従って分ける。
+    for start in range(0, len(entries), 100):
+        chunk = entries[start : start + 100]
+        body.append(f"{len(chunk)} beginbfchar")
+        body += [
+            f"<{gid:04X}> <{char.encode('utf-16-be').hex().upper()}>"
+            for gid, char in chunk
+        ]
+        body.append("endbfchar")
+    body += ["endcmap", "CMapName currentdict /CMap defineresource pop", "end", "end"]
+    return "\n".join(body).encode("ascii")
+
+
 class Document:
     """複数ページの PDF を組み立てる。"""
 
-    def __init__(self):
+    def __init__(self, font: Font | None = None):
+        self.font = font or default_font()
         self.pages: list[Page] = []
 
     def add_page(self, size: tuple[float, float] = A4_PORTRAIT) -> Page:
-        page = Page(size[0], size[1])
+        page = Page(size[0], size[1], self.font)
         self.pages.append(page)
         return page
 
@@ -191,9 +389,23 @@ class Document:
         metadata は文書情報（/Title など）に入れるキーと値。再編集のための
         フォーム入力もここへ入れる（構造計算安全証明書と同じ考え方）。
         """
+        used: set[str] = set()
+        for page in self.pages:
+            used |= page.used_chars()
+        subset = self.font.subset(used)
+
         # オブジェクト番号は固定で先に決める（相互参照があるため）。
-        catalog, pages_obj, font, cid_font, descriptor, info = range(1, 7)
-        first_page_obj = 7
+        (
+            catalog,
+            pages_obj,
+            font_obj,
+            cid_font,
+            descriptor,
+            font_file,
+            to_unicode,
+            info,
+        ) = range(1, 9)
+        first_page_obj = 9
 
         objects: dict[int, bytes] = {}
         kids = " ".join(
@@ -203,20 +415,27 @@ class Document:
         objects[pages_obj] = (
             f"<< /Type /Pages /Kids [{kids}] /Count {len(self.pages)} >>"
         ).encode("ascii")
-        objects[font] = (
-            f"<< /Type /Font /Subtype /Type0 /BaseFont /{_BASE_FONT} "
-            f"/Encoding /{_ENCODING} /DescendantFonts [{cid_font} 0 R] >>"
+        objects[font_obj] = (
+            f"<< /Type /Font /Subtype /Type0 /BaseFont /{subset.name} "
+            f"/Encoding /Identity-H /DescendantFonts [{cid_font} 0 R] "
+            f"/ToUnicode {to_unicode} 0 R >>"
         ).encode("ascii")
         objects[cid_font] = (
-            f"<< /Type /Font /Subtype /CIDFontType0 /BaseFont /{_BASE_FONT} "
-            "/CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 2 >> "
-            f"/FontDescriptor {descriptor} 0 R /DW 1000 /W [1 230 500] >>"
+            f"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{subset.name} "
+            "/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+            f"/FontDescriptor {descriptor} 0 R /DW 1000 "
+            f"/W {_width_array(subset.widths)} /CIDToGIDMap /Identity >>"
         ).encode("ascii")
         objects[descriptor] = (
-            f"<< /Type /FontDescriptor /FontName /{_BASE_FONT} /Flags 4 "
-            "/FontBBox [-92 -250 1010 922] /ItalicAngle 0 /Ascent 880 "
-            "/Descent -120 /CapHeight 718 /StemV 114 >>"
+            f"<< /Type /FontDescriptor /FontName /{subset.name} /Flags 4 "
+            f"/FontBBox [{' '.join(str(v) for v in subset.bbox)}] /ItalicAngle 0 "
+            f"/Ascent {subset.ascent} /Descent {subset.descent} "
+            f"/CapHeight {subset.cap_height} /StemV 80 /FontFile2 {font_file} 0 R >>"
         ).encode("ascii")
+        objects[font_file] = _stream(
+            subset.data, extra=f"/Length1 {len(subset.data)}"
+        )
+        objects[to_unicode] = _stream(_to_unicode_cmap(subset))
 
         entries = [b"/Producer " + _pdf_string("portal-api")]
         for key, value in (metadata or {}).items():
@@ -230,22 +449,17 @@ class Document:
             objects[page_number] = (
                 f"<< /Type /Page /Parent {pages_obj} 0 R "
                 f"/MediaBox [0 0 {page.width:.2f} {page.height:.2f}] "
-                f"/Resources << /Font << /F1 {font} 0 R >> >> "
+                f"/Resources << /Font << /F1 {font_obj} 0 R >> >> "
                 f"/Contents {content_number} 0 R >>"
             ).encode("ascii")
-            objects[content_number] = _stream(page.content())
+            objects[content_number] = _stream(page.content(subset))
 
         return _serialize(objects, catalog, info)
 
 
-def _stream(content: bytes) -> bytes:
-    return (
-        b"<< /Length "
-        + str(len(content)).encode("ascii")
-        + b" >>\nstream\n"
-        + content
-        + b"\nendstream"
-    )
+def _stream(content: bytes, extra: str = "") -> bytes:
+    header = f"<< /Length {len(content)}{' ' + extra if extra else ''} >>"
+    return header.encode("ascii") + b"\nstream\n" + content + b"\nendstream"
 
 
 def _serialize(objects: dict[int, bytes], root: int, info: int) -> bytes:

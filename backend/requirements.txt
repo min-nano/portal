@@ -7,6 +7,10 @@ openpyxl==3.1.5
 pypdf>=6.6.1,<7
 pdfminer.six>=20250506
 python-multipart>=0.0.20,<1
+# 釘配列諸定数の計算書 PDF は雛形を使わずバックエンドが直接組み立てる。
+# fontTools は、同梱した日本語フォント（app/fonts、SIL OFL 1.1）から
+# 「その PDF で実際に使った文字だけ」を切り出して埋め込むために使う。
+fonttools>=4.62.1,<5
 PyJWT[crypto]>=2.13.0,<3
 google-auth>=2.56.3,<3
 google-cloud-firestore>=2.28.1,<3
