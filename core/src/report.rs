@@ -11,12 +11,16 @@
 use crate::format::{format_int, significant, SIGNIFICANT_DIGITS};
 use crate::json::Value;
 use crate::nail_array::{self, Nail};
+use crate::wall;
 
 /// 1 パターンあたりの釘の上限。実務の面材 1 枚では 100 本程度なので十分に
 /// 余裕がある。桁を間違えた入力（格子に 0〜1000 を 1mm 刻みで書くなど）で
 /// 計算とページ描画が止まらないようにするための歯止め。
 pub const MAX_NAILS: usize = 2000;
 pub const MAX_PATTERNS: usize = 50;
+/// 1 物件あたりの壁の上限と、壁 1 枚を構成する面材の上限。
+pub const MAX_WALLS: usize = 50;
+pub const MAX_WALL_PANELS: usize = 20;
 
 /// 釘配列図に添える座標値の有効桁数（図は小さいので本文より粗くする）。
 const DIAGRAM_AXIS_DIGITS: usize = 4;
@@ -34,12 +38,63 @@ pub struct Pattern {
     pub coords: String,
 }
 
+/// 壁 1 枚分の入力（グレー本 3.3 の面材張り大壁）。
+///
+/// 面材の釘配列は「登録した釘配列パターンを選ぶ」形にしてある（patternId で
+/// 指す）。同じ配列の面材を 2 枚使う壁なら、同じパターンを 2 回選べばよい。
+#[derive(Debug, Clone, PartialEq)]
+pub struct WallInput {
+    pub wall_id: String,
+    pub wall_name: String,
+    /// 階高 H [mm]。
+    pub height: f64,
+    /// 壁の幅 W [mm]。
+    pub width: f64,
+    /// 表 3.3.1 から読み込んだ組合せの id（読み込んだ跡を残すだけで、計算には
+    /// 使わない。読み込んだあと数値を手で直せるようにするため）。
+    pub material_id: String,
+    /// 面材の厚さ t [mm]。
+    pub thickness: f64,
+    /// 面材のせん断弾性係数 GB [kN/mm²]。
+    pub shear_modulus: f64,
+    /// 釘 1 本あたりの一面せん断: 剛性 k [kN/mm]。
+    pub k: f64,
+    /// 釘の降伏点変位 δv [mm]。
+    pub delta_v: f64,
+    /// 釘の終局変位 δu [mm]。
+    pub delta_u: f64,
+    /// 釘の降伏耐力 ΔPv [kN]。
+    pub delta_pv: f64,
+    /// 表 3.3.2 から読み込んだ規格の id（読み込んだ跡を残すだけ）。
+    pub grade_id: String,
+    /// 面材のせん断強度 τmax [N/mm²]。
+    pub tau_max: f64,
+    /// 繊維直交方向の曲げヤング係数 E1 [N/mm²]。
+    pub e1: f64,
+    /// 繊維平行方向の曲げヤング係数 E2 [N/mm²]。
+    pub e2: f64,
+    /// 中間材（間柱等）を設けるか。せん断座屈の ξ になる。
+    pub has_intermediate_stud: bool,
+    /// 壁を構成する面材。
+    pub panels: Vec<WallPanelInput>,
+}
+
+/// 壁を構成する面材 1 枚分の入力。
+#[derive(Debug, Clone, PartialEq)]
+pub struct WallPanelInput {
+    /// 面材として使う釘配列パターンの patternId。
+    pub pattern_id: String,
+    /// 面材の繊維方向（"" は長辺方向）。せん断座屈の a・b の取り方を決める。
+    pub grain: String,
+}
+
 /// フォーム全体の入力（1 ファイル = 1 物件）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct FormData {
     pub project_name: String,
     pub issued_on: String,
     pub patterns: Vec<Pattern>,
+    pub walls: Vec<WallInput>,
 }
 
 impl Pattern {
@@ -61,6 +116,62 @@ impl Pattern {
     }
 }
 
+impl WallInput {
+    pub fn to_value(&self) -> Value {
+        Value::obj([
+            ("wallId", self.wall_id.clone().into()),
+            ("wallName", self.wall_name.clone().into()),
+            ("height", self.height.into()),
+            ("width", self.width.into()),
+            ("materialId", self.material_id.clone().into()),
+            ("thickness", self.thickness.into()),
+            ("shearModulus", self.shear_modulus.into()),
+            ("k", self.k.into()),
+            ("deltaV", self.delta_v.into()),
+            ("deltaU", self.delta_u.into()),
+            ("deltaPv", self.delta_pv.into()),
+            ("gradeId", self.grade_id.clone().into()),
+            ("tauMax", self.tau_max.into()),
+            ("e1", self.e1.into()),
+            ("e2", self.e2.into()),
+            ("hasIntermediateStud", self.has_intermediate_stud.into()),
+            (
+                "panels",
+                Value::Arr(
+                    self.panels
+                        .iter()
+                        .map(|panel| {
+                            Value::obj([
+                                ("patternId", panel.pattern_id.clone().into()),
+                                ("grain", panel.grain.clone().into()),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+
+    fn sheathing(&self) -> wall::Sheathing {
+        wall::Sheathing {
+            thickness: self.thickness,
+            shear_modulus: self.shear_modulus,
+            tau_max: self.tau_max,
+            e1: self.e1,
+            e2: self.e2,
+        }
+    }
+
+    fn nail(&self) -> wall::NailShear {
+        wall::NailShear {
+            k: self.k,
+            delta_v: self.delta_v,
+            delta_u: self.delta_u,
+            delta_pv: self.delta_pv,
+        }
+    }
+}
+
 impl FormData {
     pub fn to_value(&self) -> Value {
         Value::obj([
@@ -69,6 +180,10 @@ impl FormData {
             (
                 "patterns",
                 Value::Arr(self.patterns.iter().map(Pattern::to_value).collect()),
+            ),
+            (
+                "walls",
+                Value::Arr(self.walls.iter().map(WallInput::to_value).collect()),
             ),
         ])
     }
@@ -101,10 +216,73 @@ pub fn normalize_data(data: &Value) -> Result<FormData, String> {
         patterns.push(normalize_pattern(&Value::Null, 0)?);
     }
 
+    // 壁は「あってもなくてもよい」節。釘配列諸定数だけを求めたい物件では
+    // 0 枚のままにできる（パターンと違って 1 枚を補わない）。
+    let raw_walls = match data.get("walls") {
+        Some(Value::Arr(items)) => items.as_slice(),
+        _ => &[],
+    };
+    if raw_walls.len() > MAX_WALLS {
+        return Err(format!("壁は {MAX_WALLS} 枚までです。"));
+    }
+    let mut walls = Vec::with_capacity(raw_walls.len());
+    for (index, item) in raw_walls.iter().enumerate() {
+        walls.push(normalize_wall(item, index)?);
+    }
+
     Ok(FormData {
         project_name: text_of(data.get("projectName")),
         issued_on: text_of(data.get("issuedOn")),
         patterns,
+        walls,
+    })
+}
+
+pub fn normalize_wall(item: &Value, index: usize) -> Result<WallInput, String> {
+    let wall_id = match text_of(item.get("wallId")) {
+        id if id.is_empty() => format!("w{}", index + 1),
+        id => id,
+    };
+
+    let raw_panels = match item.get("panels") {
+        Some(Value::Arr(items)) => items.as_slice(),
+        _ => &[],
+    };
+    if raw_panels.len() > MAX_WALL_PANELS {
+        return Err(format!(
+            "1 枚の壁に選べる面材は {MAX_WALL_PANELS} 枚までです。"
+        ));
+    }
+    let panels = raw_panels
+        .iter()
+        .map(|panel| WallPanelInput {
+            pattern_id: text_of(panel.get("patternId")),
+            grain: wall::Grain::from_id(&text_of(panel.get("grain")))
+                .id()
+                .to_string(),
+        })
+        // まだパターンを選んでいない行は、面材として数えない。
+        .filter(|panel| !panel.pattern_id.is_empty())
+        .collect();
+
+    Ok(WallInput {
+        wall_id,
+        wall_name: text_of(item.get("wallName")),
+        height: float_of(item.get("height"), "階高 H")?,
+        width: float_of(item.get("width"), "壁の幅 W")?,
+        material_id: text_of(item.get("materialId")),
+        thickness: float_of(item.get("thickness"), "面材の厚さ t")?,
+        shear_modulus: float_of(item.get("shearModulus"), "面材のせん断弾性係数 GB")?,
+        k: float_of(item.get("k"), "釘のせん断剛性 k")?,
+        delta_v: float_of(item.get("deltaV"), "釘の降伏点変位 δv")?,
+        delta_u: float_of(item.get("deltaU"), "釘の終局変位 δu")?,
+        delta_pv: float_of(item.get("deltaPv"), "釘の降伏耐力 ΔPv")?,
+        grade_id: text_of(item.get("gradeId")),
+        tau_max: float_of(item.get("tauMax"), "面材のせん断強度 τmax")?,
+        e1: float_of(item.get("e1"), "曲げヤング係数 E1")?,
+        e2: float_of(item.get("e2"), "曲げヤング係数 E2")?,
+        has_intermediate_stud: matches!(item.get("hasIntermediateStud"), Some(Value::Bool(true))),
+        panels,
     })
 }
 
@@ -319,18 +497,55 @@ pub fn compute_all(data: &FormData) -> Value {
     )
 }
 
+/// 全ての壁を計算する。計算できない壁は ok: false で返す。
+pub fn compute_all_walls(data: &FormData) -> Value {
+    let library = PanelLibrary::of(data);
+    Value::Arr(
+        data.walls
+            .iter()
+            .enumerate()
+            .map(|(index, input)| {
+                match build_wall_report(input, &library, index) {
+                    Ok(Value::Obj(mut entries)) => {
+                        entries.insert(0, ("ok".to_string(), true.into()));
+                        Value::Obj(entries)
+                    }
+                    Ok(_) => unreachable!("build_wall_report はオブジェクトを返す"),
+                    Err(error) => Value::obj([
+                        ("ok", false.into()),
+                        ("wallId", input.wall_id.clone().into()),
+                        ("wallName", input.wall_name.clone().into()),
+                        ("error", error.into()),
+                    ]),
+                }
+            })
+            .collect(),
+    )
+}
+
+/// 保存できる状態か確かめ、全ての壁の計算結果を返す。
+pub fn validate_walls(data: &FormData) -> Result<Vec<Value>, String> {
+    let library = PanelLibrary::of(data);
+    let mut reports = Vec::with_capacity(data.walls.len());
+    for (index, input) in data.walls.iter().enumerate() {
+        reports.push(
+            build_wall_report(input, &library, index)
+                .map_err(|error| format!("「{}」を計算できません: {error}", wall_label(input, index)))?,
+        );
+    }
+    Ok(reports)
+}
+
 /// 保存できる状態か確かめ、全パターンの計算結果を返す。
 pub fn validate(data: &FormData) -> Result<Vec<Value>, String> {
     let mut reports = Vec::with_capacity(data.patterns.len());
     for (index, pattern) in data.patterns.iter().enumerate() {
         let (nails, reason) = nails_and_reason(pattern);
         if let Some(reason) = reason {
-            let name = if pattern.pattern_name.is_empty() {
-                format!("パターン{}", index + 1)
-            } else {
-                pattern.pattern_name.clone()
-            };
-            return Err(format!("「{name}」を計算できません: {reason}"));
+            return Err(format!(
+                "「{}」を計算できません: {reason}",
+                pattern_label(pattern, index)
+            ));
         }
         reports.push(build_report(pattern, &nails)?);
     }
@@ -476,6 +691,437 @@ fn build_report(pattern: &Pattern, nails: &[Nail]) -> Result<Value, String> {
             ]),
         ),
         ("diagram", build_diagram(pattern, nails, &result)),
+    ]))
+}
+
+// --- 壁の計算（グレー本 3.3） -----------------------------------------------
+
+/// 壁の見出しに使う名前（未入力なら通し番号で代替する）。
+fn wall_label(input: &WallInput, index: usize) -> String {
+    if input.wall_name.is_empty() {
+        format!("壁{}", index + 1)
+    } else {
+        input.wall_name.clone()
+    }
+}
+
+/// 登録済みの釘配列パターンを、壁から patternId で引けるようにしたもの。
+///
+/// 壁は「登録した配列パターンを選ぶ」形で面材を指すので、1 つの壁が同じ
+/// パターンを 2 回選ぶこともある。パターンごとの計算は 1 度だけにしたいので、
+/// ここでまとめて済ませておく。
+struct PanelLibrary<'a> {
+    entries: Vec<(&'a Pattern, String, Result<nail_array::Constants, String>)>,
+}
+
+impl<'a> PanelLibrary<'a> {
+    fn of(data: &'a FormData) -> PanelLibrary<'a> {
+        PanelLibrary {
+            entries: data
+                .patterns
+                .iter()
+                .enumerate()
+                .map(|(index, pattern)| {
+                    let constants = nails_of(pattern).and_then(|nails| {
+                        nail_array::compute(&nails, pattern.panel_area())
+                            .map_err(|error| error.0)
+                    });
+                    (pattern, pattern_label(pattern, index), constants)
+                })
+                .collect(),
+        }
+    }
+
+    /// 壁が選んだ 1 枚分を、面材の入力として組み立てる。
+    fn get(&self, panel: &WallPanelInput) -> Result<wall::PanelSpec, String> {
+        let (pattern, name, constants) = self
+            .entries
+            .iter()
+            .find(|(pattern, _, _)| pattern.pattern_id == panel.pattern_id)
+            .ok_or_else(|| {
+                "選ばれた釘配列パターンが見つかりません。面材を選び直してください。".to_string()
+            })?;
+        let constants = constants.as_ref().map_err(|reason| {
+            format!(
+                "釘配列パターン「{}」を計算できません: {reason}",
+                pattern.pattern_name
+            )
+        })?;
+        Ok(wall::PanelSpec::new(
+            name,
+            constants,
+            pattern.width,
+            pattern.height,
+            wall::Grain::from_id(&panel.grain),
+        ))
+    }
+}
+
+/// パターンの見出しに使う名前（未入力なら通し番号で代替する）。
+fn pattern_label(pattern: &Pattern, index: usize) -> String {
+    if pattern.pattern_name.is_empty() {
+        format!("パターン{}", index + 1)
+    } else {
+        pattern.pattern_name.clone()
+    }
+}
+
+/// 壁 1 枚の結果を、画面表示にも PDF にも使える形で組み立てる。
+fn build_wall_report(
+    input: &WallInput,
+    library: &PanelLibrary,
+    index: usize,
+) -> Result<Value, String> {
+    if input.panels.is_empty() {
+        return Err(
+            "壁を構成する面材がありません。登録した釘配列パターンから 1 枚以上選んでください。"
+                .to_string(),
+        );
+    }
+    let panels = input
+        .panels
+        .iter()
+        .map(|panel| library.get(panel))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let result = wall::compute(&wall::Wall {
+        height: input.height,
+        width: input.width,
+        sheathing: input.sheathing(),
+        nail: input.nail(),
+        has_intermediate_stud: input.has_intermediate_stud,
+        panels,
+    })
+    .map_err(|error| error.0)?;
+
+    let six = |value: f64| significant(value, SIGNIFICANT_DIGITS);
+    let step = |label: &str, equation: &str, value: String| {
+        Value::obj([
+            ("label", label.into()),
+            ("eq", equation.into()),
+            ("value", value.into()),
+        ])
+    };
+    let row = |label: &str, value: String| {
+        Value::obj([("label", label.into()), ("value", value.into())])
+    };
+
+    let mut inputs = vec![
+        row("階高 H", format!("{} mm", format_int(input.height))),
+        row("壁の幅 W", format!("{} mm", format_int(input.width))),
+    ];
+    if let Some(material) = wall::find_material(&input.material_id) {
+        inputs.push(row("面材と釘の組合せ", material.label()));
+    }
+    inputs.push(row(
+        "面材の厚さ t",
+        format!("{} mm", six(input.thickness)),
+    ));
+    inputs.push(row(
+        "面材のせん断弾性係数 GB",
+        format!("{} kN/mm²", six(input.shear_modulus)),
+    ));
+    inputs.push(row(
+        "釘 1 本あたりの一面せん断",
+        format!(
+            "k = {} kN/mm　δv = {} mm　δu = {} mm　ΔPv = {} kN",
+            six(input.k),
+            six(input.delta_v),
+            six(input.delta_u),
+            six(input.delta_pv)
+        ),
+    ));
+    if let Some(grade) = wall::find_grade(&input.grade_id) {
+        inputs.push(row("面材の規格", grade.label()));
+    }
+    inputs.push(row(
+        "面材のせん断強度・曲げヤング係数",
+        format!(
+            "τmax = {} N/mm²　E1 = {} N/mm²　E2 = {} N/mm²",
+            six(input.tau_max),
+            format_int(input.e1),
+            format_int(input.e2)
+        ),
+    ));
+    inputs.push(row(
+        "中間材（間柱等）",
+        format!(
+            "{}（せん断座屈の ξ = {}）",
+            if input.has_intermediate_stud {
+                "あり"
+            } else {
+                "なし"
+            },
+            format_int(result.xi)
+        ),
+    ));
+    inputs.push(row(
+        "面材の枚数",
+        format!("{} 枚", format_int(result.panels.len() as f64)),
+    ));
+
+    // 面材のせん断破壊・せん断座屈の検定で、いちばん余裕の少ない面材。
+    let worst = |ratio: fn(&wall::PanelResult) -> f64| {
+        result
+            .panels
+            .iter()
+            .max_by(|left, right| {
+                ratio(left)
+                    .partial_cmp(&ratio(right))
+                    .expect("検定の値は有限")
+            })
+            .expect("面材は 1 枚以上")
+    };
+    // τmax は壁の中で共通なので、せん断破壊は τN がいちばん大きい面材で決まる。
+    let worst_shear = worst(|panel| panel.tau_n);
+    // τcr は面材ごとに違うので、座屈は τN/τcr がいちばん大きい面材で決まる。
+    let worst_buckling = worst(|panel| panel.tau_n / panel.tau_cr);
+
+    Ok(Value::obj([
+        ("wallId", input.wall_id.clone().into()),
+        ("wallName", wall_label(input, index).into()),
+        ("inputs", Value::Arr(inputs)),
+        (
+            "panelColumns",
+            Value::Arr(
+                [
+                    "面材（釘配列パターン）",
+                    "Aw [mm²]",
+                    "Ixy",
+                    "Zxy",
+                    "Cxy",
+                    "K0 [kN·mm/rad]",
+                    "My [kN·mm]",
+                    "Mu [kN·mm]",
+                    "μ",
+                ]
+                .into_iter()
+                .map(Value::from)
+                .collect(),
+            ),
+        ),
+        (
+            "panels",
+            Value::Arr(
+                result
+                    .panels
+                    .iter()
+                    .map(|panel| {
+                        Value::obj([
+                            ("label", panel.spec.label.clone().into()),
+                            (
+                                "cells",
+                                Value::Arr(
+                                    [
+                                        format_int(panel.spec.area),
+                                        six(panel.spec.ixy),
+                                        six(panel.spec.zxy),
+                                        six(panel.spec.cxy),
+                                        format_int(panel.k0),
+                                        format_int(panel.my),
+                                        format_int(panel.mu),
+                                        six(panel.ductility),
+                                    ]
+                                    .into_iter()
+                                    .map(Value::from)
+                                    .collect(),
+                                ),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "summary",
+            Value::Arr(vec![
+                Value::obj([
+                    ("key", "K".into()),
+                    ("unit", "kN/rad".into()),
+                    ("value", six(result.k).into()),
+                ]),
+                Value::obj([
+                    ("key", "Pa".into()),
+                    ("unit", "kN".into()),
+                    ("value", six(result.pa).into()),
+                ]),
+                Value::obj([
+                    ("key", "ΔPa".into()),
+                    ("unit", "kN/m".into()),
+                    ("value", six(result.delta_pa).into()),
+                ]),
+            ]),
+        ),
+        (
+            "steps",
+            Value::Arr(vec![
+                step(
+                    "回転剛性 K0（面材ごとの和）",
+                    "(3.3.3)",
+                    format_int(result.k0) + " kN·mm/rad",
+                ),
+                step("面内せん断剛性 K = K0 / H", "(3.3.2)", six(result.k) + " kN/rad"),
+                step(
+                    "変形角 1/150 時のモーメント K0/150",
+                    "(3.3.1)",
+                    format_int(result.m150) + " kN·mm",
+                ),
+                step(
+                    "降伏モーメント My（面材ごとの和）",
+                    "(3.3.5)",
+                    format_int(result.my) + " kN·mm",
+                ),
+                step(
+                    "終局モーメント Mu（面材ごとの和）",
+                    "(3.3.6)",
+                    format_int(result.mu) + " kN·mm",
+                ),
+                step(
+                    "塑性率 μ（面材ごとの最小値）",
+                    "(3.3.7)",
+                    six(result.ductility),
+                ),
+                step(
+                    "終局時のモーメント 0.2√(2μ−1)×Mu",
+                    "(3.3.1)",
+                    format_int(result.ultimate_moment) + " kN·mm",
+                ),
+                step(
+                    "許容せん断耐力 Pa = min{ My, K0/150, 0.2√(2μ−1)×Mu } / H",
+                    "(3.3.1)",
+                    six(result.pa) + " kN",
+                ),
+                step(
+                    "壁長さあたりの許容せん断耐力 ΔPa = Pa / W",
+                    "",
+                    six(result.delta_pa) + " kN/m",
+                ),
+                step("Pa を決めた項", "", result.governing.label().to_string()),
+            ]),
+        ),
+        (
+            "bucklingColumns",
+            Value::Arr(
+                [
+                    "面材（釘配列パターン）",
+                    "繊維方向",
+                    "a [mm]",
+                    "b [mm]",
+                    "β",
+                    "τN [N/mm²]",
+                    "τmax [N/mm²]",
+                    "τcr [N/mm²]",
+                    "判定",
+                ]
+                .into_iter()
+                .map(Value::from)
+                .collect(),
+            ),
+        ),
+        (
+            "buckling",
+            Value::Arr(
+                result
+                    .panels
+                    .iter()
+                    .map(|panel| {
+                        Value::obj([
+                            ("label", panel.spec.label.clone().into()),
+                            ("ok", (panel.shear_ok && panel.buckling_ok).into()),
+                            (
+                                "cells",
+                                Value::Arr(
+                                    [
+                                        panel.spec.grain_label.to_string(),
+                                        format_int(panel.spec.a),
+                                        format_int(panel.spec.b),
+                                        six(panel.beta),
+                                        six(panel.tau_n),
+                                        six(input.tau_max),
+                                        six(panel.tau_cr),
+                                        if panel.shear_ok && panel.buckling_ok {
+                                            "OK".to_string()
+                                        } else {
+                                            "NG".to_string()
+                                        },
+                                    ]
+                                    .into_iter()
+                                    .map(Value::from)
+                                    .collect(),
+                                ),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "checks",
+            Value::Arr(vec![
+                Value::obj([
+                    ("label", "適用範囲 3.3(1)① 許容せん断耐力の上限".into()),
+                    (
+                        "value",
+                        format!(
+                            "ΔPa = {} kN/m {} {} kN/m",
+                            six(result.delta_pa),
+                            if result.within_limit { "≦" } else { ">" },
+                            six(wall::ALLOWABLE_SHEAR_LIMIT)
+                        )
+                        .into(),
+                    ),
+                    ("ok", result.within_limit.into()),
+                ]),
+                Value::obj([
+                    ("label", "面材のせん断破壊 τN < τmax（3.3.8）".into()),
+                    (
+                        "value",
+                        // どの面材の値かは、上の面材ごとの表で分かる。ここは
+                        // いちばん余裕の少ない面材の値だけを短く出す。
+                        format!(
+                            "最大 τN = {} N/mm² {} τmax = {} N/mm²",
+                            six(worst_shear.tau_n),
+                            if result.shear_ok { "<" } else { "≧" },
+                            six(input.tau_max)
+                        )
+                        .into(),
+                    ),
+                    ("ok", result.shear_ok.into()),
+                ]),
+                Value::obj([
+                    ("label", "面材のせん断座屈 τN < τcr（3.3.8）".into()),
+                    (
+                        "value",
+                        format!(
+                            "最大 τN/τcr の面材で τN = {} {} τcr = {} N/mm²",
+                            six(worst_buckling.tau_n),
+                            if result.buckling_ok { "<" } else { "≧" },
+                            six(worst_buckling.tau_cr)
+                        )
+                        .into(),
+                    ),
+                    ("ok", result.buckling_ok.into()),
+                ]),
+            ]),
+        ),
+        (
+            "result",
+            Value::obj([
+                ("K0", result.k0.into()),
+                ("K", result.k.into()),
+                ("M150", result.m150.into()),
+                ("My", result.my.into()),
+                ("Mu", result.mu.into()),
+                ("mu", result.ductility.into()),
+                ("Mu_term", result.ultimate_moment.into()),
+                ("Pa", result.pa.into()),
+                ("dPa", result.delta_pa.into()),
+            ]),
+        ),
+        ("governing", result.governing.id().into()),
+        ("withinLimit", result.within_limit.into()),
+        ("shearOk", result.shear_ok.into()),
+        ("bucklingOk", result.buckling_ok.into()),
     ]))
 }
 
@@ -771,6 +1417,7 @@ mod tests {
                     ..example_pattern()
                 },
             ],
+            walls: Vec::new(),
         };
 
         let reports = compute_all(&data);
@@ -797,9 +1444,235 @@ mod tests {
                 grid_y: String::new(),
                 ..example_pattern()
             }],
+            walls: Vec::new(),
         };
         let error = validate(&data).unwrap_err();
         assert!(error.contains("「南面」を計算できません"), "{error}");
+    }
+
+    // --- 壁の計算（グレー本 3.3） -------------------------------------------
+
+    /// グレー本 3.3(3) の計算例（図 3.3.10）を、フォームの入力の形で組み立てる。
+    ///
+    /// 面材は表 3.2.1 の配列をそのまま登録し、壁はその 2 枚を選ぶ。釘 1 本
+    /// あたりの数値は、本文が計算に使っているものをそのまま置く
+    /// （表 3.3.1 の N-65 / CN65 の入れ替わりについては wall.rs のコメント）。
+    fn wall_example_form() -> FormData {
+        let pattern = |index: usize, id: &str| {
+            let preset = crate::presets::find(id).expect("表 3.2.1 にある配列");
+            normalize_pattern(&preset.to_pattern_value(), index).unwrap()
+        };
+        // 繊維方向は指定しない（長辺方向とみなす）。
+        let panel = |pattern_id: &str| WallPanelInput {
+            pattern_id: pattern_id.to_string(),
+            grain: String::new(),
+        };
+        FormData {
+            project_name: "グレー本 3.3 の計算例".to_string(),
+            issued_on: String::new(),
+            patterns: vec![
+                pattern(0, "910x1820-s455-n75-hi"),
+                pattern(1, "910x910-s455-n75-ro"),
+            ],
+            walls: vec![WallInput {
+                wall_id: "w1".to_string(),
+                wall_name: "計算例の大壁".to_string(),
+                height: 3000.0,
+                width: 910.0,
+                material_id: "plywood12-n65".to_string(),
+                thickness: 12.0,
+                shear_modulus: 0.40,
+                k: 0.483,
+                delta_v: 2.3,
+                delta_u: 17.0,
+                delta_pv: 1.13,
+                grade_id: "plywood-jas1".to_string(),
+                tau_max: 3.6,
+                e1: 3500.0,
+                e2: 5500.0,
+                has_intermediate_stud: true,
+                panels: vec![panel("p1"), panel("p2")],
+            }],
+        }
+    }
+
+    fn only_wall(data: &FormData) -> Value {
+        let walls = compute_all_walls(data);
+        walls.as_array().unwrap()[0].clone()
+    }
+
+    /// 本: Pa = 8.37 kN、ΔPa = 9.20 kN/m（決めているのは K0/150）。
+    #[test]
+    fn the_wall_example_matches_the_book() {
+        let report = only_wall(&wall_example_form());
+
+        assert_eq!(report.get("ok"), Some(&Value::Bool(true)));
+        assert_eq!(report.get("governing").unwrap().as_str(), Some("drift"));
+        assert_eq!(report.get("withinLimit"), Some(&Value::Bool(true)));
+
+        let result = report.get("result").unwrap();
+        let value = |key: &str| result.get(key).unwrap().as_f64().unwrap();
+        assert!((value("Pa") - 8.37).abs() <= 0.03, "{}", value("Pa"));
+        assert!((value("dPa") - 9.20).abs() <= 0.03, "{}", value("dPa"));
+        assert!((value("K0") - 3_765_224.0).abs() <= 12_000.0, "{}", value("K0"));
+        assert!((value("My") - 34_623.0).abs() <= 100.0, "{}", value("My"));
+        assert!((value("Mu") - 41_312.0).abs() <= 100.0, "{}", value("Mu"));
+        assert!((value("mu") - 5.25).abs() <= 0.01, "{}", value("mu"));
+    }
+
+    /// 面材ごとの表には、選んだ釘配列パターンの名前と諸定数が並ぶ。
+    #[test]
+    fn the_wall_report_lists_every_panel_it_is_made_of() {
+        let report = only_wall(&wall_example_form());
+
+        assert_eq!(report.get("panelColumns").unwrap().as_array().unwrap().len(), 9);
+        let panels = report.get("panels").unwrap().as_array().unwrap();
+        assert_eq!(panels.len(), 2);
+        assert_eq!(
+            panels[0].get("label").unwrap().as_str(),
+            Some("1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）")
+        );
+        // 面材ごとの列は Aw から μ までの 8 つ（見出しの 9 列 − 面材名）。
+        let cells = panels[0].get("cells").unwrap().as_array().unwrap();
+        assert_eq!(cells.len(), 8);
+        assert_eq!(cells[0].as_str(), Some("1,656,200"));
+
+        let summary = labelled(&report, "summary", "key");
+        assert_eq!(
+            summary.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>(),
+            vec!["K", "Pa", "ΔPa"]
+        );
+    }
+
+    /// 入力欄の控えには、階高・壁幅・面材と釘の数値がそのまま並ぶ。
+    #[test]
+    fn the_wall_inputs_section_repeats_what_was_typed() {
+        let inputs = labelled(&only_wall(&wall_example_form()), "inputs", "label");
+
+        assert!(inputs.contains(&("階高 H".to_string(), "3,000 mm".to_string())));
+        assert!(inputs.contains(&("壁の幅 W".to_string(), "910 mm".to_string())));
+        assert!(inputs.contains(&(
+            "面材と釘の組合せ".to_string(),
+            "構造用合板 12mm + 鉄丸釘 N-65".to_string()
+        )));
+        assert!(inputs.contains(&(
+            "面材の規格".to_string(),
+            "構造用合板 JAS 1 級".to_string()
+        )));
+        assert!(inputs.contains(&(
+            "中間材（間柱等）".to_string(),
+            "あり（せん断座屈の ξ = 2）".to_string()
+        )));
+        assert!(inputs.contains(&("面材の枚数".to_string(), "2 枚".to_string())));
+    }
+
+    /// 上限を超えたら、検定の行に「超えている」と出す（計算は止めない）。
+    #[test]
+    fn the_wall_report_flags_a_wall_over_the_upper_limit() {
+        let mut data = wall_example_form();
+        data.walls[0].width = 300.0;
+        let report = only_wall(&data);
+
+        assert_eq!(report.get("withinLimit"), Some(&Value::Bool(false)));
+        let checks = report.get("checks").unwrap().as_array().unwrap();
+        let limit = &checks[0];
+        assert!(limit.get("label").unwrap().as_str().unwrap().contains("上限"));
+        assert_eq!(limit.get("ok"), Some(&Value::Bool(false)));
+        assert!(limit.get("value").unwrap().as_str().unwrap().contains(">"));
+    }
+
+    /// 面材を選んでいない壁・見つからないパターンを指す壁は、理由を返す。
+    #[test]
+    fn walls_that_cannot_be_calculated_are_explained() {
+        let cases = [
+            (Vec::new(), "面材がありません"),
+            (
+                vec![WallPanelInput {
+                    pattern_id: "p9".to_string(),
+                    grain: String::new(),
+                }],
+                "見つかりません",
+            ),
+        ];
+        for (panels, expected) in cases {
+            let mut data = wall_example_form();
+            data.walls[0].panels = panels;
+            let report = only_wall(&data);
+            assert_eq!(report.get("ok"), Some(&Value::Bool(false)));
+            let error = report.get("error").unwrap().as_str().unwrap();
+            assert!(error.contains(expected), "{error} should mention {expected}");
+        }
+    }
+
+    /// 選んだ釘配列パターンが計算できないときは、そのパターン名で伝える。
+    #[test]
+    fn a_wall_reports_the_pattern_that_cannot_be_calculated() {
+        let mut data = wall_example_form();
+        data.patterns[0].pattern_name = "南面 下".to_string();
+        data.patterns[0].grid_x = String::new();
+        data.patterns[0].grid_y = String::new();
+        data.patterns[0].mode = "grid".to_string();
+
+        let error = only_wall(&data);
+        let error = error.get("error").unwrap().as_str().unwrap();
+        assert!(error.contains("「南面 下」"), "{error}");
+    }
+
+    /// 壁が 1 枚も計算できないと保存させない。名前で どの壁か を伝える。
+    #[test]
+    fn validate_walls_names_the_wall_that_cannot_be_calculated() {
+        let mut data = wall_example_form();
+        data.walls[0].wall_name = String::new();
+        data.walls[0].height = 0.0;
+
+        let error = validate_walls(&data).unwrap_err();
+        assert!(error.contains("「壁1」を計算できません"), "{error}");
+        assert!(error.contains("階高 H"), "{error}");
+    }
+
+    /// 壁を 1 枚も置いていない物件（釘配列諸定数だけを求める使い方）も通る。
+    #[test]
+    fn a_form_without_walls_is_valid() {
+        let data = normalize(r#"{"patterns": [{"width": 910, "height": 610}]}"#).unwrap();
+        assert!(data.walls.is_empty());
+        assert!(validate_walls(&data).unwrap().is_empty());
+        assert!(compute_all_walls(&data).as_array().unwrap().is_empty());
+    }
+
+    /// 壁の入力も、未知のキーを捨てて足りないキーを既定値で埋める。
+    #[test]
+    fn normalizes_walls_like_patterns() {
+        let data = normalize(
+            r#"{"walls": [{"wallName": " 南面 ", "height": "3000", "junk": 1,
+                 "panels": [{"patternId": "p1"}, {"patternId": ""}, {}]}]}"#,
+        )
+        .unwrap();
+
+        let wall = &data.walls[0];
+        assert_eq!(wall.wall_id, "w1");
+        assert_eq!(wall.wall_name, "南面");
+        assert_eq!(wall.height, 3000.0);
+        assert_eq!(wall.width, 0.0);
+        // 空の patternId（未選択の行）は落とす。
+        assert_eq!(
+            wall.panels,
+            vec![WallPanelInput {
+                pattern_id: "p1".to_string(),
+                grain: String::new()
+            }]
+        );
+        assert_eq!(data.to_value().get("walls").unwrap().as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn rejects_too_many_walls_and_panels() {
+        let walls = vec![r#"{"height": 1}"#; MAX_WALLS + 1].join(",");
+        let error = normalize(&format!(r#"{{"walls": [{walls}]}}"#)).unwrap_err();
+        assert!(error.contains("壁は"), "{error}");
+
+        let panels = vec![r#"{"patternId": "p1"}"#; MAX_WALL_PANELS + 1].join(",");
+        let error = normalize(&format!(r#"{{"walls": [{{"panels": [{panels}]}}]}}"#)).unwrap_err();
+        assert!(error.contains("面材は"), "{error}");
     }
 
     #[test]

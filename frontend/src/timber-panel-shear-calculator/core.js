@@ -53,9 +53,16 @@ class Core {
     return response;
   }
 
-  /** 全パターンを計算する。計算できないパターンは ok: false で返る。 */
+  /**
+   * 釘配列パターン（グレー本 3.2）と壁（同 3.3）をまとめて計算し、
+   * { patterns, walls } を返す。計算できないものは ok: false で返る。
+   *
+   * 壁は釘配列パターンの計算結果を使うので、1 回の呼び出しで両方を返す
+   * （画面が順番を気にせずに済む）。
+   */
   computeAll(data) {
-    return this.call({ op: 'computeAll', data }).patterns;
+    const { patterns, walls } = this.call({ op: 'computeAll', data });
+    return { patterns, walls };
   }
 
   /**
@@ -69,6 +76,22 @@ class Core {
   /** 一覧の id を、そのままフォームへ入れられるパターンにする。 */
   preset(id) {
     return this.call({ op: 'preset', data: { id } }).pattern;
+  }
+
+  /**
+   * グレー本 表 3.3.1「面材釘 1 本あたりの一面せん断の数値」の一覧。
+   * 壁の入力欄へ読み込んだあとは、数値を手で直せる（4.5 の試験値を使う場合）。
+   */
+  materials() {
+    return this.call({ op: 'materials' }).materials;
+  }
+
+  /**
+   * グレー本 表 3.3.2「面材のせん断強度及び曲げヤング係数」の一覧。
+   * JAS 2 級の合板を使うときなど、規格だけを差し替えるために使う。
+   */
+  grades() {
+    return this.call({ op: 'grades' }).grades;
   }
 }
 

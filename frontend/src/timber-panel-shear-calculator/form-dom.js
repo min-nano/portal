@@ -7,7 +7,7 @@
 // 刷るので、画面と計算書で桁がずれない。
 
 import { buildDiagram } from './diagram.js';
-import { patternLabel } from './form-logic.js';
+import { patternLabel, wallLabel } from './form-logic.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -174,6 +174,263 @@ export function renderResult(root, report, pattern) {
     element(root, 'diagram'),
     buildDiagram(report.nails, pattern.width, pattern.height, report.diagram)
   );
+}
+
+// --- 壁（グレー本 3.3） -----------------------------------------------------
+
+/** 壁の入力欄を読み取る（wallId と面材の並びは画面が持たない）。 */
+export function readWall(root) {
+  const number = (id) => {
+    const value = element(root, id).value.trim();
+    return value === '' ? '' : Number(value);
+  };
+  return {
+    wallName: element(root, 'wallName').value.trim(),
+    height: Number(element(root, 'wallHeight').value) || 0,
+    width: Number(element(root, 'wallWidth').value) || 0,
+    materialId: element(root, 'materialSelect').value,
+    thickness: number('wallThickness'),
+    shearModulus: number('wallShearModulus'),
+    k: number('wallK'),
+    deltaV: number('wallDeltaV'),
+    deltaU: number('wallDeltaU'),
+    deltaPv: number('wallDeltaPv'),
+    gradeId: element(root, 'gradeSelect').value,
+    tauMax: number('wallTauMax'),
+    e1: number('wallE1'),
+    e2: number('wallE2'),
+    hasIntermediateStud: element(root, 'wallHasStud').checked,
+    // まだ選んでいない行（patternId が空）も、そのまま残して持ち帰る。ここで
+    // 落とすと「＋ 面材を追加」で出した行が、次の再計算で消えてしまう。
+    // 空の行は計算実装（wasm）が読むときに落ちる。
+    panels: Array.from(root.querySelectorAll('select[data-wall-panel]')).map(
+      (select, index) => ({
+        patternId: select.value,
+        grain: root.querySelectorAll('select[data-wall-grain]')[index].value,
+      })
+    ),
+  };
+}
+
+/** 壁の内容を入力欄へ写す。wall が null なら編集欄そのものを隠す。 */
+export function applyWall(root, wall, choices) {
+  element(root, 'wallEditor').hidden = !wall;
+  element(root, 'wallEmptyNote').hidden = Boolean(wall);
+  if (!wall) return;
+
+  element(root, 'wallName').value = wall.wallName || '';
+  element(root, 'wallHeight').value = wall.height || '';
+  element(root, 'wallWidth').value = wall.width || '';
+  element(root, 'materialSelect').value = wall.materialId || '';
+  element(root, 'gradeSelect').value = wall.gradeId || '';
+  element(root, 'wallHasStud').checked = wall.hasIntermediateStud !== false;
+  [
+    ['wallThickness', 'thickness'],
+    ['wallShearModulus', 'shearModulus'],
+    ['wallK', 'k'],
+    ['wallDeltaV', 'deltaV'],
+    ['wallDeltaU', 'deltaU'],
+    ['wallDeltaPv', 'deltaPv'],
+    ['wallTauMax', 'tauMax'],
+    ['wallE1', 'e1'],
+    ['wallE2', 'e2'],
+  ].forEach(([id, key]) => {
+    element(root, id).value = wall[key] === '' || wall[key] === undefined ? '' : wall[key];
+  });
+  renderWallPanels(root, wall.panels, choices);
+}
+
+/**
+ * グレー本 表 3.3.1 の面材と釘の組合せを、選べる一覧にする。
+ * 一覧は計算実装（wasm）が配るものをそのまま並べる。
+ */
+export function renderMaterialOptions(root, materials) {
+  fillSelect(element(root, 'materialSelect'), materials);
+}
+
+/**
+ * グレー本 表 3.3.2 の面材の規格を、選べる一覧にする。
+ * せん断破壊・せん断座屈の検定に使う τmax・E1・E2 がここで決まる。
+ */
+export function renderGradeOptions(root, grades) {
+  fillSelect(element(root, 'gradeSelect'), grades);
+}
+
+/** { id, label } の一覧を select へ並べ直す（先頭の案内だけ残す）。 */
+function fillSelect(select, entries) {
+  const document_ = select.ownerDocument;
+  while (select.options.length > 1) select.remove(1);
+  entries.forEach((entry) => {
+    const option = document_.createElement('option');
+    option.value = entry.id;
+    option.textContent = entry.label;
+    select.appendChild(option);
+  });
+}
+
+/**
+ * 壁を構成する面材の行（釘配列パターンを選ぶ select と、削除ボタン）を描く。
+ *
+ * 面材は「登録した配列パターンから選ぶ」ので、選択肢はそのときのパターンの
+ * 並びそのもの。パターンを消したあとで開いた壁は、選べなくなった面材の行が
+ * 「（選択してください）」に戻る。
+ */
+export function renderWallPanels(root, panels, choices) {
+  const container = element(root, 'wallPanels');
+  const document_ = container.ownerDocument;
+  container.innerHTML = '';
+
+  (panels || []).forEach((panel, index) => {
+    const row = document_.createElement('div');
+    row.className = 'wall-panel-row';
+
+    const select = document_.createElement('select');
+    select.setAttribute('data-wall-panel', String(index));
+    const empty = document_.createElement('option');
+    empty.value = '';
+    empty.textContent = '（選択してください）';
+    select.appendChild(empty);
+    choices.forEach((choice) => {
+      const option = document_.createElement('option');
+      option.value = choice.patternId;
+      option.textContent = choice.label;
+      select.appendChild(option);
+    });
+    select.value = choices.some((choice) => choice.patternId === panel.patternId)
+      ? panel.patternId
+      : '';
+
+    // 繊維方向（せん断座屈の a・b をどちらの辺に取るか）。
+    const grain = document_.createElement('select');
+    grain.setAttribute('data-wall-grain', String(index));
+    [
+      { value: '', text: '繊維方向: 長辺' },
+      { value: 'height', text: '繊維方向: 高さ' },
+      { value: 'width', text: '繊維方向: 幅' },
+    ].forEach(({ value, text }) => {
+      const option = document_.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      grain.appendChild(option);
+    });
+    grain.value = panel.grain || '';
+
+    const remove = document_.createElement('button');
+    remove.type = 'button';
+    remove.className = 'secondary';
+    remove.textContent = '削除';
+    remove.setAttribute('data-remove-wall-panel', String(index));
+
+    row.append(select, grain, remove);
+    container.appendChild(row);
+  });
+}
+
+/** 壁のタブと現在位置を描き直す。 */
+export function renderWallBar(root, walls, currentIndex, onSelect) {
+  element(root, 'wallPosition').textContent = walls.length
+    ? `壁 ${currentIndex + 1} / ${walls.length}`
+    : '壁 0 / 0';
+  element(root, 'wallPrevBtn').disabled = currentIndex <= 0;
+  element(root, 'wallNextBtn').disabled = currentIndex >= walls.length - 1;
+  element(root, 'removeWallBtn').disabled = walls.length === 0;
+
+  const tabs = element(root, 'wallTabs');
+  tabs.innerHTML = '';
+  walls.forEach((wall, index) => {
+    const button = tabs.ownerDocument.createElement('button');
+    button.type = 'button';
+    button.textContent = wallLabel(wall, index);
+    button.className = index === currentIndex ? 'tab current' : 'tab';
+    button.addEventListener('click', () => onSelect(index));
+    tabs.appendChild(button);
+  });
+}
+
+function appendRow(body, cells) {
+  const tr = body.ownerDocument.createElement('tr');
+  cells.forEach(({ text, className }) => {
+    const td = body.ownerDocument.createElement('td');
+    td.className = className;
+    td.textContent = text;
+    tr.appendChild(td);
+  });
+  body.appendChild(tr);
+  return tr;
+}
+
+/** 壁の計算結果を描く。report が null なら結果の欄を空にする。 */
+export function renderWallResult(root, report) {
+  const errorBox = element(root, 'wallError');
+  const summary = element(root, 'wallSummary');
+  const head = element(root, 'wallPanelHead');
+  const body = element(root, 'wallPanelBody');
+  const steps = element(root, 'wallStepsBody');
+  const bucklingHead = element(root, 'wallBucklingHead');
+  const bucklingBody = element(root, 'wallBucklingBody');
+  const checks = element(root, 'wallChecksBody');
+  const document_ = summary.ownerDocument;
+
+  [summary, head, body, steps, bucklingHead, bucklingBody, checks].forEach((node) => {
+    node.innerHTML = '';
+  });
+
+  if (!report || !report.ok) {
+    errorBox.hidden = !report;
+    errorBox.textContent = report ? report.error : '';
+    return;
+  }
+  errorBox.hidden = true;
+
+  report.summary.forEach((item) => {
+    const box = document_.createElement('div');
+    box.className = 'result-box';
+    const label = document_.createElement('span');
+    label.className = 'key';
+    label.textContent = item.unit ? `${item.key} [${item.unit}]` : item.key;
+    const value = document_.createElement('strong');
+    value.className = 'value';
+    value.textContent = item.value;
+    box.append(label, value);
+    summary.appendChild(box);
+  });
+
+  const appendTable = (headNode, bodyNode, columns, rows) => {
+    const headRow = document_.createElement('tr');
+    columns.forEach((column, index) => {
+      const th = document_.createElement('th');
+      th.className = index === 0 ? 'step-label' : 'step-value';
+      th.textContent = column;
+      headRow.appendChild(th);
+    });
+    headNode.appendChild(headRow);
+
+    rows.forEach((panel) => {
+      appendRow(bodyNode, [
+        { text: panel.label, className: 'step-label' },
+        ...panel.cells.map((cell) => ({ text: cell, className: 'step-value' })),
+      ]);
+    });
+  };
+
+  appendTable(head, body, report.panelColumns, report.panels);
+  appendTable(bucklingHead, bucklingBody, report.bucklingColumns, report.buckling);
+
+  report.steps.forEach((row) => {
+    appendRow(steps, [
+      { text: row.label, className: 'step-label' },
+      { text: row.eq, className: 'step-eq' },
+      { text: row.value, className: 'step-value' },
+    ]);
+  });
+
+  report.checks.forEach((check) => {
+    appendRow(checks, [
+      { text: check.label, className: 'step-label' },
+      { text: check.value, className: 'step-eq' },
+      { text: check.ok ? 'OK' : 'NG', className: check.ok ? 'step-value' : 'step-value ng' },
+    ]);
+  });
 }
 
 function svgNode(document_, name, attributes) {

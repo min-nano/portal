@@ -7,10 +7,16 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   applyPattern,
+  applyWall,
   readPattern,
+  readWall,
+  renderGradeOptions,
+  renderMaterialOptions,
   renderPatternBar,
   renderPresetOptions,
   renderResult,
+  renderWallBar,
+  renderWallResult,
   showPanelArea,
 } from '../src/timber-panel-shear-calculator/form-dom.js';
 
@@ -277,5 +283,306 @@ describe('renderResult', () => {
     expect(document.getElementById('resultNote').hidden).toBe(false);
     expect(document.getElementById('resultError').hidden).toBe(true);
     expect(document.getElementById('diagram').hasAttribute('hidden')).toBe(true);
+  });
+});
+
+// --- 壁（グレー本 3.3） -----------------------------------------------------
+
+// tools/timber-panel-shear-calculator/index.html の、壁の節が持つ入力欄。
+const WALL_MARKUP = `
+  <form id="wallForm">
+    <span id="wallPosition"></span>
+    <button type="button" id="wallPrevBtn"></button>
+    <button type="button" id="wallNextBtn"></button>
+    <button type="button" id="removeWallBtn"></button>
+    <div id="wallTabs"></div>
+    <p id="wallEmptyNote"></p>
+    <div id="wallEditor" hidden>
+      <input type="text" id="wallName">
+      <input type="number" id="wallHeight">
+      <input type="number" id="wallWidth">
+      <select id="materialSelect">
+        <option value="">選択すると…</option>
+        <option value="plywood12-n65">構造用合板 12mm + 鉄丸釘 N-65</option>
+      </select>
+      <input type="number" id="wallThickness">
+      <input type="number" id="wallShearModulus">
+      <input type="number" id="wallK">
+      <input type="number" id="wallDeltaV">
+      <input type="number" id="wallDeltaU">
+      <input type="number" id="wallDeltaPv">
+      <select id="gradeSelect">
+        <option value="">選択すると…</option>
+        <option value="plywood-jas1">構造用合板 JAS 1 級</option>
+      </select>
+      <input type="number" id="wallTauMax">
+      <input type="number" id="wallE1">
+      <input type="number" id="wallE2">
+      <input type="checkbox" id="wallHasStud" checked>
+      <div id="wallPanels"></div>
+      <div id="wallError" hidden></div>
+      <div id="wallSummary"></div>
+      <table><thead id="wallPanelHead"></thead><tbody id="wallPanelBody"></tbody></table>
+      <table><tbody id="wallStepsBody"></tbody></table>
+      <table><thead id="wallBucklingHead"></thead><tbody id="wallBucklingBody"></tbody></table>
+      <table><tbody id="wallChecksBody"></tbody></table>
+    </div>
+  </form>
+`;
+
+const WALL = {
+  wallId: 'w1',
+  wallName: 'グレー本 3.3 の計算例',
+  height: 3000,
+  width: 910,
+  materialId: 'plywood12-n65',
+  thickness: 12,
+  shearModulus: 0.4,
+  k: 0.483,
+  deltaV: 2.3,
+  deltaU: 17,
+  deltaPv: 1.13,
+  gradeId: 'plywood-jas1',
+  tauMax: 3.6,
+  e1: 3500,
+  e2: 5500,
+  hasIntermediateStud: true,
+  panels: [
+    { patternId: 'p1', grain: '' },
+    { patternId: 'p2', grain: 'width' },
+  ],
+};
+
+const CHOICES = [
+  { patternId: 'p1', label: '下側の面材' },
+  { patternId: 'p2', label: '上側の面材' },
+];
+
+// 計算実装（wasm）が返す形（数値は文字列として組み立て済み）。
+const WALL_REPORT = {
+  ok: true,
+  wallId: 'w1',
+  wallName: 'グレー本 3.3 の計算例',
+  panelColumns: ['面材（釘配列パターン）', 'Aw [mm²]', 'μ'],
+  panels: [
+    { label: '下側の面材', cells: ['1,656,200', '5.25012'] },
+    { label: '上側の面材', cells: ['828,100', '5.60468'] },
+  ],
+  summary: [
+    { key: 'K', unit: 'kN/rad', value: '1,258.14' },
+    { key: 'Pa', unit: 'kN', value: '8.38761' },
+    { key: 'ΔPa', unit: 'kN/m', value: '9.21715' },
+  ],
+  steps: [{ label: '許容せん断耐力 Pa', eq: '(3.3.1)', value: '8.38761 kN' }],
+  bucklingColumns: ['面材（釘配列パターン）', 'τN [N/mm²]', '判定'],
+  buckling: [
+    { label: '下側の面材', ok: true, cells: ['1.37631', 'OK'] },
+    { label: '上側の面材', ok: true, cells: ['1.39882', 'OK'] },
+  ],
+  checks: [
+    { label: 'Pa を決めた項', value: '変形角 1/150 時のモーメント K0/150', ok: true },
+    { label: '適用範囲 3.3(1)①', value: 'ΔPa = 9.21715 kN/m ≦ 13.7200 kN/m', ok: true },
+  ],
+};
+
+describe('applyWall / readWall', () => {
+  beforeEach(() => {
+    document.body.innerHTML = WALL_MARKUP;
+  });
+
+  it('入力欄へ写した内容をそのまま読み戻せる', () => {
+    applyWall(document, WALL, CHOICES);
+
+    expect(document.getElementById('wallEditor').hidden).toBe(false);
+    expect(document.getElementById('wallEmptyNote').hidden).toBe(true);
+    // wallId は画面が持たないので、読み戻しでは付かない。
+    const { wallId, ...rest } = WALL;
+    expect(readWall(document)).toEqual(rest);
+  });
+
+  it('壁が 1 枚も無ければ、編集欄を隠して案内だけを出す', () => {
+    applyWall(document, null, CHOICES);
+
+    expect(document.getElementById('wallEditor').hidden).toBe(true);
+    expect(document.getElementById('wallEmptyNote').hidden).toBe(false);
+  });
+
+  it('面材の行は、登録した釘配列パターンから選ぶ', () => {
+    applyWall(document, WALL, CHOICES);
+
+    const selects = document.querySelectorAll('select[data-wall-panel]');
+    expect(selects).toHaveLength(2);
+    // 先頭の「（選択してください）」＋パターンの数。
+    expect(selects[0].options).toHaveLength(3);
+    expect([...selects[0].options].map((o) => o.textContent)).toEqual([
+      '（選択してください）',
+      '下側の面材',
+      '上側の面材',
+    ]);
+    expect(selects[1].value).toBe('p2');
+    // 繊維方向（せん断座屈の a・b の取り方）も行ごとに選べる。
+    const grains = document.querySelectorAll('select[data-wall-grain]');
+    expect(grains).toHaveLength(2);
+    expect(grains[0].value).toBe('');
+    expect(grains[1].value).toBe('width');
+  });
+
+  it('消されたパターンを指していた面材は、未選択に戻す', () => {
+    applyWall(document, WALL, [CHOICES[0]]);
+
+    const selects = document.querySelectorAll('select[data-wall-panel]');
+    expect(selects[0].value).toBe('p1');
+    expect(selects[1].value).toBe('');
+    // 行そのものは残す（消すと「＋ 面材を追加」で出した行が消えてしまう）。
+    // 未選択の面材は、計算実装が読むときに落ちる。
+    expect(readWall(document).panels).toEqual([
+      { patternId: 'p1', grain: '' },
+      { patternId: '', grain: 'width' },
+    ]);
+  });
+
+  it('未入力の数値は空のまま読み戻す（0 と区別する）', () => {
+    applyWall(document, { ...WALL, k: '', deltaPv: '' }, CHOICES);
+
+    const wall = readWall(document);
+    expect(wall.k).toBe('');
+    expect(wall.deltaPv).toBe('');
+    expect(wall.thickness).toBe(12);
+  });
+});
+
+describe('renderGradeOptions', () => {
+  beforeEach(() => {
+    document.body.innerHTML = WALL_MARKUP;
+  });
+
+  it('グレー本 表 3.3.2 の規格を選べるようにする', () => {
+    renderGradeOptions(document, [
+      { id: 'plywood-jas1', label: '構造用合板 JAS 1 級' },
+      { id: 'mdf', label: '構造用 MDF JIS A 5905' },
+    ]);
+
+    const select = document.getElementById('gradeSelect');
+    expect(select.options).toHaveLength(3); // 先頭の案内 + 2 件
+    expect(select.options[1].value).toBe('plywood-jas1');
+  });
+});
+
+describe('renderMaterialOptions', () => {
+  beforeEach(() => {
+    document.body.innerHTML = WALL_MARKUP;
+  });
+
+  it('グレー本 表 3.3.1 の組合せを選べるようにする', () => {
+    renderMaterialOptions(document, [
+      { id: 'plywood12-n50', label: '構造用合板 12mm + 鉄丸釘 N-50' },
+      { id: 'mdf9-cn50', label: '構造用 MDF 9mm + 太め鉄丸釘(CN 釘)50' },
+    ]);
+
+    const select = document.getElementById('materialSelect');
+    expect(select.options).toHaveLength(3); // 先頭の案内 + 2 件
+    expect(select.options[1].value).toBe('plywood12-n50');
+    expect(select.options[2].textContent).toBe('構造用 MDF 9mm + 太め鉄丸釘(CN 釘)50');
+  });
+
+  it('描き直しても選択肢が積み上がらない', () => {
+    const materials = [{ id: 'plywood12-n50', label: '構造用合板' }];
+    renderMaterialOptions(document, materials);
+    renderMaterialOptions(document, materials);
+
+    expect(document.getElementById('materialSelect').options).toHaveLength(2);
+  });
+});
+
+describe('renderWallBar', () => {
+  beforeEach(() => {
+    document.body.innerHTML = WALL_MARKUP;
+  });
+
+  it('壁が無いときは 0 / 0 と出し、削除も送りもできない', () => {
+    renderWallBar(document, [], 0, () => {});
+
+    expect(document.getElementById('wallPosition').textContent).toBe('壁 0 / 0');
+    expect(document.getElementById('removeWallBtn').disabled).toBe(true);
+    expect(document.getElementById('wallPrevBtn').disabled).toBe(true);
+    expect(document.getElementById('wallNextBtn').disabled).toBe(true);
+    expect(document.getElementById('wallTabs').children).toHaveLength(0);
+  });
+
+  it('タブを並べ、押すと選ばれた位置を知らせる', () => {
+    const chosen = [];
+    renderWallBar(document, [WALL, { wallName: '' }], 0, (index) => chosen.push(index));
+
+    const tabs = document.getElementById('wallTabs').children;
+    expect([...tabs].map((tab) => tab.textContent)).toEqual([
+      'グレー本 3.3 の計算例',
+      '壁2',
+    ]);
+    expect(tabs[0].className).toBe('tab current');
+    tabs[1].click();
+    expect(chosen).toEqual([1]);
+  });
+});
+
+describe('renderWallResult', () => {
+  beforeEach(() => {
+    document.body.innerHTML = WALL_MARKUP;
+  });
+
+  it('剛性・許容せん断耐力と、面材ごとの値・途中経過・判定を並べる', () => {
+    renderWallResult(document, WALL_REPORT);
+
+    expect(document.getElementById('wallError').hidden).toBe(true);
+    const boxes = document.querySelectorAll('#wallSummary .result-box');
+    expect([...boxes].map((box) => box.querySelector('.key').textContent)).toEqual([
+      'K [kN/rad]',
+      'Pa [kN]',
+      'ΔPa [kN/m]',
+    ]);
+    expect(boxes[1].querySelector('.value').textContent).toBe('8.38761');
+
+    // 面材ごとの表は、見出しと面材の数だけ行が並ぶ。
+    const head = document.querySelectorAll('#wallPanelHead th');
+    expect([...head].map((th) => th.textContent)).toEqual(WALL_REPORT.panelColumns);
+    const rows = document.querySelectorAll('#wallPanelBody tr');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].children[1].textContent).toBe('1,656,200');
+
+    expect(document.querySelectorAll('#wallStepsBody tr')).toHaveLength(1);
+    // せん断破壊・せん断座屈の検定も、面材ごとの表で出す。
+    expect(document.querySelectorAll('#wallBucklingHead th')).toHaveLength(3);
+    expect(document.querySelectorAll('#wallBucklingBody tr')).toHaveLength(2);
+    expect(document.querySelectorAll('#wallChecksBody tr')).toHaveLength(2);
+  });
+
+  it('適用範囲を外れた壁は NG と出す', () => {
+    const checks = [{ label: '適用範囲', value: 'ΔPa > 13.7200 kN/m', ok: false }];
+    renderWallResult(document, { ...WALL_REPORT, checks });
+
+    const cell = document.querySelector('#wallChecksBody tr').children[2];
+    expect(cell.textContent).toBe('NG');
+    expect(cell.className).toContain('ng');
+  });
+
+  it('計算できない壁は理由だけを出す', () => {
+    renderWallResult(document, {
+      ok: false,
+      wallId: 'w1',
+      error: '壁を構成する面材がありません。',
+    });
+
+    expect(document.getElementById('wallError').hidden).toBe(false);
+    expect(document.getElementById('wallError').textContent).toContain('面材がありません');
+    expect(document.querySelectorAll('#wallSummary .result-box')).toHaveLength(0);
+  });
+
+  it('壁を選んでいなければ、結果の欄を空にする', () => {
+    renderWallResult(document, WALL_REPORT);
+    renderWallResult(document, null);
+
+    expect(document.getElementById('wallError').hidden).toBe(true);
+    expect(document.querySelectorAll('#wallSummary .result-box')).toHaveLength(0);
+    expect(document.querySelectorAll('#wallPanelBody tr')).toHaveLength(0);
+    expect(document.querySelectorAll('#wallBucklingBody tr')).toHaveLength(0);
   });
 });

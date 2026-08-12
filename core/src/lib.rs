@@ -9,11 +9,13 @@
 //! 呼び出し口は 1 つだけで、JSON の要求を渡すと JSON の応答が返る:
 //!
 //! ```text
-//! {"op": "computeAll", "data": {...}}  → {"ok": true,  "patterns": [...]}
-//! {"op": "validate",   "data": {...}}  → {"ok": true,  "patterns": [...]}
+//! {"op": "computeAll", "data": {...}}  → {"ok": true,  "patterns": [...], "walls": [...]}
+//! {"op": "validate",   "data": {...}}  → {"ok": true,  "patterns": [...], "walls": [...]}
 //! {"op": "normalize",  "data": {...}}  → {"ok": true,  "data": {...}}
 //! {"op": "presets"}                    → {"ok": true,  "presets": [...]}
 //! {"op": "preset",     "data": {...}}  → {"ok": true,  "preset": {...}, "pattern": {...}}
+//! {"op": "materials"}                  → {"ok": true,  "materials": [...]}
+//! {"op": "grades"}                     → {"ok": true,  "grades": [...]}
 //! {"op": "config"}                     → {"ok": true,  "version": "1.0.0", ...}
 //! 失敗                                  → {"ok": false, "error": "利用者に見せる日本語"}
 //! ```
@@ -26,6 +28,7 @@ pub mod json;
 pub mod nail_array;
 pub mod presets;
 pub mod report;
+pub mod wall;
 
 use json::Value;
 
@@ -59,14 +62,17 @@ fn dispatch(request: &str) -> Result<Value, String> {
     match operation {
         "computeAll" => {
             let form = report::normalize_data(data())?;
-            Ok(Value::obj([("patterns", report::compute_all(&form))]))
+            Ok(Value::obj([
+                ("patterns", report::compute_all(&form)),
+                ("walls", report::compute_all_walls(&form)),
+            ]))
         }
         "validate" => {
             let form = report::normalize_data(data())?;
-            Ok(Value::obj([(
-                "patterns",
-                Value::Arr(report::validate(&form)?),
-            )]))
+            Ok(Value::obj([
+                ("patterns", Value::Arr(report::validate(&form)?)),
+                ("walls", Value::Arr(report::validate_walls(&form)?)),
+            ]))
         }
         "normalize" => {
             let form = report::normalize_data(data())?;
@@ -94,10 +100,65 @@ fn dispatch(request: &str) -> Result<Value, String> {
                 ("pattern", preset.to_pattern_value()),
             ]))
         }
+        // グレー本 表 3.3.1「面材釘 1 本あたりの一面せん断の数値」。壁の計算の
+        // 入力欄へ読み込んだあと、手で直せるようにするための一覧。
+        "materials" => Ok(Value::obj([(
+            "materials",
+            Value::Arr(
+                wall::materials()
+                    .iter()
+                    .map(|material| {
+                        // 表 3.3.2 の既定の規格も一緒に配って、1 回の選択で
+                        // せん断破壊・せん断座屈の検定まで数値がそろうようにする。
+                        let sheathing = material.sheathing();
+                        Value::obj([
+                            ("id", material.id.into()),
+                            ("label", material.label().into()),
+                            ("panel", material.panel.into()),
+                            ("nailLabel", material.nail_label.into()),
+                            ("thickness", material.thickness.into()),
+                            ("shearModulus", material.shear_modulus.into()),
+                            ("k", material.nail.k.into()),
+                            ("deltaV", material.nail.delta_v.into()),
+                            ("deltaU", material.nail.delta_u.into()),
+                            ("deltaPv", material.nail.delta_pv.into()),
+                            ("gradeId", material.grade_id.into()),
+                            ("tauMax", sheathing.tau_max.into()),
+                            ("e1", sheathing.e1.into()),
+                            ("e2", sheathing.e2.into()),
+                        ])
+                    })
+                    .collect(),
+            ),
+        )])),
+        // グレー本 表 3.3.2「面材のせん断強度及び曲げヤング係数」。
+        // JAS 2 級の合板を使うときなど、規格だけを差し替えるための一覧。
+        "grades" => Ok(Value::obj([(
+            "grades",
+            Value::Arr(
+                wall::grades()
+                    .iter()
+                    .map(|grade| {
+                        Value::obj([
+                            ("id", grade.id.into()),
+                            ("label", grade.label().into()),
+                            ("panel", grade.panel.into()),
+                            ("grade", grade.grade.into()),
+                            ("tauMax", grade.tau_max.into()),
+                            ("e1", grade.e1.into()),
+                            ("e2", grade.e2.into()),
+                        ])
+                    })
+                    .collect(),
+            ),
+        )])),
         "config" => Ok(Value::obj([
             ("version", VERSION.into()),
             ("maxPatterns", report::MAX_PATTERNS.into()),
             ("maxNails", report::MAX_NAILS.into()),
+            ("maxWalls", report::MAX_WALLS.into()),
+            ("maxWallPanels", report::MAX_WALL_PANELS.into()),
+            ("allowableShearLimit", wall::ALLOWABLE_SHEAR_LIMIT.into()),
             ("significantDigits", format::SIGNIFICANT_DIGITS.into()),
         ])),
         other => Err(format!("知らない操作です: {other}")),
@@ -127,6 +188,75 @@ mod tests {
         assert_eq!(patterns.len(), 2);
         assert_eq!(patterns[0].get("ok"), Some(&Value::Bool(true)));
         assert_eq!(patterns[1].get("ok"), Some(&Value::Bool(false)));
+    }
+
+    /// 壁は釘配列パターンを patternId で指す。計算結果はパターンと同じ 1 回の
+    /// 呼び出しで返る（画面が 2 度呼ばなくて済むように）。
+    #[test]
+    fn compute_all_also_returns_the_walls() {
+        let response = call_json(
+            r#"{"op": "computeAll", "data": {
+                 "patterns": [{"patternId": "p1", "width": 910, "height": 610,
+                               "gridX": "10, 455, 900", "gridY": "10, 155, 305, 455, 600"}],
+                 "walls": [
+                   {"wallId": "w1", "height": 3000, "width": 910, "thickness": 12,
+                    "shearModulus": 0.4, "k": 0.483, "deltaV": 2.3, "deltaU": 17,
+                    "deltaPv": 1.13, "tauMax": 3.6, "e1": 3500, "e2": 5500,
+                    "hasIntermediateStud": true, "panels": [{"patternId": "p1"}]},
+                   {"wallId": "w2", "height": 3000, "width": 910, "thickness": 12,
+                    "shearModulus": 0.4, "k": 0.483, "deltaV": 2.3, "deltaU": 17,
+                    "deltaPv": 1.13, "tauMax": 3.6, "e1": 3500, "e2": 5500,
+                    "hasIntermediateStud": true, "panels": []}
+                 ]}}"#,
+        );
+
+        assert_eq!(response.get("ok"), Some(&Value::Bool(true)));
+        let walls = response.get("walls").unwrap().as_array().unwrap();
+        assert_eq!(walls.len(), 2);
+        assert_eq!(walls[0].get("ok"), Some(&Value::Bool(true)));
+        assert!(walls[0].get("result").unwrap().get("Pa").is_some());
+        // 面材を選んでいない壁だけが ok: false（他の壁の結果は失わない）。
+        assert_eq!(walls[1].get("ok"), Some(&Value::Bool(false)));
+    }
+
+    /// 壁を置いていない物件でも walls は空の配列で返る（画面が場合分けしない）。
+    #[test]
+    fn compute_all_returns_an_empty_wall_list_when_there_are_none() {
+        let response = call_json(r#"{"op": "computeAll", "data": {"patterns": []}}"#);
+        assert!(response.get("walls").unwrap().as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn materials_list_the_combinations_of_the_book_table() {
+        let response = call_json(r#"{"op": "materials"}"#);
+
+        let materials = response.get("materials").unwrap().as_array().unwrap();
+        assert_eq!(materials.len(), 12);
+        assert_eq!(materials[0].get("id").unwrap().as_str(), Some("plywood12-n50"));
+        assert_eq!(materials[0].get("shearModulus").unwrap().as_f64(), Some(0.40));
+        assert_eq!(materials[0].get("deltaPv").unwrap().as_f64(), Some(0.91));
+    }
+
+    #[test]
+    fn validate_refuses_a_wall_that_cannot_be_calculated() {
+        let response = call_json(
+            r#"{"op": "validate", "data": {
+                 "patterns": [{"patternId": "p1", "width": 910, "height": 610,
+                               "gridX": "10, 455, 900", "gridY": "10, 155, 305, 455, 600"}],
+                 "walls": [{"wallName": "南面", "height": 3000, "width": 910,
+                            "thickness": 12, "shearModulus": 0.4, "k": 0.483,
+                            "deltaV": 2.3, "deltaU": 17, "deltaPv": 1.13,
+                            "tauMax": 3.6, "e1": 3500, "e2": 5500,
+                            "panels": []}]}}"#,
+        );
+
+        assert_eq!(response.get("ok"), Some(&Value::Bool(false)));
+        assert!(response
+            .get("error")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("「南面」を計算できません"));
     }
 
     #[test]

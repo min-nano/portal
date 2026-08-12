@@ -14,7 +14,11 @@
 // 続きを編集できる。ファイル操作の考え方も証明書と同じ「新規作成 / 開く /
 // 保存 / 別名で保存」で、共通部分は ../pdf-file-ops.js・../save-dialogs.js。
 //
-// 1 ファイル = 1 物件、1 ページ = 1 パターン。物件の中の複数パターンは
+// 釘配列諸定数（3.2）に続けて、その配列を面材として選ぶ **面材張り大壁**
+// （3.3）の面内せん断剛性 K と許容せん断耐力 Pa も求める。
+//
+// 1 ファイル = 1 物件。計算書 PDF は「1 ページ = 1 パターン」に続けて
+// 「1 ページ = 1 壁」を並べる。物件の中の複数パターン・複数の壁は、それぞれ
 // ページ送りで切り替えて編集する。
 
 import '../styles.css';
@@ -33,25 +37,38 @@ import {
 } from '../pdf-file-ops.js';
 import {
   applyPattern,
+  applyWall,
   readPattern,
+  readWall,
+  renderGradeOptions,
+  renderMaterialOptions,
   renderPatternBar,
   renderPresetOptions,
   renderResult,
+  renderWallBar,
+  renderWallPanels,
+  renderWallResult,
   showPanelArea,
   syncNailModeVisibility,
 } from './form-dom.js';
 import {
   canRemovePattern,
+  canRemoveWall,
   defaultSaveName,
   emptyFormData,
   formSignature,
   indexAfterRemoval,
   makePattern,
+  makeWall,
   mergeFormData,
+  panelChoices,
   patternLabel,
   toRequestBody,
   verificationOf,
   verificationWarning,
+  wallFieldsFromGrade,
+  wallFieldsFromMaterial,
+  wallLabel,
 } from './form-logic.js';
 import { loadCore } from './core.js';
 
@@ -65,9 +82,13 @@ const CALCULATE_DEBOUNCE_MS = 60;
 
 let config = null; // /config の応答（既定ファイル名・計算実装の在り処）
 let core = null; // 計算実装（wasm）。サーバと同じバイト列。
-let data = null; // 画面が編集中の内容 { projectName, issuedOn, patterns }
+let data = null; // 画面が編集中の内容 { projectName, issuedOn, patterns, walls }
 let currentIndex = 0;
-let reports = []; // パターンごとの計算結果
+let currentWallIndex = 0;
+let reports = { patterns: [], walls: [] }; // パターン・壁ごとの計算結果
+let materials = []; // グレー本 表 3.3.1 の面材と釘の組合せ
+let grades = []; // グレー本 表 3.3.2 の面材の規格
+let panelChoiceSignature = ''; // 壁の面材として選べるパターンの一覧（前回の内容）
 let calculateTimer = null;
 
 let sourceFile = null; // 開いているファイル（Drive 上の PDF）。{ id, name }
@@ -97,26 +118,42 @@ function currentPattern() {
   return data.patterns[currentIndex];
 }
 
-/** 入力欄の内容を、編集中のパターンへ書き戻す。 */
+function currentWall() {
+  return data.walls[currentWallIndex] || null;
+}
+
+/** 入力欄の内容を、編集中のパターン・壁へ書き戻す。 */
 function captureCurrentPattern() {
   Object.assign(currentPattern(), readPattern(document));
+  const wall = currentWall();
+  if (wall) Object.assign(wall, readWall(document));
   data.projectName = document.getElementById('projectName').value.trim();
   data.issuedOn = document.getElementById('issuedOn').value;
 }
 
-/** 編集中のパターンを入力欄へ写し、タブと計算結果を描き直す。 */
+/** 編集中のパターン・壁を入力欄へ写し、タブと計算結果を描き直す。 */
 function renderCurrent() {
   document.getElementById('projectName').value = data.projectName;
   document.getElementById('issuedOn').value = data.issuedOn;
   applyPattern(document, currentPattern());
   renderPatternBar(document, data.patterns, currentIndex, goToPattern);
+  applyWall(document, currentWall(), panelChoices(data));
+  panelChoiceSignature = JSON.stringify(panelChoices(data));
+  renderWallBar(document, data.walls, currentWallIndex, goToWall);
   renderCurrentResult();
 }
 
 function renderCurrentResult() {
   const pattern = currentPattern();
-  const report = reports.find((r) => r && r.patternId === pattern.patternId) || null;
+  const report =
+    reports.patterns.find((r) => r && r.patternId === pattern.patternId) || null;
   renderResult(document, report, pattern);
+
+  const wall = currentWall();
+  renderWallResult(
+    document,
+    wall ? reports.walls.find((r) => r && r.wallId === wall.wallId) || null : null
+  );
 }
 
 function goToPattern(index) {
@@ -140,6 +177,78 @@ function removePattern() {
   if (!window.confirm(`「${name}」を削除します。よろしいですか？`)) return;
   data.patterns.splice(currentIndex, 1);
   currentIndex = indexAfterRemoval(currentIndex, data.patterns.length);
+  renderCurrent();
+  scheduleCalculate();
+}
+
+// --- 壁（グレー本 3.3） -----------------------------------------------------
+
+function goToWall(index) {
+  if (index < 0 || index >= data.walls.length || index === currentWallIndex) return;
+  captureCurrentPattern();
+  currentWallIndex = index;
+  renderCurrent();
+}
+
+function addWall() {
+  captureCurrentPattern();
+  data.walls.push(makeWall());
+  currentWallIndex = data.walls.length - 1;
+  renderCurrent();
+  scheduleCalculate();
+}
+
+function removeWall() {
+  if (!canRemoveWall(data)) return;
+  const name = wallLabel(currentWall(), currentWallIndex);
+  if (!window.confirm(`「${name}」を削除します。よろしいですか？`)) return;
+  data.walls.splice(currentWallIndex, 1);
+  currentWallIndex = indexAfterRemoval(currentWallIndex, data.walls.length);
+  renderCurrent();
+  scheduleCalculate();
+}
+
+/** 面材の行を 1 つ増やす（どのパターンを使うかは、そのあと選んでもらう）。 */
+function addWallPanel() {
+  const wall = currentWall();
+  if (!wall) return;
+  captureCurrentPattern();
+  wall.panels.push({ patternId: '' });
+  renderCurrent();
+}
+
+function removeWallPanel(index) {
+  const wall = currentWall();
+  if (!wall) return;
+  captureCurrentPattern();
+  wall.panels.splice(index, 1);
+  renderCurrent();
+  scheduleCalculate();
+}
+
+/**
+ * グレー本 表 3.3.1 の面材と釘の組合せを、今の壁の入力欄へ読み込む。
+ *
+ * 表 3.3.2 の既定の規格（構造用合板なら JAS 1 級）も一緒に入るので、この
+ * 1 回でせん断破壊・せん断座屈の検定に要る τmax・E1・E2 までそろう。
+ */
+function loadMaterial(id) {
+  const wall = currentWall();
+  const material = materials.find((entry) => entry.id === id);
+  if (!wall || !material) return;
+  captureCurrentPattern();
+  Object.assign(wall, wallFieldsFromMaterial(material));
+  renderCurrent();
+  scheduleCalculate();
+}
+
+/** グレー本 表 3.3.2 の面材の規格を、今の壁の入力欄へ読み込む。 */
+function loadGrade(id) {
+  const wall = currentWall();
+  const grade = grades.find((entry) => entry.id === id);
+  if (!wall || !grade) return;
+  captureCurrentPattern();
+  Object.assign(wall, wallFieldsFromGrade(grade));
   renderCurrent();
   scheduleCalculate();
 }
@@ -177,11 +286,20 @@ function calculate() {
   try {
     reports = core.computeAll(toRequestBody(data));
   } catch (error) {
-    // パターンごとの不備は ok: false として返るので、ここへ来るのは
+    // パターン・壁ごとの不備は ok: false として返るので、ここへ来るのは
     // 入力全体が壊れている場合（数値でない寸法など）。
-    reports = [];
+    reports = { patterns: [], walls: [] };
     showMessage(error.message, 'red');
   }
+  // パターン名を変えると、壁の面材の選択肢の表示も変わる。入力欄そのものは
+  // 書き戻さない（打鍵のたびに value を入れ直すとカーソルが飛ぶ）ので、
+  // 選択肢が変わったときだけ面材の行を描き直す。
+  const signature = JSON.stringify(panelChoices(data));
+  const wall = currentWall();
+  if (wall && signature !== panelChoiceSignature) {
+    renderWallPanels(document, wall.panels, panelChoices(data));
+  }
+  panelChoiceSignature = signature;
   renderCurrentResult();
 }
 
@@ -196,6 +314,13 @@ function watchInputs() {
   form.addEventListener('change', (event) => {
     if (event.target.name === 'nailMode') syncNailModeVisibility(document);
     scheduleCalculate();
+  });
+  // 面材の行は数が変わるので、行ごとではなく容器で受ける。
+  form.addEventListener('click', (event) => {
+    const index = event.target.getAttribute
+      ? event.target.getAttribute('data-remove-wall-panel')
+      : null;
+    if (index !== null) removeWallPanel(Number(index));
   });
 }
 
@@ -264,7 +389,8 @@ async function newDocument() {
   if (!(await confirmDiscardChanges('新規作成'))) return;
   data = emptyFormData();
   currentIndex = 0;
-  reports = [];
+  currentWallIndex = 0;
+  reports = { patterns: [], walls: [] };
   documentName = '';
   setSourceFile(null);
   renderCurrent();
@@ -277,7 +403,8 @@ async function newDocument() {
 function applyParsed(parsed) {
   data = mergeFormData(parsed);
   currentIndex = 0;
-  reports = [];
+  currentWallIndex = 0;
+  reports = { patterns: [], walls: [] };
   documentName = parsed.suggestedFileName || '';
   setSourceFile(parsed.file && parsed.file.id ? parsed.file : null);
   renderCurrent();
@@ -436,6 +563,21 @@ async function start() {
   document
     .getElementById('nextBtn')
     .addEventListener('click', () => goToPattern(currentIndex + 1));
+  document.getElementById('addWallBtn').addEventListener('click', addWall);
+  document.getElementById('removeWallBtn').addEventListener('click', removeWall);
+  document.getElementById('addWallPanelBtn').addEventListener('click', addWallPanel);
+  document
+    .getElementById('wallPrevBtn')
+    .addEventListener('click', () => goToWall(currentWallIndex - 1));
+  document
+    .getElementById('wallNextBtn')
+    .addEventListener('click', () => goToWall(currentWallIndex + 1));
+  document.getElementById('materialSelect').addEventListener('change', (event) => {
+    loadMaterial(event.target.value);
+  });
+  document.getElementById('gradeSelect').addEventListener('change', (event) => {
+    loadGrade(event.target.value);
+  });
   watchInputs();
 
   // ページを閉じる・再読み込みするときも、未保存の入力があれば引き止める。
@@ -456,8 +598,13 @@ async function start() {
     return;
   }
 
-  // 呼び出せる釘配列（グレー本 表 3.2.1）は計算実装が持っている。
+  // 呼び出せる釘配列（グレー本 表 3.2.1）と、面材と釘の組合せ（同 表 3.3.1）は
+  // どちらも計算実装が持っている。
   renderPresetOptions(document, core.presets());
+  materials = core.materials();
+  renderMaterialOptions(document, materials);
+  grades = core.grades();
+  renderGradeOptions(document, grades);
 
   data = emptyFormData();
   setSourceFile(null);

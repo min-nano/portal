@@ -60,7 +60,7 @@ describe('計算実装（wasm）', () => {
   });
 
   it('グレー本の計算例を、計算書と同じ桁で返す', async () => {
-    const [report] = (await core()).computeAll({ patterns: [EXAMPLE] });
+    const [report] = (await core()).computeAll({ patterns: [EXAMPLE] }).patterns;
 
     expect(report.ok).toBe(true);
     expect(Object.fromEntries(report.summary.map((s) => [s.key, s.value]))).toEqual({
@@ -74,7 +74,7 @@ describe('計算実装（wasm）', () => {
   });
 
   it('釘配列図の範囲と目盛も返す（計算書 PDF と同じもの）', async () => {
-    const [report] = (await core()).computeAll({ patterns: [EXAMPLE] });
+    const [report] = (await core()).computeAll({ patterns: [EXAMPLE] }).patterns;
 
     expect(report.diagram.maxX).toBe(910);
     expect(report.diagram.xTicks.map((t) => t.label)).toEqual(['10', '455', '900']);
@@ -99,12 +99,113 @@ describe('計算実装（wasm）', () => {
       gridY: '10, 155, 305, 455, 600',
     });
 
-    const [report] = loaded.computeAll({ patterns: [{ patternId: 'p1', ...pattern }] });
+    const [report] = loaded.computeAll({
+      patterns: [{ patternId: 'p1', ...pattern }],
+    }).patterns;
     expect(Object.fromEntries(report.summary.map((s) => [s.key, s.value]))).toEqual({
       Ixy: '0.888868',
       Zxy: '0.00358851',
       Cxy: '1.26155',
     });
+  });
+
+  it('グレー本 表 3.3.1 の面材と釘の組合せを一覧する', async () => {
+    const materials = (await core()).materials();
+
+    expect(materials).toHaveLength(12);
+    expect(materials[0]).toMatchObject({
+      id: 'plywood12-n50',
+      label: '構造用合板 12mm + 鉄丸釘 N-50',
+      thickness: 12,
+      shearModulus: 0.4,
+      k: 0.43,
+      deltaPv: 0.91,
+      // 表 3.3.2 の既定の規格（構造用合板は JAS 1 級）も一緒に付いてくる。
+      gradeId: 'plywood-jas1',
+      tauMax: 3.6,
+      e1: 3500,
+      e2: 5500,
+    });
+  });
+
+  it('グレー本 表 3.3.2 の面材の規格を一覧する', async () => {
+    const grades = (await core()).grades();
+
+    expect(grades.map((grade) => grade.id)).toEqual([
+      'plywood-jas1',
+      'plywood-jas2',
+      'mdf',
+      'particleboard',
+    ]);
+    // JAS 2 級はせん断強度だけが下がる（注 *1 により E1・E2 は 1 級と同じ）。
+    expect(grades[1]).toMatchObject({ tauMax: 2.4, e1: 3500, e2: 5500 });
+  });
+
+  it('グレー本 3.3 の計算例（図 3.3.10）を、本と同じ答えで返す', async () => {
+    // 面材は表 3.2.1 の配列をそのまま登録し、壁はその 2 枚を選ぶ。
+    // 釘 1 本あたりの数値は、本文が計算に使っているものをそのまま入れる。
+    const loaded = await core();
+    const patterns = ['910x1820-s455-n75-hi', '910x910-s455-n75-ro'].map(
+      (id, index) => ({ patternId: `p${index + 1}`, ...loaded.preset(id) })
+    );
+
+    const { walls } = loaded.computeAll({
+      patterns,
+      walls: [
+        {
+          wallId: 'w1',
+          wallName: 'グレー本 3.3 の計算例',
+          height: 3000,
+          width: 910,
+          thickness: 12,
+          shearModulus: 0.4,
+          k: 0.483,
+          deltaV: 2.3,
+          deltaU: 17,
+          deltaPv: 1.13,
+          tauMax: 3.6,
+          e1: 3500,
+          e2: 5500,
+          hasIntermediateStud: true,
+          panels: [{ patternId: 'p1' }, { patternId: 'p2' }],
+        },
+      ],
+    });
+
+    expect(walls[0].ok).toBe(true);
+    // 本の答えは Pa = 8.37 kN、ΔPa = 9.20 kN/m（決めているのは K0/150）。
+    expect(walls[0].governing).toBe('drift');
+    expect(walls[0].result.Pa).toBeCloseTo(8.37, 1);
+    expect(walls[0].result.dPa).toBeCloseTo(9.2, 1);
+    expect(walls[0].withinLimit).toBe(true);
+    expect(walls[0].panels.map((panel) => panel.label)).toEqual([
+      '1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）',
+      '910×910 縦置・ロ型（間柱・根太 @455 / 釘 @75）',
+    ]);
+    // 面材のせん断破壊・せん断座屈（式 3.3.8〜3.3.11）も、どちらも通る。
+    expect(walls[0].shearOk).toBe(true);
+    expect(walls[0].bucklingOk).toBe(true);
+    expect(walls[0].buckling.every((panel) => panel.ok)).toBe(true);
+  });
+
+  it('計算できない壁は、理由を添えて ok: false で返る', async () => {
+    const { walls } = (await core()).computeAll({
+      patterns: [EXAMPLE],
+      walls: [
+        {
+          wallId: 'w1',
+          height: 3000,
+          width: 910,
+          tauMax: 3.6,
+          e1: 3500,
+          e2: 5500,
+          panels: [],
+        },
+      ],
+    });
+
+    expect(walls[0].ok).toBe(false);
+    expect(walls[0].error).toContain('面材がありません');
   });
 
   it('知らない釘配列を呼ぶと、日本語の文面で投げる', async () => {
@@ -114,9 +215,10 @@ describe('計算実装（wasm）', () => {
   });
 
   it('計算できないパターンは、理由を添えて ok: false で返る', async () => {
-    const [report] = (await core()).computeAll({
+    const { patterns } = (await core()).computeAll({
       patterns: [{ ...EXAMPLE, gridX: '', gridY: '' }],
     });
+    const [report] = patterns;
 
     expect(report.ok).toBe(false);
     expect(report.error).toContain('釘座標が入力されていません');
@@ -142,9 +244,10 @@ describe('計算実装（wasm）', () => {
   it('メモリが広がる大きさの入力でも壊れない', async () => {
     const axis = Array.from({ length: 40 }, (_, index) => index * 10).join(', ');
 
-    const [report] = (await core()).computeAll({
+    const { patterns } = (await core()).computeAll({
       patterns: [{ ...EXAMPLE, gridX: axis, gridY: axis }],
     });
+    const [report] = patterns;
 
     expect(report.nails).toHaveLength(1600);
   });

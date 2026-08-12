@@ -129,12 +129,17 @@ def screen_verification(body: dict, **overrides) -> dict:
     画面と同じ .wasm を同じ入力で回すので、これはそのまま「食い違いのない
     正常な保存」になる。
     """
-    data = panel_shear.normalize_data(body)
+    reports = panel_shear.compute_all(panel_shear.normalize_data(body))
     verify = {
         "coreVersion": nail_core.version(),
         "patterns": [
             {"patternId": report["patternId"], "result": report["result"]}
-            for report in panel_shear.compute_all(data)
+            for report in reports["patterns"]
+            if report["ok"]
+        ],
+        "walls": [
+            {"wallId": report["wallId"], "result": report["result"]}
+            for report in reports["walls"]
             if report["ok"]
         ],
     }

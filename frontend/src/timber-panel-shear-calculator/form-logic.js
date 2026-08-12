@@ -14,11 +14,21 @@ import { sanitizeFileName } from '../pdf-file-ops.js';
 const DEFAULT_WIDTH = 910;
 const DEFAULT_HEIGHT = 2730;
 
+/** 壁の既定値。階高は一般的な 1 階、面材は構造用合板の既定（表 3.3.1 の脚注）。 */
+const DEFAULT_WALL_HEIGHT = 2900;
+const DEFAULT_WALL_WIDTH = 910;
+
 let patternSequence = 0;
+let wallSequence = 0;
 
 /** パターンの一意 ID を作る。PDF に埋め込まれ、読み込み後もそのまま使う。 */
 export function newPatternId() {
   return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** 壁の一意 ID を作る。パターンと同じく PDF に埋め込まれる。 */
+export function newWallId() {
+  return `w_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /** 新しいパターン（1 枚の面材の入力）を作る。 */
@@ -37,6 +47,72 @@ export function makePattern(overrides) {
   };
 }
 
+/**
+ * 新しい壁（面材張り大壁 1 枚分の入力）を作る。
+ *
+ * 面材と釘の数値は空のままにしておき、表 3.3.1 の一覧から読み込むか、
+ * 4.5 の試験で得た値を直接入力してもらう（既定値を入れておくと、確かめない
+ * まま計算してしまうため）。
+ */
+export function makeWall(overrides) {
+  wallSequence += 1;
+  return {
+    wallId: newWallId(),
+    wallName: `壁${wallSequence}`,
+    height: DEFAULT_WALL_HEIGHT,
+    width: DEFAULT_WALL_WIDTH,
+    materialId: '',
+    thickness: '',
+    shearModulus: '',
+    k: '',
+    deltaV: '',
+    deltaU: '',
+    deltaPv: '',
+    gradeId: '',
+    tauMax: '',
+    e1: '',
+    e2: '',
+    // 適用範囲 3.3(1)⑦ は中間材（間柱等）を求めているので、既定は「あり」。
+    hasIntermediateStud: true,
+    panels: [],
+    ...(overrides || {}),
+  };
+}
+
+/**
+ * 表 3.3.1 の 1 行を、壁の入力欄へ入れる形にする。
+ *
+ * 表 3.3.2 の既定の規格（構造用合板なら JAS 1 級）も一緒に入るので、これ
+ * 1 回の選択で面材のせん断破壊・せん断座屈の検定まで数値がそろう。
+ */
+export function wallFieldsFromMaterial(material) {
+  return {
+    materialId: material.id,
+    thickness: material.thickness,
+    shearModulus: material.shearModulus,
+    k: material.k,
+    deltaV: material.deltaV,
+    deltaU: material.deltaU,
+    deltaPv: material.deltaPv,
+    ...wallFieldsFromGrade({
+      id: material.gradeId,
+      tauMax: material.tauMax,
+      e1: material.e1,
+      e2: material.e2,
+    }),
+  };
+}
+
+/** 表 3.3.2 の 1 行（面材の規格）を、壁の入力欄へ入れる形にする。 */
+export function wallFieldsFromGrade(grade) {
+  return {
+    gradeId: grade.id,
+    tauMax: grade.tauMax,
+    e1: grade.e1,
+    e2: grade.e2,
+  };
+}
+
 /** 今日の日付を input[type=date] の値にする。 */
 export function todayIso() {
   const now = new Date();
@@ -46,9 +122,19 @@ export function todayIso() {
   );
 }
 
-/** 新規作成の初期状態。1 物件 = 1 ファイルなので、パターンは 1 つから始める。 */
+/**
+ * 新規作成の初期状態。1 物件 = 1 ファイルなので、パターンは 1 つから始める。
+ *
+ * 壁は 0 枚から始める。釘配列諸定数だけを求めたい使い方（グレー本 3.2 まで）が
+ * そのまま残るようにするため。
+ */
 export function emptyFormData() {
-  return { projectName: '', issuedOn: todayIso(), patterns: [makePattern()] };
+  return {
+    projectName: '',
+    issuedOn: todayIso(),
+    patterns: [makePattern()],
+    walls: [],
+  };
 }
 
 /**
@@ -71,10 +157,39 @@ export function mergeFormData(parsed) {
       coords: String(pattern.coords || ''),
     })
   );
+  const walls = Array.isArray(parsed && parsed.walls) ? parsed.walls : [];
+  const mergedWalls = walls.map((wall, index) =>
+    makeWall({
+      wallId: String(wall.wallId || '') || newWallId(),
+      wallName: String(wall.wallName || '') || `壁${index + 1}`,
+      height: Number(wall.height) || 0,
+      width: Number(wall.width) || 0,
+      materialId: String(wall.materialId || ''),
+      thickness: Number(wall.thickness) || 0,
+      shearModulus: Number(wall.shearModulus) || 0,
+      k: Number(wall.k) || 0,
+      deltaV: Number(wall.deltaV) || 0,
+      deltaU: Number(wall.deltaU) || 0,
+      deltaPv: Number(wall.deltaPv) || 0,
+      gradeId: String(wall.gradeId || ''),
+      tauMax: Number(wall.tauMax) || 0,
+      e1: Number(wall.e1) || 0,
+      e2: Number(wall.e2) || 0,
+      hasIntermediateStud: wall.hasIntermediateStud !== false,
+      panels: (Array.isArray(wall.panels) ? wall.panels : [])
+        .filter((panel) => panel && panel.patternId)
+        .map((panel) => ({
+          patternId: String(panel.patternId),
+          grain: String(panel.grain || ''),
+        })),
+    })
+  );
+
   return {
     projectName: String((parsed && parsed.projectName) || ''),
     issuedOn: String((parsed && parsed.issuedOn) || '') || todayIso(),
     patterns: merged.length > 0 ? merged : [makePattern()],
+    walls: mergedWalls,
   };
 }
 
@@ -84,6 +199,7 @@ export function toRequestBody(data) {
     projectName: data.projectName,
     issuedOn: data.issuedOn,
     patterns: data.patterns,
+    walls: data.walls,
   };
 }
 
@@ -104,11 +220,17 @@ export function formSignature(data) {
  * 画面を開いたまま新しい版がデプロイされた場合などに食い違いが起こりうる。
  */
 export function verificationOf(coreVersion, reports) {
+  const calculated = (list) => (list || []).filter((report) => report && report.ok);
   return {
     coreVersion,
-    patterns: (reports || [])
-      .filter((report) => report && report.ok)
-      .map((report) => ({ patternId: report.patternId, result: report.result })),
+    patterns: calculated(reports && reports.patterns).map((report) => ({
+      patternId: report.patternId,
+      result: report.result,
+    })),
+    walls: calculated(reports && reports.walls).map((report) => ({
+      wallId: report.wallId,
+      result: report.result,
+    })),
   };
 }
 
@@ -132,7 +254,11 @@ export function verificationWarning(verification) {
   const differences = verification.differences || [];
   const shown = differences
     .map((difference) => {
-      const name = difference.patternName || difference.patternId;
+      const name =
+        difference.patternName ||
+        difference.wallName ||
+        difference.patternId ||
+        difference.wallId;
       return `${name} の ${difference.key}（画面 ${difference.client} / 計算書 ${difference.server}）`;
     })
     .join('、');
@@ -184,4 +310,27 @@ export function indexAfterRemoval(currentIndex, remaining) {
 /** パターンのタブに出す名前（未入力なら通し番号で代替する）。 */
 export function patternLabel(pattern, index) {
   return String((pattern && pattern.patternName) || '').trim() || `パターン${index + 1}`;
+}
+
+/** 壁のタブに出す名前（未入力なら通し番号で代替する）。 */
+export function wallLabel(wall, index) {
+  return String((wall && wall.wallName) || '').trim() || `壁${index + 1}`;
+}
+
+/**
+ * 壁の面材として選べる釘配列パターンの一覧。
+ *
+ * 面材は「登録した配列パターンから選ぶ」ので、選択肢はそのときのパターンの
+ * 並びそのもの。名前が未入力のパターンは通し番号で見せる。
+ */
+export function panelChoices(data) {
+  return (data.patterns || []).map((pattern, index) => ({
+    patternId: pattern.patternId,
+    label: patternLabel(pattern, index),
+  }));
+}
+
+/** 壁を消せるのは 1 枚以上あるときだけ（壁は 0 枚でもよい）。 */
+export function canRemoveWall(data) {
+  return (data.walls || []).length > 0;
 }
