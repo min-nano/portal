@@ -333,6 +333,30 @@ describe('renderWallPanels', () => {
     expect(document.querySelector('[data-panel-area]').textContent).toBe('-');
   });
 
+  it('折り畳んだ面材は、描き直しても畳んだままにする', () => {
+    renderWallPanels(document, WALL.panels, OPTIONS);
+    document.querySelectorAll('[data-panel-index]')[0].open = false;
+
+    // 面材を 1 枚足したときの描き直し。畳んでおいた面材は開かず、
+    // これから入力する面材だけが開いた状態で増える。
+    const added = { ...PANEL, panelId: 'pn3', panelName: '' };
+    renderWallPanels(document, [...WALL.panels, added], OPTIONS);
+
+    const panels = document.querySelectorAll('[data-panel-index]');
+    expect(panels[0].open).toBe(false);
+    expect(panels[1].open).toBe(true);
+    expect(panels[2].open).toBe(true);
+  });
+
+  it('面材を減らしても、残った面材の折り畳みはそのまま', () => {
+    renderWallPanels(document, WALL.panels, OPTIONS);
+    document.querySelectorAll('[data-panel-index]')[1].open = false;
+
+    renderWallPanels(document, [WALL.panels[1]], OPTIONS);
+
+    expect(document.querySelector('[data-panel-index]').open).toBe(false);
+  });
+
   it('描き直しても入力欄が積み上がらない', () => {
     renderWallPanels(document, WALL.panels, OPTIONS);
     renderWallPanels(document, WALL.panels, OPTIONS);

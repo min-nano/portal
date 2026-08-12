@@ -418,19 +418,36 @@ function buildPanelEditor(document_, panel, index, options) {
   return box;
 }
 
+/** 今、画面に出ている面材のうち、折り畳んであるものの面材 ID。 */
+function collapsedPanelIds(container) {
+  const ids = new Set();
+  container.querySelectorAll('[data-panel-index]').forEach((node) => {
+    const id = node.getAttribute('data-panel-id');
+    if (id && node.hasAttribute('collapsed')) ids.add(id);
+  });
+  return ids;
+}
+
 /**
  * 壁を構成する面材の入力欄を描き直す。
  *
  * 入力のたびには呼ばない（打鍵のたびに value を入れ直すとカーソルが飛ぶ）。
  * 面材の枚数が変わったとき・別の壁へ移ったとき・一覧から読み込んだときだけ
  * 組み立て直し、ふだんは結果の欄（renderPanelResults）だけを描き替える。
+ *
+ * 折り畳んである面材は、描き直しても畳んだままにする（面材を 1 枚足した
+ * だけで、畳んでおいた面材まで開いてしまわないように）。今までに無かった
+ * 面材＝これから入力する面材なので、開いた状態で出す。
  */
 export function renderWallPanels(root, panels, options) {
   const container = element(root, 'wallPanels');
   const document_ = container.ownerDocument;
+  const collapsed = collapsedPanelIds(container);
   container.innerHTML = '';
   (panels || []).forEach((panel, index) => {
-    container.appendChild(buildPanelEditor(document_, panel, index, options));
+    const node = buildPanelEditor(document_, panel, index, options);
+    if (collapsed.has(panel.panelId)) node.setAttribute('collapsed', '');
+    container.appendChild(node);
   });
   syncNailModeVisibility(root);
   showPanelArea(root);
