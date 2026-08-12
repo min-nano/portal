@@ -6,18 +6,11 @@
   <title>面材張り大壁 計算ツール</title>
 </head>
 <body>
-  <header class="portal-header">
-    <span class="title"><a href="/">%PORTAL_TITLE%</a></span>
-    <span class="account" id="accountArea" hidden>
-      <span id="accountEmail"></span>
-      <button type="button" id="signOutBtn">サインアウト</button>
-    </span>
-  </header>
+  <!-- ヘッダー・サインインゲート・ファイル操作まわりは、全ページ／PDF ツール
+       共通の部品（src/components/）。 -->
+  <portal-header class="portal-header" portal-name="%PORTAL_TITLE%" home></portal-header>
 
-  <div id="authGate" class="auth-gate" hidden>
-    <p class="note">社内の Google アカウントでサインインしてください。</p>
-    <div class="clerk-mount"></div>
-  </div>
+  <portal-auth-gate id="authGate" class="auth-gate" hidden></portal-auth-gate>
 
   <div id="app" class="container" hidden>
     <div class="page-head">
@@ -33,31 +26,21 @@
 
     <!-- 開いているファイルと、その切り替え操作。通常のアプリの「新規作成 /
          開く」と同じ並びにする。 -->
-    <div class="edit-bar">
-      <div>
-        <span class="label">編集中のファイル: </span>
-        <span id="sourceName" class="name">なし（新規作成）</span>
-      </div>
-      <div class="file-actions">
-        <button type="button" id="newBtn">新規作成</button>
-        <button type="button" id="loadBtn">Drive から開く</button>
-        <button type="button" id="uploadBtn">手元の PDF を開く</button>
-        <!-- 読み込むだけで Drive には保存しないため、Picker のアップロード
-             画面ではなくブラウザのファイル選択を使う。 -->
-        <input type="file" id="uploadInput" accept="application/pdf,.pdf" hidden>
-      </div>
-      <p class="hint" id="sourceNote" hidden></p>
-    </div>
+    <portal-edit-bar class="edit-bar"></portal-edit-bar>
+
+    <!-- 節（と面材 1 枚ずつ）は折り畳める。入力・計算の量が多いので、
+         まとめて開閉して目的の入力欄を探せるようにする。 -->
+    <portal-section-controls class="section-controls" for="calcForm"></portal-section-controls>
 
     <form id="calcForm" onsubmit="return false;">
       <!-- 1 ファイル = 1 物件。物件の情報は壁によらず共通。 -->
-      <div class="cert-section">
-        <h3>物件</h3>
+      <portal-section class="cert-section">
+        <h3 slot="title">物件</h3>
         <label for="projectName">物件名</label>
         <input type="text" id="projectName" placeholder="○○邸 新築工事">
         <label for="issuedOn">作成日</label>
         <input type="date" id="issuedOn">
-      </div>
+      </portal-section>
 
       <!-- 1 物件の中の複数の壁を、ページ送りで切り替えて編集する。 -->
       <div class="pattern-bar">
@@ -78,8 +61,8 @@
       <div id="wallEditor">
         <!-- 実際の設計では面材の種類（と釘）が先に決まり、面材の配置・釘の
              間隔・へりあきで調整する。入力欄もその順番に並べる。 -->
-        <div class="cert-section">
-          <h3>壁</h3>
+        <portal-section class="cert-section">
+          <h3 slot="title">壁</h3>
           <label for="wallName">壁の名前（この物件内での識別名）</label>
           <input type="text" id="wallName" placeholder="南面 X1 通り など">
 
@@ -91,10 +74,10 @@
               <input type="number" id="wallWidth" inputmode="numeric">
             </label>
           </div>
-        </div>
+        </portal-section>
 
-        <div class="cert-section">
-          <h3>面材と釘</h3>
+        <portal-section class="cert-section">
+          <h3 slot="title">面材と釘</h3>
           <label for="materialSelect">
             面材と釘の組合せ（グレー本 表 3.3.1）から読み込む
           </label>
@@ -161,12 +144,12 @@
             <input type="checkbox" id="wallHasStud" checked>
             中間材（間柱等）を設ける ― せん断座屈の ξ が 2 になります（なしは 1）
           </label>
-        </div>
+        </portal-section>
 
         <!-- 壁を構成する面材。1 枚ごとに配置・釘の間隔・へりあきを決め、
              その場で釘配列諸定数（グレー本 3.2）が出る。 -->
-        <div class="cert-section">
-          <h3>面材の配置と釘（釘配列諸定数：グレー本 3.2）</h3>
+        <portal-section class="cert-section">
+          <h3 slot="title">面材の配置と釘（釘配列諸定数：グレー本 3.2）</h3>
           <p class="hint">
             面材 1 枚ごとに寸法・配列の型・間柱ピッチ・釘ピッチ・へりあきを決めると、
             その面材の Ixy・Zxy・Cxy（式 3.2.1〜3.2.7）が求まり、そのまま下の壁の計算に入ります。
@@ -176,10 +159,10 @@
           </p>
           <div id="wallPanels" class="wall-panels"></div>
           <button type="button" id="addWallPanelBtn" class="secondary">＋ 面材を追加</button>
-        </div>
+        </portal-section>
 
-        <div class="cert-section">
-          <h3>壁の計算結果（グレー本 3.3）</h3>
+        <portal-section class="cert-section">
+          <h3 slot="title">壁の計算結果（グレー本 3.3）</h3>
           <div id="wallError" class="result-error" hidden></div>
           <div id="wallSummary" class="result-summary"></div>
           <table class="steps-table">
@@ -196,19 +179,12 @@
           <table class="steps-table">
             <tbody id="wallChecksBody"></tbody>
           </table>
-        </div>
+        </portal-section>
       </div>
 
       <!-- 保存先は「編集中のファイル」そのもの。ファイル名と保存する場所は、
            新規保存・別名保存のときだけ下の保存ダイアログで指定する。 -->
-      <div class="save-bar">
-        <h3>保存</h3>
-        <p class="hint" id="saveHint"></p>
-        <div class="save-actions">
-          <button type="button" id="submitBtn">保存</button>
-          <button type="button" id="saveAsBtn" class="secondary">別名で保存</button>
-        </div>
-      </div>
+      <portal-save-bar class="save-bar"></portal-save-bar>
     </form>
 
     <div id="message"></div>
@@ -217,31 +193,9 @@
     </div>
   </div>
 
-  <!-- 未保存の入力があるまま新規作成・読み込みへ移るときの確認。 -->
-  <dialog id="unsavedDialog" class="app-dialog">
-    <p id="unsavedMessage"></p>
-    <div class="dialog-actions">
-      <button type="button" data-choice="save">保存する</button>
-      <button type="button" data-choice="discard" class="secondary">保存しない</button>
-      <button type="button" data-choice="cancel" class="secondary">キャンセル</button>
-    </div>
-  </dialog>
-
-  <!-- 新規保存・別名保存のときの保存ダイアログ（「名前を付けて保存」）。 -->
-  <dialog id="saveAsDialog" class="app-dialog">
-    <h3 id="saveAsTitle">別名で保存</h3>
-    <label for="saveAsName">ファイル名</label>
-    <input type="text" id="saveAsName" placeholder="釘配列諸定数計算書.pdf">
-    <label for="saveAsFolderBtn">保存先フォルダ</label>
-    <div class="folder-row">
-      <span id="saveAsFolderName" class="unset">未選択</span>
-      <button type="button" id="saveAsFolderBtn" class="secondary">選択</button>
-    </div>
-    <div class="dialog-actions">
-      <button type="button" id="saveAsConfirmBtn" disabled>保存</button>
-      <button type="button" id="saveAsCancelBtn" class="secondary">キャンセル</button>
-    </div>
-  </dialog>
+  <!-- 未保存の入力があるまま新規作成・読み込みへ移るときの確認と、
+       新規保存・別名保存のときの「名前を付けて保存」。 -->
+  <portal-save-dialogs name-placeholder="釘配列諸定数計算書.pdf"></portal-save-dialogs>
 
   <script type="module" src="/src/timber-panel-shear-calculator/main.js"></script>
 </body>

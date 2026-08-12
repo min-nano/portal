@@ -7,6 +7,7 @@
 //     （mapping.json が単一の情報源になり、手動同期が不要になった）
 
 import '../styles.css';
+import '../components/index.js';
 import { requireSignIn } from '../auth.js';
 import { redirectToCanonicalHost } from '../canonical-host.js';
 import { apiGet, apiPostForBlob, apiSendJson } from '../api.js';
@@ -124,11 +125,14 @@ function nextDefaultFloor() {
   return value !== '' ? value : '1';
 }
 
+// 部屋は 1 つずつ折り畳める（<portal-section>）。計測値の表が長いので、
+// 入力の済んだ部屋を閉じておけるようにする。見出しの行には部屋の名前と
+// 階数・部屋名の欄を残し、閉じたままでも見分けと修正ができるようにする。
 function addRoom() {
   if (!config) return;
   const id = 'room' + roomSeq++;
   const defaultFloor = nextDefaultFloor();
-  const wrap = document.createElement('div');
+  const wrap = document.createElement('portal-section');
   wrap.className = 'room';
   wrap.id = id;
 
@@ -143,10 +147,10 @@ function addRoom() {
   });
 
   wrap.innerHTML =
-    '<div class="room-head">' +
+    '<button type="button" class="remove" slot="actions">削除</button>' +
+    '<div class="room-head" slot="title">' +
       '<div class="room-title-row">' +
         '<h3 class="room-title"></h3>' +
-        '<button type="button" class="remove">削除</button>' +
       '</div>' +
       '<div class="room-meta">' +
         '<label>階数</label><input type="number" inputmode="numeric" data-room-field="floor">' +
@@ -177,10 +181,29 @@ function removeRoom(id) {
   renumberRooms();
 }
 
+// 見出しは「部屋 1（1階 LDK）」のように、入力済みの階数・部屋名を添える。
+// 折り畳んだときに、どの部屋かをこの行だけで見分けられるようにするため。
+function roomHeading(roomEl, index) {
+  const value = function (field) {
+    const input = roomEl.querySelector('[data-room-field="' + field + '"]');
+    return input ? input.value.trim() : '';
+  };
+  const floor = value('floor');
+  const detail = [floor === '' ? '' : floor + '階', value('room_name')]
+    .filter(function (part) {
+      return part !== '';
+    })
+    .join(' ');
+  return detail === '' ? '部屋 ' + (index + 1) : '部屋 ' + (index + 1) + '（' + detail + '）';
+}
+
 function renumberRooms() {
   const rooms = document.querySelectorAll('#rooms .room');
   rooms.forEach(function (r, i) {
-    r.querySelector('.room-title').textContent = '部屋 ' + (i + 1);
+    const heading = roomHeading(r, i);
+    r.querySelector('.room-title').textContent = heading;
+    // 折り畳みのつまみの読み上げ名も、見出しに合わせる。
+    r.setAttribute('label', heading);
   });
 }
 
@@ -278,6 +301,13 @@ async function submitForm() {
 
 // --- 初期化 -----------------------------------------------------------------
 
+function bindRoomEvents() {
+  // 階数・部屋名を入れたら、部屋の見出しにも反映する（折り畳んだときの目印）。
+  document.getElementById('rooms').addEventListener('input', function (e) {
+    if (e.target.dataset && e.target.dataset.roomField) renumberRooms();
+  });
+}
+
 function bindStickyHeadWorkarounds() {
   // 方向選択後、同じ行の水平器入力欄へ自動フォーカスする。ただし「傾斜無」「―」など
   // 計測値を入力しない選択肢のときは、数値欄を飛ばして次の計測点の選択欄へ送る。
@@ -343,6 +373,7 @@ async function start() {
   document.getElementById('templateBtn').addEventListener('click', chooseTemplate);
   document.getElementById('addRoomBtn').addEventListener('click', addRoom);
   document.getElementById('submitBtn').addEventListener('click', submitForm);
+  bindRoomEvents();
   bindStickyHeadWorkarounds();
 
   // フォーム定義と雛形設定を並行して取得してから、最初の 1 部屋を表示する。

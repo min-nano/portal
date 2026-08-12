@@ -6,11 +6,13 @@
 // 残らないことを確かめる。
 
 import { beforeEach, describe, expect, it } from 'vitest';
+import { setSectionsOpen } from '../src/components/collapsible-section.js';
 import {
   buildForm,
   buildUsage,
   readValues,
   refresh,
+  revealMissingFields,
   writeValues,
 } from '../src/wall-quantity-calculator/form-dom.js';
 
@@ -207,6 +209,16 @@ describe('buildForm', () => {
     expect(titles).toEqual(['作成者', '1. 必要壁量', '2-2 柱の小径']);
   });
 
+  it('節は折り畳めるようにし、見出しを開閉の行に出す', () => {
+    const sections = [...root.querySelectorAll('[data-section]')];
+
+    expect(sections.every((node) => node.tagName.toLowerCase() === 'portal-section')).toBe(
+      true
+    );
+    expect(sections[0].querySelector('h3').slot).toBe('title');
+    expect(sections.every((node) => node.open)).toBe(true);
+  });
+
   it('用途の選択を最初の節の直後に置く', () => {
     const children = Array.from(root.querySelector('.wq-form').children);
     expect(children[0].dataset.section).toBe('header');
@@ -374,5 +386,34 @@ describe('refresh', () => {
   it('知らない建物なら何もしない', () => {
     const current = values();
     expect(refresh(root, config, 'ないもの', current)).toBe(current);
+  });
+});
+
+describe('revealMissingFields', () => {
+  it('未入力の必須欄がある節を、折り畳んでいても開く', () => {
+    // 1 階階高（必須）は空のまま、多雪区域の垂直積雪量（条件つき必須）は埋める。
+    let current = values({
+      usage: 'performance',
+      heavy_snow: 'あり(多雪区域)',
+      snow_depth: '100',
+    });
+    current = refresh(root, config, 'one_story', current);
+    writeValues(root, current);
+    setSectionsOpen(root, false);
+
+    revealMissingFields(root);
+
+    expect(root.querySelector('[data-section="loads"]').open).toBe(true);
+    expect(root.querySelector('[data-section="header"]').open).toBe(false);
+  });
+
+  it('使わない算定方法（チェックの外れた節）は開かない', () => {
+    let current = refresh(root, config, 'one_story', values({ height_1f: '3' }));
+    writeValues(root, current);
+    setSectionsOpen(root, false);
+
+    revealMissingFields(root);
+
+    expect(root.querySelector('[data-section="column_2"]').open).toBe(false);
   });
 });

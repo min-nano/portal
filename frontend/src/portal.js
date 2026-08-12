@@ -1,6 +1,7 @@
 // ポータルトップページ。サインイン状態を確認してツール一覧を表示する。
 
 import './styles.css';
+import './components/index.js';
 import { requireSignIn } from './auth.js';
 import { redirectToCanonicalHost } from './canonical-host.js';
 

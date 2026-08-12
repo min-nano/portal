@@ -6,18 +6,10 @@
   <title>小規模木造建築物 必要壁量 計算ツール</title>
 </head>
 <body>
-  <header class="portal-header">
-    <span class="title"><a href="/">%PORTAL_TITLE%</a></span>
-    <span class="account" id="accountArea" hidden>
-      <span id="accountEmail"></span>
-      <button type="button" id="signOutBtn">サインアウト</button>
-    </span>
-  </header>
+  <!-- ヘッダーとサインインゲートは全ページ共通の部品（src/components/）。 -->
+  <portal-header class="portal-header" portal-name="%PORTAL_TITLE%" home></portal-header>
 
-  <div id="authGate" class="auth-gate" hidden>
-    <p class="note">社内の Google アカウントでサインインしてください。</p>
-    <div class="clerk-mount"></div>
-  </div>
+  <portal-auth-gate id="authGate" class="auth-gate" hidden></portal-auth-gate>
 
   <div id="app" class="container" hidden>
     <!-- 同梱している表計算ツールの版は、雛形と同じくタイトル横に小さく置く。
@@ -41,6 +33,9 @@
     <form id="worksheetForm" onsubmit="return false;">
       <label for="buildingSelect">建物の種別</label>
       <select id="buildingSelect"></select>
+
+      <!-- 節は折り畳める。入力する箇所を探しやすいよう、まとめて開閉もできる。 -->
+      <portal-section-controls class="section-controls" for="formArea"></portal-section-controls>
 
       <div id="formArea"></div>
 

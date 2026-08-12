@@ -347,6 +347,20 @@ describe('renderWallPanels', () => {
     expect([...buttons].map((button) => button.getAttribute('data-remove-wall-panel')))
       .toEqual(['0', '1']);
   });
+
+  it('面材 1 枚ごとに折り畳める（面材名と削除ボタンは開閉の行に残す）', () => {
+    renderWallPanels(document, WALL.panels, OPTIONS);
+
+    const panel = document.querySelector('[data-panel-index]');
+    expect(panel.tagName.toLowerCase()).toBe('portal-section');
+    expect(panel.open).toBe(true);
+    expect(panel.querySelector('[slot="title"]').textContent).toBe('下段');
+    expect(panel.querySelector('[data-remove-wall-panel]').slot).toBe('actions');
+
+    // 折り畳んでも入力欄は残る（読み戻す内容は変わらない）。
+    panel.open = false;
+    expect(readPanels(document)[0].width).toBe(910);
+  });
 });
 
 describe('renderPanelResults', () => {
