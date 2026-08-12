@@ -77,14 +77,16 @@ def test_compute_all_matches_the_reference_example():
     assert report["panelArea"] == 555100
 
     steps = {row["label"]: row["value"] for row in report["steps"]}
-    assert steps["X方向 中立軸 x0"] == "445.000 mm"
+    # 本は左下の釘を原点にしているので x0 = 445.0。ここはへりあき 10 mm を
+    # 見込んで面材の左下を原点にするため、その分だけ動く。
+    assert steps["X方向 中立軸 x0"] == "455.000 mm"
     assert steps["二次モーメント Iy"] == "1,980,250 mm²"
     assert steps["変形割合 αx"] == "0.750834"
 
 
 def test_compute_all_reports_a_broken_pattern_without_losing_the_others():
     data = panel_shear.normalize_data(
-        {"patterns": [dict(EXAMPLE), {"patternId": "p2", "width": 610, "height": 910}]}
+        {"patterns": [dict(EXAMPLE), {"patternId": "p2", "width": 910, "height": 610}]}
     )
 
     reports = panel_shear.compute_all(data)
@@ -96,7 +98,7 @@ def test_compute_all_reports_a_broken_pattern_without_losing_the_others():
 
 def test_validate_names_the_pattern_that_cannot_be_calculated():
     data = panel_shear.normalize_data(
-        {"patterns": [{"patternName": "南面", "width": 610, "height": 910}]}
+        {"patterns": [{"patternName": "南面", "width": 910, "height": 610}]}
     )
 
     with pytest.raises(panel_shear.PanelShearError, match="「南面」を計算できません"):
@@ -239,7 +241,7 @@ def test_pdf_prints_the_inputs_and_the_results():
     assert "○○邸 新築工事" in text
     assert "作成日: 2026年8月11日" in text
     # 入力（面材寸法・面積）と、画面に出るのと同じ桁の結果。
-    assert "610 × 910 mm" in text
+    assert "910 × 610 mm" in text
     assert "555,100 mm²" in text
     assert "0.888868" in text
     assert "0.00358851" in text

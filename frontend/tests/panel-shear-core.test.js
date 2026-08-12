@@ -37,15 +37,16 @@ async function wasmBytes() {
   }
 }
 
-// グレー本 3.2【解説】の計算例（図 3.2.2）。
+// グレー本 3.2【解説】の計算例（図 3.2.2）。W 910 × H 610 の横置きで、
+// へりあき 10 mm を見込んだ座標（本は左下の釘を (0, 0) として書いている）。
 const EXAMPLE = {
   patternId: 'p1',
   patternName: 'グレー本の計算例',
-  width: 610,
-  height: 910,
+  width: 910,
+  height: 610,
   mode: 'grid',
-  gridX: '0, 445, 890',
-  gridY: '0, 145, 295, 445, 590',
+  gridX: '10, 455, 900',
+  gridY: '10, 155, 305, 455, 600',
   coords: '',
 };
 
@@ -68,15 +69,48 @@ describe('計算実装（wasm）', () => {
       Cxy: '1.26155',
     });
     expect(report.nails).toHaveLength(15);
-    expect(report.result.x0).toBe(445);
+    expect(report.result.x0).toBe(455);
+    expect(report.result.y0).toBe(305);
   });
 
   it('釘配列図の範囲と目盛も返す（計算書 PDF と同じもの）', async () => {
     const [report] = (await core()).computeAll({ patterns: [EXAMPLE] });
 
-    expect(report.diagram.maxX).toBe(890);
-    expect(report.diagram.xTicks.map((t) => t.label)).toEqual(['0', '445', '890']);
-    expect(report.diagram.axis.xLabel).toBe('x0 = 445.0');
+    expect(report.diagram.maxX).toBe(910);
+    expect(report.diagram.xTicks.map((t) => t.label)).toEqual(['10', '455', '900']);
+    expect(report.diagram.axis.xLabel).toBe('x0 = 455.0');
+  });
+
+  it('グレー本 表 3.2.1 の釘配列を一覧して、そのまま読み込める', async () => {
+    const loaded = await core();
+    const presets = loaded.presets();
+
+    expect(presets).toHaveLength(106);
+    const kawa = presets.find((p) => p.id === '910x610-s455-n150-kawa');
+    expect(kawa.label).toBe('910×610 横置・川型（間柱・根太 @455 / 釘 @150）');
+
+    // 表 3.2.1 の「910×610 横置・川型」は、解説の計算例そのもの。
+    const pattern = loaded.preset(kawa.id);
+    expect(pattern).toMatchObject({
+      width: 910,
+      height: 610,
+      mode: 'grid',
+      gridX: '10, 455, 900',
+      gridY: '10, 155, 305, 455, 600',
+    });
+
+    const [report] = loaded.computeAll({ patterns: [{ patternId: 'p1', ...pattern }] });
+    expect(Object.fromEntries(report.summary.map((s) => [s.key, s.value]))).toEqual({
+      Ixy: '0.888868',
+      Zxy: '0.00358851',
+      Cxy: '1.26155',
+    });
+  });
+
+  it('知らない釘配列を呼ぶと、日本語の文面で投げる', async () => {
+    const loaded = await core();
+
+    expect(() => loaded.preset('なにか')).toThrow(/知らない釘配列です/);
   });
 
   it('計算できないパターンは、理由を添えて ok: false で返る', async () => {

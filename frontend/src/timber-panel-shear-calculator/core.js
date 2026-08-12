@@ -57,6 +57,19 @@ class Core {
   computeAll(data) {
     return this.call({ op: 'computeAll', data }).patterns;
   }
+
+  /**
+   * グレー本 表 3.2.1「標準的なサイズの面材の釘配列諸定数」の配列一覧。
+   * 選ぶための情報だけで、釘座標は preset() で組み立てる。
+   */
+  presets() {
+    return this.call({ op: 'presets' }).presets;
+  }
+
+  /** 一覧の id を、そのままフォームへ入れられるパターンにする。 */
+  preset(id) {
+    return this.call({ op: 'preset', data: { id } }).pattern;
+  }
 }
 
 /**

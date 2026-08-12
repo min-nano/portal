@@ -12,6 +12,8 @@
 //! {"op": "computeAll", "data": {...}}  → {"ok": true,  "patterns": [...]}
 //! {"op": "validate",   "data": {...}}  → {"ok": true,  "patterns": [...]}
 //! {"op": "normalize",  "data": {...}}  → {"ok": true,  "data": {...}}
+//! {"op": "presets"}                    → {"ok": true,  "presets": [...]}
+//! {"op": "preset",     "data": {...}}  → {"ok": true,  "preset": {...}, "pattern": {...}}
 //! {"op": "config"}                     → {"ok": true,  "version": "1.0.0", ...}
 //! 失敗                                  → {"ok": false, "error": "利用者に見せる日本語"}
 //! ```
@@ -22,6 +24,7 @@ pub mod abi;
 pub mod format;
 pub mod json;
 pub mod nail_array;
+pub mod presets;
 pub mod report;
 
 use json::Value;
@@ -69,6 +72,28 @@ fn dispatch(request: &str) -> Result<Value, String> {
             let form = report::normalize_data(data())?;
             Ok(Value::obj([("data", form.to_value())]))
         }
+        // グレー本 表 3.2.1 の標準的な配列。一覧には釘座標を載せず
+        // （106 通りある）、選ばれた 1 つだけを "preset" で組み立てる。
+        "presets" => Ok(Value::obj([(
+            "presets",
+            Value::Arr(
+                presets::all()
+                    .iter()
+                    .map(presets::Preset::to_value)
+                    .collect(),
+            ),
+        )])),
+        "preset" => {
+            let id = data()
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "呼び出す釘配列の id がありません。".to_string())?;
+            let preset = presets::find(id).ok_or_else(|| format!("知らない釘配列です: {id}"))?;
+            Ok(Value::obj([
+                ("preset", preset.to_value()),
+                ("pattern", preset.to_pattern_value()),
+            ]))
+        }
         "config" => Ok(Value::obj([
             ("version", VERSION.into()),
             ("maxPatterns", report::MAX_PATTERNS.into()),
@@ -91,9 +116,9 @@ mod tests {
     fn compute_all_returns_one_entry_per_pattern() {
         let response = call_json(
             r#"{"op": "computeAll", "data": {"patterns": [
-                 {"patternId": "p1", "width": 610, "height": 910,
-                  "gridX": "0, 445, 890", "gridY": "0, 145, 295, 445, 590"},
-                 {"patternId": "p2", "width": 610, "height": 910}
+                 {"patternId": "p1", "width": 910, "height": 610,
+                  "gridX": "10, 455, 900", "gridY": "10, 155, 305, 455, 600"},
+                 {"patternId": "p2", "width": 910, "height": 610}
                ]}}"#,
         );
 
@@ -108,7 +133,7 @@ mod tests {
     fn validate_refuses_a_pattern_that_cannot_be_calculated() {
         let response = call_json(
             r#"{"op": "validate", "data": {"patterns": [
-                 {"patternName": "南面", "width": 610, "height": 910}]}}"#,
+                 {"patternName": "南面", "width": 910, "height": 610}]}}"#,
         );
 
         assert_eq!(response.get("ok"), Some(&Value::Bool(false)));
@@ -128,6 +153,50 @@ mod tests {
         assert_eq!(data.get("projectName").unwrap().as_str(), Some(""));
         assert_eq!(data.get("junk"), None);
         assert_eq!(data.get("patterns").unwrap().as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn presets_list_the_arrangements_of_the_book_table() {
+        let response = call_json(r#"{"op": "presets"}"#);
+
+        let presets = response.get("presets").unwrap().as_array().unwrap();
+        assert_eq!(presets.len(), 106);
+        assert_eq!(
+            presets[0].get("id").unwrap().as_str(),
+            Some("910x3030-s455-n150-kawa")
+        );
+        // 一覧は選ぶための情報だけ（釘座標は "preset" で組み立てる）。
+        assert_eq!(presets[0].get("coords"), None);
+    }
+
+    #[test]
+    fn preset_builds_a_pattern_that_can_be_calculated() {
+        let response = call_json(r#"{"op": "preset", "data": {"id": "910x610-s455-n150-kawa"}}"#);
+
+        let pattern = response.get("pattern").unwrap();
+        assert_eq!(pattern.get("width").unwrap().as_f64(), Some(910.0));
+        assert_eq!(pattern.get("height").unwrap().as_f64(), Some(610.0));
+        assert_eq!(pattern.get("gridX").unwrap().as_str(), Some("10, 455, 900"));
+        assert_eq!(
+            response
+                .get("preset")
+                .unwrap()
+                .get("nailCount")
+                .unwrap()
+                .as_f64(),
+            Some(15.0)
+        );
+    }
+
+    #[test]
+    fn an_unknown_preset_is_an_error_not_a_panic() {
+        for request in [
+            r#"{"op": "preset"}"#,
+            r#"{"op": "preset", "data": {"id": "なにか"}}"#,
+        ] {
+            let response = call_json(request);
+            assert_eq!(response.get("ok"), Some(&Value::Bool(false)));
+        }
     }
 
     #[test]

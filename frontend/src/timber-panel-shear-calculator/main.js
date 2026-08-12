@@ -35,6 +35,7 @@ import {
   applyPattern,
   readPattern,
   renderPatternBar,
+  renderPresetOptions,
   renderResult,
   showPanelArea,
   syncNailModeVisibility,
@@ -146,6 +147,19 @@ function removePattern() {
 /** グレー本 解説の計算例を、今のパターンへ読み込む。 */
 function loadExample() {
   Object.assign(currentPattern(), config.example);
+  renderCurrent();
+  scheduleCalculate();
+}
+
+/**
+ * グレー本 表 3.2.1 の標準的な釘配列を、今のパターンへ読み込む。
+ *
+ * 釘座標は計算実装（wasm）が組み立てる。表に載っているのは Ixy・Zxy・Cxy
+ * だけなので、そこから配列を起こす規則も計算と同じ場所に置いてある。
+ */
+function loadPreset(id) {
+  if (!id || !core) return;
+  Object.assign(currentPattern(), core.preset(id));
   renderCurrent();
   scheduleCalculate();
 }
@@ -413,6 +427,12 @@ async function start() {
   document.getElementById('submitBtn').addEventListener('click', saveCurrent);
   document.getElementById('saveAsBtn').addEventListener('click', () => save('new'));
   document.getElementById('exampleBtn').addEventListener('click', loadExample);
+  document.getElementById('presetSelect').addEventListener('change', (event) => {
+    loadPreset(event.target.value);
+    // 読み込んだあとは、続けて同じものを選び直せるように戻しておく
+    //（入力欄を手で直したあと、もう一度読み込みたいことがある）。
+    event.target.value = '';
+  });
   document.getElementById('addPatternBtn').addEventListener('click', addPattern);
   document.getElementById('removePatternBtn').addEventListener('click', removePattern);
   document
@@ -440,6 +460,9 @@ async function start() {
     showMessage(error.message, 'red');
     return;
   }
+
+  // 呼び出せる釘配列（グレー本 表 3.2.1）は計算実装が持っている。
+  renderPresetOptions(document, core.presets());
 
   data = emptyFormData();
   setSourceFile(null);
