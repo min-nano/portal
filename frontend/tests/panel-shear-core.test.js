@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest';
 import {
   instantiateCore,
   loadCore,
-} from '../src/timber-panel-shear-calculator/core.js';
+} from '../src/core.js';
 
 const WASM_PATH = new URL(
   '../../backend/app/wasm/nail_array_core.wasm',

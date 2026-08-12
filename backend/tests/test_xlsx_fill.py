@@ -68,6 +68,44 @@ def test_cell_text_reads_shared_strings_without_phonetic(template):
     assert template.cell_text(ONE_STORY, "A3") is None
 
 
+def test_cell_text_reads_a_value_that_ends_with_a_space(template):
+    """末尾に空白がある値（<v xml:space="preserve">）も読めること。
+
+    配布物の機械等級区分は「E150 」と末尾に空白が入っていて、これを
+    読み落とすと圧縮基準強度の引き当てが静かに外れる。
+    """
+    assert template.cell_text("柱の圧縮基準強度", "D8") == "E150 "
+    assert template.cell_text("柱の圧縮基準強度", "A8") == (
+        "JAS機械等級区分構造用製材あかまつE150 "
+    )
+
+
+def test_formulas_can_be_read_for_the_guard(template):
+    """数式が読めること（配布物の計算が変わっていないかの番人テストで使う）。"""
+    # 平屋建ての「1階の壁荷重」。
+    assert template.cell_formula(ONE_STORY, "Z36").startswith("(VLOOKUP($H26,")
+    # 数式の無いセル・存在しないセルは None。
+    assert template.cell_formula(ONE_STORY, "H18") is None
+    assert template.cell_formula(ONE_STORY, "ZZ999") is None
+
+    cells = template.formula_cells(ONE_STORY)
+    assert cells["Z36"] == template.cell_formula(ONE_STORY, "Z36")
+    # 空のセル（<c r="…"/>）の次にある数式を取り違えないこと。
+    assert cells == _formulas_by_xml(template, ONE_STORY)
+
+
+def _formulas_by_xml(template, sheet: str) -> dict:
+    """同じものを XML パーサで読み直す（正規表現の取りこぼしの検出）。"""
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    root = ET.fromstring(template._text(template._sheet_path(sheet)))
+    found = {}
+    for cell in root.iter(f"{ns}c"):
+        formula = cell.find(f"{ns}f")
+        if formula is not None and formula.text:
+            found[cell.get("r")] = formula.text
+    return found
+
+
 def test_unknown_sheet_is_rejected(template):
     with pytest.raises(XlsxError):
         template.cell_text("ないシート", "A1")

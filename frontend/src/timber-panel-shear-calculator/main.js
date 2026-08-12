@@ -6,7 +6,7 @@
 // 実際の設計では面材の種類と釘が先に決まっていて、面材の配置・釘の間隔・
 // へりあきで調整するので、入力もその順番に並べてある。
 //
-// 編集中の計算は画面の中で完結する（./core.js が読み込む wasm を呼ぶだけで、
+// 編集中の計算は画面の中で完結する（../core.js が読み込む wasm を呼ぶだけで、
 // 入力のたびの往復が無い）。その wasm はサーバが計算に使っているものと同じ
 // バイト列なので、計算の実装は 1 つしかない。
 //
@@ -69,7 +69,7 @@ import {
   wallFieldsFromMaterial,
   wallLabel,
 } from './form-logic.js';
-import { loadCore } from './core.js';
+import { loadCore } from '../core.js';
 
 const TOOL_API = '/api/tools/timber-panel-shear-calculator';
 const PDF_MIME = 'application/pdf';

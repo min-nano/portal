@@ -12,9 +12,12 @@ name: Worksheet update check
 # 最後のものを成功のまま終えると、確認できていないことに気付けない
 # （「緑だから最新版のままだ」と読めてしまう）。issue と併せて赤にする。
 #
-# PR には「雛形の番人テスト」（backend/tests/test_wall_quantity_template.py）の
-# 結果を添える。GITHUB_TOKEN で作った PR では CI が自動で走らないため、
-# 差し替えで入力欄の位置がずれていないかは、ここで確かめて本文に書く。
+# PR には配布物の番人テストの結果を添える。GITHUB_TOKEN で作った PR では CI が
+# 自動で走らないため、差し替えで
+#   - 入力欄の位置がずれていないか（tests/test_wall_quantity_template.py）
+#   - 計算（数式）が変わっていないか（tests/test_wall_quantity_calculation.py）
+# を、ここで確かめて本文に書く。計算が変われば、写した Rust
+# （core/src/wall_quantity.rs）も直さなければならない。
 
 on:
   schedule:
@@ -48,6 +51,15 @@ jobs:
           python3 .github/scripts/check_howtec_worksheet.py \
             --report worksheet-check.json --apply
 
+      - name: Build the calculation core
+        if: steps.check.outputs.status == 'updated'
+        # 計算の番人テストは wasm を動かす（.wasm はコミットしていない）。
+        run: core/build.sh
+
+      - name: Install the test dependencies
+        if: steps.check.outputs.status == 'updated'
+        run: pip install -r backend/requirements-dev.txt
+
       - name: Run the template guard tests
         id: guard
         if: steps.check.outputs.status == 'updated'
@@ -56,8 +68,16 @@ jobs:
         continue-on-error: true
         run: |
           cd backend
-          pip install -r requirements-dev.txt
           python -m pytest -q tests/test_wall_quantity_template.py
+
+      - name: Run the calculation guard tests
+        id: calculation
+        if: steps.check.outputs.status == 'updated'
+        # 配布物の数式・入力例・圧縮基準強度の表と、写した計算を突き合わせる。
+        continue-on-error: true
+        run: |
+          cd backend
+          python -m pytest -q tests/test_wall_quantity_calculation.py
 
       - name: Push the replacement to a branch
         if: steps.check.outputs.status == 'updated'
@@ -83,11 +103,13 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           GUARD: ${{ steps.guard.outcome }}
+          CALCULATION: ${{ steps.calculation.outcome }}
         with:
           script: |
             const fs = require('fs');
             const report = JSON.parse(fs.readFileSync('worksheet-check.json', 'utf8'));
             const guard = process.env.GUARD === 'success';
+            const calculation = process.env.CALCULATION === 'success';
             const body = [
               '配布ページの表計算ツールが、リポジトリに同梱しているものと違っていたため差し替えます。',
               '',
@@ -100,10 +122,14 @@ jobs:
               `- ファイル: ${report.fileUrl}`,
               '',
               guard
-                ? '✅ **雛形の番人テストは通りました。** マッピングが指しているセルには、これまでと同じラベル・選択肢が入っています。入力欄の位置は変わっていないと考えられます。'
-                : '🔴 **雛形の番人テストが落ちました。** 入力欄の位置か選択肢が変わっています。配布物を開いて読み直し、`backend/app/wall_quantity_mapping.json` を直してからマージしてください（README「表計算ツールが改訂されたときの手順」を参照）。',
+                ? '✅ **入力欄の番人テストは通りました。** マッピングが指しているセルには、これまでと同じラベル・選択肢が入っています。入力欄の位置は変わっていないと考えられます。'
+                : '🔴 **入力欄の番人テストが落ちました。** 入力欄の位置か選択肢が変わっています。配布物を開いて読み直し、`backend/app/wall_quantity_mapping.json` を直してからマージしてください（README「表計算ツールが改訂されたときの手順」を参照）。',
               '',
-              '更新履歴シートに書かれた変更内容も確かめてください。計算方法が変わっている場合、フォームの注意書きの直しが要ることがあります。',
+              calculation
+                ? '✅ **計算の番人テストは通りました。** 配布物の数式は変わっておらず、同梱の入力例も同じ値になります。'
+                : '🔴 **計算の番人テストが落ちました。** 配布物の計算が変わっています。変わった数式を読み直して `core/src/wall_quantity.rs` を直し、`wall_quantity_mapping.json` の `guard.formulas` を更新してからマージしてください（画面に出す出力結果は、この Rust の写しが計算しています）。',
+              '',
+              '更新履歴シートに書かれた変更内容も確かめてください。',
             ].join('\n');
             await github.rest.pulls.create({
               owner: context.repo.owner,

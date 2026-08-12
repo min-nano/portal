@@ -60,7 +60,7 @@ def test_guard_cells_still_hold_the_recorded_labels(template, mapping):
         "two_story": _sheet_of(mapping, "two_story"),
         "strength": "柱の圧縮基準強度",
     }
-    for key, expected in mapping["guard"].items():
+    for key, expected in mapping["guard"]["labels"].items():
         sheet = sheets[key]
         actual = {ref: template.cell_text(sheet, ref) for ref in expected}
         assert actual == expected, f"{sheet} のラベルが変わっています"

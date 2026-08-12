@@ -8,9 +8,19 @@
   2. フォーム入力を、配布物の入力欄（緑の枠）へそのまま書き込み、
   3. **Excel 形式のまま** 返す
 
-という素直な作りにしている。計算は配布物の数式が行う（このツールは
-必要壁量を自前で計算し直さない）。だから提出物は「配布物に値を入れたもの」
-そのもので、受け取る側が見慣れた表計算ツールのままになる。
+という素直な作りにしている。提出物は「配布物に値を入れたもの」そのもので、
+受け取る側が見慣れた表計算ツールのままになる。**配布物の数式は書き換えない**
+ので、Excel で開いた時点の計算結果も配布物のものそのまま。
+
+そのうえで、配布物の数式を Rust（core/src/wall_quantity.rs）へ写してあり、
+
+  - 画面は入力のたびにその wasm で計算して「出力結果」を出す
+    （xlsx をダウンロードして Excel で開くまで待たなくてよい）
+  - 保存のときはサーバも同じ wasm で計算し、画面が出していた値と
+    突き合わせる（verify）
+
+という形にしている。この計算は今後、配布物どおりではない計算へ広げる予定
+なので、面材張り大壁と同じく Rust → wasm に一本化してある。
 
 書き込み位置・選択肢・条件は wall_quantity_mapping.json が単一の情報源で、
 フォームの組み立てもそこから導く（excel_report.py と同じ考え方）。
@@ -22,7 +32,8 @@ import math
 import os
 import unicodedata
 
-from . import xlsx_fill
+from . import nail_core, xlsx_fill
+from .nail_core import CoreError
 from .xlsx_fill import XlsxError, XlsxTemplate
 
 _DIR = os.path.dirname(__file__)
@@ -31,6 +42,9 @@ _MAPPING_PATH = os.path.join(_DIR, "wall_quantity_mapping.json")
 _MAPPING = None
 _SOURCE = None
 _TEMPLATE_BYTES = None
+
+# 突き合わせの結果に並べる食い違いの上限（全部ずれていても応答が膨れないように）。
+MAX_REPORTED_DIFFERENCES = 20
 
 
 class WallQuantityError(Exception):
@@ -84,16 +98,25 @@ def template_version() -> str:
 # --- フォーム定義 -----------------------------------------------------------
 
 
-def form_config() -> dict:
+def form_config(core_path: str) -> dict:
     """画面がフォームを組み立てるための定義を、マッピングから丸ごと配る。
 
     節・表・入力欄の並びも、選択肢も、条件も、書き込み先のセルも
     マッピングにしかない。画面側に定数を持たせないことで、配布物の改訂に
     「マッピングを直すだけ」で追従できるようにする。
+
+    編集中の計算は画面が行うため、計算実装（wasm）の在り処もここで知らせる
+    （面材張り大壁の /config と同じ仕組み。URL に中身のハッシュが付く）。
     """
     mapping = load_mapping()
     source = load_source()
+    digest = nail_core.sha256()
     return {
+        "core": {
+            "url": f"{core_path}?v={digest[:16]}",
+            "version": nail_core.version(),
+            "sha256": digest,
+        },
         "usage": mapping["usage"],
         "options": mapping["options"],
         "species": mapping["species"],
@@ -201,14 +224,19 @@ def normalize_data(body: dict) -> dict:
         else:
             values[key] = _normalize_text(raw.get(key))
 
-    toggles = body.get("toggles")
-    toggles = toggles if isinstance(toggles, dict) else {}
+    # 算定方法のチェックボックスは、条件の判定（_condition_met）と同じ形で
+    # 引けるよう values にも入れつつ、計算（wasm）が読む形でも持つ。
+    raw_toggles = body.get("toggles")
+    raw_toggles = raw_toggles if isinstance(raw_toggles, dict) else {}
+    toggles: dict = {}
     for section in building["sections"]:
         toggle = section.get("toggle")
         if toggle:
-            values[toggle["key"]] = bool(toggles.get(toggle["key"]))
+            toggles[toggle["key"]] = bool(raw_toggles.get(toggle["key"]))
+            values[toggle["key"]] = toggles[toggle["key"]]
 
     return {
+        "toggles": toggles,
         "building": building_key,
         "usage": usage,
         "values": values,
@@ -346,6 +374,97 @@ def build_worksheet(data: dict) -> bytes:
         )
 
 
+# --- 計算（唯一の実装である wasm へ委譲する） -------------------------------
+
+
+def compute(data: dict) -> dict:
+    """配布物の「出力結果」と同じ値を計算する。
+
+    計算そのものは Rust（core/src/wall_quantity.rs）が持っていて、画面が
+    編集中に動かすのと**同じ .wasm** をここでも動かす。入力が足りない
+    ところは、配布物と同じく空欄で返る（エラーにはしない）。
+    """
+    try:
+        return nail_core.call({"op": "wallQuantity", "data": data})["result"]
+    except CoreError as error:
+        raise WallQuantityError(str(error)) from error
+
+
+def calculation_inputs(building: str) -> dict:
+    """計算が読む入力欄の key と、柱の圧縮基準強度の表。
+
+    マッピング（書き込み先のセル）と計算（wasm）がずれていないかを
+    確かめるためのもので、テストが使う。
+    """
+    try:
+        return nail_core.call(
+            {"op": "wallQuantityInputs", "data": {"building": building}}
+        )
+    except CoreError as error:
+        raise WallQuantityError(str(error)) from error
+
+
+def result_cells(result: dict) -> dict:
+    """計算結果を「key → 表示文字列」の平らな辞書にする（突き合わせ用）。"""
+    cells = {}
+    for section in result.get("sections") or []:
+        for table in section.get("tables") or []:
+            for row in table.get("rows") or []:
+                for cell in row.get("cells") or []:
+                    cells[str(cell.get("key"))] = str(cell.get("text", ""))
+    return cells
+
+
+def verify(result: dict, claim) -> dict:
+    """画面が出した計算結果と、サーバの計算結果を突き合わせる。
+
+    編集中の計算は画面（wasm）が行うので、利用者が見ていた「出力結果」と、
+    サーバが同じ入力から出す値が同じであることを保存のたびに確かめる。
+    同じ .wasm を動かしている以上ふつうは一致するが、
+
+      - 画面を開いたまま新しい版がデプロイされ、古い計算実装が残っている
+      - 送信の途中で入力が入れ替わった
+
+    といった食い違いはここで拾える。ずれていても保存は止めない（xlsx に
+    入るのは入力値だけで、計算するのは Excel の数式なので、成果物が壊れる
+    ことはない）。画面には警告として返し、利用者が気付けるようにする。
+
+    突き合わせるのは表示文字列。利用者が画面で見たものそのものなので、
+    「値は同じだが桁の丸めが違う」も食い違いとして拾える。
+    """
+    if not isinstance(claim, dict):
+        # 画面が突き合わせの材料を送ってこない（＝この仕組みより前の版）。
+        return {"checked": False, "ok": True, "differences": []}
+
+    client_version = str(claim.get("coreVersion") or "")
+    server_version = nail_core.version()
+    claimed = claim.get("cells")
+    claimed = claimed if isinstance(claimed, dict) else {}
+
+    differences = []
+    for key, server_text in result_cells(result).items():
+        client_text = claimed.get(key)
+        if client_text is None or str(client_text) != server_text:
+            differences.append(
+                {
+                    "key": key,
+                    "client": "-" if client_text is None else str(client_text),
+                    "server": server_text,
+                }
+            )
+
+    return {
+        "checked": True,
+        "ok": not differences and client_version == server_version,
+        "coreVersion": {"client": client_version, "server": server_version},
+        "differences": differences[:MAX_REPORTED_DIFFERENCES],
+        "omittedDifferences": max(0, len(differences) - MAX_REPORTED_DIFFERENCES),
+    }
+
+
+# --- ファイル名 --------------------------------------------------------------
+
+
 def file_name(data: dict) -> str:
     """ダウンロードするファイル名。物件名があれば添える。"""
     naming = load_mapping()["file_name"]
@@ -365,13 +484,17 @@ def _sanitize(text: str) -> str:
 __all__ = [
     "WallQuantityError",
     "build_worksheet",
+    "calculation_inputs",
+    "compute",
     "file_name",
     "form_config",
     "load_mapping",
     "load_source",
     "normalize_data",
+    "result_cells",
     "template_bytes",
     "template_version",
     "validate",
+    "verify",
     "xlsx_fill",
 ]

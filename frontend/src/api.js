@@ -62,7 +62,12 @@ export async function apiPostFile(path, file) {
   return resp.json();
 }
 
-/** バイナリ（xlsx など）を返すエンドポイント用。Blob とファイル名を返す。 */
+/**
+ * バイナリ（xlsx など）を返すエンドポイント用。Blob とファイル名を返す。
+ *
+ * 本文がファイルそのものなので、サーバーが添える情報（必要壁量の
+ * 突き合わせ結果など）はヘッダに載る。読めるように headers も渡す。
+ */
 export async function apiPostForBlob(path, body, fallbackFileName) {
   const resp = await authorizedFetch(path, {
     method: 'POST',
@@ -74,5 +79,5 @@ export async function apiPostForBlob(path, body, fallbackFileName) {
   const fileName =
     fileNameFromDisposition(resp.headers.get('Content-Disposition')) ||
     fallbackFileName;
-  return { blob, fileName };
+  return { blob, fileName, headers: resp.headers };
 }

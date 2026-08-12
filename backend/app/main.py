@@ -8,6 +8,7 @@
 権限モデル（雛形にアクセス権のある本人しか読めない）を維持する。
 """
 
+import json
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Header, Request, UploadFile
@@ -49,6 +50,10 @@ _WALL_PREFIX = f"/api/tools/{TOOL_WALL_QUANTITY}"
 # アップロードされた PDF の上限。証明書は 1 ページなので十分に余裕がある。
 _MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
+# 必要壁量の xlsx を返すときに、画面との突き合わせ結果を載せるヘッダ。
+# 本文が xlsx なので、応答の中に入れる場所がここしかない。
+VERIFICATION_HEADER = "X-Wall-Quantity-Verification"
+
 app = FastAPI(title="portal-api", docs_url=None, redoc_url=None)
 
 # 本番は Firebase Hosting のリライトで同一オリジンになるため CORS は不要だが、
@@ -58,7 +63,7 @@ app.add_middleware(
     allow_origins=config.cors_allowed_origins(),
     allow_methods=["*"],
     allow_headers=["Authorization", "Content-Type"],
-    expose_headers=["Content-Disposition"],
+    expose_headers=["Content-Disposition", VERIFICATION_HEADER],
 )
 
 
@@ -657,23 +662,47 @@ async def parse_drive_panel_shear_report(
 # 提出物は「日本住宅・木材技術センターが配布している表計算ツールに値を入れたもの」
 # そのものなので、雛形は Drive ではなくリポジトリに同梱した配布物を使い、
 # Excel 形式のまま返す（Google スプレッドシート等へは変換しない）。共有設定も
-# Drive アクセスも要らないので、このツールにあるのは config と生成の 2 つだけ。
-# 必要壁量の計算は配布物の数式が行う（このツールは計算し直さない）。
+# Drive アクセスも要らないので、このツールにあるのは config と wasm と生成だけ。
+#
+# 提出物に入る計算結果は配布物の数式が出す（このツールは xlsx の数式に手を
+# 入れない）。一方で画面には、配布物の数式を写した wasm で計算した「出力結果」
+# をその場で出す。保存のときはサーバも同じ wasm で計算し、画面が出していた値と
+# 突き合わせて、食い違えば応答ヘッダで知らせる。
 
 
 @app.get(f"{_WALL_PREFIX}/config")
 async def get_wall_quantity_config(user: User = Depends(require_user)):
     """フォーム定義（節・入力欄・選択肢・条件）と、同梱している配布物の版を配る。"""
-    return wall_quantity.form_config()
+    return wall_quantity.form_config(f"{_WALL_PREFIX}/core.wasm")
+
+
+@app.get(f"{_WALL_PREFIX}/core.wasm")
+async def get_wall_quantity_core(user: User = Depends(require_user)):
+    """画面が編集中の計算に使う wasm を配る（面材張り大壁と同じバイト列）。"""
+    return Response(
+        content=nail_core.wasm_bytes(),
+        media_type="application/wasm",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": f'"{nail_core.sha256()}"',
+        },
+    )
 
 
 @app.post(f"{_WALL_PREFIX}/worksheets")
 async def create_wall_quantity_worksheet(
     request: Request, user: User = Depends(require_user)
 ):
-    """フォーム入力を書き込んだ表計算ツール（xlsx）を返す。"""
-    data = wall_quantity.normalize_data(await _json_body(request))
+    """フォーム入力を書き込んだ表計算ツール（xlsx）を返す。
+
+    本文が xlsx そのものなので、画面との突き合わせ（verify）の結果は
+    応答ヘッダ X-Wall-Quantity-Verification に JSON で載せる。食い違っても
+    生成は止めない（xlsx に入るのは入力値で、計算するのは Excel の数式）。
+    """
+    body = await _json_body(request)
+    data = wall_quantity.normalize_data(body)
     wall_quantity.validate(data)
+    verification = wall_quantity.verify(wall_quantity.compute(data), body.get("verify"))
     xlsx_bytes = wall_quantity.build_worksheet(data)
 
     return Response(
@@ -682,6 +711,8 @@ async def create_wall_quantity_worksheet(
         headers={
             "Content-Disposition": (
                 f"attachment; filename*=UTF-8''{quote(wall_quantity.file_name(data))}"
-            )
+            ),
+            # key と数値だけなので ASCII に収まる（ヘッダに非 ASCII は置けない）。
+            VERIFICATION_HEADER: json.dumps(verification, ensure_ascii=True),
         },
     )
