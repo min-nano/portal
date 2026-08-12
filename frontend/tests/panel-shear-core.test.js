@@ -1,0 +1,122 @@
+// 画面が編集中に使う計算実装（wasm）のテスト。
+//
+// 読み込むのは、リポジトリにコミットしてある **本物の .wasm**
+// （backend/app/wasm/nail_array_core.wasm）。本番の画面はこれと同じバイト列を
+// /api/tools/timber-panel-shear-calculator/core.wasm から受け取るので、ここで
+// 通ることは「サーバと同じ計算が画面でもできる」ことの確認になる。
+//
+// 式ごとの検証は core/src/*.rs の `cargo test` にある。ここで確かめるのは、
+// JavaScript から正しく呼べること（線形メモリの受け渡し）と、グレー本の
+// 計算例が同じ数字で返ること。
+
+import { readFile } from 'node:fs/promises';
+import { describe, expect, it } from 'vitest';
+import {
+  instantiateCore,
+  loadCore,
+} from '../src/timber-panel-shear-calculator/core.js';
+
+const WASM_PATH = new URL(
+  '../../backend/app/wasm/nail_array_core.wasm',
+  import.meta.url
+);
+
+// グレー本 3.2【解説】の計算例（図 3.2.2）。
+const EXAMPLE = {
+  patternId: 'p1',
+  patternName: 'グレー本の計算例',
+  width: 610,
+  height: 910,
+  mode: 'grid',
+  gridX: '0, 445, 890',
+  gridY: '0, 145, 295, 445, 590',
+  coords: '',
+};
+
+async function core() {
+  return instantiateCore(await readFile(WASM_PATH));
+}
+
+describe('計算実装（wasm）', () => {
+  it('版を名乗る（保存時にサーバと突き合わせる）', async () => {
+    expect((await core()).version).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it('グレー本の計算例を、計算書と同じ桁で返す', async () => {
+    const [report] = (await core()).computeAll({ patterns: [EXAMPLE] });
+
+    expect(report.ok).toBe(true);
+    expect(Object.fromEntries(report.summary.map((s) => [s.key, s.value]))).toEqual({
+      Ixy: '0.888868',
+      Zxy: '0.00358851',
+      Cxy: '1.26155',
+    });
+    expect(report.nails).toHaveLength(15);
+    expect(report.result.x0).toBe(445);
+  });
+
+  it('釘配列図の範囲と目盛も返す（計算書 PDF と同じもの）', async () => {
+    const [report] = (await core()).computeAll({ patterns: [EXAMPLE] });
+
+    expect(report.diagram.maxX).toBe(890);
+    expect(report.diagram.xTicks.map((t) => t.label)).toEqual(['0', '445', '890']);
+    expect(report.diagram.axis.xLabel).toBe('x0 = 445.0');
+  });
+
+  it('計算できないパターンは、理由を添えて ok: false で返る', async () => {
+    const [report] = (await core()).computeAll({
+      patterns: [{ ...EXAMPLE, gridX: '', gridY: '' }],
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.error).toContain('釘座標が入力されていません');
+  });
+
+  it('入力全体が壊れていれば、日本語の文面で投げる', async () => {
+    const loaded = await core();
+
+    expect(() => loaded.computeAll({ patterns: [{ width: 'ろく' }] })).toThrow(
+      /面材の幅 W/
+    );
+  });
+
+  it('何度呼んでも結果が変わらない（メモリの受け渡しが漏れない）', async () => {
+    const loaded = await core();
+    const first = loaded.computeAll({ patterns: [EXAMPLE] });
+
+    for (let round = 0; round < 30; round += 1) {
+      expect(loaded.computeAll({ patterns: [EXAMPLE] })).toEqual(first);
+    }
+  });
+
+  it('メモリが広がる大きさの入力でも壊れない', async () => {
+    const axis = Array.from({ length: 40 }, (_, index) => index * 10).join(', ');
+
+    const [report] = (await core()).computeAll({
+      patterns: [{ ...EXAMPLE, gridX: axis, gridY: axis }],
+    });
+
+    expect(report.nails).toHaveLength(1600);
+  });
+});
+
+describe('loadCore', () => {
+  it('受け取ったバイト列から組み立てる', async () => {
+    const fetched = [];
+    const loaded = await loadCore('/core.wasm?v=abc', async (url) => {
+      fetched.push(url);
+      return readFile(WASM_PATH);
+    });
+
+    expect(fetched).toEqual(['/core.wasm?v=abc']);
+    expect(loaded.version).toBeTruthy();
+  });
+
+  it('受け取れなければ、何が起きたか分かる文面で投げる', async () => {
+    await expect(
+      loadCore('/core.wasm', async () => {
+        throw new Error('サーバーエラーが発生しました (HTTP 503)。');
+      })
+    ).rejects.toThrow(/計算エンジンを読み込めませんでした.*HTTP 503/);
+  });
+});

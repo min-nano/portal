@@ -1,4 +1,4 @@
-"""面材張り耐力要素 釘配列諸定数 計算ツールの入力整形・計算書 PDF の生成と解析。
+"""面材張り耐力要素 釘配列諸定数 計算ツールの保存・計算書 PDF の生成と解析。
 
 GAS 版（gas-timber-panel-shear-calculator）はスプレッドシートへ「現在値 +
 履歴」を書き出していたが、本ポータルでは構造計算安全証明書と同じ考え方に
@@ -6,19 +6,18 @@ GAS 版（gas-timber-panel-shear-calculator）はスプレッドシートへ「�
 文書情報へ埋め込むので、保存した PDF を開き直せば入力内容を完全に復元して
 続きを編集できる（スプレッドシートも履歴タブも持たない）。
 
-計算そのものは nail_array に委譲する（唯一の計算実装）。画面に出す数値も
-PDF に刷る数値も、このモジュールが組み立てた同じ文字列を使うため、
-「画面と計算書で桁が違う」ということが起こらない。
+計算・入力の解釈・表示する桁の丸めは nail_core（Rust 製の wasm）に委譲する。
+画面もまったく同じ .wasm を動かすので、実装は 1 つしかない。このモジュールが
+受け持つのは、その結果を PDF に組む仕事と、保存時の突き合わせ（verify）。
 
 1 PDF = 1 物件、1 ページ = 1 パターン。
 """
 
 import json
-import math
 import re
 
-from . import nail_array, pdf_tools, pdf_write
-from .nail_array import Nail
+from . import nail_core, pdf_tools, pdf_write
+from .nail_core import CoreError
 
 # 文書情報に入れる独自キー（このツールが作った PDF の目印にもなる）。
 METADATA_KEY = "/PortalTimberPanelShear"
@@ -29,15 +28,15 @@ FILE_NAME_TEMPLATE = "釘配列諸定数計算書_{projectName}.pdf"
 # ファイル名に使えない文字（Drive 上でも扱いづらいもの）。
 _UNSAFE_FILE_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
-# 1 パターンあたりの釘の上限。実務の面材 1 枚では 100 本程度なので十分に
-# 余裕がある。桁を間違えた入力（格子に 0〜1000 を 1mm 刻みで書くなど）で
-# 計算とページ描画が止まらないようにするための歯止め。
-MAX_NAILS = 2000
-MAX_PATTERNS = 50
+# 画面の計算結果とサーバの計算結果を「同じ」とみなす相対差。
+#
+# 同じ .wasm を同じ引数で動かすので、本来は 1 ビットも違わない。ここに幅を
+# 持たせてあるのは、JSON を経由する往復や端末差を疑わずに済ませるためで、
+# これを超える差は「画面とサーバで違うものを計算している」ということ。
+VERIFY_RELATIVE_TOLERANCE = 1e-9
 
-# 有効桁数。Zxy ≈ 0.0036 のように小さい値でも Cxy = Zpxy / Zxy を自分で
-# 検算できるだけの桁を確保する（GAS 版の画面表示と同じ 6 桁）。
-SIGNIFICANT_DIGITS = 6
+# 突き合わせの結果に並べる差の上限（全項目が違うときに応答が膨れないように）。
+MAX_REPORTED_DIFFERENCES = 20
 
 # グレー本 解説の計算例（図 3.2.2）。画面の「計算例を読み込む」で使う。
 EXAMPLE_PATTERN = {
@@ -59,340 +58,112 @@ class PanelShearError(Exception):
         self.status = status
 
 
-# --- 数値の整形 --------------------------------------------------------------
+# --- 計算（唯一の実装である wasm へ委譲する） -------------------------------
 
 
-def significant(value: float | None, digits: int = SIGNIFICANT_DIGITS) -> str:
-    """有効桁数で整形する（整数部には 3 桁区切りを付ける）。
-
-    「小数点以下の桁数」を固定すると、Zxy ≈ 0.0036 や Zpxy ≈ 0.0045 のような
-    小さい値で有効桁が 2 桁しか出ず、Cxy = Zpxy / Zxy の検算ができない。
-    そのため丸めは有効桁で行い、末尾の 0 も有効桁として残す。
-    """
-    if value is None or not math.isfinite(value):
-        return "-"
-    if value == 0:
-        return "0"
-    # 先に有効桁で丸めてから桁数を数える（9.9999… が 10.000 へ繰り上がる
-    # ときに有効桁が 1 桁増えてしまうのを防ぐ）。
-    rounded = float(f"{value:.{digits}g}")
-    exponent = math.floor(math.log10(abs(rounded)))
-    fraction_digits = min(100, max(0, digits - 1 - exponent))
-    text = f"{rounded:.{fraction_digits}f}"
-
-    sign = "-" if text.startswith("-") else ""
-    text = text.lstrip("-")
-    integer, _, fraction = text.partition(".")
-    integer = f"{int(integer):,}"
-    return sign + integer + ("." + fraction if fraction else "")
-
-
-def format_int(value: float | None) -> str:
-    """整数として 3 桁区切りで整形する（釘本数・面積など）。"""
-    if value is None or not math.isfinite(value):
-        return "-"
-    return f"{round(value):,}"
-
-
-# --- 入力の正規化 ------------------------------------------------------------
-
-
-def _to_float(value, label: str) -> float:
-    if value is None or value == "":
-        return 0.0
+def _core(operation: str, data: dict) -> dict:
+    """計算実装を呼ぶ。失敗はそのまま利用者に見せられる 400 にする。"""
     try:
-        number = float(value)
-    except (TypeError, ValueError):
-        raise PanelShearError(f"{label}には数値を入力してください。") from None
-    if not math.isfinite(number):
-        raise PanelShearError(f"{label}には有限の数値を入力してください。")
-    return number
-
-
-def _text(value) -> str:
-    return "" if value is None else str(value).strip()
+        return nail_core.call({"op": operation, "data": data})
+    except CoreError as error:
+        raise PanelShearError(str(error)) from error
 
 
 def normalize_data(data) -> dict:
     """API で受け取った本文を、このツールが扱う形へ整える。
 
     未知のキーは捨て、パターンは 1 つ以上に整える（空のフォームでも
-    「パターンが 1 つある」状態から始められるようにする）。
+    「パターンが 1 つある」状態から始められるようにする）。入力欄の文字列を
+    どう読むかは計算そのものと地続きなので、ここも計算実装に任せる。
     """
-    if not isinstance(data, dict):
-        raise PanelShearError("入力データがありません。")
-
-    raw_patterns = data.get("patterns")
-    raw_patterns = raw_patterns if isinstance(raw_patterns, list) else []
-    if len(raw_patterns) > MAX_PATTERNS:
-        raise PanelShearError(f"パターンは {MAX_PATTERNS} 個までです。")
-
-    patterns = [normalize_pattern(p, i) for i, p in enumerate(raw_patterns)]
-    if not patterns:
-        patterns = [normalize_pattern({}, 0)]
-
-    return {
-        "projectName": _text(data.get("projectName")),
-        "issuedOn": _text(data.get("issuedOn")),
-        "patterns": patterns,
-    }
-
-
-def normalize_pattern(pattern, index: int = 0) -> dict:
-    if not isinstance(pattern, dict):
-        pattern = {}
-    mode = _text(pattern.get("mode")) or "grid"
-    return {
-        "patternId": _text(pattern.get("patternId")) or f"p{index + 1}",
-        "patternName": _text(pattern.get("patternName")),
-        "width": _to_float(pattern.get("width"), "面材の幅 W"),
-        "height": _to_float(pattern.get("height"), "面材の高さ H"),
-        "mode": mode if mode in ("grid", "coords") else "grid",
-        "gridX": _text(pattern.get("gridX")),
-        "gridY": _text(pattern.get("gridY")),
-        "coords": _text(pattern.get("coords")),
-    }
-
-
-def parse_number_list(text: str) -> list[float]:
-    """「0, 445, 890」のようなカンマ・空白区切りの数値列を読む。"""
-    numbers = []
-    for token in re.split(r"[,\s]+", text or ""):
-        if not token:
-            continue
-        try:
-            number = float(token)
-        except ValueError:
-            continue
-        if math.isfinite(number):
-            numbers.append(number)
-    return numbers
-
-
-def parse_coord_lines(text: str) -> list[Nail]:
-    """「x, y」を 1 行に 1 本ずつ書いた釘座標を読む。"""
-    nails = []
-    for line in (text or "").splitlines():
-        parts = parse_number_list(line)
-        if len(parts) >= 2:
-            nails.append(Nail(parts[0], parts[1]))
-    return nails
-
-
-def panel_area_of(pattern: dict) -> float:
-    return pattern["width"] * pattern["height"]
-
-
-def _unusable_reason(pattern: dict, nails: list[Nail]) -> str:
-    """このパターンを計算できない理由を返す（計算できるなら空文字）。
-
-    nail_array 側にも同じ状況を弾く guard があるが、あちらは計算式が壊れた
-    入力を受け取らないための最終防衛線で、文言も式の言葉（「Ix + Iy が 0」）で
-    書かれている。画面に出すのは、入力欄の言葉で書いたこちらの理由。
-
-    ここで挙げる 3 つが、入力から到達しうる計算不能のすべて:
-      - 釘が無い / 面積が 0     … nail_array.validate_input
-      - 釘が 1 点に集中している … Ix + Iy = 0
-      - 釘が 1 直線上に並ぶ     … Zx もしくは Zy が 0 → Zxy = 0
-    """
-    if not nails:
-        return "釘座標が入力されていません。少なくとも 1 本の釘が必要です。"
-    if panel_area_of(pattern) <= 0:
-        return "面材の幅 W と高さ H に正の数値を入力してください。"
-
-    xs = {nail.x for nail in nails}
-    ys = {nail.y for nail in nails}
-    if len(xs) == 1 and len(ys) == 1:
-        return "釘が 1 点に集中しているため、釘配列諸定数を求められません。"
-    if len(xs) == 1 or len(ys) == 1:
-        return (
-            "釘が 1 直線上に並んでいるため、釘配列諸定数を求められません。"
-            "X 方向・Y 方向のどちらにも広がりが必要です。"
-        )
-    return ""
-
-
-def _nails_and_reason(pattern: dict) -> tuple[list[Nail], str]:
-    """釘リストと、計算できない理由（計算できるなら空文字）を返す。
-
-    理由を例外ではなく戻り値にしているのは、入力途中のパターンを画面へ
-    そのまま出すため（例外の文字列を応答に混ぜない）。
-    """
-    if pattern["mode"] == "grid":
-        xs = parse_number_list(pattern["gridX"])
-        ys = parse_number_list(pattern["gridY"])
-        # 格子は組み合わせの数で増えるので、作る前に本数を確かめる。
-        if len(xs) * len(ys) > MAX_NAILS:
-            return [], (
-                f"釘の本数が多すぎます（{len(xs)} × {len(ys)} 本）。"
-                f"1 パターンあたり {MAX_NAILS} 本までにしてください。"
-            )
-        nails = nail_array.build_rectangular_grid(xs, ys)
-    else:
-        nails = parse_coord_lines(pattern["coords"])
-        if len(nails) > MAX_NAILS:
-            return [], (
-                f"釘の本数が多すぎます（{len(nails)} 本）。"
-                f"1 パターンあたり {MAX_NAILS} 本までにしてください。"
-            )
-    return nails, _unusable_reason(pattern, nails)
-
-
-def nails_of(pattern: dict) -> list[Nail]:
-    """パターンの入力方式に応じて釘リストを組み立てる。"""
-    nails, reason = _nails_and_reason(pattern)
-    if reason:
-        raise PanelShearError(reason)
-    return nails
-
-
-# --- 計算（画面と PDF が共有する表示用データ） ------------------------------
-
-
-def _nail_arrangement_text(pattern: dict, nails: list[Nail]) -> str:
-    if pattern["mode"] == "grid":
-        return f"格子　X: {pattern['gridX']}　／　Y: {pattern['gridY']}"
-    return f"座標を直接入力（{len(nails)} 点）"
-
-
-def compute_pattern(pattern: dict) -> dict:
-    """1 パターンを計算し、画面表示にも PDF にも使える形で返す。
-
-    表示用の文字列（有効桁・単位）まで組み立てて返すことで、画面と計算書で
-    桁の丸め方が食い違わないようにしている。
-    """
-    nails, reason = _nails_and_reason(pattern)
-    if reason:
-        raise PanelShearError(reason)
-    return _build_report(pattern, nails)
-
-
-def _build_report(pattern: dict, nails: list[Nail]) -> dict:
-    """計算できると分かっているパターンの結果を組み立てる。
-
-    ここへ来る入力は _unusable_reason を通っているので、nail_array 側の
-    guard に掛かることはない（掛かるなら判定漏れという不具合）。
-    """
-    area = panel_area_of(pattern)
-    result = nail_array.compute(nails, area)
-
-    return {
-        "patternId": pattern["patternId"],
-        "patternName": pattern["patternName"],
-        "nails": [{"x": nail.x, "y": nail.y} for nail in nails],
-        "panelArea": area,
-        "result": result.as_dict(),
-        "inputs": [
-            {
-                "label": "面材寸法 W × H",
-                "value": f"{format_int(pattern['width'])} × "
-                f"{format_int(pattern['height'])} mm",
-            },
-            {"label": "面材面積 Aw", "value": f"{format_int(area)} mm²"},
-            {"label": "釘配列", "value": _nail_arrangement_text(pattern, nails)},
-            {"label": "釘本数 n", "value": f"{format_int(result.n)} 本"},
-        ],
-        "summary": [
-            {"key": "Ixy", "unit": "mm²/mm²", "value": significant(result.Ixy)},
-            {"key": "Zxy", "unit": "mm/mm²", "value": significant(result.Zxy)},
-            {"key": "Cxy", "unit": "", "value": significant(result.Cxy)},
-        ],
-        "steps": [
-            {"label": "釘本数 n", "eq": "", "value": format_int(result.n)},
-            {
-                "label": "X方向 中立軸 x0",
-                "eq": "(3.2.2b)",
-                "value": significant(result.x0) + " mm",
-            },
-            {
-                "label": "Y方向 中立軸 y0",
-                "eq": "(3.2.2a)",
-                "value": significant(result.y0) + " mm",
-            },
-            {
-                "label": "二次モーメント Ix",
-                "eq": "(3.2.2a)",
-                "value": format_int(result.Ix) + " mm²",
-            },
-            {
-                "label": "二次モーメント Iy",
-                "eq": "(3.2.2b)",
-                "value": format_int(result.Iy) + " mm²",
-            },
-            {
-                "label": "Ixy",
-                "eq": "(3.2.1)",
-                "value": significant(result.Ixy) + " mm²/mm²",
-            },
-            {
-                "label": "端部距離 (y-y0)max",
-                "eq": "",
-                "value": significant(result.dy_max) + " mm",
-            },
-            {
-                "label": "端部距離 (x-x0)max",
-                "eq": "",
-                "value": significant(result.dx_max) + " mm",
-            },
-            {
-                "label": "釘配列係数 Zx",
-                "eq": "(3.2.4a)",
-                "value": significant(result.Zx) + " mm",
-            },
-            {
-                "label": "釘配列係数 Zy",
-                "eq": "(3.2.4b)",
-                "value": significant(result.Zy) + " mm",
-            },
-            {
-                "label": "Zxy",
-                "eq": "(3.2.3)",
-                "value": significant(result.Zxy) + " mm/mm²",
-            },
-            {"label": "変形割合 αx", "eq": "(3.2.7)", "value": significant(result.alpha_x)},
-            {
-                "label": "塑性釘配列係数 Zpxy",
-                "eq": "(3.2.6)",
-                "value": significant(result.Zpxy) + " mm/mm²",
-            },
-            {"label": "Cxy", "eq": "(3.2.5)", "value": significant(result.Cxy)},
-        ],
-    }
+    return _core("normalize", data)["data"]
 
 
 def compute_all(data: dict) -> list[dict]:
     """全パターンを計算する。計算できないパターンは ok: False で返す。
 
-    入力途中でも画面に出せるよう、1 つのパターンの不備で他のパターンの
-    結果まで失わせない（保存時は validate() で改めて全件を確かめる）。
+    1 つのパターンの不備で他のパターンの結果まで失わせない
+    （保存時は validate() で改めて全件を確かめる）。
     """
-    reports = []
-    for pattern in data["patterns"]:
-        nails, reason = _nails_and_reason(pattern)
-        if reason:
-            reports.append(
-                {
-                    "ok": False,
-                    "patternId": pattern["patternId"],
-                    "patternName": pattern["patternName"],
-                    "error": reason,
-                }
-            )
-        else:
-            reports.append({"ok": True, **_build_report(pattern, nails)})
-    return reports
+    return _core("computeAll", data)["patterns"]
 
 
 def validate(data: dict) -> list[dict]:
     """保存できる状態か確かめ、全パターンの計算結果を返す。"""
-    reports = []
-    for index, pattern in enumerate(data["patterns"], start=1):
-        nails, reason = _nails_and_reason(pattern)
-        if reason:
-            name = pattern["patternName"] or f"パターン{index}"
-            raise PanelShearError(f"「{name}」を計算できません: {reason}")
-        reports.append(_build_report(pattern, nails))
-    return reports
+    return _core("validate", data)["patterns"]
+
+
+# --- 保存時の突き合わせ ------------------------------------------------------
+
+
+def _is_close(client, server) -> bool:
+    """画面の値とサーバの値を「同じ」とみなせるか。"""
+    if not isinstance(client, (int, float)) or isinstance(client, bool):
+        return False
+    difference = abs(float(client) - float(server))
+    scale = max(1.0, abs(float(client)), abs(float(server)))
+    return difference <= VERIFY_RELATIVE_TOLERANCE * scale
+
+
+def verify(reports: list[dict], claim) -> dict:
+    """画面が出した計算結果と、サーバの計算結果を突き合わせる。
+
+    編集中の計算は画面（wasm）が行うので、保存する計算書と画面で見ていた値が
+    同じであることを、保存のたびにサーバ側でも確かめる。同じ .wasm を動かして
+    いる以上ふつうは一致するが、次のような食い違いはここで拾える:
+
+      - 画面を開いたまま新しい版がデプロイされ、古い計算実装が残っている
+      - 端末や処理系の差で、末尾の桁が違う
+
+    ずれていても保存は止めない（計算書に載るのはサーバの値なので、成果物が
+    壊れることはない）。画面には警告として返し、利用者が気付けるようにする。
+    """
+    if not isinstance(claim, dict):
+        # 画面が突き合わせの材料を送ってこない（＝この仕組みより前の版）。
+        return {"checked": False, "ok": True, "differences": []}
+
+    client_version = str(claim.get("coreVersion") or "")
+    server_version = nail_core.version()
+    claimed = {
+        str(entry.get("patternId")): entry.get("result")
+        for entry in claim.get("patterns") or []
+        if isinstance(entry, dict)
+    }
+
+    differences = []
+    for report in reports:
+        client_result = claimed.get(report["patternId"])
+        if not isinstance(client_result, dict):
+            differences.append(
+                {
+                    "patternId": report["patternId"],
+                    "patternName": report["patternName"],
+                    "key": "(計算結果なし)",
+                    "client": "-",
+                    "server": "計算済み",
+                }
+            )
+            continue
+        for key, server_value in report["result"].items():
+            client_value = client_result.get(key)
+            if not _is_close(client_value, server_value):
+                differences.append(
+                    {
+                        "patternId": report["patternId"],
+                        "patternName": report["patternName"],
+                        "key": key,
+                        "client": client_value,
+                        "server": server_value,
+                    }
+                )
+
+    return {
+        "checked": True,
+        "ok": not differences and client_version == server_version,
+        "coreVersion": {"client": client_version, "server": server_version},
+        "differences": differences[:MAX_REPORTED_DIFFERENCES],
+        "omittedDifferences": max(0, len(differences) - MAX_REPORTED_DIFFERENCES),
+    }
 
 
 # --- ファイル名 --------------------------------------------------------------
@@ -441,20 +212,19 @@ def _draw_diagram(page: pdf_write.Page, box: tuple[float, float, float, float],
 
     box は (x, y, width, height)。工学座標（x は右・y は上、原点は面材の
     左下）をそのまま PDF 座標へ写せるので、画面の SVG と違って上下の反転は
-    要らない。釘が面材からはみ出す配列でも切り取らず、外接矩形に合わせて
-    縮尺を決めて「はみ出していること」が見えるようにする。
+    要らない。描く範囲と目盛の文字は計算実装が決めたもの（report["diagram"]）
+    を使う。画面の SVG も同じものを読むので、縮尺だけが違う同じ図になる。
     """
     x, y, width, height = box
     nails = report["nails"]
+    diagram = report["diagram"]
     panel_w = pattern["width"]
     panel_h = pattern["height"]
     if not nails or panel_w <= 0 or panel_h <= 0:
         return
 
-    xs = [n["x"] for n in nails]
-    ys = [n["y"] for n in nails]
-    min_x, max_x = min(0.0, *xs), max(panel_w, *xs)
-    min_y, max_y = min(0.0, *ys), max(panel_h, *ys)
+    min_x, max_x = diagram["minX"], diagram["maxX"]
+    min_y, max_y = diagram["minY"], diagram["maxY"]
     domain_w = max_x - min_x
     domain_h = max_y - min_y
     if domain_w <= 0 or domain_h <= 0:
@@ -484,26 +254,22 @@ def _draw_diagram(page: pdf_write.Page, box: tuple[float, float, float, float],
     )
 
     # 弾性中立軸 x0 / y0（破線）。
-    result = report["result"]
-    axis_x, axis_y = to_x(result["x0"]), to_y(result["y0"])
+    axis = diagram["axis"]
+    axis_x, axis_y = to_x(axis["x0"]), to_y(axis["y0"])
     page.line(axis_x, to_y(min_y), axis_x, to_y(max_y), 0.6, 0.35, dash=(3, 2))
     page.line(to_x(min_x), axis_y, to_x(max_x), axis_y, 0.6, 0.35, dash=(3, 2))
-    page.text(axis_x, to_y(max_y) + 4, f"x0={significant(result['x0'], 4)}", 6.5,
-              align="center", gray=0.35)
-    page.text(to_x(max_x) + 3, axis_y - 2, f"y0={significant(result['y0'], 4)}", 6.5,
-              gray=0.35)
+    page.text(axis_x, to_y(max_y) + 4, axis["xLabel"], 6.5, align="center", gray=0.35)
+    page.text(to_x(max_x) + 3, axis_y - 2, axis["yLabel"], 6.5, gray=0.35)
 
     # 座標の目盛（重複を除いた昇順）。
-    for value in sorted(set(xs)):
-        position = to_x(value)
+    for tick in diagram["xTicks"]:
+        position = to_x(tick["value"])
         page.line(position, origin_y - 3, position, origin_y, 0.4, 0.6)
-        page.text(position, origin_y - 11, format_int(value), 6, align="center",
-                  gray=0.45)
-    for value in sorted(set(ys)):
-        position = to_y(value)
+        page.text(position, origin_y - 11, tick["label"], 6, align="center", gray=0.45)
+    for tick in diagram["yTicks"]:
+        position = to_y(tick["value"])
         page.line(origin_x - 3, position, origin_x, position, 0.4, 0.6)
-        page.text(origin_x - 5, position - 2, format_int(value), 6, align="right",
-                  gray=0.45)
+        page.text(origin_x - 5, position - 2, tick["label"], 6, align="right", gray=0.45)
 
     for nail in nails:
         page.circle(to_x(nail["x"]), to_y(nail["y"]), 1.8, 0.3, 0.2, fill_gray=0.2)
@@ -641,11 +407,22 @@ def parse_pdf(pdf_bytes: bytes) -> dict:
     return normalize_data(stored)
 
 
-def form_config() -> dict:
-    """画面が必要とする既定値を配信する（ファイル名の組み立てと計算例）。"""
+def form_config(core_path: str) -> dict:
+    """画面が必要とする既定値を配信する（ファイル名の組み立てと計算例）。
+
+    編集中の計算は画面が行うため、計算実装（wasm）の在り処もここで知らせる。
+    URL に中身のハッシュを付けるので、実装が変われば画面は必ず新しいものを
+    取りに行き、変わらないうちはブラウザのキャッシュから読む。
+    """
+    digest = nail_core.sha256()
     return {
         "default_file_name": DEFAULT_FILE_NAME,
         "file_name_template": FILE_NAME_TEMPLATE,
         "example": EXAMPLE_PATTERN,
-        "max_patterns": MAX_PATTERNS,
+        "max_patterns": nail_core.config()["maxPatterns"],
+        "core": {
+            "url": f"{core_path}?v={digest[:16]}",
+            "version": nail_core.version(),
+            "sha256": digest,
+        },
     }

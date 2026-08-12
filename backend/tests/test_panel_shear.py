@@ -1,8 +1,12 @@
-"""計算書の入力整形・表示整形・PDF の生成と読み戻しのテスト。
+"""計算書 PDF の生成と読み戻し、保存時の突き合わせのテスト。
 
 PDF はバックエンドが直接組み立てるため、雛形を用意せずにここで完結する。
 「作った PDF から入力を復元できる」ことが保存形式としての要（スプレッド
 シートの代わり）なので、往復を通して確かめる。
+
+計算そのもの・入力の解釈・表示の桁揃えは唯一の実装（core/、wasm）が持つので、
+式ごとの検証は core/src/*.rs の `cargo test` にある。ここでは「その結果が
+そのまま PDF に載ること」を確かめる。
 """
 
 import io
@@ -11,8 +15,7 @@ import json
 import pytest
 from pdfminer.high_level import extract_text
 
-from app import panel_shear
-from app.nail_array import Nail
+from app import nail_core, panel_shear
 
 EXAMPLE = dict(panel_shear.EXAMPLE_PATTERN, patternId="p1")
 
@@ -56,68 +59,17 @@ def test_normalize_rejects_a_non_numeric_dimension():
 
 
 def test_normalize_rejects_too_many_patterns():
-    patterns = [{"patternId": f"p{i}"} for i in range(panel_shear.MAX_PATTERNS + 1)]
+    limit = nail_core.config()["maxPatterns"]
+    patterns = [{"patternId": f"p{i}"} for i in range(limit + 1)]
     with pytest.raises(panel_shear.PanelShearError, match="パターンは"):
         panel_shear.normalize_data({"patterns": patterns})
-
-
-def test_parse_number_list_ignores_separators_and_junk():
-    assert panel_shear.parse_number_list("0, 445  890\n1200") == [0, 445, 890, 1200]
-    assert panel_shear.parse_number_list("0, あ, 445") == [0, 445]
-    assert panel_shear.parse_number_list("") == []
-
-
-def test_parse_coord_lines_needs_two_numbers_per_line():
-    nails = panel_shear.parse_coord_lines("0, 0\n445 295\n\n910\n")
-    assert nails == [Nail(0, 0), Nail(445, 295)]
-
-
-def test_nails_of_grid_is_every_combination():
-    nails = panel_shear.nails_of(panel_shear.normalize_pattern(EXAMPLE))
-    assert len(nails) == 15
-
-
-def test_nails_of_rejects_an_absurd_grid():
-    """桁を間違えた入力で計算とページ描画が止まらないようにする。"""
-    pattern = panel_shear.normalize_pattern(
-        {"mode": "grid", "gridX": ",".join(str(i) for i in range(100)),
-         "gridY": ",".join(str(i) for i in range(100))}
-    )
-    with pytest.raises(panel_shear.PanelShearError, match="釘の本数が多すぎます"):
-        panel_shear.nails_of(pattern)
-
-
-# --- 表示用の整形 ------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "value,expected",
-    [
-        (445, "445.000"),
-        (657150, "657,150"),
-        (0.0035885, "0.00358850"),
-        (1.2615536, "1.26155"),
-        (0, "0"),
-        (-2227.63, "-2,227.63"),
-        # 有効桁で丸めた結果が繰り上がっても、桁数が増えないこと。
-        (9.999999, "10.0000"),
-        (None, "-"),
-    ],
-)
-def test_significant_keeps_six_significant_digits(value, expected):
-    assert panel_shear.significant(value) == expected
-
-
-def test_format_int_rounds_and_groups():
-    assert panel_shear.format_int(555100) == "555,100"
-    assert panel_shear.format_int(2227.63) == "2,228"
 
 
 # --- 計算（画面と PDF が共有する表示用データ） ------------------------------
 
 
-def test_compute_pattern_matches_the_reference_example():
-    report = panel_shear.compute_pattern(panel_shear.normalize_pattern(EXAMPLE))
+def test_compute_all_matches_the_reference_example():
+    report = panel_shear.compute_all(make_data())[0]
 
     values = {row["key"]: row["value"] for row in report["summary"]}
     assert values == {"Ixy": "0.888868", "Zxy": "0.00358851", "Cxy": "1.26155"}
@@ -128,37 +80,6 @@ def test_compute_pattern_matches_the_reference_example():
     assert steps["X方向 中立軸 x0"] == "445.000 mm"
     assert steps["二次モーメント Iy"] == "1,980,250 mm²"
     assert steps["変形割合 αx"] == "0.750834"
-
-
-@pytest.mark.parametrize(
-    "pattern,expected",
-    [
-        # 釘が無い / 面材の寸法が入っていない。
-        ({"width": 610, "height": 910}, "釘座標が入力されていません"),
-        (
-            {"width": 0, "height": 910, "gridX": "0, 445", "gridY": "0, 295"},
-            "面材の幅 W と高さ H に正の数値",
-        ),
-        # 釘が 1 点に集中している（Ix + Iy = 0）。
-        (
-            {"width": 610, "height": 910, "gridX": "100", "gridY": "200"},
-            "1 点に集中している",
-        ),
-        # 釘が 1 直線上に並ぶ（Zx もしくは Zy が 0 → Zxy = 0）。
-        (
-            {"width": 610, "height": 910, "gridX": "0, 445", "gridY": "295"},
-            "1 直線上に並んでいる",
-        ),
-    ],
-)
-def test_unusable_patterns_are_explained_in_the_words_of_the_form(pattern, expected):
-    """計算できない理由は、式の言葉ではなく入力欄の言葉で伝える。"""
-    data = panel_shear.normalize_data({"patterns": [pattern]})
-
-    report = panel_shear.compute_all(data)[0]
-
-    assert report["ok"] is False
-    assert expected in report["error"]
 
 
 def test_compute_all_reports_a_broken_pattern_without_losing_the_others():
@@ -180,6 +101,90 @@ def test_validate_names_the_pattern_that_cannot_be_calculated():
 
     with pytest.raises(panel_shear.PanelShearError, match="「南面」を計算できません"):
         panel_shear.validate(data)
+
+
+# --- 保存時の突き合わせ ------------------------------------------------------
+
+
+def claim_from(reports: list[dict], **overrides) -> dict:
+    """画面が送ってくる「私はこう計算した」を、正しい値で組み立てる。"""
+    claim = {
+        "coreVersion": nail_core.version(),
+        "patterns": [
+            # サーバ側の結果とは別の辞書にする（画面から届いた値のつもり）。
+            {"patternId": report["patternId"], "result": dict(report["result"])}
+            for report in reports
+        ],
+    }
+    claim.update(overrides)
+    return claim
+
+
+def test_verify_accepts_the_same_numbers():
+    reports = panel_shear.validate(make_data())
+
+    result = panel_shear.verify(reports, claim_from(reports))
+
+    assert result == {
+        "checked": True,
+        "ok": True,
+        "coreVersion": {"client": nail_core.version(), "server": nail_core.version()},
+        "differences": [],
+        "omittedDifferences": 0,
+    }
+
+
+def test_verify_points_at_the_value_that_differs():
+    reports = panel_shear.validate(make_data())
+    claim = claim_from(reports)
+    claim["patterns"][0]["result"]["Cxy"] = 9.99
+
+    result = panel_shear.verify(reports, claim)
+
+    assert result["ok"] is False
+    assert [(d["key"], d["client"]) for d in result["differences"]] == [("Cxy", 9.99)]
+    assert result["differences"][0]["patternName"] == "グレー本の計算例"
+
+
+def test_verify_tolerates_the_last_bit():
+    """JSON を往復した程度の差は「同じ」とみなす（端末差を騒ぎ立てない）。"""
+    reports = panel_shear.validate(make_data())
+    claim = claim_from(reports)
+    claim["patterns"][0]["result"]["Cxy"] *= 1 + 1e-12
+
+    assert panel_shear.verify(reports, claim)["ok"] is True
+
+
+def test_verify_flags_a_screen_running_an_older_implementation():
+    """開きっぱなしのタブが古い計算実装のまま保存した場合。"""
+    reports = panel_shear.validate(make_data())
+
+    result = panel_shear.verify(reports, claim_from(reports, coreVersion="0.9.0"))
+
+    assert result["ok"] is False
+    assert result["coreVersion"] == {"client": "0.9.0", "server": nail_core.version()}
+    # 数値そのものは合っているので、差の一覧は空（版だけが食い違っている）。
+    assert result["differences"] == []
+
+
+def test_verify_flags_a_pattern_the_screen_did_not_calculate():
+    reports = panel_shear.validate(make_data())
+
+    result = panel_shear.verify(reports, claim_from(reports, patterns=[]))
+
+    assert result["ok"] is False
+    assert result["differences"][0]["key"] == "(計算結果なし)"
+
+
+def test_verify_is_skipped_when_the_screen_sends_nothing():
+    """突き合わせの材料が無ければ、警告は出さない（保存も止めない）。"""
+    reports = panel_shear.validate(make_data())
+
+    assert panel_shear.verify(reports, None) == {
+        "checked": False,
+        "ok": True,
+        "differences": [],
+    }
 
 
 # --- ファイル名 --------------------------------------------------------------

@@ -1,0 +1,27 @@
+[package]
+name = "nail-array-core"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.94"
+publish = false
+description = "面材張り耐力要素 釘配列諸定数の唯一の計算実装（画面の wasm とサーバが同じバイト列を動かす）"
+
+[lib]
+name = "nail_array_core"
+# cdylib: wasm32-unknown-unknown 向けの成果物（画面とサーバが読み込む .wasm）。
+# rlib:   cargo test でそのまま単体テストできるようにするため。
+crate-type = ["cdylib", "rlib"]
+
+# 依存クレートは持たない。JSON の読み書きまで自前で持つことで、
+#   - .wasm が小さくなる（数十 KB）ので、画面の読み込みが軽い
+#   - 同じ toolchain なら同じバイト列が出る（成果物の更新漏れを CI で検出できる）
+#   - 供給網（crates.io）を計算の信頼性の外に置ける
+# という利点がある。追加する場合は、この 3 点への影響を確かめること。
+[dependencies]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

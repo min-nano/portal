@@ -1,0 +1,10 @@
+# 成果物（backend/app/wasm/nail_array_core.wasm）をコミットしているため、
+# ビルドに使う toolchain を固定する。同じ toolchain なら同じバイト列が出るので、
+# CI は「ソースを変えたのに .wasm を作り直していない」を検出できる
+# （.github/workflows/tests.yml の Core ジョブ）。
+#
+# 上げるときは、この 1 行を書き換えて core/build.sh を実行し、
+# 作り直した .wasm も一緒にコミットすること。
+[toolchain]
+channel = "1.94.1"
+targets = ["wasm32-unknown-unknown"]

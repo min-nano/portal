@@ -20,6 +20,7 @@ from . import (
     excel_report,
     google_docs,
     google_drive,
+    nail_core,
     panel_shear,
     settings_store,
     structural_cert,
@@ -529,25 +530,35 @@ async def parse_drive_certificate(
 # 文書情報へ埋め込むため、保存した PDF を開き直せば続きを編集できる。
 # 雛形は使わない（計算書はバックエンドが直接組み立てる）ので、このツールには
 # 共有設定が無い。
+#
+# 編集中の計算に API は使わない。画面は /core.wasm で計算実装を受け取り、
+# 手元で計算する（入力のたびの往復が無いので、釘の本数が増えても速い）。
+# サーバが計算するのは保存のときだけで、そこで画面の値と突き合わせる。
 
 
 @app.get(f"{_PANEL_PREFIX}/config")
 async def get_panel_shear_config(user: User = Depends(require_user)):
-    """既定のファイル名とグレー本の計算例を配信する。"""
-    return panel_shear.form_config()
+    """既定のファイル名・グレー本の計算例・計算実装の在り処を配信する。"""
+    return panel_shear.form_config(f"{_PANEL_PREFIX}/core.wasm")
 
 
-@app.post(f"{_PANEL_PREFIX}/calculations")
-async def calculate_panel_shear(request: Request, user: User = Depends(require_user)):
-    """入力中のフォームを計算し、画面に出す値をそのまま返す。
+@app.get(f"{_PANEL_PREFIX}/core.wasm")
+async def get_panel_shear_core(user: User = Depends(require_user)):
+    """画面が編集中の計算に使う wasm を配る。
 
-    計算も表示用の桁揃えもサーバ側の唯一の実装（nail_array / panel_shear）で
-    行うため、画面の数値と計算書 PDF の数値が食い違うことがない。入力途中の
-    不備は 400 にせず、パターンごとに ok: false として返す（他のパターンの
-    結果まで消さないため）。
+    サーバ自身が計算に使っているものと**同じバイト列**をそのまま返すので、
+    「画面とサーバで実装が違う」状態が原理的に起こらない。URL には中身の
+    ハッシュが付く（/config が配る）ため、内容が変わらないうちはブラウザの
+    キャッシュから読ませ、変われば必ず取り直させる。
     """
-    data = panel_shear.normalize_data(await _json_body(request))
-    return {"patterns": panel_shear.compute_all(data)}
+    return Response(
+        content=nail_core.wasm_bytes(),
+        media_type="application/wasm",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": f'"{nail_core.sha256()}"',
+        },
+    )
 
 
 @app.post(f"{_PANEL_PREFIX}/reports")
@@ -557,10 +568,15 @@ async def create_panel_shear_report(
     """フォームデータから計算書 PDF を作り、Drive へ保存する。
 
     保存方法は証明書と同じく body.save.mode（overwrite / new）で切り替える。
+
+    計算書に載るのはここで計算し直した値。編集中に画面（同じ wasm）が出して
+    いた値も body.verify として受け取り、突き合わせた結果を応答へ添える
+    （食い違っていても保存は止めず、画面に警告を出させる）。
     """
     body = await _json_body(request)
     data = panel_shear.normalize_data(body)
     reports = panel_shear.validate(data)
+    verification = panel_shear.verify(reports, body.get("verify"))
 
     session = google_drive.delegated_write_session(user.email)
     destination = _resolve_pdf_destination(
@@ -577,6 +593,7 @@ async def create_panel_shear_report(
         "fileId": saved.get("id", ""),
         "fileName": saved.get("name", ""),
         "webViewLink": saved.get("webViewLink", ""),
+        "verification": verification,
     }
 
 

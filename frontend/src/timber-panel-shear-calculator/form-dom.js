@@ -2,8 +2,9 @@
 //
 // 項目が固定のフォームなので、入力欄は tools/…/index.html に直接置いてある。
 // ここが受け持つのは「今のパターンを入力欄へ写す／入力欄から読み取る」と
-// 「サーバが返した表示用の値を並べる」こと。数値の丸めや単位はサーバが
-// 組み立てた文字列をそのまま出す（画面と計算書 PDF で桁がずれないように）。
+// 「計算実装が返した表示用の値を並べる」こと。数値の丸めや単位は計算実装
+// （core/、wasm）が組み立てた文字列をそのまま出す。計算書 PDF も同じ文字列を
+// 刷るので、画面と計算書で桁がずれない。
 
 import { buildDiagram } from './diagram.js';
 import { patternLabel } from './form-logic.js';
@@ -139,7 +140,7 @@ export function renderResult(root, report, pattern) {
 
   renderDiagram(
     element(root, 'diagram'),
-    buildDiagram(report.nails, pattern.width, pattern.height, report.result)
+    buildDiagram(report.nails, pattern.width, pattern.height, report.diagram)
   );
 }
 
@@ -205,14 +206,12 @@ export function renderDiagram(svg, diagram) {
       })
     );
     svg.appendChild(
-      svgText(document_, diagram.axes.x, diagram.frame.y - 6,
-        `x0 = ${Math.round(diagram.axes.x0 * 100) / 100}`,
+      svgText(document_, diagram.axes.x, diagram.frame.y - 6, diagram.axes.xLabel,
         { 'text-anchor': 'middle', fill: '#6366f1', 'font-size': 10 })
     );
     svg.appendChild(
       svgText(document_, diagram.frame.x + diagram.frame.width + 4, diagram.axes.y + 4,
-        `y0 = ${Math.round(diagram.axes.y0 * 100) / 100}`,
-        { fill: '#059669', 'font-size': 10 })
+        diagram.axes.yLabel, { fill: '#059669', 'font-size': 10 })
     );
   }
 
@@ -226,7 +225,7 @@ export function renderDiagram(svg, diagram) {
       })
     );
     svg.appendChild(
-      svgText(document_, tick.position, diagram.axisBottom + 16, String(tick.value), {
+      svgText(document_, tick.position, diagram.axisBottom + 16, tick.label, {
         'text-anchor': 'middle', fill: '#94a3b8', 'font-size': 9,
       })
     );
@@ -240,7 +239,7 @@ export function renderDiagram(svg, diagram) {
       })
     );
     svg.appendChild(
-      svgText(document_, diagram.axisLeft - 7, tick.position + 3, String(tick.value), {
+      svgText(document_, diagram.axisLeft - 7, tick.position + 3, tick.label, {
         'text-anchor': 'end', fill: '#94a3b8', 'font-size': 9,
       })
     );

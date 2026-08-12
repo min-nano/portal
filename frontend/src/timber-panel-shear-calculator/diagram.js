@@ -1,13 +1,13 @@
-// 釘配列図の幾何計算（描画そのものは form-dom.js が SVG に写す）。
+// 釘配列図の縮尺と座標変換（描画そのものは form-dom.js が SVG に写す）。
 //
-// GAS 版 index.html の diagram 算出をそのまま移した。工学座標（x は右・
-// y は上、原点は面材の左下）を SVG 座標（y は下向き）へ変換して返す。
+// 工学座標（x は右・y は上、原点は面材の左下）を SVG 座標（y は下向き）へ
+// 変換して返す。
 //
-// 描画ドメインは「面材枠 (0,0)-(W,H) と全釘」の外接矩形にする。釘が面材から
-// はみ出す配列でも切り取らず、はみ出していることが見えるようにするため。
-//
-// 釘座標はバックエンドが解釈した結果（/calculations の応答）をそのまま
-// 受け取るので、この画面が座標の書式を解釈し直すことはない。
+// 「どこからどこまでを描くか」「目盛にどの値を出し、どう書くか」は計算実装
+// （core/）が決めたもの（計算結果の diagram）をそのまま使う。計算書 PDF も
+// 同じものを読むので、画面と計算書は縮尺だけが違う同じ図になる。描画範囲は
+// 「面材枠 (0,0)-(W,H) と全釘」の外接矩形で、釘が面材からはみ出す配列でも
+// 切り取らず、はみ出していることが見えるようになっている。
 
 const PADDING = 44; // ラベル・目盛用の余白 [px]
 const MAX_DIMENSION = 460; // 描画領域の長辺の目標サイズ [px]
@@ -18,21 +18,17 @@ const MAX_DIMENSION = 460; // 描画領域の長辺の目標サイズ [px]
  * @param {{x:number,y:number}[]} nails 釘座標 [mm]
  * @param {number} width  面材の幅 W [mm]
  * @param {number} height 面材の高さ H [mm]
- * @param {{x0:number,y0:number}|null} result 弾性中立軸（無ければ軸を描かない）
+ * @param {object|null} diagram 計算結果の diagram（範囲・目盛・中立軸）
  */
-export function buildDiagram(nails, width, height, result) {
+export function buildDiagram(nails, width, height, diagram) {
   const panelWidth = Number(width) || 0;
   const panelHeight = Number(height) || 0;
   if (!(panelWidth > 0) || !(panelHeight > 0) || !nails || nails.length === 0) {
     return null;
   }
+  if (!diagram) return null;
 
-  const xs = nails.map((nail) => nail.x);
-  const ys = nails.map((nail) => nail.y);
-  const minX = Math.min(0, ...xs);
-  const maxX = Math.max(panelWidth, ...xs);
-  const minY = Math.min(0, ...ys);
-  const maxY = Math.max(panelHeight, ...ys);
+  const { minX, maxX, minY, maxY } = diagram;
   const domainWidth = maxX - minX;
   const domainHeight = maxY - minY;
 
@@ -40,8 +36,6 @@ export function buildDiagram(nails, width, height, result) {
   const mapX = (x) => PADDING + (x - minX) * scale;
   // y は上下を反転して、原点が左下に見えるようにする。
   const mapY = (y) => PADDING + (maxY - y) * scale;
-
-  const unique = (values) => Array.from(new Set(values)).sort((a, b) => a - b);
 
   return {
     svgWidth: domainWidth * scale + PADDING * 2,
@@ -59,18 +53,20 @@ export function buildDiagram(nails, width, height, result) {
       x: nail.x,
       y: nail.y,
     })),
-    xTicks: unique(xs).map((x) => ({ value: x, position: mapX(x) })),
-    yTicks: unique(ys).map((y) => ({ value: y, position: mapY(y) })),
-    axes: result
+    xTicks: diagram.xTicks.map((tick) => ({
+      label: tick.label,
+      position: mapX(tick.value),
+    })),
+    yTicks: diagram.yTicks.map((tick) => ({
+      label: tick.label,
+      position: mapY(tick.value),
+    })),
+    axes: diagram.axis
       ? {
-          x: mapX(result.x0),
-          y: mapY(result.y0),
-          x0: result.x0,
-          y0: result.y0,
-          top: mapY(maxY),
-          bottom: mapY(minY),
-          left: mapX(minX),
-          right: mapX(maxX),
+          x: mapX(diagram.axis.x0),
+          y: mapY(diagram.axis.y0),
+          xLabel: diagram.axis.xLabel,
+          yLabel: diagram.axis.yLabel,
         }
       : null,
     axisBottom: mapY(minY),

@@ -11,6 +11,7 @@
 | フロントエンド | **Firebase Hosting** + Vite (vanilla JS) | モバイル最適化の入力フォーム。`/api/**` は Hosting のリライトで Cloud Run へ転送（同一オリジン） |
 | 認証 | **Clerk**（Google ログインのみ有効化） | サインインとセッション JWT の発行 |
 | バックエンド | **Cloud Run**（FastAPI / Python） | Clerk JWT の検証、Excel 生成（openpyxl）、PDF 生成・解析（Docs API + pypdf / pdfminer.six）、Drive アクセス |
+| 計算 | **Rust → wasm**（`core/`） | 釘配列諸定数の計算・入力の解釈・表示の桁揃え。**同じ .wasm を画面とバックエンドの両方が動かす**（「計算の一元管理（Rust → wasm）」参照） |
 | データ保存 | **Google Workspace の Drive** / Firestore | Drive: Excel 雛形（社外秘フォーマット）・証明書の雛形（Google ドキュメント）・生成した PDF。Firestore: 全利用者共通の設定 |
 
 ### セキュリティ / 権限モデル（GAS 版との対応）
@@ -90,7 +91,7 @@ GAS 版の機能をそのまま移植しています。
 
 **雛形はありません**。計算書は帳票ではなく計算過程そのものなので、バックエンドが PDF を直接組み立てます（`backend/app/pdf_write.py`）。そのため、このツールには共有設定（雛形の場所）もありません。
 
-**計算は必ずサーバ側の唯一の実装を通ります**。画面は入力のたびにバックエンドへ計算を問い合わせ、返ってきた**表示用の文字列をそのまま並べる**だけです（有効桁の丸めもサーバ側で行う）。そのため画面の数値と計算書 PDF の数値が食い違うことがありません。計算の実装は `backend/app/nail_array.py` の 1 か所だけで、GAS 版と同じくグレー本の解説の計算例をユニットテストで再現しています。
+**編集中の計算は画面の中で完結し、保存のときにサーバが確かめます**。実装は 1 つ（Rust の `core/`）で、それを wasm にしたものを画面もバックエンドも動かします。詳細は「計算の一元管理（Rust → wasm）」を参照してください。
 
 > **計算書 PDF のフォントについて**: 本文のフォントは **Noto Sans JP**（SIL Open Font License 1.1）を `backend/app/fonts/` に同梱し、**その PDF で実際に使った文字だけを取り出したサブセットを埋め込みます**。閲覧側の環境に日本語フォントがあるかどうかに関係なく、いつでも同じ字形で表示されます。同梱フォントは 5.8MB ありますが、埋め込まれるのは使った文字だけなので計算書 1 通は数十 KB です（切り出しは fontTools が行い、生成 1 回あたり 0.1 秒程度）。
 
@@ -121,10 +122,18 @@ backend/                      # Cloud Run サービス (FastAPI)
   app/structural_cert.py      # 証明書の生成・PDF 解析
   app/structural_cert_mapping.json  # 証明書の雛形マッピング（単一の情報源）
   app/pdf_tools.py            # PDF の文字座標取得と ○ の描き込み
-  app/nail_array.py           # 釘配列諸定数の計算（唯一の計算実装）
-  app/panel_shear.py          # 計算書 PDF の組み立てと読み戻し
+  app/nail_core.py            # 釘配列諸定数の計算（唯一の実装＝wasm）を呼ぶ薄い口
+  app/panel_shear.py          # 計算書 PDF の組み立てと読み戻し・保存時の突き合わせ
   app/pdf_write.py            # 日本語まじりの PDF を組み立てる最小限のライター
   app/fonts/                  # 計算書 PDF に埋め込む日本語フォント（Noto Sans JP, OFL 1.1）
+  app/wasm/                   # core/ をビルドした .wasm（コミットする成果物）
+core/                         # 釘配列諸定数の唯一の計算実装（Rust → wasm）
+  src/nail_array.rs           # グレー本 3.2 の式（3.2.1〜3.2.7）
+  src/report.rs               # 入力の解釈と、画面・PDF が共有する結果の組み立て
+  src/format.rs               # 有効桁・3 桁区切り（画面と計算書で同じ文字列にする）
+  src/json.rs                 # 受け渡しの JSON（外部クレートに依存しないため自前）
+  src/abi.rs                  # wasm の呼び出し口（線形メモリの受け渡し）
+  build.sh                    # ビルドして backend/app/wasm/ へ置く
 firestore/                    # Firestore セキュリティルールとそのテスト
   firestore.rules             # クライアント SDK からのアクセスを全面拒否（deny-all）
   tests/rules.test.js         # エミュレータでルールを検証
@@ -525,18 +534,32 @@ npm install
 npm run dev
 ```
 
+計算実装（`core/`）を触るときだけ Rust が要ります。触らないなら、コミットしてある `backend/app/wasm/nail_array_core.wasm` がそのまま使われるので、上の手順だけで動きます。
+
+```bash
+# 計算実装を変更したとき（要: rustup。toolchain は core/rust-toolchain.toml が指定する）
+cd core
+./build.sh   # cargo test → wasm ビルド → backend/app/wasm/ へ配置
+```
+
 ## 🧪 テスト
 
 旧リポジトリのテスト（Cloud Function の pytest・GAS の jest）を新構成に移植しています。CI（`.github/workflows/tests.yml`）が push / PR ごとに実行します。
 
 ```bash
-# バックエンド: API 経由の Excel 生成・証明書 PDF の生成と解析・釘配列諸定数の計算と
-# 計算書 PDF の往復・雛形設定・JWT 検証
+# 計算（Rust）: グレー本 3.2 の式・入力の解釈・表示の桁揃え。
+# 釘配列諸定数の計算そのものを検証するのはここだけ（画面もサーバも
+# この実装を wasm として動かすため）。
+cd core && cargo test
+
+# バックエンド: API 経由の Excel 生成・証明書 PDF の生成と解析・計算書 PDF の往復と
+# 保存時の突き合わせ・雛形設定・JWT 検証
 # （Drive/Docs/Firestore と認証はテスト内でフェイク）
 cd backend && python -m pytest
 
 # フロントエンド: フォームの純粋ロジック（バリデーション・数値正規化・ファイル名の組み立て・
-# 釘配列図の幾何計算）、画面とデータの往復、Google Picker の呼び出し
+# 釘配列図の縮尺）、画面とデータの往復、Google Picker の呼び出し、
+# コミットしてある .wasm を実際に読み込んでの計算
 # （gapi / GIS / Picker はテスト内でフェイク）
 cd frontend && npm test
 
@@ -619,6 +642,49 @@ for line in pages[0].lines:
 ```
 
 テストでは雛形そのものを同梱せず（個人名・登録番号が入るため）、同じレイアウトの PDF を `backend/tests/pdf_util.py` がその場で組み立てています。
+
+## 🧮 計算の一元管理（Rust → wasm）
+
+釘配列諸定数の計算は、**Rust で書いた 1 つの実装（`core/`）を wasm にして、画面とバックエンドの両方が動かします**。
+
+```
+core/src/*.rs
+  └─ core/build.sh ─→ backend/app/wasm/nail_array_core.wasm   ← コミットする成果物
+                        ├─ バックエンド（wasmtime）が読み込んで計算する
+                        └─ GET /api/tools/timber-panel-shear-calculator/core.wasm
+                             └─ 画面がそのバイト列を受け取り、編集中の計算に使う
+```
+
+### なぜこうしたか
+
+以前は「画面は入力のたびにバックエンドへ計算を問い合わせる」構成でした。実装が 1 つで済む代わりに、打鍵のたびに往復が発生し、計算量が増えるほど無視できない待ち時間になります。かといって画面側にも計算を書くと、実装が 2 つになって「画面の数値と計算書 PDF の数値が違う」を防げません。
+
+そこで **実装は 1 つのまま、置き場所を両方にした**のがこの構成です。同じソースをそれぞれの言語へ移植するのではなく、**同じバイト列**（同じ `.wasm`）を両方が動かすので、片方だけ直す・片方だけ古い、が起こりません。式の意味を持つ処理はすべてここに入っています（グレー本 3.2 の式、入力欄の文字列の解釈、計算できない入力の説明文、有効桁の丸め、釘配列図の範囲と目盛の文字）。バックエンドと画面に残るのは、その結果を PDF に組む／DOM に並べる仕事だけです。
+
+### 保存時の突き合わせ
+
+編集中の値は画面が計算したものです。保存（`POST …/reports`）では**サーバがもう一度計算し、画面が送ってきた値と突き合わせます**（`panel_shear.verify`）。計算書 PDF に載るのは常にサーバの値なので、成果物が壊れることはありません。食い違いがあっても保存は止めず、応答の `verification` に載せて画面に警告を出させます。
+
+拾えるのは主に次の 2 つです。
+
+* **画面が古い実装のまま動いている**（開きっぱなしのタブの裏で新しい版がデプロイされた）… 版番号（`core/Cargo.toml` の `version`）を突き合わせ、再読み込みを促します。
+* **端末や処理系の差で末尾の桁が違う** … 相対差 `1e-9` を超えたら、どのパターンのどの項目かを挙げて知らせます。
+
+同じ `.wasm` を動かしている以上ふつうは 1 ビットも違いません。それでも突き合わせるのは、「違わないはずのものが違ったとき」に黙って通さないためです。
+
+### 触るときの手順
+
+```bash
+cd core
+cargo test          # 式ごとの検証（グレー本の計算例・各関数・入力検証）はここ
+./build.sh          # テスト → wasm ビルド → backend/app/wasm/ へ配置
+```
+
+* **`.wasm` はコミットします**。フロントエンドのビルド（`npm run build`）にも Cloud Run のビルド（`gcloud run deploy --source backend`）にも Rust を要らなくするためです。`core/` を触ったら `build.sh` を実行し、作り直した `.wasm` も一緒にコミットしてください。
+* toolchain は `core/rust-toolchain.toml` で固定してあり、同じソースからは同じバイト列が出ます。CI（`tests.yml` の Core ジョブ）が作り直して突き合わせるので、**更新し忘れはそこで落ちます**。
+* 外部クレートには依存していません（JSON の読み書きも自前）。`.wasm` を小さく保ち、ビルドを再現しやすくし、計算の信頼性を crates.io の外に置かないためです。
+* 計算の中身を変えたときは `core/Cargo.toml` の `version` も上げてください。突き合わせで「画面が古い」を検出できるのはこの値です。
+* 画面が受け取る URL には中身のハッシュが付きます（`/config` が配る `core.url`）。内容が変われば URL が変わるので、古い実装がブラウザのキャッシュに残り続けることはありません。
 
 ## 🧮 計算書 PDF（釘配列諸定数）
 

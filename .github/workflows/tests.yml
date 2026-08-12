@@ -11,6 +11,36 @@ permissions:
   contents: read
 
 jobs:
+  test-core:
+    name: Core (cargo + wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Rust
+        # toolchain は core/rust-toolchain.toml で固定してある（成果物の
+        # バイト列を再現できるようにするため）。cargo を 1 度呼べば、rustup が
+        # その toolchain と wasm32 ターゲットを取ってくる。
+        run: |
+          cd core
+          cargo --version
+      - name: Run tests
+        # 式ごとの検証（グレー本の計算例・各関数・入力検証）はここにある。
+        run: |
+          cd core
+          cargo test
+      - name: Check the committed wasm is up to date
+        # backend/app/wasm/*.wasm はコミットしてある成果物。ソースを変えた
+        # のに作り直していないと、画面とサーバが古い計算のまま動いてしまう。
+        # 同じ toolchain なら同じバイト列が出るので、突き合わせて確かめる。
+        run: |
+          cd core
+          cargo build --release --target wasm32-unknown-unknown
+          if ! cmp -s target/wasm32-unknown-unknown/release/nail_array_core.wasm \
+                     ../backend/app/wasm/nail_array_core.wasm; then
+            echo "::error file=backend/app/wasm/nail_array_core.wasm::core/ の変更が成果物に反映されていません。core/build.sh を実行して、作り直した .wasm もコミットしてください。"
+            exit 1
+          fi
+
   test-backend:
     name: Backend (pytest)
     runs-on: ubuntu-latest

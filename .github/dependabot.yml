@@ -115,6 +115,30 @@ updates:
           - minor
           - patch
 
+  # 釘配列諸定数の計算実装 (Rust → wasm)
+  #
+  # この crate は今のところ外部クレートに依存していない（core/Cargo.toml の
+  # 理由を参照）ので、ここが PR を出すことは無い。依存を足したときに監視漏れ
+  # にならないよう、登録だけしておく。
+  - package-ecosystem: cargo
+    directory: "/core"
+    schedule:
+      interval: daily
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      core-rust:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
   # バックエンドの Cloud Run 用コンテナ
   - package-ecosystem: docker
     directory: "/backend"

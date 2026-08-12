@@ -1,9 +1,9 @@
 // 釘配列諸定数 計算フォームの純粋ロジック（DOM に依存しない部分）。
 //
-// 計算そのもの・表示する桁の丸め・釘座標の解釈はすべてバックエンド
-// （backend/app/nail_array.py / panel_shear.py）が唯一の実装として持つ。
-// この画面は入力を集めて送り、返ってきた表示用の値をそのまま並べるだけで、
-// ここには「フォームの形をどう保つか」だけを置く。
+// 計算そのもの・表示する桁の丸め・釘座標の解釈は、Rust で書いた唯一の実装
+// （リポジトリの core/）が wasm として持つ。画面はそれを ./core.js 経由で
+// 呼び、返ってきた表示用の値をそのまま並べるだけで、ここには「フォームの形を
+// どう保つか」だけを置く。
 //
 // 「保存 / 別名で保存 / 未保存の確認」といったファイル操作の判断と文言は、
 // 構造計算安全証明書 作成ツールと共通なので ../pdf-file-ops.js にある。
@@ -94,6 +94,55 @@ export function toRequestBody(data) {
  */
 export function formSignature(data) {
   return JSON.stringify(toRequestBody(data));
+}
+
+/**
+ * 保存時に添える「画面はこう計算した」。
+ *
+ * 編集中の計算は画面（wasm）が行うので、サーバは保存のたびに同じ計算をして
+ * これと突き合わせる。同じ .wasm を動かしている以上ふつうは一致するが、
+ * 画面を開いたまま新しい版がデプロイされた場合などに食い違いが起こりうる。
+ */
+export function verificationOf(coreVersion, reports) {
+  return {
+    coreVersion,
+    patterns: (reports || [])
+      .filter((report) => report && report.ok)
+      .map((report) => ({ patternId: report.patternId, result: report.result })),
+  };
+}
+
+/**
+ * 突き合わせの結果を、画面に出す 1 つの文にする。
+ * 食い違いが無ければ空文字（＝警告を出さない）。
+ */
+export function verificationWarning(verification) {
+  if (!verification || !verification.checked || verification.ok) return '';
+
+  const versions = verification.coreVersion || {};
+  if (versions.client !== versions.server) {
+    return (
+      '警告: 画面の計算エンジン（' +
+      `${versions.client || '不明'}）がサーバー（${versions.server || '不明'}）と違います。` +
+      'ページを再読み込みしてから、内容を確かめてください。' +
+      '計算書には、サーバーで計算し直した値が載っています。'
+    );
+  }
+
+  const differences = verification.differences || [];
+  const shown = differences
+    .map((difference) => {
+      const name = difference.patternName || difference.patternId;
+      return `${name} の ${difference.key}（画面 ${difference.client} / 計算書 ${difference.server}）`;
+    })
+    .join('、');
+  const omitted = verification.omittedDifferences
+    ? ` ほか ${verification.omittedDifferences} 件`
+    : '';
+  return (
+    '警告: 画面に出ていた値と、計算書に載せた値が違います: ' +
+    `${shown}${omitted}。計算書にはサーバーで計算し直した値が載っています。`
+  );
 }
 
 /**
