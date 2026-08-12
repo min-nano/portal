@@ -7,6 +7,7 @@
 """
 
 import io
+import os
 
 import pytest
 from fontTools.ttLib import TTFont
@@ -45,8 +46,7 @@ def test_only_the_used_characters_are_embedded():
     """同梱フォントは 5MB 超あるが、埋め込むのは使った文字だけ。"""
     embedded = descendant_font(build())["/FontDescriptor"]["/FontFile2"].get_data()
 
-    full_font_size = len(open(pdf_write.FONT_PATH, "rb").read())
-    assert len(embedded) < full_font_size / 20
+    assert len(embedded) < os.path.getsize(pdf_write.FONT_PATH) / 20
 
     # 使った文字ぶん（+ .notdef）しかグリフを持たない。
     subset = TTFont(io.BytesIO(embedded))
