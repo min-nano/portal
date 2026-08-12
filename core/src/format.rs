@@ -47,6 +47,17 @@ pub fn format_int(value: f64) -> String {
     group_digits(&format!("{value:.0}"))
 }
 
+/// 入力された寸法を、打ち込まれたとおりの見た目で返す（へりあき・呼び径など）。
+///
+/// 有効桁で整形すると 10 mm が「10.0000 mm」になってしまい、入力欄の控えとして
+/// 読みづらい。ここは末尾に 0 を足さず、10 → "10"、12.5 → "12.5" と出す。
+pub fn format_dimension(value: f64) -> String {
+    if !value.is_finite() {
+        return "-".to_string();
+    }
+    group_digits(&format!("{value}"))
+}
+
 /// "-1234567.89" を "-1,234,567.89" にする。
 fn group_digits(text: &str) -> String {
     let (sign, digits) = match text.strip_prefix('-') {
@@ -115,6 +126,16 @@ mod tests {
     fn accepts_other_digit_counts() {
         assert_eq!(significant(445.0, 4), "445.0");
         assert_eq!(significant(1234.5678, 4), "1,235");
+    }
+
+    /// 入力された寸法は、打ち込まれたとおりの見た目で出す。
+    #[test]
+    fn formats_dimensions_without_padding_zeros() {
+        assert_eq!(format_dimension(10.0), "10");
+        assert_eq!(format_dimension(12.5), "12.5");
+        assert_eq!(format_dimension(3.05), "3.05");
+        assert_eq!(format_dimension(1820.0), "1,820");
+        assert_eq!(format_dimension(f64::NAN), "-");
     }
 
     #[test]

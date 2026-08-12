@@ -1,4 +1,4 @@
-"""面材張り耐力要素 釘配列諸定数 計算ツールの API テスト。
+"""面材張り大壁 計算ツールの API テスト。
 
 Drive・認証は conftest のフェイクに差し替え、ルートハンドラのロジック
 （保存方法の切り替え・突き合わせ・PDF の読み戻し）を実際に通して検証する。
@@ -19,7 +19,7 @@ REPORTS_URL = f"{BASE}/reports"
 PARSE_URL = f"{BASE}/reports/parse"
 PARSE_DRIVE_URL = f"{BASE}/reports/parse-drive"
 
-EXAMPLE = dict(panel_shear.EXAMPLE_PATTERN, patternId="p1")
+EXAMPLE_PANEL = dict(panel_shear.EXAMPLE_PANEL, panelId="w1-p1")
 
 # 新規保存の保存先は、そのつど画面の Picker で選ばれたフォルダが送られてくる。
 NEW_SAVE = {"mode": "new", "folderId": "out-folder"}
@@ -36,11 +36,23 @@ def folder(drive):
     return drive
 
 
+def example_wall(**overrides):
+    """グレー本 3.2 の計算例の面材を 1 枚張った壁（面材と釘は表 3.3.1 から）。"""
+    wall = {
+        **panel_shear.material(panel_shear.EXAMPLE_WALL_MATERIAL),
+        **panel_shear.EXAMPLE_WALL,
+        "wallId": "w1",
+        "panels": [dict(EXAMPLE_PANEL)],
+    }
+    wall.update(overrides)
+    return wall
+
+
 def valid_body(**overrides):
     body = {
         "projectName": "○○邸 新築工事",
         "issuedOn": "2026-08-11",
-        "patterns": [dict(EXAMPLE)],
+        "walls": [example_wall()],
         "save": dict(NEW_SAVE),
     }
     body.update(overrides)
@@ -57,7 +69,9 @@ def test_config_carries_the_file_name_defaults(client):
     body = resp.json()
     assert body["default_file_name"] == "釘配列諸定数計算書.pdf"
     assert body["file_name_template"] == panel_shear.FILE_NAME_TEMPLATE
-    assert body["max_patterns"] == nail_core.config()["maxPatterns"]
+    assert body["max_walls"] == nail_core.config()["maxWalls"]
+    assert body["max_wall_panels"] == nail_core.config()["maxWallPanels"]
+    assert body["default_edge_distance"] == nail_core.config()["defaultEdgeDistance"]
 
 
 def test_config_points_at_the_calculation_core(client):
@@ -132,15 +146,15 @@ def screen_verification(body: dict, **overrides) -> dict:
     reports = panel_shear.compute_all(panel_shear.normalize_data(body))
     verify = {
         "coreVersion": nail_core.version(),
-        "patterns": [
-            {"patternId": report["patternId"], "result": report["result"]}
-            for report in reports["patterns"]
-            if report["ok"]
-        ],
         "walls": [
             {"wallId": report["wallId"], "result": report["result"]}
             for report in reports["walls"]
             if report["ok"]
+        ],
+        # 釘配列諸定数（3.2）は壁の計算の一部なので、突き合わせも一緒に送る。
+        "panels": [
+            {"panelId": report["panelId"], "result": report["result"]}
+            for report in panel_shear.panel_reports(reports)
         ],
     }
     verify.update(overrides)
@@ -162,7 +176,7 @@ def test_save_warns_when_the_screen_and_the_server_disagree(client, folder):
     """食い違っても保存は止めない（計算書はサーバの値で作られる）。"""
     body = valid_body()
     verify = screen_verification(body)
-    verify["patterns"][0]["result"]["Cxy"] = 9.99
+    verify["panels"][0]["result"]["Cxy"] = 9.99
 
     resp = client.post(REPORTS_URL, json={**body, "verify": verify})
 
@@ -192,7 +206,7 @@ def test_created_report_can_be_read_back(client, folder):
 
     parsed = panel_shear.parse_pdf(folder.created[0][2])
     assert parsed["projectName"] == "○○邸 新築工事"
-    assert parsed["patterns"][0]["gridY"] == "10, 155, 305, 455, 600"
+    assert parsed["walls"][0]["panels"][0]["nailPitch"] == 150
 
 
 def test_create_report_overwrites_with_version_history(client, drive):
@@ -251,14 +265,20 @@ def test_save_rejects_a_destination_that_is_not_a_folder(client, drive):
     assert "フォルダ" in resp.json()["error"]
 
 
-def test_save_rejects_a_pattern_that_cannot_be_calculated(client, folder):
-    """計算できないパターンを含んだまま保存させない（名前で場所を伝える）。"""
-    broken = {"patternId": "p2", "patternName": "南面", "width": 910, "height": 610}
+def test_save_rejects_a_wall_that_cannot_be_calculated(client, folder):
+    """計算できない面材を含んだまま保存させない（名前で場所を伝える）。"""
+    broken = example_wall(
+        wallId="w2",
+        wallName="南面",
+        panels=[{"panelName": "下段", "width": 910, "height": 610, "nailPitch": 0}],
+    )
 
-    resp = client.post(REPORTS_URL, json=valid_body(patterns=[dict(EXAMPLE), broken]))
+    resp = client.post(REPORTS_URL, json=valid_body(walls=[example_wall(), broken]))
 
     assert resp.status_code == 400
-    assert "「南面」を計算できません" in resp.json()["error"]
+    error = resp.json()["error"]
+    assert "「南面」を計算できません" in error
+    assert "面材「下段」" in error
     assert folder.created == []
 
 
@@ -283,7 +303,7 @@ def test_parse_uploaded_report_restores_the_form(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["projectName"] == "○○邸 新築工事"
-    assert body["patterns"][0]["patternName"] == "グレー本の計算例"
+    assert body["walls"][0]["panels"][0]["panelName"] == "グレー本の計算例"
     # アップロードした PDF は Drive 上のファイルではないので上書き先にできない。
     assert body["file"]["id"] == ""
 
@@ -316,7 +336,7 @@ def test_parse_drive_report_returns_the_overwrite_target(client, drive):
     assert resp.status_code == 200
     body = resp.json()
     assert body["file"] == {"id": "pdf-1", "name": "釘配列諸定数計算書.pdf"}
-    assert body["patterns"][0]["gridX"] == "10, 455, 900"
+    assert body["walls"][0]["panels"][0]["arrangement"] == "kawa"
     # 読み込みは読み取り専用の代理で足りる。
     assert drive.delegated_emails == [TEST_EMAIL]
     assert drive.write_emails == []
@@ -345,14 +365,14 @@ def test_edit_round_trip_overwrites_the_source_file(client, drive):
     drive.download_bytes = make_report_pdf()
 
     loaded = client.post(PARSE_DRIVE_URL, json={"fileId": "pdf-1"}).json()
-    loaded["patterns"][0]["patternName"] = "南面 耐力壁"
+    loaded["walls"][0]["panels"][0]["panelName"] = "南面 耐力壁"
 
     resp = client.post(
         REPORTS_URL,
         json={
             "projectName": loaded["projectName"],
             "issuedOn": loaded["issuedOn"],
-            "patterns": loaded["patterns"],
+            "walls": loaded["walls"],
             "save": {"mode": "overwrite", "fileId": loaded["file"]["id"]},
         },
     )
@@ -360,4 +380,4 @@ def test_edit_round_trip_overwrites_the_source_file(client, drive):
     assert resp.status_code == 200
     assert drive.updated[0][0] == "pdf-1"
     reparsed = panel_shear.parse_pdf(drive.updated[0][1])
-    assert reparsed["patterns"][0]["patternName"] == "南面 耐力壁"
+    assert reparsed["walls"][0]["panels"][0]["panelName"] == "南面 耐力壁"

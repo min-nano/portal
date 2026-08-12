@@ -73,9 +73,14 @@ class Core {
     return this.call({ op: 'presets' }).presets;
   }
 
-  /** 一覧の id を、そのままフォームへ入れられるパターンにする。 */
+  /** 一覧の id を、そのまま面材 1 枚の割り付けとして入れられる形にする。 */
   preset(id) {
-    return this.call({ op: 'preset', data: { id } }).pattern;
+    return this.call({ op: 'preset', data: { id } }).panel;
+  }
+
+  /** 割り付けの型（川型・山型・ロ型・日型）の一覧。 */
+  arrangements() {
+    return this.call({ op: 'arrangements' }).arrangements;
   }
 
   /**

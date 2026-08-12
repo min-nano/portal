@@ -47,6 +47,18 @@ use crate::nail_array::Constants;
 /// 適用範囲（3.3(1)①）の許容せん断耐力の上限 [kN/m]（= 壁倍率 7 倍 × 1.96）。
 pub const ALLOWABLE_SHEAR_LIMIT: f64 = 13.72;
 
+/// 適用範囲（3.3(1)④）の、面材の釘列に対するへりあきの最小値 [mm]。
+///
+/// 「釘等のピッチは 75mm 以上かつ 1 列配置とし、面材の釘列に対するへりあきは、
+/// **10mm 以上かつ接合具径 d [mm] × 5 以上**とし、軸材の釘列に対する縁端距離は、
+/// 20mm 以上かつ接合具径 d [mm] × 5 以上とする」。
+///
+/// ここで検定できるのは面材側（面材の縁から釘の中心まで）だけ。軸材側の縁端
+/// 距離は軸材の断面が要るので、設計者が確認する前提とする。
+pub const MIN_EDGE_DISTANCE: f64 = 10.0;
+/// 同じく 3.3(1)④ の、接合具径に対するへりあきの倍率。
+pub const EDGE_DISTANCE_DIAMETER_FACTOR: f64 = 5.0;
+
 /// 変形角の逆数。K0/150 は変形角 1/150 [rad] のときのモーメント（式 3.3.1）。
 const DRIFT_DENOMINATOR: f64 = 150.0;
 
@@ -608,6 +620,11 @@ pub struct Material {
     pub thickness: f64,
     /// 釘の種類（「太め鉄丸釘(CN 釘)65」など）。
     pub nail_label: &'static str,
+    /// 釘の呼び径 d [mm]（JIS A 5508）。
+    ///
+    /// 剛性・耐力の計算そのものには使わない。適用範囲 3.3(1)④ の
+    /// へりあき（10mm 以上かつ d × 5 以上）が、この径で決まる。
+    pub nail_diameter: f64,
     pub nail: NailShear,
     /// 面材のせん断弾性係数 GB [kN/mm²]（表 3.3.1 の脚注）。
     pub shear_modulus: f64,
@@ -616,6 +633,18 @@ pub struct Material {
 }
 
 impl Material {
+    /// この釘で必要な、面材の釘列に対するへりあきの最小値 [mm]（3.3(1)④）。
+    ///
+    /// 10mm 以上かつ接合具径 d の 5 倍以上。表 3.3.1 の釘はどれも呼び径が
+    /// 2mm を超えるので、実際に効くのは常に d × 5 の側になる。
+    pub fn min_edge_distance(&self) -> f64 {
+        let from_diameter = EDGE_DISTANCE_DIAMETER_FACTOR * self.nail_diameter;
+        // 5 × 3.76 が 18.799999999999997 になるような 2 進数の端数を落とす
+        //（この値は画面と計算書にそのまま出す）。
+        let from_diameter = (from_diameter * 1e6).round() / 1e6;
+        from_diameter.max(MIN_EDGE_DISTANCE)
+    }
+
     pub fn label(&self) -> String {
         format!(
             "{} {}mm + {}",
@@ -693,11 +722,21 @@ const MDF_G: f64 = 0.75;
 /// JIS A 5908 の構造用パーティクルボードのせん断弾性係数 GB [kN/mm²]。
 const PARTICLE_BOARD_G: f64 = 1.00;
 
+/// 釘の呼び径 [mm]（JIS A 5508）。長さが同じでも CN 釘のほうが太い。
+const N50_D: f64 = 2.75;
+const N65_D: f64 = 3.05;
+const N75_D: f64 = 3.40;
+const CN50_D: f64 = 2.87;
+const CN65_D: f64 = 3.33;
+const CN75_D: f64 = 3.76;
+
+#[allow(clippy::too_many_arguments)]
 const fn material(
     id: &'static str,
     panel: &'static str,
     thickness: f64,
     nail_label: &'static str,
+    nail_diameter: f64,
     k: f64,
     delta_v: f64,
     delta_u: f64,
@@ -710,6 +749,7 @@ const fn material(
         panel,
         thickness,
         nail_label,
+        nail_diameter,
         nail: NailShear {
             k,
             delta_v,
@@ -734,18 +774,18 @@ const fn material(
 /// 3.3(3) の計算例が「CN65」として使っている k = 0.483、δv = 2.3、δu = 17.0、
 /// ΔPv = 1.13 は訂正後の N-65 の値なので、計算例の釘は N-65 として扱う。
 const TABLE: &[Material] = &[
-    material("plywood12-n50", "構造用合板", 12.0, "鉄丸釘 N-50", 0.430, 2.1, 17.1, 0.91, PLYWOOD_G, "plywood-jas1"),
-    material("plywood12-n65", "構造用合板", 12.0, "鉄丸釘 N-65", 0.483, 2.3, 17.0, 1.13, PLYWOOD_G, "plywood-jas1"),
-    material("plywood12-cn50", "構造用合板", 12.0, "太め鉄丸釘(CN 釘)50", 0.467, 2.0, 17.1, 0.94, PLYWOOD_G, "plywood-jas1"),
-    material("plywood12-cn65", "構造用合板", 12.0, "太め鉄丸釘(CN 釘)65", 0.605, 2.1, 17.0, 1.29, PLYWOOD_G, "plywood-jas1"),
-    material("plywood24-n75", "構造用合板", 24.0, "鉄丸釘 N-75", 0.651, 2.5, 17.1, 1.62, PLYWOOD_G, "plywood-jas1"),
-    material("plywood24-cn65", "構造用合板", 24.0, "太め鉄丸釘(CN 釘)65", 0.878, 1.5, 13.2, 1.31, PLYWOOD_G, "plywood-jas1"),
-    material("plywood24-cn75", "構造用合板", 24.0, "太め鉄丸釘(CN 釘)75", 1.013, 1.8, 21.4, 1.85, PLYWOOD_G, "plywood-jas1"),
-    material("plywood28-n75", "構造用合板", 28.0, "鉄丸釘 N-75", 0.651, 2.5, 17.1, 1.62, PLYWOOD_G, "plywood-jas1"),
-    material("plywood28-cn65", "構造用合板", 28.0, "太め鉄丸釘(CN 釘)65", 0.878, 1.5, 13.2, 1.31, PLYWOOD_G, "plywood-jas1"),
-    material("plywood28-cn75", "構造用合板", 28.0, "太め鉄丸釘(CN 釘)75", 1.013, 1.8, 21.4, 1.85, PLYWOOD_G, "plywood-jas1"),
-    material("mdf9-cn50", "構造用 MDF", 9.0, "太め鉄丸釘(CN 釘)50", 0.636, 1.5, 17.1, 0.93, MDF_G, "mdf"),
-    material("particleboard9-cn50", "構造用パーティクルボード", 9.0, "太め鉄丸釘(CN 釘)50", 0.732, 1.2, 15.6, 0.85, PARTICLE_BOARD_G, "particleboard"),
+    material("plywood12-n50", "構造用合板", 12.0, "鉄丸釘 N-50", N50_D, 0.430, 2.1, 17.1, 0.91, PLYWOOD_G, "plywood-jas1"),
+    material("plywood12-n65", "構造用合板", 12.0, "鉄丸釘 N-65", N65_D, 0.483, 2.3, 17.0, 1.13, PLYWOOD_G, "plywood-jas1"),
+    material("plywood12-cn50", "構造用合板", 12.0, "太め鉄丸釘(CN 釘)50", CN50_D, 0.467, 2.0, 17.1, 0.94, PLYWOOD_G, "plywood-jas1"),
+    material("plywood12-cn65", "構造用合板", 12.0, "太め鉄丸釘(CN 釘)65", CN65_D, 0.605, 2.1, 17.0, 1.29, PLYWOOD_G, "plywood-jas1"),
+    material("plywood24-n75", "構造用合板", 24.0, "鉄丸釘 N-75", N75_D, 0.651, 2.5, 17.1, 1.62, PLYWOOD_G, "plywood-jas1"),
+    material("plywood24-cn65", "構造用合板", 24.0, "太め鉄丸釘(CN 釘)65", CN65_D, 0.878, 1.5, 13.2, 1.31, PLYWOOD_G, "plywood-jas1"),
+    material("plywood24-cn75", "構造用合板", 24.0, "太め鉄丸釘(CN 釘)75", CN75_D, 1.013, 1.8, 21.4, 1.85, PLYWOOD_G, "plywood-jas1"),
+    material("plywood28-n75", "構造用合板", 28.0, "鉄丸釘 N-75", N75_D, 0.651, 2.5, 17.1, 1.62, PLYWOOD_G, "plywood-jas1"),
+    material("plywood28-cn65", "構造用合板", 28.0, "太め鉄丸釘(CN 釘)65", CN65_D, 0.878, 1.5, 13.2, 1.31, PLYWOOD_G, "plywood-jas1"),
+    material("plywood28-cn75", "構造用合板", 28.0, "太め鉄丸釘(CN 釘)75", CN75_D, 1.013, 1.8, 21.4, 1.85, PLYWOOD_G, "plywood-jas1"),
+    material("mdf9-cn50", "構造用 MDF", 9.0, "太め鉄丸釘(CN 釘)50", CN50_D, 0.636, 1.5, 17.1, 0.93, MDF_G, "mdf"),
+    material("particleboard9-cn50", "構造用パーティクルボード", 9.0, "太め鉄丸釘(CN 釘)50", CN50_D, 0.732, 1.2, 15.6, 0.85, PARTICLE_BOARD_G, "particleboard"),
 ];
 
 /// 表 3.3.1 の組合せを、表と同じ並びで返す。
@@ -1271,6 +1311,49 @@ mod tests {
             let thick = find_material(thick).unwrap();
             assert!(thick.nail.k > thin.nail.k, "{}", thick.id);
             assert!(thick.nail.delta_pv > thin.nail.delta_pv, "{}", thick.id);
+        }
+    }
+
+    /// 釘の呼び径（JIS A 5508）。剛性・耐力の計算には使わないが、
+    /// 適用範囲 3.3(1)④ のへりあきがこの径で決まる。
+    #[test]
+    fn every_material_carries_the_nail_diameter() {
+        assert_eq!(find_material("plywood12-n50").unwrap().nail_diameter, 2.75);
+        assert_eq!(find_material("plywood12-n65").unwrap().nail_diameter, 3.05);
+        assert_eq!(find_material("plywood24-cn75").unwrap().nail_diameter, 3.76);
+        for material in materials() {
+            assert!(material.nail_diameter > 0.0, "{}", material.id);
+        }
+        // 同じ長さなら、太め鉄丸釘(CN 釘)のほうが太い。
+        for (thin, thick) in [
+            ("plywood12-n50", "plywood12-cn50"),
+            ("plywood12-n65", "plywood12-cn65"),
+        ] {
+            assert!(
+                find_material(thick).unwrap().nail_diameter
+                    > find_material(thin).unwrap().nail_diameter
+            );
+        }
+    }
+
+    /// 3.3(1)④「面材の釘列に対するへりあきは、10mm 以上かつ接合具径 d ×5 以上」。
+    #[test]
+    fn the_minimum_edge_distance_follows_the_nail_diameter() {
+        // N-50（φ2.75）→ 13.75mm、N-65（φ3.05）→ 15.25mm、CN75（φ3.76）→ 18.8mm。
+        assert_eq!(find_material("plywood12-n50").unwrap().min_edge_distance(), 13.75);
+        assert_eq!(find_material("plywood12-n65").unwrap().min_edge_distance(), 15.25);
+        assert_eq!(find_material("plywood24-cn75").unwrap().min_edge_distance(), 18.8);
+        for material in materials() {
+            // 表 3.3.1 の釘はどれも φ2mm を超えるので、10mm の側では決まらない。
+            assert!(material.min_edge_distance() > MIN_EDGE_DISTANCE, "{}", material.id);
+            assert!(
+                (material.min_edge_distance()
+                    - material.nail_diameter * EDGE_DISTANCE_DIAMETER_FACTOR)
+                    .abs()
+                    <= 1e-9,
+                "{}",
+                material.id
+            );
         }
     }
 

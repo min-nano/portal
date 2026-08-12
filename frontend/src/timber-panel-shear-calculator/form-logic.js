@@ -1,48 +1,75 @@
-// 釘配列諸定数 計算フォームの純粋ロジック（DOM に依存しない部分）。
+// 面材張り大壁 計算フォームの純粋ロジック（DOM に依存しない部分）。
 //
 // 計算そのもの・表示する桁の丸め・釘座標の解釈は、Rust で書いた唯一の実装
 // （リポジトリの core/）が wasm として持つ。画面はそれを ./core.js 経由で
 // 呼び、返ってきた表示用の値をそのまま並べるだけで、ここには「フォームの形を
 // どう保つか」だけを置く。
 //
+// 入力の単位は壁 1 枚で、釘配列（グレー本 3.2）はその壁を構成する面材ごとの
+// 入力として中に入る。実際の設計では面材の種類と釘が先に決まっていて、面材の
+// 配置・釘の間隔・へりあきで調整するため。
+//
 // 「保存 / 別名で保存 / 未保存の確認」といったファイル操作の判断と文言は、
 // 構造計算安全証明書 作成ツールと共通なので ../pdf-file-ops.js にある。
 
 import { sanitizeFileName } from '../pdf-file-ops.js';
 
-/** 面材の既定寸法 [mm]（3×10 板の短辺 × 一般的な階高まわり）。 */
-const DEFAULT_WIDTH = 910;
-const DEFAULT_HEIGHT = 2730;
+/** 面材の既定寸法 [mm]（3×6 板を縦に使う一般的な面材）。 */
+const DEFAULT_PANEL_WIDTH = 910;
+const DEFAULT_PANEL_HEIGHT = 1820;
 
-/** 壁の既定値。階高は一般的な 1 階、面材は構造用合板の既定（表 3.3.1 の脚注）。 */
+/** 割り付けの既定値 [mm]（尺モジュールの間柱ピッチ・釘ピッチ）。 */
+const DEFAULT_STUD_PITCH = 455;
+const DEFAULT_NAIL_PITCH = 150;
+
+/**
+ * へりあき（面材の縁から釘の中心まで）の下限 [mm]。
+ *
+ * 適用範囲 3.3(1)④「面材の釘列に対するへりあきは、10mm 以上かつ接合具径
+ * d [mm] × 5 以上とする」の 10mm 側。d の側は選んだ釘で決まるので、
+ * 表 3.3.1 の一覧が配る minEdgeDistance を使う。
+ */
+export const MIN_EDGE_DISTANCE = 10;
+
+/** 壁の既定値。階高は一般的な 1 階。 */
 const DEFAULT_WALL_HEIGHT = 2900;
 const DEFAULT_WALL_WIDTH = 910;
 
-let patternSequence = 0;
 let wallSequence = 0;
+let panelSequence = 0;
 
-/** パターンの一意 ID を作る。PDF に埋め込まれ、読み込み後もそのまま使う。 */
-export function newPatternId() {
-  return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-/** 壁の一意 ID を作る。パターンと同じく PDF に埋め込まれる。 */
+/** 壁の一意 ID を作る。PDF に埋め込まれ、読み込み後もそのまま使う。 */
 export function newWallId() {
   return `w_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** 新しいパターン（1 枚の面材の入力）を作る。 */
-export function makePattern(overrides) {
-  patternSequence += 1;
+/** 面材の一意 ID を作る。壁と同じく PDF に埋め込まれる。 */
+export function newPanelId() {
+  return `pn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * 新しい面材（壁を構成する 1 枚）を作る。
+ *
+ * 既定は「割り付け・日型（四周打ち）」。面材張り大壁は適用範囲 3.3(1)⑤ で
+ * 面材の四周を釘打ちすると定められているため。
+ */
+export function makePanel(overrides) {
+  panelSequence += 1;
   return {
-    patternId: newPatternId(),
-    patternName: `パターン${patternSequence}`,
-    width: DEFAULT_WIDTH,
-    height: DEFAULT_HEIGHT,
-    mode: 'grid',
+    panelId: newPanelId(),
+    panelName: `面材${panelSequence}`,
+    width: DEFAULT_PANEL_WIDTH,
+    height: DEFAULT_PANEL_HEIGHT,
+    mode: 'layout',
+    arrangement: 'hi',
+    studPitch: DEFAULT_STUD_PITCH,
+    nailPitch: DEFAULT_NAIL_PITCH,
+    edgeDistance: MIN_EDGE_DISTANCE,
     gridX: '',
     gridY: '',
     coords: '',
+    grain: '',
     ...(overrides || {}),
   };
 }
@@ -52,7 +79,7 @@ export function makePattern(overrides) {
  *
  * 面材と釘の数値は空のままにしておき、表 3.3.1 の一覧から読み込むか、
  * 4.5 の試験で得た値を直接入力してもらう（既定値を入れておくと、確かめない
- * まま計算してしまうため）。
+ * まま計算してしまうため）。面材は 1 枚から始める。
  */
 export function makeWall(overrides) {
   wallSequence += 1;
@@ -74,7 +101,7 @@ export function makeWall(overrides) {
     e2: '',
     // 適用範囲 3.3(1)⑦ は中間材（間柱等）を求めているので、既定は「あり」。
     hasIntermediateStud: true,
-    panels: [],
+    panels: [makePanel()],
     ...(overrides || {}),
   };
 }
@@ -113,6 +140,55 @@ export function wallFieldsFromGrade(grade) {
   };
 }
 
+/** 表 3.3.1 から選んだ組合せを引く（選んでいなければ null）。 */
+export function findMaterial(materials, materialId) {
+  return (materials || []).find((entry) => entry.id === materialId) || null;
+}
+
+/**
+ * 選んだ釘で必要になる、面材のへりあきの最小値 [mm]（適用範囲 3.3(1)④）。
+ *
+ * 「10mm 以上かつ接合具径 d × 5 以上」。d の側は計算実装が組合せごとに
+ * 配るので、ここでは選んでいないとき（4.5 の試験値を直接入力する場合）の
+ * 10mm を補うだけにする。
+ */
+export function minimumEdgeDistance(materials, materialId) {
+  const material = findMaterial(materials, materialId);
+  return material && material.minEdgeDistance
+    ? material.minEdgeDistance
+    : MIN_EDGE_DISTANCE;
+}
+
+/**
+ * 選んだ面材と釘の組合せを、へりあきを決めるための一言にする。
+ *
+ * へりあきは釘の呼び径で決まる（3.3(1)④）ので、選んだ釘とその径、必要な
+ * へりあきをそのまま伝える。
+ */
+export function nailNote(materials, materialId) {
+  const material = findMaterial(materials, materialId);
+  if (!material) return '';
+  return (
+    `選んだ釘は ${material.nailLabel}（呼び径 φ${material.nailDiameter} mm）です。` +
+    `適用範囲 3.3(1)④ により、面材のへりあきは ${material.minEdgeDistance} mm 以上` +
+    `（10 mm 以上かつ呼び径の 5 倍以上）にしてください。`
+  );
+}
+
+/**
+ * 面材のへりあきを、必要な最小値まで引き上げる（足りているものは触らない）。
+ *
+ * 面材と釘を選び直したとき・標準的な釘配列（表 3.2.1、へりあき 10 mm が
+ * 前提）を読み込んだときに使う。設計者が広げた値を勝手に狭めないよう、
+ * 引き上げるだけにしてある。
+ */
+export function raiseEdgeDistance(panels, minimum) {
+  (panels || []).forEach((panel) => {
+    if (!(Number(panel.edgeDistance) >= minimum)) panel.edgeDistance = minimum;
+  });
+  return panels;
+}
+
 /** 今日の日付を input[type=date] の値にする。 */
 export function todayIso() {
   const now = new Date();
@@ -123,42 +199,27 @@ export function todayIso() {
 }
 
 /**
- * 新規作成の初期状態。1 物件 = 1 ファイルなので、パターンは 1 つから始める。
- *
- * 壁は 0 枚から始める。釘配列諸定数だけを求めたい使い方（グレー本 3.2 まで）が
- * そのまま残るようにするため。
+ * 新規作成の初期状態。1 物件 = 1 ファイルなので、壁は 1 枚から始める。
  */
 export function emptyFormData() {
   return {
     projectName: '',
     issuedOn: todayIso(),
-    patterns: [makePattern()],
-    walls: [],
+    walls: [makeWall()],
   };
 }
 
 /**
  * 読み込んだ PDF の内容を、この画面が扱う形に整える。
  *
- * 定義に無いキーは捨て、足りないキーは既定値で埋める。パターンが 1 つも
- * 無ければ空のパターンを 1 つ用意する（編集を始められる状態にする）。
+ * 定義に無いキーは捨て、足りないキーは既定値で埋める。壁が 1 枚も無ければ
+ * 空の壁を 1 枚用意する（編集を始められる状態にする）。古い形（釘配列
+ * パターンを別に登録した形）からの移し替えは、読み込みの時点で計算実装が
+ * 済ませているので、ここには来ない。
  */
 export function mergeFormData(parsed) {
-  const patterns = Array.isArray(parsed && parsed.patterns) ? parsed.patterns : [];
-  const merged = patterns.map((pattern, index) =>
-    makePattern({
-      patternId: String(pattern.patternId || '') || newPatternId(),
-      patternName: String(pattern.patternName || '') || `パターン${index + 1}`,
-      width: Number(pattern.width) || 0,
-      height: Number(pattern.height) || 0,
-      mode: pattern.mode === 'coords' ? 'coords' : 'grid',
-      gridX: String(pattern.gridX || ''),
-      gridY: String(pattern.gridY || ''),
-      coords: String(pattern.coords || ''),
-    })
-  );
   const walls = Array.isArray(parsed && parsed.walls) ? parsed.walls : [];
-  const mergedWalls = walls.map((wall, index) =>
+  const merged = walls.map((wall, index) =>
     makeWall({
       wallId: String(wall.wallId || '') || newWallId(),
       wallName: String(wall.wallName || '') || `壁${index + 1}`,
@@ -176,21 +237,36 @@ export function mergeFormData(parsed) {
       e1: Number(wall.e1) || 0,
       e2: Number(wall.e2) || 0,
       hasIntermediateStud: wall.hasIntermediateStud !== false,
-      panels: (Array.isArray(wall.panels) ? wall.panels : [])
-        .filter((panel) => panel && panel.patternId)
-        .map((panel) => ({
-          patternId: String(panel.patternId),
+      panels: (Array.isArray(wall.panels) ? wall.panels : []).map((panel, position) =>
+        makePanel({
+          panelId: String(panel.panelId || '') || newPanelId(),
+          panelName: String(panel.panelName || '') || `面材${position + 1}`,
+          width: Number(panel.width) || 0,
+          height: Number(panel.height) || 0,
+          mode: panelMode(panel.mode),
+          arrangement: String(panel.arrangement || 'hi'),
+          studPitch: Number(panel.studPitch) || 0,
+          nailPitch: Number(panel.nailPitch) || 0,
+          edgeDistance: Number(panel.edgeDistance) || 0,
+          gridX: String(panel.gridX || ''),
+          gridY: String(panel.gridY || ''),
+          coords: String(panel.coords || ''),
           grain: String(panel.grain || ''),
-        })),
+        })
+      ),
     })
   );
 
   return {
     projectName: String((parsed && parsed.projectName) || ''),
     issuedOn: String((parsed && parsed.issuedOn) || '') || todayIso(),
-    patterns: merged.length > 0 ? merged : [makePattern()],
-    walls: mergedWalls,
+    walls: merged.length > 0 ? merged : [makeWall()],
   };
+}
+
+/** 釘配列の入力方式（知らない値は割り付けに寄せる）。 */
+export function panelMode(mode) {
+  return mode === 'grid' || mode === 'coords' ? mode : 'layout';
 }
 
 /** バックエンドへ送る本文（保存・計算で共通）。 */
@@ -198,7 +274,6 @@ export function toRequestBody(data) {
   return {
     projectName: data.projectName,
     issuedOn: data.issuedOn,
-    patterns: data.patterns,
     walls: data.walls,
   };
 }
@@ -216,19 +291,23 @@ export function formSignature(data) {
  * 保存時に添える「画面はこう計算した」。
  *
  * 編集中の計算は画面（wasm）が行うので、サーバは保存のたびに同じ計算をして
- * これと突き合わせる。同じ .wasm を動かしている以上ふつうは一致するが、
- * 画面を開いたまま新しい版がデプロイされた場合などに食い違いが起こりうる。
+ * これと突き合わせる。壁の値（3.3）だけでなく、その根拠になる面材ごとの
+ * 釘配列諸定数（3.2）も送る。同じ .wasm を動かしている以上ふつうは一致
+ * するが、画面を開いたまま新しい版がデプロイされた場合などに食い違いが
+ * 起こりうる。
  */
 export function verificationOf(coreVersion, reports) {
-  const calculated = (list) => (list || []).filter((report) => report && report.ok);
+  const walls = (reports && reports.walls) || [];
+  const panels = walls.flatMap((wall) => (wall && wall.panelReports) || []);
+  const calculated = (list) => list.filter((report) => report && report.ok);
   return {
     coreVersion,
-    patterns: calculated(reports && reports.patterns).map((report) => ({
-      patternId: report.patternId,
+    walls: calculated(walls).map((report) => ({
+      wallId: report.wallId,
       result: report.result,
     })),
-    walls: calculated(reports && reports.walls).map((report) => ({
-      wallId: report.wallId,
+    panels: calculated(panels).map((report) => ({
+      panelId: report.panelId,
       result: report.result,
     })),
   };
@@ -255,9 +334,9 @@ export function verificationWarning(verification) {
   const shown = differences
     .map((difference) => {
       const name =
-        difference.patternName ||
+        difference.panelName ||
         difference.wallName ||
-        difference.patternId ||
+        difference.panelId ||
         difference.wallId;
       return `${name} の ${difference.key}（画面 ${difference.client} / 計算書 ${difference.server}）`;
     })
@@ -297,19 +376,14 @@ export function defaultSaveName(config, data, documentName) {
   );
 }
 
-/** パターンを消せるのは 2 つ以上あるときだけ（0 個の物件は作らせない）。 */
-export function canRemovePattern(data) {
-  return data.patterns.length > 1;
+/** 壁を消せるのは 2 枚以上あるときだけ（0 枚の物件は作らせない）。 */
+export function canRemoveWall(data) {
+  return (data.walls || []).length > 1;
 }
 
-/** 削除後に選んでおくパターンの位置。末尾を消したら 1 つ前へ寄せる。 */
+/** 削除後に選んでおく壁の位置。末尾を消したら 1 つ前へ寄せる。 */
 export function indexAfterRemoval(currentIndex, remaining) {
   return Math.max(0, Math.min(currentIndex, remaining - 1));
-}
-
-/** パターンのタブに出す名前（未入力なら通し番号で代替する）。 */
-export function patternLabel(pattern, index) {
-  return String((pattern && pattern.patternName) || '').trim() || `パターン${index + 1}`;
 }
 
 /** 壁のタブに出す名前（未入力なら通し番号で代替する）。 */
@@ -317,20 +391,7 @@ export function wallLabel(wall, index) {
   return String((wall && wall.wallName) || '').trim() || `壁${index + 1}`;
 }
 
-/**
- * 壁の面材として選べる釘配列パターンの一覧。
- *
- * 面材は「登録した配列パターンから選ぶ」ので、選択肢はそのときのパターンの
- * 並びそのもの。名前が未入力のパターンは通し番号で見せる。
- */
-export function panelChoices(data) {
-  return (data.patterns || []).map((pattern, index) => ({
-    patternId: pattern.patternId,
-    label: patternLabel(pattern, index),
-  }));
-}
-
-/** 壁を消せるのは 1 枚以上あるときだけ（壁は 0 枚でもよい）。 */
-export function canRemoveWall(data) {
-  return (data.walls || []).length > 0;
+/** 面材の見出しに出す名前（未入力なら通し番号で代替する）。 */
+export function panelLabel(panel, index) {
+  return String((panel && panel.panelName) || '').trim() || `面材${index + 1}`;
 }

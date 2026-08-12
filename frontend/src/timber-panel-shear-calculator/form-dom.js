@@ -1,189 +1,56 @@
 // 画面（DOM）とデータの往復、および計算結果・釘配列図の描画。
 //
-// 項目が固定のフォームなので、入力欄は tools/…/index.html に直接置いてある。
-// ここが受け持つのは「今のパターンを入力欄へ写す／入力欄から読み取る」と
-// 「計算実装が返した表示用の値を並べる」こと。数値の丸めや単位は計算実装
-// （core/、wasm）が組み立てた文字列をそのまま出す。計算書 PDF も同じ文字列を
-// 刷るので、画面と計算書で桁がずれない。
+// 壁の項目は固定なので、その入力欄は tools/…/index.html に直接置いてある。
+// 壁を構成する面材は枚数が変わるため、1 枚ぶんの入力欄（寸法・割り付け・
+// へりあき）と、その面材の釘配列諸定数の結果はここで組み立てる。
+//
+// 数値の丸めや単位は計算実装（core/、wasm）が組み立てた文字列をそのまま出す。
+// 計算書 PDF も同じ文字列を刷るので、画面と計算書で桁がずれない。
 
 import { buildDiagram } from './diagram.js';
-import { patternLabel, wallLabel } from './form-logic.js';
+import { panelLabel, panelMode, wallLabel } from './form-logic.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** 繊維方向の選択肢（せん断座屈の a・b をどちらの辺に取るか）。 */
+const GRAIN_CHOICES = [
+  { value: '', text: '長辺方向' },
+  { value: 'height', text: '高さ方向' },
+  { value: 'width', text: '幅方向' },
+];
+
+/** 釘配列の入力方式。 */
+const MODE_CHOICES = [
+  { value: 'layout', text: '割り付け（型・ピッチ・へりあきから作る）' },
+  { value: 'grid', text: '格子（X と Y の座標リストの全組合せ）' },
+  { value: 'coords', text: '座標を直接入力' },
+];
 
 function element(root, id) {
   return root.getElementById ? root.getElementById(id) : root.querySelector(`#${id}`);
 }
 
-/** 入力欄から今のパターンの内容を読み取る（patternId は画面が持たない）。 */
-export function readPattern(root) {
-  const checked = root.querySelector('input[name="nailMode"]:checked');
-  return {
-    patternName: element(root, 'patternName').value.trim(),
-    width: Number(element(root, 'patternWidth').value) || 0,
-    height: Number(element(root, 'patternHeight').value) || 0,
-    mode: checked && checked.value === 'coords' ? 'coords' : 'grid',
-    gridX: element(root, 'gridX').value.trim(),
-    gridY: element(root, 'gridY').value.trim(),
-    coords: element(root, 'coords').value.trim(),
-  };
+/** 面材 1 枚分の入力欄の中から、名前で 1 つ取り出す。 */
+function field(panelNode, name) {
+  return panelNode.querySelector(`[data-panel-field="${name}"]`);
 }
 
-/** パターンの内容を入力欄へ写す。 */
-export function applyPattern(root, pattern) {
-  element(root, 'patternName').value = pattern.patternName || '';
-  element(root, 'patternWidth').value = pattern.width || '';
-  element(root, 'patternHeight').value = pattern.height || '';
-  element(root, 'gridX').value = pattern.gridX || '';
-  element(root, 'gridY').value = pattern.gridY || '';
-  element(root, 'coords').value = pattern.coords || '';
-  root.querySelectorAll('input[name="nailMode"]').forEach((radio) => {
-    radio.checked = radio.value === pattern.mode;
-  });
-  syncNailModeVisibility(root);
-  showPanelArea(root);
+/** 入力欄を数値として読む（未入力は 0）。 */
+function numberOf(node) {
+  return Number(node.value) || 0;
 }
 
-/**
- * グレー本 表 3.2.1 の釘配列を、選べる一覧にする。
- *
- * 一覧は計算実装（wasm）が配るものをそのまま並べる。面材寸法とピッチが同じ
- * ものを 1 つのまとまりにして、その中を型（川型・山型・ロ型・日型）で選ぶ。
- */
-export function renderPresetOptions(root, presets) {
-  const select = element(root, 'presetSelect');
-  const document_ = select.ownerDocument;
-  // 先頭の「選択すると…」だけ残して組み立て直す。
-  while (select.options.length > 1) select.remove(1);
-
-  let group = null;
-  let groupLabel = '';
-  presets.forEach((preset) => {
-    const label =
-      `${preset.sizeLabel} ${preset.orientation}` +
-      `（間柱・根太 @${preset.studPitch} / 釘 @${preset.nailPitch}）`;
-    if (label !== groupLabel) {
-      groupLabel = label;
-      group = document_.createElement('optgroup');
-      group.label = label;
-      select.appendChild(group);
-    }
-    const option = document_.createElement('option');
-    option.value = preset.id;
-    option.textContent = `${preset.arrangementLabel}（釘 ${preset.nailCount} 本）`;
-    option.title = preset.arrangementNote;
-    group.appendChild(option);
-  });
+/** 入力欄を数値として読む（未入力は空文字のまま持ち帰る）。 */
+function optionalNumberOf(node) {
+  const value = node.value.trim();
+  return value === '' ? '' : Number(value);
 }
 
-/** 選ばれている入力方式に応じて、格子／座標の入力欄を出し分ける。 */
-export function syncNailModeVisibility(root) {
-  const checked = root.querySelector('input[name="nailMode"]:checked');
-  const coords = checked && checked.value === 'coords';
-  element(root, 'gridInputs').hidden = coords;
-  element(root, 'coordsInputs').hidden = !coords;
-}
+// --- 壁 ---------------------------------------------------------------------
 
-/**
- * 面材面積の目安を入力欄の横に出す。
- *
- * 正となる面積は計算結果（と計算書）に載るサーバ側の値。ここは幅 × 高さを
- * その場で掛けただけの入力補助で、桁を間違えたときにすぐ気付けるようにする。
- */
-export function showPanelArea(root) {
-  const width = Number(element(root, 'patternWidth').value) || 0;
-  const height = Number(element(root, 'patternHeight').value) || 0;
-  const area = width * height;
-  element(root, 'panelArea').textContent = area > 0
-    ? `${Math.round(area).toLocaleString('ja-JP')} mm²`
-    : '-';
-}
-
-/** パターンのタブと現在位置を描き直す。 */
-export function renderPatternBar(root, patterns, currentIndex, onSelect) {
-  element(root, 'patternPosition').textContent =
-    `パターン ${currentIndex + 1} / ${patterns.length}`;
-  element(root, 'prevBtn').disabled = currentIndex === 0;
-  element(root, 'nextBtn').disabled = currentIndex >= patterns.length - 1;
-  element(root, 'removePatternBtn').disabled = patterns.length <= 1;
-
-  const tabs = element(root, 'patternTabs');
-  tabs.innerHTML = '';
-  patterns.forEach((pattern, index) => {
-    const button = tabs.ownerDocument.createElement('button');
-    button.type = 'button';
-    button.textContent = patternLabel(pattern, index);
-    button.className = index === currentIndex ? 'tab current' : 'tab';
-    button.addEventListener('click', () => onSelect(index));
-    tabs.appendChild(button);
-  });
-}
-
-/**
- * 計算結果を描く。report が null（入力が足りない）なら案内だけを出す。
- * report.ok が false なら、その理由を出して結果は空にする。
- */
-export function renderResult(root, report, pattern) {
-  const errorBox = element(root, 'resultError');
-  const summary = element(root, 'summary');
-  const steps = element(root, 'stepsBody');
-  const document_ = summary.ownerDocument;
-
-  summary.innerHTML = '';
-  steps.innerHTML = '';
-
-  if (!report || !report.ok) {
-    errorBox.hidden = !report;
-    errorBox.textContent = report ? report.error : '';
-    element(root, 'resultNote').hidden = Boolean(report);
-    renderDiagram(element(root, 'diagram'), null);
-    return;
-  }
-  errorBox.hidden = true;
-  element(root, 'resultNote').hidden = true;
-
-  report.summary.forEach((item) => {
-    const box = document_.createElement('div');
-    box.className = 'result-box';
-    const label = document_.createElement('span');
-    label.className = 'key';
-    label.textContent = item.unit ? `${item.key} [${item.unit}]` : item.key;
-    const value = document_.createElement('strong');
-    value.className = 'value';
-    value.textContent = item.value;
-    box.append(label, value);
-    summary.appendChild(box);
-  });
-
-  report.steps.forEach((row) => {
-    const tr = document_.createElement('tr');
-    [
-      { text: row.label, className: 'step-label' },
-      { text: row.eq, className: 'step-eq' },
-      { text: row.value, className: 'step-value' },
-    ].forEach((cell) => {
-      const td = document_.createElement('td');
-      td.className = cell.className;
-      td.textContent = cell.text;
-      tr.appendChild(td);
-    });
-    steps.appendChild(tr);
-  });
-
-  renderDiagram(
-    element(root, 'diagram'),
-    buildDiagram(report.nails, pattern.width, pattern.height, report.diagram)
-  );
-}
-
-// --- 壁（グレー本 3.3） -----------------------------------------------------
-
-/** 壁の入力欄を読み取る（wallId と面材の並びは画面が持たない）。 */
+/** 壁の入力欄を読み取る（wallId は画面が持たない）。 */
 export function readWall(root) {
-  const number = (id) => {
-    const value = element(root, id).value.trim();
-    return value === '' ? '' : Number(value);
-  };
+  const number = (id) => optionalNumberOf(element(root, id));
   return {
     wallName: element(root, 'wallName').value.trim(),
     height: Number(element(root, 'wallHeight').value) || 0,
@@ -200,20 +67,34 @@ export function readWall(root) {
     e1: number('wallE1'),
     e2: number('wallE2'),
     hasIntermediateStud: element(root, 'wallHasStud').checked,
-    // まだ選んでいない行（patternId が空）も、そのまま残して持ち帰る。ここで
-    // 落とすと「＋ 面材を追加」で出した行が、次の再計算で消えてしまう。
-    // 空の行は計算実装（wasm）が読むときに落ちる。
-    panels: Array.from(root.querySelectorAll('select[data-wall-panel]')).map(
-      (select, index) => ({
-        patternId: select.value,
-        grain: root.querySelectorAll('select[data-wall-grain]')[index].value,
-      })
-    ),
+    panels: readPanels(root),
   };
 }
 
+/** 壁を構成する面材の入力欄を、並び順のまま読み取る。 */
+export function readPanels(root) {
+  return Array.from(root.querySelectorAll('[data-panel-index]')).map((node) => {
+    const checked = node.querySelector('input[data-panel-mode]:checked');
+    return {
+      panelId: node.getAttribute('data-panel-id'),
+      panelName: field(node, 'panelName').value.trim(),
+      width: numberOf(field(node, 'width')),
+      height: numberOf(field(node, 'height')),
+      mode: panelMode(checked && checked.value),
+      arrangement: field(node, 'arrangement').value,
+      studPitch: numberOf(field(node, 'studPitch')),
+      nailPitch: numberOf(field(node, 'nailPitch')),
+      edgeDistance: numberOf(field(node, 'edgeDistance')),
+      gridX: field(node, 'gridX').value.trim(),
+      gridY: field(node, 'gridY').value.trim(),
+      coords: field(node, 'coords').value.trim(),
+      grain: field(node, 'grain').value,
+    };
+  });
+}
+
 /** 壁の内容を入力欄へ写す。wall が null なら編集欄そのものを隠す。 */
-export function applyWall(root, wall, choices) {
+export function applyWall(root, wall, options) {
   element(root, 'wallEditor').hidden = !wall;
   element(root, 'wallEmptyNote').hidden = Boolean(wall);
   if (!wall) return;
@@ -237,7 +118,7 @@ export function applyWall(root, wall, choices) {
   ].forEach(([id, key]) => {
     element(root, id).value = wall[key] === '' || wall[key] === undefined ? '' : wall[key];
   });
-  renderWallPanels(root, wall.panels, choices);
+  renderWallPanels(root, wall.panels, options);
 }
 
 /**
@@ -256,6 +137,15 @@ export function renderGradeOptions(root, grades) {
   fillSelect(element(root, 'gradeSelect'), grades);
 }
 
+/** 選んだ釘の呼び径を、へりあきを決める手がかりとして案内に出す。 */
+export function showNailNote(root, note) {
+  const box = element(root, 'materialNote');
+  box.textContent = note
+    ? note
+    : '表にない組合せは、グレー本 4.5 の試験で求めた k・ΔPv・δv・δu を' +
+      '直接入力してください。読み込んだあとに編集できます。';
+}
+
 /** { id, label } の一覧を select へ並べ直す（先頭の案内だけ残す）。 */
 function fillSelect(select, entries) {
   const document_ = select.ownerDocument;
@@ -268,64 +158,6 @@ function fillSelect(select, entries) {
   });
 }
 
-/**
- * 壁を構成する面材の行（釘配列パターンを選ぶ select と、削除ボタン）を描く。
- *
- * 面材は「登録した配列パターンから選ぶ」ので、選択肢はそのときのパターンの
- * 並びそのもの。パターンを消したあとで開いた壁は、選べなくなった面材の行が
- * 「（選択してください）」に戻る。
- */
-export function renderWallPanels(root, panels, choices) {
-  const container = element(root, 'wallPanels');
-  const document_ = container.ownerDocument;
-  container.innerHTML = '';
-
-  (panels || []).forEach((panel, index) => {
-    const row = document_.createElement('div');
-    row.className = 'wall-panel-row';
-
-    const select = document_.createElement('select');
-    select.setAttribute('data-wall-panel', String(index));
-    const empty = document_.createElement('option');
-    empty.value = '';
-    empty.textContent = '（選択してください）';
-    select.appendChild(empty);
-    choices.forEach((choice) => {
-      const option = document_.createElement('option');
-      option.value = choice.patternId;
-      option.textContent = choice.label;
-      select.appendChild(option);
-    });
-    select.value = choices.some((choice) => choice.patternId === panel.patternId)
-      ? panel.patternId
-      : '';
-
-    // 繊維方向（せん断座屈の a・b をどちらの辺に取るか）。
-    const grain = document_.createElement('select');
-    grain.setAttribute('data-wall-grain', String(index));
-    [
-      { value: '', text: '繊維方向: 長辺' },
-      { value: 'height', text: '繊維方向: 高さ' },
-      { value: 'width', text: '繊維方向: 幅' },
-    ].forEach(({ value, text }) => {
-      const option = document_.createElement('option');
-      option.value = value;
-      option.textContent = text;
-      grain.appendChild(option);
-    });
-    grain.value = panel.grain || '';
-
-    const remove = document_.createElement('button');
-    remove.type = 'button';
-    remove.className = 'secondary';
-    remove.textContent = '削除';
-    remove.setAttribute('data-remove-wall-panel', String(index));
-
-    row.append(select, grain, remove);
-    container.appendChild(row);
-  });
-}
-
 /** 壁のタブと現在位置を描き直す。 */
 export function renderWallBar(root, walls, currentIndex, onSelect) {
   element(root, 'wallPosition').textContent = walls.length
@@ -333,7 +165,7 @@ export function renderWallBar(root, walls, currentIndex, onSelect) {
     : '壁 0 / 0';
   element(root, 'wallPrevBtn').disabled = currentIndex <= 0;
   element(root, 'wallNextBtn').disabled = currentIndex >= walls.length - 1;
-  element(root, 'removeWallBtn').disabled = walls.length === 0;
+  element(root, 'removeWallBtn').disabled = walls.length <= 1;
 
   const tabs = element(root, 'wallTabs');
   tabs.innerHTML = '';
@@ -344,6 +176,300 @@ export function renderWallBar(root, walls, currentIndex, onSelect) {
     button.className = index === currentIndex ? 'tab current' : 'tab';
     button.addEventListener('click', () => onSelect(index));
     tabs.appendChild(button);
+  });
+}
+
+// --- 壁を構成する面材（釘配列: グレー本 3.2） -------------------------------
+
+function labelled(document_, text, control) {
+  const label = document_.createElement('label');
+  label.append(document_.createTextNode(text), control);
+  return label;
+}
+
+function input(document_, name, value, attributes) {
+  const node = document_.createElement('input');
+  node.setAttribute('data-panel-field', name);
+  Object.entries(attributes || {}).forEach(([key, attribute]) => {
+    node.setAttribute(key, String(attribute));
+  });
+  node.value = value === '' || value === undefined || value === null ? '' : value;
+  return node;
+}
+
+function select(document_, name, value, choices) {
+  const node = document_.createElement('select');
+  node.setAttribute('data-panel-field', name);
+  choices.forEach((choice) => {
+    const option = document_.createElement('option');
+    option.value = choice.value;
+    option.textContent = choice.text;
+    option.title = choice.note || '';
+    node.appendChild(option);
+  });
+  node.value = choices.some((choice) => choice.value === value) ? value : choices[0].value;
+  return node;
+}
+
+/**
+ * グレー本 表 3.2.1 の釘配列を、選べる一覧にする。
+ *
+ * 選ぶと、その面材の割り付けの欄（寸法・型・ピッチ・へりあき）へ入る。
+ * 面材寸法とピッチが同じものを 1 つのまとまりにして、その中を型で選ぶ。
+ */
+function presetSelect(document_, index, presets) {
+  const node = document_.createElement('select');
+  node.setAttribute('data-panel-preset', String(index));
+  const empty = document_.createElement('option');
+  empty.value = '';
+  empty.textContent = '標準的な釘配列（表 3.2.1）から読み込む';
+  node.appendChild(empty);
+
+  let group = null;
+  let groupLabel = '';
+  (presets || []).forEach((preset) => {
+    const label =
+      `${preset.sizeLabel} ${preset.orientation}` +
+      `（間柱・根太 @${preset.studPitch} / 釘 @${preset.nailPitch}）`;
+    if (label !== groupLabel) {
+      groupLabel = label;
+      group = document_.createElement('optgroup');
+      group.label = label;
+      node.appendChild(group);
+    }
+    const option = document_.createElement('option');
+    option.value = preset.id;
+    option.textContent = `${preset.arrangementLabel}（釘 ${preset.nailCount} 本）`;
+    option.title = preset.arrangementNote;
+    group.appendChild(option);
+  });
+  return node;
+}
+
+/** 面材 1 枚分の入力欄と、その面材の計算結果の器を組み立てる。 */
+function buildPanelEditor(document_, panel, index, options) {
+  const box = document_.createElement('div');
+  box.className = 'wall-panel';
+  box.setAttribute('data-panel-index', String(index));
+  box.setAttribute('data-panel-id', panel.panelId || '');
+
+  const head = document_.createElement('div');
+  head.className = 'wall-panel-head';
+  const title = document_.createElement('strong');
+  title.textContent = panelLabel(panel, index);
+  const remove = document_.createElement('button');
+  remove.type = 'button';
+  remove.className = 'secondary';
+  remove.textContent = 'この面材を削除';
+  remove.setAttribute('data-remove-wall-panel', String(index));
+  head.append(title, remove);
+  box.appendChild(head);
+
+  box.appendChild(
+    labelled(document_, '面材名', input(document_, 'panelName', panel.panelName, {
+      type: 'text',
+      placeholder: '南面 下段 など',
+    }))
+  );
+  box.appendChild(presetSelect(document_, index, options && options.presets));
+
+  const size = document_.createElement('div');
+  size.className = 'panel-size';
+  size.append(
+    labelled(document_, '幅 W [mm]', input(document_, 'width', panel.width, {
+      type: 'number',
+      inputmode: 'numeric',
+    })),
+    labelled(document_, '高さ H [mm]', input(document_, 'height', panel.height, {
+      type: 'number',
+      inputmode: 'numeric',
+    })),
+    labelled(document_, '繊維方向', select(document_, 'grain', panel.grain || '', GRAIN_CHOICES))
+  );
+  const area = document_.createElement('div');
+  area.className = 'area';
+  const areaLabel = document_.createElement('span');
+  areaLabel.className = 'label';
+  areaLabel.textContent = '面積 Aw';
+  const areaValue = document_.createElement('span');
+  areaValue.setAttribute('data-panel-area', String(index));
+  areaValue.textContent = '-';
+  area.append(areaLabel, areaValue);
+  size.appendChild(area);
+  box.appendChild(size);
+
+  // 釘配列の入力方式（割り付け / 格子 / 座標）。
+  const choices = document_.createElement('fieldset');
+  choices.className = 'cert-choices';
+  const legend = document_.createElement('legend');
+  legend.textContent = '釘配列の入力方法';
+  choices.appendChild(legend);
+  MODE_CHOICES.forEach((choice) => {
+    const option = document_.createElement('input');
+    option.type = 'radio';
+    option.name = `nailMode-${index}`;
+    option.value = choice.value;
+    option.checked = panelMode(panel.mode) === choice.value;
+    option.setAttribute('data-panel-mode', String(index));
+    const label = document_.createElement('label');
+    label.className = 'choice-option';
+    label.append(option, document_.createTextNode(choice.text));
+    choices.appendChild(label);
+  });
+  box.appendChild(choices);
+
+  // 割り付け（既定）。へりあきは面材・釘の種類に合わせてここで調整する。
+  const layout = document_.createElement('div');
+  layout.setAttribute('data-panel-section', 'layout');
+  const arrangementChoices = (options && options.arrangements ? options.arrangements : []).map(
+    (arrangement) => ({
+      value: arrangement.id,
+      text: arrangement.label,
+      note: arrangement.note,
+    })
+  );
+  layout.appendChild(
+    labelled(
+      document_,
+      '配列の型',
+      select(document_, 'arrangement', panel.arrangement, arrangementChoices.length
+        ? arrangementChoices
+        : [{ value: 'hi', text: '日型' }])
+    )
+  );
+  const pitches = document_.createElement('div');
+  pitches.className = 'panel-size';
+  pitches.append(
+    labelled(document_, '間柱・根太ピッチ [mm]', input(document_, 'studPitch', panel.studPitch, {
+      type: 'number',
+      inputmode: 'numeric',
+    })),
+    labelled(document_, '釘ピッチ [mm]', input(document_, 'nailPitch', panel.nailPitch, {
+      type: 'number',
+      inputmode: 'numeric',
+    })),
+    labelled(document_, 'へりあき [mm]', input(document_, 'edgeDistance', panel.edgeDistance, {
+      type: 'number',
+      inputmode: 'decimal',
+      step: 'any',
+    }))
+  );
+  layout.appendChild(pitches);
+  const layoutNote = document_.createElement('p');
+  layoutNote.className = 'hint';
+  layoutNote.textContent =
+    'へりあきは面材の縁から釘の中心までの距離です。適用範囲 3.3(1)④ により、' +
+    '10 mm 以上かつ選んだ釘の呼び径の 5 倍以上にしてください（面材と釘を選ぶと、' +
+    '足りない面材はその値まで引き上げます）。' +
+    '面材の長辺方向に走る間柱の釘列は、釘配列諸定数に含めません（3.3(1)⑧）。';
+  layout.appendChild(layoutNote);
+  box.appendChild(layout);
+
+  const grid = document_.createElement('div');
+  grid.setAttribute('data-panel-section', 'grid');
+  grid.append(
+    labelled(document_, 'X 座標のリスト [mm]（カンマ区切り）',
+      input(document_, 'gridX', panel.gridX, { type: 'text', placeholder: '10, 455, 900' })),
+    labelled(document_, 'Y 座標のリスト [mm]（カンマ区切り）',
+      input(document_, 'gridY', panel.gridY, { type: 'text', placeholder: '10, 155, 305' }))
+  );
+  box.appendChild(grid);
+
+  const coords = document_.createElement('div');
+  coords.setAttribute('data-panel-section', 'coords');
+  const coordsInput = document_.createElement('textarea');
+  coordsInput.setAttribute('data-panel-field', 'coords');
+  coordsInput.setAttribute('rows', '6');
+  coordsInput.value = panel.coords || '';
+  coords.appendChild(
+    labelled(document_, '釘座標「x, y」を 1 行に 1 本ずつ [mm]', coordsInput)
+  );
+  box.appendChild(coords);
+
+  // この面材の釘配列諸定数（グレー本 3.2）の結果。
+  const result = document_.createElement('div');
+  result.className = 'panel-result';
+  const error = document_.createElement('div');
+  error.className = 'result-error';
+  error.setAttribute('data-panel-error', String(index));
+  error.hidden = true;
+  const summary = document_.createElement('div');
+  summary.className = 'result-summary';
+  summary.setAttribute('data-panel-summary', String(index));
+  const steps = document_.createElement('table');
+  steps.className = 'steps-table';
+  const body = document_.createElement('tbody');
+  body.setAttribute('data-panel-steps', String(index));
+  steps.appendChild(body);
+  const diagram = document_.createElementNS(SVG_NS, 'svg');
+  diagram.setAttribute('data-panel-diagram', String(index));
+  diagram.setAttribute('role', 'img');
+  diagram.setAttribute('aria-label', '釘配列図');
+  diagram.setAttribute('hidden', '');
+  result.append(error, summary, steps, diagram);
+  box.appendChild(result);
+
+  return box;
+}
+
+/**
+ * 壁を構成する面材の入力欄を描き直す。
+ *
+ * 入力のたびには呼ばない（打鍵のたびに value を入れ直すとカーソルが飛ぶ）。
+ * 面材の枚数が変わったとき・別の壁へ移ったとき・一覧から読み込んだときだけ
+ * 組み立て直し、ふだんは結果の欄（renderPanelResults）だけを描き替える。
+ */
+export function renderWallPanels(root, panels, options) {
+  const container = element(root, 'wallPanels');
+  const document_ = container.ownerDocument;
+  container.innerHTML = '';
+  (panels || []).forEach((panel, index) => {
+    container.appendChild(buildPanelEditor(document_, panel, index, options));
+  });
+  syncNailModeVisibility(root);
+  showPanelArea(root);
+}
+
+/** 面材ごとに、選ばれている入力方式に応じて入力欄を出し分ける。 */
+export function syncNailModeVisibility(root) {
+  root.querySelectorAll('[data-panel-index]').forEach((node) => {
+    const checked = node.querySelector('input[data-panel-mode]:checked');
+    const mode = panelMode(checked && checked.value);
+    node.querySelectorAll('[data-panel-section]').forEach((section) => {
+      section.hidden = section.getAttribute('data-panel-section') !== mode;
+    });
+  });
+}
+
+/**
+ * 面材面積の目安を、面材ごとの入力欄の横に出す。
+ *
+ * 正となる面積は計算結果（と計算書）に載る計算実装の値。ここは幅 × 高さを
+ * その場で掛けただけの入力補助で、桁を間違えたときにすぐ気付けるようにする。
+ */
+export function showPanelArea(root) {
+  root.querySelectorAll('[data-panel-index]').forEach((node) => {
+    const area = numberOf(field(node, 'width')) * numberOf(field(node, 'height'));
+    const box = node.querySelector('[data-panel-area]');
+    box.textContent = area > 0 ? `${Math.round(area).toLocaleString('ja-JP')} mm²` : '-';
+  });
+}
+
+/** 結果の枠（Ixy [mm²/mm²] のような見出しと値）を並べる。 */
+function fillSummary(node, items) {
+  const document_ = node.ownerDocument;
+  node.innerHTML = '';
+  items.forEach((item) => {
+    const box = document_.createElement('div');
+    box.className = 'result-box';
+    const label = document_.createElement('span');
+    label.className = 'key';
+    label.textContent = item.unit ? `${item.key} [${item.unit}]` : item.key;
+    const value = document_.createElement('strong');
+    value.className = 'value';
+    value.textContent = item.value;
+    box.append(label, value);
+    node.appendChild(box);
   });
 }
 
@@ -359,6 +485,45 @@ function appendRow(body, cells) {
   return tr;
 }
 
+/**
+ * 面材ごとの釘配列諸定数（グレー本 3.2）を、それぞれの入力欄の下に描く。
+ *
+ * reports は壁の計算結果に入っている panelReports。計算できない面材は
+ * ok: false で理由が入っているので、それをそのまま出す。
+ */
+export function renderPanelResults(root, reports) {
+  root.querySelectorAll('[data-panel-index]').forEach((node, index) => {
+    const report = (reports || [])[index] || null;
+    const error = node.querySelector('[data-panel-error]');
+    const summary = node.querySelector('[data-panel-summary]');
+    const steps = node.querySelector('[data-panel-steps]');
+    const diagram = node.querySelector('[data-panel-diagram]');
+
+    summary.innerHTML = '';
+    steps.innerHTML = '';
+
+    if (!report || !report.ok) {
+      error.hidden = !report;
+      error.textContent = report ? report.error : '';
+      renderDiagram(diagram, null);
+      return;
+    }
+    error.hidden = true;
+
+    fillSummary(summary, report.summary);
+    report.steps.forEach((row) => {
+      appendRow(steps, [
+        { text: row.label, className: 'step-label' },
+        { text: row.eq, className: 'step-eq' },
+        { text: row.value, className: 'step-value' },
+      ]);
+    });
+    renderDiagram(diagram, buildDiagram(report.nails, report.diagram));
+  });
+}
+
+// --- 壁の計算結果（グレー本 3.3） -------------------------------------------
+
 /** 壁の計算結果を描く。report が null なら結果の欄を空にする。 */
 export function renderWallResult(root, report) {
   const errorBox = element(root, 'wallError');
@@ -371,6 +536,9 @@ export function renderWallResult(root, report) {
   const checks = element(root, 'wallChecksBody');
   const document_ = summary.ownerDocument;
 
+  // 面材ごとの釘配列諸定数は、壁の計算の一部として一緒に返る。
+  renderPanelResults(root, report && report.panelReports);
+
   [summary, head, body, steps, bucklingHead, bucklingBody, checks].forEach((node) => {
     node.innerHTML = '';
   });
@@ -382,18 +550,7 @@ export function renderWallResult(root, report) {
   }
   errorBox.hidden = true;
 
-  report.summary.forEach((item) => {
-    const box = document_.createElement('div');
-    box.className = 'result-box';
-    const label = document_.createElement('span');
-    label.className = 'key';
-    label.textContent = item.unit ? `${item.key} [${item.unit}]` : item.key;
-    const value = document_.createElement('strong');
-    value.className = 'value';
-    value.textContent = item.value;
-    box.append(label, value);
-    summary.appendChild(box);
-  });
+  fillSummary(summary, report.summary);
 
   const appendTable = (headNode, bodyNode, columns, rows) => {
     const headRow = document_.createElement('tr');

@@ -1,10 +1,10 @@
 [package]
 name = "nail-array-core"
-version = "1.1.0"
+version = "2.0.0"
 edition = "2021"
 rust-version = "1.94"
 publish = false
-description = "面材張り耐力要素 釘配列諸定数の唯一の計算実装（画面の wasm とサーバが同じバイト列を動かす）"
+description = "面材張り大壁と釘配列諸定数の唯一の計算実装（画面の wasm とサーバが同じバイト列を動かす）"
 
 [lib]
 name = "nail_array_core"

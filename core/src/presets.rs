@@ -2,100 +2,23 @@
 //!
 //! 表 3.2.1 は、実務でよく使う面材寸法・間柱（根太）ピッチ・釘ピッチの
 //! 組み合わせについて、釘配列諸定数 Ixy・Zxy・Cxy をまとめたもの。ここには
-//! **その表に載っている配列そのもの**（釘 1 本ごとの座標）を組み立てる規則を
-//! 置き、画面から「呼び出せる配列」として一覧できるようにする。
+//! **その表に載っている配列そのもの**を組み立てる規則を置き、画面から
+//! 「呼び出せる配列」として一覧できるようにする。
 //!
-//! 座標系は nail_array と同じで、原点は面材の左下・単位は mm。へりあき
-//! （EDGE_DISTANCE）を見込むので、釘は面材の内側に収まる。
-//!
-//! # 表の配列（型）の読み方
-//!
-//! 型の名前は、釘を打つ線を漢字の形に見立てたもの。縦線は面材の左右の端 +
-//! 間柱（根太）の位置、横線は面材の上下の端（横架材）。
-//!
-//! | 型   | 縦線（両端 + 中間）        | 横線（上端 / 下端） |
-//! | ---- | -------------------------- | ------------------- |
-//! | 川型 | あり                       | なし                |
-//! | 山型 | あり                       | 下端のみ            |
-//! | ロ型 | 両端のみ（中間の間柱なし） | 上端・下端          |
-//! | 日型 | あり                       | 上端・下端          |
-//!
-//! 面材の長辺方向に走る間柱に打たれた釘列は、グレー本 3.3(1)⑧ の理由により
-//! 釘配列計算に含めない（表 3.2.1 の縦置の図で ※ が付いている列）。したがって
-//! 縦長（H > W）の面材では、中間の縦線を釘配列から外す。
-//!
-//! # 釘の間隔
-//!
-//! 1 本の線には両端に必ず 1 本ずつ打ち、その間を釘ピッチちょうどで割り付け、
-//! 割り切れない余りは両端の 2 区間へ均等に振り分ける（区間数は「距離 ÷
-//! ピッチ」の切り上げ）。グレー本 3.2【解説】の計算例（図 3.2.2、610 mm の
-//! 辺に @150）が 10・155・305・455・600 と、中央から等間隔で両端に寄せた
-//! 並びになっているのと同じ規則。
+//! 呼び出した配列は、壁を構成する面材 1 枚の**割り付けの入力欄**（面材寸法・
+//! 型・間柱ピッチ・釘ピッチ・へりあき）へそのまま入る。表の配列を出発点に
+//! して、面材の配置や釘の間隔を実際の設計に合わせて動かせるようにするため。
+//! 釘座標の作り方そのものは layout.rs にある。
 
 use crate::json::Value;
+use crate::layout::{Arrangement, Layout, ARRANGEMENTS, DEFAULT_EDGE_DISTANCE};
 use crate::nail_array::Nail;
 
-/// へりあき（面材の縁から釘までの距離）[mm]。
+/// 表 3.2.1 の配列が前提とするへりあき [mm]。
 ///
 /// グレー本 3.2【解説】の計算例が 910 × 610 の面材に対して 890 × 590 の
 /// 広がりで釘を打っている（両側 10 mm ずつ内側）ことによる。
-pub const EDGE_DISTANCE: f64 = 10.0;
-
-/// 釘を打つ線の組み合わせ（表 3.2.1 の「型」）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Arrangement {
-    /// 川型: 縦線のみ。
-    Kawa,
-    /// 山型: 縦線 + 下端の横線。
-    Yama,
-    /// ロ型: 面材の四周のみ（中間の間柱を設けない）。
-    Ro,
-    /// 日型: 縦線 + 上下端の横線。
-    Hi,
-}
-
-impl Arrangement {
-    pub fn id(self) -> &'static str {
-        match self {
-            Arrangement::Kawa => "kawa",
-            Arrangement::Yama => "yama",
-            Arrangement::Ro => "ro",
-            Arrangement::Hi => "hi",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Arrangement::Kawa => "川型",
-            Arrangement::Yama => "山型",
-            Arrangement::Ro => "ロ型",
-            Arrangement::Hi => "日型",
-        }
-    }
-
-    pub fn description(self) -> &'static str {
-        match self {
-            Arrangement::Kawa => "面材の左右の端と間柱に釘を打つ（上下の横架材には打たない）",
-            Arrangement::Yama => "川型に加えて、下端の横架材にも釘を打つ",
-            Arrangement::Ro => "面材の四周だけに釘を打つ（中間の間柱を設けない）",
-            Arrangement::Hi => "川型に加えて、上下端の横架材にも釘を打つ",
-        }
-    }
-
-    /// 中間の縦線（間柱・根太）を使う型か。
-    fn uses_intermediate_studs(self) -> bool {
-        !matches!(self, Arrangement::Ro)
-    }
-
-    /// この型が釘を打つ横線（面材下端からの高さ）。
-    fn rows(self, height: f64) -> Vec<f64> {
-        match self {
-            Arrangement::Kawa => Vec::new(),
-            Arrangement::Yama => vec![EDGE_DISTANCE],
-            Arrangement::Ro | Arrangement::Hi => vec![EDGE_DISTANCE, height - EDGE_DISTANCE],
-        }
-    }
-}
+pub const EDGE_DISTANCE: f64 = DEFAULT_EDGE_DISTANCE;
 
 /// 表 3.2.1 の 1 つの配列（面材寸法・ピッチ・型の組み合わせ）。
 #[derive(Debug, Clone, PartialEq)]
@@ -171,12 +94,7 @@ pub fn all() -> Vec<Preset> {
     let mut presets = Vec::new();
     for row in CATALOGUE {
         for &nail_pitch in row.nail_pitches {
-            for arrangement in [
-                Arrangement::Kawa,
-                Arrangement::Yama,
-                Arrangement::Ro,
-                Arrangement::Hi,
-            ] {
+            for arrangement in ARRANGEMENTS {
                 if arrangement == Arrangement::Ro && !row.has_ro {
                     continue;
                 }
@@ -211,18 +129,26 @@ impl Preset {
         )
     }
 
+    /// この配列の割り付け（へりあきは表が前提とする 10 mm）。
+    pub fn layout(&self) -> Layout {
+        Layout {
+            width: self.width,
+            height: self.height,
+            stud_pitch: self.stud_pitch,
+            nail_pitch: self.nail_pitch,
+            edge_distance: EDGE_DISTANCE,
+            arrangement: self.arrangement,
+        }
+    }
+
+    /// 釘 1 本ごとの座標（X, Y の昇順）。
+    pub fn nails(&self) -> Vec<Nail> {
+        self.layout().nails()
+    }
+
     /// 縦置き（面材の長辺が縦）か。正方形は表 3.2.1 に合わせて縦置と呼ぶ。
     pub fn is_portrait(&self) -> bool {
         self.height >= self.width
-    }
-
-    /// 間柱が面材の長辺方向に走るか（＝その釘列を計算に含めない配列か）。
-    ///
-    /// 間柱は面材の高さ方向に走るので、縦長のときだけ長辺方向になる。正方形は
-    /// 長辺が無いため、表 3.2.1 も 910 × 910 / 1000 × 1000 の中間の間柱を
-    /// 計算に含めている（縦置と呼んではいるが ※ が付かない）。
-    fn studs_run_along_the_long_side(&self) -> bool {
-        self.height > self.width
     }
 
     pub fn orientation_label(&self) -> &'static str {
@@ -255,96 +181,20 @@ impl Preset {
         )
     }
 
-    /// 縦線（釘を打つ間柱・面材の左右の端）の X 座標。
+    /// この配列を、壁を構成する面材 1 枚ぶんの入力として書き出す。
     ///
-    /// 面材の長辺方向に走る間柱の釘列は釘配列計算に含めない（3.3(1)⑧）ため、
-    /// 縦長の面材では中間の間柱を外す。
-    pub fn stud_positions(&self) -> Vec<f64> {
-        let left = EDGE_DISTANCE;
-        let right = self.width - EDGE_DISTANCE;
-        let mut positions = vec![left];
-        if self.arrangement.uses_intermediate_studs() && !self.studs_run_along_the_long_side() {
-            let mut index = 1;
-            loop {
-                let x = self.stud_pitch * index as f64;
-                if x >= right {
-                    break;
-                }
-                if x > left {
-                    positions.push(x);
-                }
-                index += 1;
-            }
-        }
-        if right > left {
-            positions.push(right);
-        }
-        positions
-    }
-
-    /// 釘 1 本ごとの座標（X, Y の昇順）。
-    pub fn nails(&self) -> Vec<Nail> {
-        let rows = self.arrangement.rows(self.height);
-        let mut nails = Vec::new();
-
-        // 横線（横架材）。端から端まで釘ピッチで割り付ける。
-        for &y in &rows {
-            for x in line_positions(EDGE_DISTANCE, self.width - EDGE_DISTANCE, self.nail_pitch) {
-                nails.push(Nail { x, y });
-            }
-        }
-        // 縦線（左右の端・間柱）。横線と重なる位置は、横線の釘がすでにある。
-        for x in self.stud_positions() {
-            for y in line_positions(EDGE_DISTANCE, self.height - EDGE_DISTANCE, self.nail_pitch) {
-                if rows.iter().any(|row| *row == y) {
-                    continue;
-                }
-                nails.push(Nail { x, y });
-            }
-        }
-
-        nails.sort_by(|a, b| {
-            a.x.partial_cmp(&b.x)
-                .expect("釘座標は有限")
-                .then(a.y.partial_cmp(&b.y).expect("釘座標は有限"))
-        });
-        nails
-    }
-
-    /// この配列をフォーム 1 パターン分の入力として書き出す。
-    ///
-    /// 川型は縦線だけの格子なので、そのまま「格子」入力にする（X と Y を
-    /// 直せる形で渡るほうが、実際の設計に合わせて手を入れやすい）。
-    /// 横線が加わる型は格子で表せないので、座標を直接並べる。
-    pub fn to_pattern_value(&self) -> Value {
-        let (mode, grid_x, grid_y, coords) = if self.arrangement == Arrangement::Kawa {
-            (
-                "grid",
-                join(&self.stud_positions()),
-                join(&line_positions(
-                    EDGE_DISTANCE,
-                    self.height - EDGE_DISTANCE,
-                    self.nail_pitch,
-                )),
-                String::new(),
-            )
-        } else {
-            let coords = self
-                .nails()
-                .iter()
-                .map(|nail| format!("{}, {}", number(nail.x), number(nail.y)))
-                .collect::<Vec<_>>()
-                .join("\n");
-            ("coords", String::new(), String::new(), coords)
-        };
+    /// 割り付けの欄（寸法・型・ピッチ・へりあき）へそのまま入るので、
+    /// 読み込んだあとに面材の配置や釘の間隔を動かせる。
+    pub fn to_panel_value(&self) -> Value {
         Value::obj([
-            ("patternName", self.label().into()),
+            ("panelName", self.label().into()),
             ("width", self.width.into()),
             ("height", self.height.into()),
-            ("mode", mode.into()),
-            ("gridX", grid_x.into()),
-            ("gridY", grid_y.into()),
-            ("coords", coords.into()),
+            ("mode", "layout".into()),
+            ("arrangement", self.arrangement.id().into()),
+            ("studPitch", self.stud_pitch.into()),
+            ("nailPitch", self.nail_pitch.into()),
+            ("edgeDistance", EDGE_DISTANCE.into()),
         ])
     }
 
@@ -362,201 +212,34 @@ impl Preset {
             ("height", self.height.into()),
             ("studPitch", self.stud_pitch.into()),
             ("nailPitch", self.nail_pitch.into()),
+            ("edgeDistance", EDGE_DISTANCE.into()),
             ("nailCount", self.nails().len().into()),
         ])
     }
 }
 
-/// 1 本の線に打つ釘の位置。
-///
-/// 両端に 1 本ずつ置き、その間を釘ピッチちょうどで割り付け、割り切れない
-/// 余りは両端の 2 区間へ均等に振り分ける。区間数は「距離 ÷ ピッチ」の
-/// 切り上げなので、どの区間もピッチを超えない。
-pub fn line_positions(low: f64, high: f64, pitch: f64) -> Vec<f64> {
-    let span = high - low;
-    if !(span > 0.0) {
-        return vec![low];
-    }
-    if !(pitch > 0.0) || pitch >= span {
-        return vec![low, high];
-    }
-    let intervals = (span / pitch).ceil() as usize;
-    let inner = intervals - 2;
-    let end = (span - inner as f64 * pitch) / 2.0;
-
-    let mut positions = Vec::with_capacity(intervals + 1);
-    positions.push(low);
-    for index in 0..=inner {
-        positions.push(low + end + pitch * index as f64);
-    }
-    positions.push(high);
-    positions
-}
-
-/// 座標を入力欄の文字列にする（3 桁区切りは付けない。区切りに使う「,」と
-/// 混ざってしまうため）。
+/// 寸法を入力欄の文字列にする（3 桁区切りは付けない）。
 fn number(value: f64) -> String {
     format!("{value}")
-}
-
-fn join(values: &[f64]) -> String {
-    values
-        .iter()
-        .map(|value| number(*value))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 #[cfg(test)]
 mod tests {
     //! テストの構成:
-    //!   1. 釘の割り付け規則（線 1 本・縦線の位置）。
-    //!   2. 一覧としての体裁（件数・id の一意性・書き出す入力の形）。
-    //!   3. グレー本 表 3.2.1 の Ixy・Zxy・Cxy との突き合わせ（本節の主眼）。
+    //!   1. 一覧としての体裁（件数・id の一意性・書き出す入力の形）。
+    //!   2. グレー本 表 3.2.1 の Ixy・Zxy・Cxy との突き合わせ（本節の主眼）。
+    //!
+    //! 釘の割り付け規則そのもののテストは layout.rs にある。
 
     use super::*;
     use crate::nail_array;
-    use crate::report::{self, Pattern};
-
-    // --- 1. 割り付け規則 -----------------------------------------------------
-
-    /// グレー本 3.2【解説】の計算例（図 3.2.2）の並び。
-    /// 610 mm の辺に @150 → 10, 155, 305, 455, 600（両端の区間だけ 145）。
-    #[test]
-    fn line_positions_match_the_worked_example() {
-        assert_eq!(
-            line_positions(10.0, 600.0, 150.0),
-            vec![10.0, 155.0, 305.0, 455.0, 600.0]
-        );
-    }
-
-    #[test]
-    fn line_positions_keep_the_pitch_between_the_inner_nails() {
-        // 910 mm の辺に @150 → 両端 145、中は 150 ちょうど。
-        assert_eq!(
-            line_positions(10.0, 900.0, 150.0),
-            vec![10.0, 155.0, 305.0, 455.0, 605.0, 755.0, 900.0]
-        );
-        // 割り切れる場合は等間隔になる。
-        assert_eq!(
-            line_positions(10.0, 1810.0, 150.0),
-            (0..=12)
-                .map(|i| 10.0 + 150.0 * i as f64)
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn line_positions_never_exceed_the_pitch() {
-        for (low, high, pitch) in [
-            (10.0, 600.0, 150.0),
-            (10.0, 3020.0, 75.0),
-            (10.0, 990.0, 100.0),
-        ] {
-            let positions = line_positions(low, high, pitch);
-            for pair in positions.windows(2) {
-                assert!(
-                    pair[1] - pair[0] <= pitch + 1e-9,
-                    "{pair:?} exceeds {pitch}"
-                );
-            }
-            assert_eq!(positions.first(), Some(&low));
-            assert_eq!(positions.last(), Some(&high));
-        }
-    }
-
-    #[test]
-    fn line_positions_fall_back_to_the_two_ends() {
-        assert_eq!(line_positions(10.0, 600.0, 0.0), vec![10.0, 600.0]);
-        assert_eq!(line_positions(10.0, 600.0, 900.0), vec![10.0, 600.0]);
-        assert_eq!(line_positions(10.0, 10.0, 150.0), vec![10.0]);
-    }
+    use crate::report;
 
     fn preset(id: &str) -> Preset {
         find(id).unwrap_or_else(|| panic!("{id} が一覧にありません"))
     }
 
-    /// 横長の面材は、間柱の位置にも釘列が入る。
-    #[test]
-    fn stud_positions_include_the_intermediate_studs_of_a_landscape_panel() {
-        assert_eq!(
-            preset("1820x910-s455-n150-kawa").stud_positions(),
-            vec![10.0, 455.0, 910.0, 1365.0, 1810.0]
-        );
-        assert_eq!(
-            preset("1820x910-s910-n150-kawa").stud_positions(),
-            vec![10.0, 910.0, 1810.0]
-        );
-    }
-
-    /// 縦長の面材では、長辺方向の間柱の釘列を含めない（3.3(1)⑧）。
-    #[test]
-    fn stud_positions_drop_the_intermediate_studs_of_a_portrait_panel() {
-        assert_eq!(
-            preset("910x3030-s455-n150-kawa").stud_positions(),
-            vec![10.0, 900.0]
-        );
-    }
-
-    /// ロ型は中間の間柱を設けない。
-    #[test]
-    fn stud_positions_of_the_ro_arrangement_are_the_two_edges() {
-        assert_eq!(
-            preset("910x610-s455-n150-ro").stud_positions(),
-            vec![10.0, 900.0]
-        );
-    }
-
-    /// 横線と縦線が交わる位置の釘は 1 本だけ（二重に数えない）。
-    #[test]
-    fn nails_are_not_duplicated_where_the_lines_cross() {
-        let nails = preset("910x610-s455-n150-hi").nails();
-        for (index, nail) in nails.iter().enumerate() {
-            for other in &nails[index + 1..] {
-                assert!(
-                    nail.x != other.x || nail.y != other.y,
-                    "({}, {}) が重複しています",
-                    nail.x,
-                    nail.y
-                );
-            }
-        }
-    }
-
-    /// 釘はすべて面材の内側（へりあきの分だけ内側）に入る。
-    #[test]
-    fn nails_stay_inside_the_panel() {
-        for preset in all() {
-            for nail in preset.nails() {
-                assert!(
-                    nail.x >= EDGE_DISTANCE - 1e-9
-                        && nail.x <= preset.width - EDGE_DISTANCE + 1e-9
-                        && nail.y >= EDGE_DISTANCE - 1e-9
-                        && nail.y <= preset.height - EDGE_DISTANCE + 1e-9,
-                    "{} の釘 ({}, {}) が面材からはみ出しています",
-                    preset.id(),
-                    nail.x,
-                    nail.y
-                );
-            }
-        }
-    }
-
-    /// 川型（縦線のみ）は、グレー本 3.2【解説】の計算例そのもの。
-    #[test]
-    fn the_worked_example_is_one_of_the_presets() {
-        let preset = preset("910x610-s455-n150-kawa");
-        let pattern = preset.to_pattern_value();
-        assert_eq!(pattern.get("mode").unwrap().as_str(), Some("grid"));
-        assert_eq!(pattern.get("gridX").unwrap().as_str(), Some("10, 455, 900"));
-        assert_eq!(
-            pattern.get("gridY").unwrap().as_str(),
-            Some("10, 155, 305, 455, 600")
-        );
-        assert_eq!(preset.nails().len(), 15);
-    }
-
-    // --- 2. 一覧としての体裁 -------------------------------------------------
+    // --- 1. 一覧としての体裁 -------------------------------------------------
 
     /// 表 3.2.1 は 33 通りの寸法・ピッチ × 型 = 106 の配列を載せている。
     #[test]
@@ -601,33 +284,33 @@ mod tests {
         );
     }
 
-    /// 横線を持つ型は座標をそのまま並べる（格子では表せない）。
+    /// 呼び出した配列は、割り付けの入力欄をそのまま埋める。
     #[test]
-    fn arrangements_with_rows_are_written_as_coordinates() {
-        let pattern = preset("910x610-s455-n150-yama").to_pattern_value();
-        assert_eq!(pattern.get("mode").unwrap().as_str(), Some("coords"));
-        let coords = pattern.get("coords").unwrap().as_str().unwrap();
-        assert!(coords.starts_with("10, 10\n10, 155\n"), "{coords}");
-        assert_eq!(
-            coords.lines().count(),
-            preset("910x610-s455-n150-yama").nails().len()
-        );
+    fn a_preset_fills_the_layout_fields_of_a_panel() {
+        let panel = preset("910x610-s455-n150-kawa").to_panel_value();
+        assert_eq!(panel.get("mode").unwrap().as_str(), Some("layout"));
+        assert_eq!(panel.get("width").unwrap().as_f64(), Some(910.0));
+        assert_eq!(panel.get("height").unwrap().as_f64(), Some(610.0));
+        assert_eq!(panel.get("arrangement").unwrap().as_str(), Some("kawa"));
+        assert_eq!(panel.get("studPitch").unwrap().as_f64(), Some(455.0));
+        assert_eq!(panel.get("nailPitch").unwrap().as_f64(), Some(150.0));
+        assert_eq!(panel.get("edgeDistance").unwrap().as_f64(), Some(10.0));
     }
 
-    /// 書き出した入力は、フォームの入力としてそのまま計算できる。
+    /// 書き出した入力は、面材 1 枚としてそのまま計算できる。
     #[test]
-    fn every_preset_can_be_calculated_as_a_form_pattern() {
+    fn every_preset_can_be_calculated_as_a_wall_panel() {
         for preset in all() {
-            let pattern = report::normalize_pattern(&preset.to_pattern_value(), 0).unwrap();
-            let nails = report::nails_of(&pattern).unwrap_or_else(|error| {
+            let panel = report::normalize_panel(&preset.to_panel_value(), "w1", 0).unwrap();
+            let nails = report::nails_of(&panel).unwrap_or_else(|error| {
                 panic!("{} を計算できません: {error}", preset.id());
             });
             assert_eq!(nails.len(), preset.nails().len(), "{}", preset.id());
-            assert!(nail_array::compute(&nails, pattern.panel_area()).is_ok());
+            assert!(nail_array::compute(&nails, panel.panel_area()).is_ok());
         }
     }
 
-    // --- 3. グレー本 表 3.2.1 との突き合わせ ---------------------------------
+    // --- 2. グレー本 表 3.2.1 との突き合わせ ---------------------------------
 
     /// 表 3.2.1 の値（Ixy [mm²/mm²]、Zxy [mm/mm²]、Cxy）。
     /// 並びは CATALOGUE と同じ（面材寸法・ピッチごとに 川・山・（ロ・）日）。

@@ -1,4 +1,4 @@
-"""面材張り耐力要素 釘配列諸定数 計算ツールの保存・計算書 PDF の生成と解析。
+"""面材張り大壁 計算ツールの保存・計算書 PDF の生成と解析。
 
 GAS 版（gas-timber-panel-shear-calculator）はスプレッドシートへ「現在値 +
 履歴」を書き出していたが、本ポータルでは構造計算安全証明書と同じ考え方に
@@ -10,8 +10,9 @@ GAS 版（gas-timber-panel-shear-calculator）はスプレッドシートへ「�
 画面もまったく同じ .wasm を動かすので、実装は 1 つしかない。このモジュールが
 受け持つのは、その結果を PDF に組む仕事と、保存時の突き合わせ（verify）。
 
-1 PDF = 1 物件。ページは「釘配列パターン 1 つにつき 1 ページ」（グレー本 3.2）
-のあとに「壁 1 枚につき 1 ページ」（グレー本 3.3）を続ける。
+1 PDF = 1 物件。ページは壁 1 枚ごとに「その壁を構成する面材の釘配列諸定数
+（グレー本 3.2）を 1 枚 1 ページ」並べ、続けて「壁の剛性と許容せん断耐力
+（同 3.3）を 1 ページ」置く。釘配列諸定数は壁の計算の一部として扱う。
 """
 
 import json
@@ -46,21 +47,22 @@ MAX_REPORTED_DIFFERENCES = 20
 # 10 mm を見込んで面材の左下を原点にする。平行移動なので Ixy・Zxy・Cxy は
 # 本と同じで、弾性中立軸だけが x0 = 455、y0 = 305 になる。この配列は
 # 表 3.2.1 の「910×610 横置・川型（@455 / 釘 @150）」そのものなので、画面では
-# 標準的な釘配列の一覧から呼び出す（計算例だけを読み込む操作は置いていない）。
-EXAMPLE_PATTERN = {
-    "patternName": "グレー本の計算例",
+# 標準的な釘配列の一覧から呼び出せる（計算例だけを読み込む操作は置いていない）。
+EXAMPLE_PANEL = {
+    "panelName": "グレー本の計算例",
     "width": 910,
     "height": 610,
-    "mode": "grid",
-    "gridX": "10, 455, 900",
-    "gridY": "10, 155, 305, 455, 600",
-    "coords": "",
+    "mode": "layout",
+    "arrangement": "kawa",
+    "studPitch": 455,
+    "nailPitch": 150,
+    "edgeDistance": 10,
 }
 
 # グレー本 3.3(3)「面材張り大壁の許容せん断耐力の計算例」（図 3.3.10）。
 #
 # 階高 3000・幅 910 の準耐力壁形式の大壁で、下側に 1820 × 910、上側に
-# 910 × 910 の構造用合板 12mm を @75 で四周打ちしたもの。面材の釘配列は
+# 910 × 910 の構造用合板 12mm を @75 で四周打ちしたもの。面材の割り付けは
 # 表 3.2.1 の配列（EXAMPLE_WALL_PRESETS）をそのまま使い、面材と釘の数値は
 # 表 3.3.1 の組合せ（EXAMPLE_WALL_MATERIAL）から読み込む。
 #
@@ -68,6 +70,10 @@ EXAMPLE_PATTERN = {
 # N-65 と CN65 が入れ替わっており（正誤表による訂正あり）、本文が計算に使って
 # いる k = 0.483・δv = 2.3・δu = 17.0・ΔPv = 1.13 は訂正後の N-65 の値。
 # よってこの計算例の釘は N-65 として扱う（core/src/wall.rs の TABLE 参照）。
+# 表 3.2.1 の配列はへりあき 10mm を前提としているが、この計算例の釘 N-65 は
+# 呼び径 φ3.05 なので、3.3(1)④ の「10mm 以上かつ接合具径 d ×5 以上」は
+# 15.25mm を要求する。本の計算例をそのまま再現するとこの検定は NG になる
+# （画面では、面材と釘を選んだ時点でへりあきが必要な値まで引き上げられる）。
 EXAMPLE_WALL_PRESETS = ("910x1820-s455-n75-hi", "910x910-s455-n75-ro")
 EXAMPLE_WALL_MATERIAL = "plywood12-n65"
 EXAMPLE_WALL = {
@@ -76,7 +82,6 @@ EXAMPLE_WALL = {
     "width": 910,
     # 間柱 30 × 105 を @455 で入れている（図 3.3.10）。
     "hasIntermediateStud": True,
-    "panels": [{"patternId": "p1"}, {"patternId": "p2"}],
 }
 
 
@@ -102,33 +107,35 @@ def _core(operation: str, data: dict) -> dict:
 def normalize_data(data) -> dict:
     """API で受け取った本文を、このツールが扱う形へ整える。
 
-    未知のキーは捨て、パターンは 1 つ以上に整える（空のフォームでも
-    「パターンが 1 つある」状態から始められるようにする）。入力欄の文字列を
-    どう読むかは計算そのものと地続きなので、ここも計算実装に任せる。
+    未知のキーは捨て、壁は 1 枚以上に整える（空のフォームでも「壁が 1 枚
+    ある」状態から始められるようにする）。前の版で保存した PDF（釘配列
+    パターンを別に登録し、壁が patternId で指す形）も、ここで今の形へ
+    移し替える。入力欄の文字列をどう読むかは計算そのものと地続きなので、
+    ここも計算実装に任せる。
     """
     return _core("normalize", data)["data"]
 
 
 def compute_all(data: dict) -> dict:
-    """釘配列パターンと壁をまとめて計算し、{"patterns": [...], "walls": [...]} を返す。
+    """壁をまとめて計算し、{"walls": [...]} を返す。
 
-    計算できないものは ok: False で返る。1 つの不備で他の結果まで失わせない
-    （保存時は validate() で改めて全件を確かめる）。
+    面材ごとの釘配列諸定数（グレー本 3.2）は、壁の結果の中に
+    `panelReports` として入る。計算できないものは ok: False で返る。
+    1 枚の壁の不備で他の壁の結果まで失わせない（保存時は validate() で
+    改めて全件を確かめる）。
     """
-    response = _core("computeAll", data)
-    return {"patterns": response["patterns"], "walls": response["walls"]}
+    return {"walls": _core("computeAll", data)["walls"]}
 
 
 def validate(data: dict) -> dict:
-    """保存できる状態か確かめ、釘配列パターンと壁の計算結果を返す。"""
-    response = _core("validate", data)
-    return {"patterns": response["patterns"], "walls": response["walls"]}
+    """保存できる状態か確かめ、壁ごとの計算結果を返す。"""
+    return {"walls": _core("validate", data)["walls"]}
 
 
-def preset_pattern(preset_id: str) -> dict:
-    """グレー本 表 3.2.1 の配列を、フォームのパターン 1 つ分にして返す。"""
+def preset_panel(preset_id: str) -> dict:
+    """グレー本 表 3.2.1 の配列を、面材 1 枚分の割り付けにして返す。"""
     try:
-        return nail_core.call({"op": "preset", "data": {"id": preset_id}})["pattern"]
+        return nail_core.call({"op": "preset", "data": {"id": preset_id}})["panel"]
     except CoreError as error:
         raise PanelShearError(str(error)) from error
 
@@ -162,11 +169,15 @@ def example_wall_data() -> dict:
     return normalize_data(
         {
             "projectName": "グレー本 3.3 の計算例",
-            "patterns": [
-                dict(preset_pattern(preset_id), patternId=f"p{index + 1}")
-                for index, preset_id in enumerate(EXAMPLE_WALL_PRESETS)
+            "walls": [
+                {
+                    **material(EXAMPLE_WALL_MATERIAL),
+                    **EXAMPLE_WALL,
+                    "panels": [
+                        preset_panel(preset_id) for preset_id in EXAMPLE_WALL_PRESETS
+                    ],
+                }
             ],
-            "walls": [{**material(EXAMPLE_WALL_MATERIAL), **EXAMPLE_WALL}],
         }
     )
 
@@ -193,7 +204,7 @@ def _claimed_results(claim: dict, section: str, id_key: str) -> dict:
 
 
 def _differences(reports: list[dict], claimed: dict, id_key: str, name_key: str) -> list[dict]:
-    """1 つの節（パターン／壁）について、画面とサーバの食い違いを並べる。"""
+    """1 つの節（壁／面材）について、画面とサーバの食い違いを並べる。"""
     differences = []
     for report in reports:
         found = {id_key: report[id_key], name_key: report[name_key]}
@@ -210,12 +221,28 @@ def _differences(reports: list[dict], claimed: dict, id_key: str, name_key: str)
     return differences
 
 
+def panel_reports(reports: dict) -> list[dict]:
+    """壁ごとの結果から、面材 1 枚ずつの釘配列諸定数を順番どおりに取り出す。
+
+    釘配列諸定数は壁の計算の一部（`panelReports`）なので、突き合わせも
+    計算書のページ組みも、この並びをそのまま使う。
+    """
+    return [
+        panel
+        for wall in reports["walls"]
+        for panel in wall.get("panelReports") or []
+        if panel.get("ok", True)
+    ]
+
+
 def verify(reports: dict, claim) -> dict:
     """画面が出した計算結果と、サーバの計算結果を突き合わせる。
 
     編集中の計算は画面（wasm）が行うので、保存する計算書と画面で見ていた値が
-    同じであることを、保存のたびにサーバ側でも確かめる。同じ .wasm を動かして
-    いる以上ふつうは一致するが、次のような食い違いはここで拾える:
+    同じであることを、保存のたびにサーバ側でも確かめる。壁の値（3.3）だけで
+    なく、その根拠になる面材ごとの釘配列諸定数（3.2）も突き合わせる。同じ
+    .wasm を動かしている以上ふつうは一致するが、次のような食い違いはここで
+    拾える:
 
       - 画面を開いたまま新しい版がデプロイされ、古い計算実装が残っている
       - 端末や処理系の差で、末尾の桁が違う
@@ -231,15 +258,15 @@ def verify(reports: dict, claim) -> dict:
     server_version = nail_core.version()
 
     differences = _differences(
-        reports["patterns"],
-        _claimed_results(claim, "patterns", "patternId"),
-        "patternId",
-        "patternName",
-    ) + _differences(
         reports["walls"],
         _claimed_results(claim, "walls", "wallId"),
         "wallId",
         "wallName",
+    ) + _differences(
+        panel_reports(reports),
+        _claimed_results(claim, "panels", "panelId"),
+        "panelId",
+        "panelName",
     )
 
     return {
@@ -282,6 +309,8 @@ _FOOTNOTE = (
 )
 
 _WALL_TITLE = "面材張り大壁 剛性・許容せん断耐力 計算書"
+# PDF の文書情報に入れる題名（1 通の中に 3.2 と 3.3 の両方が入る）。
+_DOCUMENT_TITLE = "面材張り大壁・釘配列諸定数 計算書"
 _WALL_SUBTITLE = (
     "グレー本『木造軸組工法住宅の許容応力度設計』"
     "3.3 面材張り大壁の詳細計算法（式 3.3.1〜3.3.11）に準拠"
@@ -289,8 +318,9 @@ _WALL_SUBTITLE = (
 _WALL_FOOTNOTE = (
     "面材のせん断座屈は四周打ち（式 3.3.11）で検定している（適用範囲 3.3(1)⑤ により、"
     "面材張り大壁は面材の四周を釘打ちする）。適用範囲のうち機械的に判定できるのは"
-    "①許容せん断耐力の上限のみで、面材と釘の組合せ・釘のピッチとへりあき・端部および"
-    "継目の材の断面・中間材（間柱等）の配置は、設計者が 3.3(1) の②〜⑧に照らして確認すること。"
+    "①許容せん断耐力の上限と、④のうち面材の釘列に対するへりあき（10mm 以上かつ接合具径 d ×5 以上）まで。"
+    "釘のピッチ・軸材の釘列に対する縁端距離・面材と釘の組合せ・端部および継目の材の断面・"
+    "中間材（間柱等）の配置は、設計者が 3.3(1) の②〜⑧に照らして確認すること。"
 )
 
 # 面材ごとの値の表で、面材名の欄に取る幅 [pt]。残りを数値の列で等分する。
@@ -307,7 +337,7 @@ def _format_issued_on(value: str) -> str:
 
 
 def _draw_diagram(page: pdf_write.Page, box: tuple[float, float, float, float],
-                  report: dict, pattern: dict):
+                  report: dict):
     """釘配列図（面材の枠・釘・弾性中立軸）を box の中に描く。
 
     box は (x, y, width, height)。工学座標（x は右・y は上、原点は面材の
@@ -318,8 +348,8 @@ def _draw_diagram(page: pdf_write.Page, box: tuple[float, float, float, float],
     x, y, width, height = box
     nails = report["nails"]
     diagram = report["diagram"]
-    panel_w = pattern["width"]
-    panel_h = pattern["height"]
+    panel_w = diagram["panelWidth"]
+    panel_h = diagram["panelHeight"]
     if not nails or panel_w <= 0 or panel_h <= 0:
         return
 
@@ -375,12 +405,18 @@ def _draw_diagram(page: pdf_write.Page, box: tuple[float, float, float, float],
         page.circle(to_x(nail["x"]), to_y(nail["y"]), 1.8, 0.3, 0.2, fill_gray=0.2)
 
 
-def _draw_page(page: pdf_write.Page, data: dict, pattern: dict, report: dict,
-               index: int, total: int, page_number: int, page_total: int):
-    """釘配列パターン 1 つ分のページ（グレー本 3.2 の計算）。"""
+def _draw_panel_page(page: pdf_write.Page, data: dict, wall: dict, report: dict,
+                     position: tuple[int, int, int, int],
+                     page_number: int, page_total: int):
+    """壁を構成する面材 1 枚分のページ（グレー本 3.2 の釘配列諸定数）。
+
+    position は (壁の番号, 壁の総数, 面材の番号, 面材の総数)。どの壁の
+    どの面材かが、次に続く壁のページと突き合わせられるように見出しへ出す。
+    """
     left = _MARGIN
     right = page.width - _MARGIN
     cursor = page.height - _MARGIN
+    wall_index, wall_total, panel_index, panel_total = position
 
     # --- 見出し ---
     page.text(left, cursor - 14, _TITLE, 14)
@@ -390,31 +426,38 @@ def _draw_page(page: pdf_write.Page, data: dict, pattern: dict, report: dict,
     page.line(left, cursor, right, cursor, 0.8, 0.3)
     cursor -= 16
 
-    # --- 物件・パターン ---
+    # --- 物件・壁・面材 ---
     page.text(left, cursor, "物件名", 8, gray=0.45)
     page.text(left + 52, cursor, data["projectName"] or "（未入力）", 9.5)
     issued = _format_issued_on(data["issuedOn"])
     if issued:
         page.text(right, cursor, f"作成日: {issued}", 8.5, align="right", gray=0.3)
     cursor -= 14
-    page.text(left, cursor, "パターン", 8, gray=0.45)
-    page.text(left + 52, cursor, pattern["patternName"] or f"パターン{index}", 9.5)
-    page.text(right, cursor, f"パターン {index} / {total}", 8.5, align="right", gray=0.3)
+    page.text(left, cursor, "壁", 8, gray=0.45)
+    page.text(left + 52, cursor, wall["wallName"], 9.5)
+    page.text(right, cursor, f"壁 {wall_index} / {wall_total}", 8.5, align="right", gray=0.3)
+    cursor -= 14
+    page.text(left, cursor, "面材", 8, gray=0.45)
+    page.text(left + 52, cursor, report["panelName"], 9.5)
+    page.text(right, cursor, f"面材 {panel_index} / {panel_total}", 8.5,
+              align="right", gray=0.3)
     cursor -= 20
 
     # --- 1. 入力 ---
     cursor = _draw_section(page, left, right, cursor, "1. 入力")
     for row in report["inputs"]:
         page.text(left + 8, cursor, row["label"], 8.5, gray=0.45)
-        page.text(left + 130, cursor, row["value"], 9)
+        value = row["value"]
+        size = _shrink_to_fit(page, value, 9, right - left - 138)
+        page.text(left + 130, cursor, value, size)
         cursor -= 13
     cursor -= 8
 
     # --- 2. 計算結果 ---
     cursor = _draw_section(page, left, right, cursor, "2. 釘配列諸定数")
     box_width = (right - left - 16) / 3
-    for position, item in enumerate(report["summary"]):
-        box_x = left + position * (box_width + 8)
+    for position_index, item in enumerate(report["summary"]):
+        box_x = left + position_index * (box_width + 8)
         page.rect(box_x, cursor - 34, box_width, 38, 0.5, 0.6, fill_gray=0.96)
         unit = f" [{item['unit']}]" if item["unit"] else ""
         page.text(box_x + box_width / 2, cursor - 8, item["key"] + unit, 7.5,
@@ -436,10 +479,8 @@ def _draw_page(page: pdf_write.Page, data: dict, pattern: dict, report: dict,
     # --- 4. 釘配列図 ---
     cursor = _draw_section(page, left, right, cursor, "4. 釘配列図")
     diagram_bottom = _MARGIN + 24
-    _draw_diagram(
-        page, (left, diagram_bottom, right - left, cursor - diagram_bottom + 6),
-        report, pattern,
-    )
+    _draw_diagram(page, (left, diagram_bottom, right - left, cursor - diagram_bottom + 6),
+                  report)
 
     # --- 脚注 ---
     _draw_footnote(page, left, right, _FOOTNOTE, page_number, page_total)
@@ -609,26 +650,34 @@ def _draw_footnote(page: pdf_write.Page, left: float, right: float, note: str,
 def build_pdf(data: dict, reports: dict) -> bytes:
     """計算書 PDF を組み立てる。
 
-    ページは「釘配列パターン 1 つにつき 1 ページ」（グレー本 3.2）のあとに、
-    「壁 1 枚につき 1 ページ」（グレー本 3.3）を続ける。壁の計算は面材ごとの
-    釘配列諸定数を使うので、その根拠が前のページに並んでいる形になる。
+    ページは壁 1 枚につき「その壁を構成する面材 1 枚ごとの釘配列諸定数」
+    （グレー本 3.2）を並べ、そのあとに「壁の剛性と許容せん断耐力」
+    （同 3.3）を置く。壁の計算の根拠になる釘配列諸定数が、必ずその壁の
+    ページの直前にそろう。
 
     再編集のため、フォーム入力そのものを文書情報へ埋め込む
     （構造計算安全証明書と同じ仕組み）。ensure_ascii のままにして
     PDF の文字コードの差異を避ける。
     """
     document = pdf_write.Document()
-    patterns, walls = reports["patterns"], reports["walls"]
-    page_total = len(patterns) + len(walls)
+    walls = reports["walls"]
+    page_total = sum(len(wall["panelReports"]) + 1 for wall in walls)
 
-    for index, (pattern, report) in enumerate(zip(data["patterns"], patterns), start=1):
-        _draw_page(document.add_page(), data, pattern, report, index, len(patterns),
-                   index, page_total)
-    for index, report in enumerate(walls, start=1):
-        _draw_wall_page(document.add_page(), data, report, index, len(walls),
-                        len(patterns) + index, page_total)
+    page_number = 0
+    for index, wall in enumerate(walls, start=1):
+        panels = wall["panelReports"]
+        for panel_index, panel in enumerate(panels, start=1):
+            page_number += 1
+            _draw_panel_page(
+                document.add_page(), data, wall, panel,
+                (index, len(walls), panel_index, len(panels)),
+                page_number, page_total,
+            )
+        page_number += 1
+        _draw_wall_page(document.add_page(), data, wall, index, len(walls),
+                        page_number, page_total)
 
-    title = _TITLE + (f"（{data['projectName']}）" if data["projectName"] else "")
+    title = _DOCUMENT_TITLE + (f"（{data['projectName']}）" if data["projectName"] else "")
     return document.to_bytes(
         {
             "Title": title,
@@ -679,7 +728,9 @@ def form_config(core_path: str) -> dict:
     return {
         "default_file_name": DEFAULT_FILE_NAME,
         "file_name_template": FILE_NAME_TEMPLATE,
-        "max_patterns": nail_core.config()["maxPatterns"],
+        "max_walls": nail_core.config()["maxWalls"],
+        "max_wall_panels": nail_core.config()["maxWallPanels"],
+        "default_edge_distance": nail_core.config()["defaultEdgeDistance"],
         "core": {
             "url": f"{core_path}?v={digest[:16]}",
             "version": nail_core.version(),

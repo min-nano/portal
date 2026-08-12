@@ -7,6 +7,10 @@ PDF はバックエンドが直接組み立てるため、雛形を用意せず�
 計算そのもの・入力の解釈・表示の桁揃えは唯一の実装（core/、wasm）が持つので、
 式ごとの検証は core/src/*.rs の `cargo test` にある。ここでは「その結果が
 そのまま PDF に載ること」を確かめる。
+
+入力の単位は壁 1 枚で、釘配列諸定数はその壁を構成する面材ごとの計算として
+中に入る（面材の種類が先に決まり、面材の配置・釘の間隔・へりあきで調整する
+という設計の順番に合わせてある）。
 """
 
 import io
@@ -17,14 +21,22 @@ from pdfminer.high_level import extract_text
 
 from app import nail_core, panel_shear
 
-EXAMPLE = dict(panel_shear.EXAMPLE_PATTERN, patternId="p1")
+EXAMPLE_PANEL = dict(panel_shear.EXAMPLE_PANEL, panelId="w1-p1")
 
 
 def make_data(**overrides):
+    """グレー本 3.2 の計算例の面材を 1 枚だけ張った壁。"""
     body = {
         "projectName": "○○邸 新築工事",
         "issuedOn": "2026-08-11",
-        "patterns": [dict(EXAMPLE)],
+        "walls": [
+            {
+                **panel_shear.material(panel_shear.EXAMPLE_WALL_MATERIAL),
+                **panel_shear.EXAMPLE_WALL,
+                "wallId": "w1",
+                "panels": [dict(EXAMPLE_PANEL)],
+            }
+        ],
     }
     body.update(overrides)
     return panel_shear.normalize_data(body)
@@ -35,42 +47,97 @@ def make_data(**overrides):
 
 def test_normalize_keeps_only_known_keys():
     data = panel_shear.normalize_data(
-        {"projectName": " 邸 ", "unknown": 1, "patterns": [{"width": "610", "junk": 2}]}
+        {
+            "projectName": " 邸 ",
+            "unknown": 1,
+            "walls": [{"height": "2900", "junk": 2, "panels": [{"width": "610"}]}],
+        }
     )
 
     assert data["projectName"] == "邸"
     assert "unknown" not in data
-    assert data["patterns"][0]["width"] == 610.0
-    assert "junk" not in data["patterns"][0]
+    assert data["walls"][0]["height"] == 2900.0
+    assert "junk" not in data["walls"][0]
+    assert data["walls"][0]["panels"][0]["width"] == 610.0
 
 
-def test_normalize_gives_an_empty_form_one_pattern():
-    """パターンが 1 つも無い入力でも、画面が編集を始められる形にする。"""
+def test_normalize_gives_an_empty_form_one_wall():
+    """壁が 1 枚も無い入力でも、画面が編集を始められる形にする。"""
     data = panel_shear.normalize_data({})
 
-    assert len(data["patterns"]) == 1
-    assert data["patterns"][0]["patternId"] == "p1"
-    assert data["patterns"][0]["mode"] == "grid"
+    assert len(data["walls"]) == 1
+    assert data["walls"][0]["wallId"] == "w1"
+    assert data["walls"][0]["panels"] == []
+
+
+def test_normalize_defaults_a_panel_to_a_four_sided_layout():
+    """面材の既定は割り付け・日型（四周打ち）・へりあき 10 mm。"""
+    data = panel_shear.normalize_data({"walls": [{"panels": [{"width": 910}]}]})
+
+    panel = data["walls"][0]["panels"][0]
+    assert panel["mode"] == "layout"
+    assert panel["arrangement"] == "hi"
+    assert panel["edgeDistance"] == nail_core.config()["defaultEdgeDistance"]
+
+
+def test_normalize_keeps_the_edge_distance_of_each_panel():
+    """へりあきは面材ごとに決める（釘・面材の種類に合わせて調整するため）。"""
+    data = panel_shear.normalize_data(
+        {"walls": [{"panels": [{"edgeDistance": 15}, {"edgeDistance": 20}]}]}
+    )
+
+    assert [panel["edgeDistance"] for panel in data["walls"][0]["panels"]] == [15, 20]
 
 
 def test_normalize_rejects_a_non_numeric_dimension():
     with pytest.raises(panel_shear.PanelShearError, match="面材の幅 W"):
-        panel_shear.normalize_data({"patterns": [{"width": "ろく"}]})
+        panel_shear.normalize_data({"walls": [{"panels": [{"width": "ろく"}]}]})
 
 
-def test_normalize_rejects_too_many_patterns():
-    limit = nail_core.config()["maxPatterns"]
-    patterns = [{"patternId": f"p{i}"} for i in range(limit + 1)]
-    with pytest.raises(panel_shear.PanelShearError, match="パターンは"):
-        panel_shear.normalize_data({"patterns": patterns})
+def test_normalize_rejects_too_many_walls():
+    limit = nail_core.config()["maxWalls"]
+    walls = [{"wallId": f"w{i}"} for i in range(limit + 1)]
+    with pytest.raises(panel_shear.PanelShearError, match="壁は"):
+        panel_shear.normalize_data({"walls": walls})
+
+
+def test_normalize_reads_the_old_pattern_form():
+    """前の版で保存した PDF（釘配列パターンを別に登録した形）も開ける。"""
+    data = panel_shear.normalize_data(
+        {
+            "patterns": [
+                {
+                    "patternId": "p1",
+                    "patternName": "南面 下",
+                    "width": 910,
+                    "height": 610,
+                    "mode": "grid",
+                    "gridX": "10, 455, 900",
+                    "gridY": "10, 155, 305, 455, 600",
+                }
+            ],
+            "walls": [
+                {"wallName": "南面", "height": 2900, "panels": [{"patternId": "p1"}]}
+            ],
+        }
+    )
+
+    assert "patterns" not in data
+    panel = data["walls"][0]["panels"][0]
+    assert panel["panelName"] == "南面 下"
+    assert panel["mode"] == "grid"
+    assert panel["gridX"] == "10, 455, 900"
 
 
 # --- 計算（画面と PDF が共有する表示用データ） ------------------------------
 
 
 def test_compute_all_matches_the_reference_example():
-    report = panel_shear.compute_all(make_data())["patterns"][0]
+    """釘配列諸定数（3.2）は、壁の結果の中に面材 1 枚ずつ入る。"""
+    wall = panel_shear.compute_all(make_data())["walls"][0]
+    report = wall["panelReports"][0]
 
+    assert report["ok"] is True
     values = {row["key"]: row["value"] for row in report["summary"]}
     assert values == {"Ixy": "0.888868", "Zxy": "0.00358851", "Cxy": "1.26155"}
     assert len(report["nails"]) == 15
@@ -84,16 +151,41 @@ def test_compute_all_matches_the_reference_example():
     assert steps["変形割合 αx"] == "0.750834"
 
 
-def test_compute_all_reports_a_broken_pattern_without_losing_the_others():
-    data = panel_shear.normalize_data(
-        {"patterns": [dict(EXAMPLE), {"patternId": "p2", "width": 910, "height": 610}]}
+def test_compute_all_keeps_the_layout_in_the_inputs():
+    """割り付けの入力（型・ピッチ・へりあき）は、そのまま控えに残す。"""
+    wall = panel_shear.compute_all(make_data())["walls"][0]
+    inputs = {row["label"]: row["value"] for row in wall["panelReports"][0]["inputs"]}
+
+    assert "川型" in inputs["釘配列"]
+    assert "釘 @150" in inputs["釘配列"]
+    assert "へりあき 10 mm" in inputs["釘配列"]
+
+
+def test_a_wider_edge_distance_changes_the_constants():
+    """へりあきを広げると釘が内側へ寄り、諸定数が下がる。"""
+    narrow = panel_shear.compute_all(make_data())["walls"][0]
+    data = make_data()
+    data["walls"][0]["panels"][0]["edgeDistance"] = 30
+    wide = panel_shear.compute_all(data)["walls"][0]
+
+    assert (
+        wide["panelReports"][0]["result"]["Ixy"]
+        < narrow["panelReports"][0]["result"]["Ixy"]
     )
+    assert wide["result"]["Pa"] < narrow["result"]["Pa"]
 
-    reports = panel_shear.compute_all(data)["patterns"]
 
-    assert reports[0]["ok"] is True
-    assert reports[1]["ok"] is False
-    assert "釘座標" in reports[1]["error"]
+def test_compute_all_reports_a_broken_panel_without_losing_the_others():
+    data = make_data()
+    data["walls"][0]["panels"].append({"panelName": "空", "width": 910, "height": 610,
+                                       "mode": "coords", "coords": ""})
+
+    wall = panel_shear.compute_all(data)["walls"][0]
+
+    assert wall["ok"] is False
+    assert "面材「空」" in wall["error"]
+    assert wall["panelReports"][0]["ok"] is True
+    assert wall["panelReports"][1]["ok"] is False
 
 
 def test_compute_all_calculates_the_walls_of_the_book_example():
@@ -112,10 +204,14 @@ def test_compute_all_calculates_the_walls_of_the_book_example():
     assert report["bucklingOk"] is True
     assert abs(report["result"]["Pa"] - 8.37) <= 0.03
     assert abs(report["result"]["dPa"] - 9.20) <= 0.03
-    # 壁を構成する 2 枚の面材が、選んだ釘配列パターンの名前で並ぶ。
+    # 壁を構成する 2 枚の面材が、呼び出した配列の名前で並ぶ。
     assert [panel["label"] for panel in report["panels"]] == [
         "1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）",
         "910×910 縦置・ロ型（間柱・根太 @455 / 釘 @75）",
+    ]
+    # その根拠になる釘配列諸定数も、同じ並びで付いてくる。
+    assert [panel["panelName"] for panel in report["panelReports"]] == [
+        panel["label"] for panel in report["panels"]
     ]
 
 
@@ -130,6 +226,60 @@ def test_compute_all_checks_the_shear_failure_and_buckling_of_each_panel():
     assert (lower[0], lower[1], lower[2]) == ("高さ方向", "910", "1,820")
     assert lower[-1] == "OK"
     assert all(panel["ok"] for panel in report["buckling"])
+
+
+def test_the_wall_inputs_name_the_nail_diameter():
+    """へりあきを決める手がかりとして、選んだ釘の呼び径を控えに残す。"""
+    report = panel_shear.compute_all(panel_shear.example_wall_data())["walls"][0]
+
+    inputs = {row["label"]: row["value"] for row in report["inputs"]}
+    assert inputs["面材と釘の組合せ"] == (
+        "構造用合板 12mm + 鉄丸釘 N-65（釘の呼び径 φ3.05 mm）"
+    )
+
+
+def test_the_edge_distance_check_follows_the_nail_diameter():
+    """適用範囲 3.3(1)④「面材のへりあきは 10mm 以上かつ接合具径 d ×5 以上」。
+
+    計算例の釘 N-65 は呼び径 φ3.05 なので 15.25mm 必要。表 3.2.1 の配列が
+    前提とする 10mm のままでは足りない。
+    """
+    data = panel_shear.example_wall_data()
+
+    report = panel_shear.compute_all(data)["walls"][0]
+
+    assert report["edgeDistanceOk"] is False
+    check = next(c for c in report["checks"] if "へりあき" in c["label"])
+    assert "最小 へりあき 10 mm < 15.25 mm" in check["value"]
+    assert "φ3.05 mm × 5 以上" in check["value"]
+
+    # 必要な値まで広げれば通る（画面は面材と釘を選んだ時点で引き上げる）。
+    for panel in data["walls"][0]["panels"]:
+        panel["edgeDistance"] = 15.25
+    widened = panel_shear.compute_all(data)["walls"][0]
+    assert widened["edgeDistanceOk"] is True
+
+
+def test_the_edge_distance_is_measured_for_every_input_mode():
+    """へりあきは、割り付けでも座標入力でも釘の座標から測る。"""
+    data = make_data()
+    data["walls"][0]["panels"] = [
+        {
+            "panelName": "座標入力",
+            "width": 910,
+            "height": 610,
+            "mode": "coords",
+            "coords": "20, 20\n890, 20\n20, 590\n890, 590",
+        }
+    ]
+    data = panel_shear.normalize_data(data)
+
+    wall = panel_shear.compute_all(data)["walls"][0]
+
+    inputs = {row["label"]: row["value"] for row in wall["panelReports"][0]["inputs"]}
+    assert inputs["へりあき（面材の縁から釘まで）"] == "20 mm"
+    # N-65（φ3.05）に必要な 15.25mm を満たしている。
+    assert wall["edgeDistanceOk"] is True
 
 
 def test_a_thin_panel_fails_the_shear_check():
@@ -165,12 +315,13 @@ def test_validate_names_the_wall_that_cannot_be_calculated():
         panel_shear.validate(data)
 
 
-def test_validate_names_the_pattern_that_cannot_be_calculated():
-    data = panel_shear.normalize_data(
-        {"patterns": [{"patternName": "南面", "width": 910, "height": 610}]}
-    )
+def test_validate_names_the_panel_that_cannot_be_calculated():
+    data = panel_shear.example_wall_data()
+    data["walls"][0]["wallName"] = "南面"
+    data["walls"][0]["panels"][0]["panelName"] = "下段"
+    data["walls"][0]["panels"][0]["nailPitch"] = 0
 
-    with pytest.raises(panel_shear.PanelShearError, match="「南面」を計算できません"):
+    with pytest.raises(panel_shear.PanelShearError, match="面材「下段」"):
         panel_shear.validate(data)
 
 
@@ -182,13 +333,13 @@ def claim_from(reports: dict, **overrides) -> dict:
     claim = {
         "coreVersion": nail_core.version(),
         # サーバ側の結果とは別の辞書にする（画面から届いた値のつもり）。
-        "patterns": [
-            {"patternId": report["patternId"], "result": dict(report["result"])}
-            for report in reports["patterns"]
-        ],
         "walls": [
             {"wallId": report["wallId"], "result": dict(report["result"])}
             for report in reports["walls"]
+        ],
+        "panels": [
+            {"panelId": report["panelId"], "result": dict(report["result"])}
+            for report in panel_shear.panel_reports(reports)
         ],
     }
     claim.update(overrides)
@@ -209,23 +360,23 @@ def test_verify_accepts_the_same_numbers():
     }
 
 
-def test_verify_points_at_the_value_that_differs():
+def test_verify_points_at_the_panel_value_that_differs():
     reports = panel_shear.validate(make_data())
     claim = claim_from(reports)
-    claim["patterns"][0]["result"]["Cxy"] = 9.99
+    claim["panels"][0]["result"]["Cxy"] = 9.99
 
     result = panel_shear.verify(reports, claim)
 
     assert result["ok"] is False
     assert [(d["key"], d["client"]) for d in result["differences"]] == [("Cxy", 9.99)]
-    assert result["differences"][0]["patternName"] == "グレー本の計算例"
+    assert result["differences"][0]["panelName"] == "グレー本の計算例"
 
 
 def test_verify_tolerates_the_last_bit():
     """JSON を往復した程度の差は「同じ」とみなす（端末差を騒ぎ立てない）。"""
     reports = panel_shear.validate(make_data())
     claim = claim_from(reports)
-    claim["patterns"][0]["result"]["Cxy"] *= 1 + 1e-12
+    claim["panels"][0]["result"]["Cxy"] *= 1 + 1e-12
 
     assert panel_shear.verify(reports, claim)["ok"] is True
 
@@ -242,10 +393,10 @@ def test_verify_flags_a_screen_running_an_older_implementation():
     assert result["differences"] == []
 
 
-def test_verify_flags_a_pattern_the_screen_did_not_calculate():
+def test_verify_flags_a_panel_the_screen_did_not_calculate():
     reports = panel_shear.validate(make_data())
 
-    result = panel_shear.verify(reports, claim_from(reports, patterns=[]))
+    result = panel_shear.verify(reports, claim_from(reports, panels=[]))
 
     assert result["ok"] is False
     assert result["differences"][0]["key"] == "(計算結果なし)"
@@ -260,6 +411,19 @@ def test_verify_is_skipped_when_the_screen_sends_nothing():
         "ok": True,
         "differences": [],
     }
+
+
+def test_verify_points_at_a_wall_value_that_differs():
+    data = panel_shear.example_wall_data()
+    reports = panel_shear.validate(data)
+    claim = claim_from(reports)
+    claim["walls"][0]["result"]["Pa"] = 9.99
+
+    result = panel_shear.verify(reports, claim)
+
+    assert result["ok"] is False
+    assert [(d["key"], d["client"]) for d in result["differences"]] == [("Pa", 9.99)]
+    assert result["differences"][0]["wallName"] == "グレー本 3.3 の計算例"
 
 
 # --- ファイル名 --------------------------------------------------------------
@@ -297,12 +461,15 @@ def build_example_pdf(**overrides) -> tuple[dict, bytes]:
     return data, panel_shear.build_pdf(data, panel_shear.validate(data))
 
 
-def test_pdf_has_one_page_per_pattern():
-    second = dict(EXAMPLE, patternId="p2", patternName="南面")
-    _, pdf_bytes = build_example_pdf(patterns=[dict(EXAMPLE), second])
+def test_pdf_has_one_page_per_panel_and_one_per_wall():
+    data = make_data()
+    data["walls"][0]["panels"].append(
+        dict(EXAMPLE_PANEL, panelId="w1-p2", panelName="南面 上")
+    )
+    pdf_bytes = panel_shear.build_pdf(data, panel_shear.validate(data))
 
-    # ページ区切り（改ページ）で数える。
-    assert extract_text(io.BytesIO(pdf_bytes)).count("\x0c") == 2
+    # ページ区切り（改ページ）で数える。面材 2 枚 ＋ 壁 1 枚。
+    assert extract_text(io.BytesIO(pdf_bytes)).count("\x0c") == 3
 
 
 def test_pdf_prints_the_inputs_and_the_results():
@@ -324,8 +491,8 @@ def test_pdf_prints_the_inputs_and_the_results():
     assert "0.750834" in text
 
 
-def test_pdf_puts_the_wall_pages_after_the_nail_arrangement_pages():
-    """壁の計算は、その根拠になる釘配列諸定数のページの後ろに続ける。"""
+def test_pdf_puts_the_nail_arrangement_pages_before_their_wall():
+    """壁の計算は、その根拠になる面材ごとの釘配列諸定数の後ろに続ける。"""
     data = panel_shear.example_wall_data()
     pdf_bytes = panel_shear.build_pdf(data, panel_shear.validate(data))
 
@@ -334,6 +501,9 @@ def test_pdf_puts_the_wall_pages_after_the_nail_arrangement_pages():
     assert len(pages) == 3  # 面材 2 枚 ＋ 壁 1 枚
     assert all(panel_shear._TITLE in page for page in pages[:2])
     assert panel_shear._WALL_TITLE in pages[2]
+    # どの壁のどの面材かが、面材のページからも読める。
+    assert "面材 1 / 2" in pages[0]
+    assert "壁 1 / 1" in pages[0]
     # 通しのページ番号は、両方の節を続けて数える。
     assert "3 / 3" in pages[2]
 
@@ -356,7 +526,7 @@ def test_pdf_prints_the_wall_calculation():
         assert item["value"] in text
     assert "(3.3.1)" in text
     assert "(3.3.7)" in text
-    # 面材ごとの表（釘配列パターン名と、そのパターンの Ixy）。
+    # 面材ごとの表（面材の名前と、その面材の Ixy）。
     assert "1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）" in text
     assert wall["panels"][0]["cells"][1] in text
     # 面材のせん断破壊・せん断座屈の検定（式 3.3.8〜3.3.11）。
@@ -386,23 +556,11 @@ def test_pdf_round_trips_a_form_with_walls():
     parsed = panel_shear.parse_pdf(pdf_bytes)
 
     assert parsed == data
-    assert parsed["walls"][0]["panels"] == [
-        {"patternId": "p1", "grain": ""},
-        {"patternId": "p2", "grain": ""},
-    ]
-
-
-def test_verify_points_at_a_wall_value_that_differs():
-    data = panel_shear.example_wall_data()
-    reports = panel_shear.validate(data)
-    claim = claim_from(reports)
-    claim["walls"][0]["result"]["Pa"] = 9.99
-
-    result = panel_shear.verify(reports, claim)
-
-    assert result["ok"] is False
-    assert [(d["key"], d["client"]) for d in result["differences"]] == [("Pa", 9.99)]
-    assert result["differences"][0]["wallName"] == "グレー本 3.3 の計算例"
+    # 面材は壁の一部として保存される（別に登録した配列を指す形ではない）。
+    panel = parsed["walls"][0]["panels"][0]
+    assert panel["mode"] == "layout"
+    assert panel["arrangement"] == "hi"
+    assert panel["edgeDistance"] == 10
 
 
 def test_pdf_embeds_the_font_it_uses():
@@ -428,20 +586,24 @@ def test_pdf_round_trips_the_form_input():
 
 
 def test_pdf_round_trips_coordinate_input():
-    pattern = {
-        "patternId": "p9",
-        "patternName": "座標入力",
-        "width": 910,
-        "height": 2730,
-        "mode": "coords",
-        "coords": "0, 0\n0, 455\n455, 910",
-    }
-    data, pdf_bytes = build_example_pdf(patterns=[pattern])
+    data = make_data()
+    data["walls"][0]["panels"] = [
+        {
+            "panelId": "w1-p9",
+            "panelName": "座標入力",
+            "width": 910,
+            "height": 2730,
+            "mode": "coords",
+            "coords": "0, 0\n0, 455\n455, 910",
+        }
+    ]
+    data = panel_shear.normalize_data(data)
+    pdf_bytes = panel_shear.build_pdf(data, panel_shear.validate(data))
 
     parsed = panel_shear.parse_pdf(pdf_bytes)
 
-    assert parsed["patterns"][0]["mode"] == "coords"
-    assert parsed["patterns"][0]["coords"] == "0, 0\n0, 455\n455, 910"
+    assert parsed["walls"][0]["panels"][0]["mode"] == "coords"
+    assert parsed["walls"][0]["panels"][0]["coords"] == "0, 0\n0, 455\n455, 910"
 
 
 def test_embedded_input_is_ascii_only():
