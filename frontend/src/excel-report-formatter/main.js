@@ -146,11 +146,14 @@ function addRoom() {
     });
   });
 
+  // 削除ボタンは見出しの行の中（部屋名の右端）に置く。開閉のつまみの隣
+  // （slot="actions"）に出すと、階数・部屋名の行に使える幅がその分狭くなり、
+  // 折り返してしまう。
   wrap.innerHTML =
-    '<button type="button" class="remove" slot="actions">削除</button>' +
     '<div class="room-head" slot="title">' +
       '<div class="room-title-row">' +
         '<h3 class="room-title"></h3>' +
+        '<button type="button" class="remove">削除</button>' +
       '</div>' +
       '<div class="room-meta">' +
         '<label>階数</label><input type="number" inputmode="numeric" data-room-field="floor">' +

@@ -99,11 +99,13 @@ button:disabled { background-color: #aaa; }
 .room-title-row { display: flex; align-items: center; justify-content: space-between; }
 .room-title-row h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .room .remove { width: auto; margin-top: 0; padding: 4px 10px; font-size: 0.8em; background-color: #c0392b; }
-.room-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.room-meta label { display: inline; margin-top: 0; font-size: 0.8em; }
+/* 階数・部屋名は 1 行に収める。狭い画面では折り返さずに部屋名の欄を縮める
+   （見出しの行なので、2 行に増えると表の前置きが厚くなってしまう）。 */
+.room-meta { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+.room-meta label { display: inline; margin-top: 0; font-size: 0.8em; white-space: nowrap; }
 .room-meta input { width: auto; margin-top: 0; padding: 5px 6px; }
-.room-meta input[data-room-field="floor"] { width: 56px; }
-.room-meta input[data-room-field="room_name"] { width: 110px; }
+.room-meta input[data-room-field="floor"] { width: 56px; flex: none; }
+.room-meta input[data-room-field="room_name"] { width: 110px; flex: 0 1 110px; min-width: 3em; }
 
 /* 計測値は選択と数値しか入れないので、表形式で縦に詰めてラベルはヘッダー列で代表する。 */
 .measure-table { width: 100%; border-collapse: collapse; margin-top: 10px; table-layout: fixed; }
