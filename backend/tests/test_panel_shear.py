@@ -238,6 +238,50 @@ def test_the_wall_inputs_name_the_nail_diameter():
     )
 
 
+def test_the_edge_distance_check_follows_the_nail_diameter():
+    """適用範囲 3.3(1)④「面材のへりあきは 10mm 以上かつ接合具径 d ×5 以上」。
+
+    計算例の釘 N-65 は呼び径 φ3.05 なので 15.25mm 必要。表 3.2.1 の配列が
+    前提とする 10mm のままでは足りない。
+    """
+    data = panel_shear.example_wall_data()
+
+    report = panel_shear.compute_all(data)["walls"][0]
+
+    assert report["edgeDistanceOk"] is False
+    check = next(c for c in report["checks"] if "へりあき" in c["label"])
+    assert "最小 へりあき 10 mm < 15.25 mm" in check["value"]
+    assert "φ3.05 mm × 5 以上" in check["value"]
+
+    # 必要な値まで広げれば通る（画面は面材と釘を選んだ時点で引き上げる）。
+    for panel in data["walls"][0]["panels"]:
+        panel["edgeDistance"] = 15.25
+    widened = panel_shear.compute_all(data)["walls"][0]
+    assert widened["edgeDistanceOk"] is True
+
+
+def test_the_edge_distance_is_measured_for_every_input_mode():
+    """へりあきは、割り付けでも座標入力でも釘の座標から測る。"""
+    data = make_data()
+    data["walls"][0]["panels"] = [
+        {
+            "panelName": "座標入力",
+            "width": 910,
+            "height": 610,
+            "mode": "coords",
+            "coords": "20, 20\n890, 20\n20, 590\n890, 590",
+        }
+    ]
+    data = panel_shear.normalize_data(data)
+
+    wall = panel_shear.compute_all(data)["walls"][0]
+
+    inputs = {row["label"]: row["value"] for row in wall["panelReports"][0]["inputs"]}
+    assert inputs["へりあき（面材の縁から釘まで）"] == "20 mm"
+    # N-65（φ3.05）に必要な 15.25mm を満たしている。
+    assert wall["edgeDistanceOk"] is True
+
+
 def test_a_thin_panel_fails_the_shear_check():
     """面材を薄くすれば τN が上がり、せん断破壊で NG になる。"""
     data = panel_shear.example_wall_data()

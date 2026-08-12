@@ -8,7 +8,9 @@ import {
   makePanel,
   makeWall,
   mergeFormData,
+  minimumEdgeDistance,
   nailNote,
+  raiseEdgeDistance,
   panelLabel,
   suggestedFileName,
   toRequestBody,
@@ -242,6 +244,8 @@ describe('面材と釘の一覧（グレー本 表 3.3.1 / 表 3.3.2）', () => 
     panel: '構造用合板',
     nailLabel: '鉄丸釘 N-50',
     nailDiameter: 2.75,
+    // 3.3(1)④「10mm 以上かつ接合具径 d × 5 以上」→ 2.75 × 5 = 13.75mm。
+    minEdgeDistance: 13.75,
     thickness: 12,
     shearModulus: 0.4,
     k: 0.43,
@@ -288,14 +292,33 @@ describe('面材と釘の一覧（グレー本 表 3.3.1 / 表 3.3.2）', () => 
     });
   });
 
-  it('へりあきを決める手がかりとして、選んだ釘の呼び径を案内する', () => {
+  it('選んだ釘と、そこから決まるへりあきの最小値を案内する', () => {
     const note = nailNote([material], 'plywood12-n50');
 
     expect(note).toContain('鉄丸釘 N-50');
     expect(note).toContain('φ2.75 mm');
-    expect(note).toContain('へりあき');
+    // 3.3(1)④「10mm 以上かつ接合具径 d × 5 以上」→ 2.75 × 5 = 13.75mm。
+    expect(note).toContain('13.75 mm 以上');
     // まだ選んでいないときは案内を出さない。
     expect(nailNote([material], '')).toBe('');
+  });
+
+  it('必要なへりあきは、選んだ釘で決まる（未選択なら 10mm）', () => {
+    expect(minimumEdgeDistance([material], 'plywood12-n50')).toBe(13.75);
+    expect(minimumEdgeDistance([material], '')).toBe(10);
+    expect(minimumEdgeDistance([], 'plywood12-n50')).toBe(10);
+  });
+
+  it('足りないへりあきだけを引き上げる（広げた値は狭めない）', () => {
+    const panels = [
+      { edgeDistance: 10 },
+      { edgeDistance: 20 },
+      { edgeDistance: '' },
+    ];
+
+    raiseEdgeDistance(panels, 13.75);
+
+    expect(panels.map((panel) => panel.edgeDistance)).toEqual([13.75, 20, 13.75]);
   });
 });
 

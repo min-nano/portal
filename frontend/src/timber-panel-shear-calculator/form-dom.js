@@ -358,7 +358,9 @@ function buildPanelEditor(document_, panel, index, options) {
   const layoutNote = document_.createElement('p');
   layoutNote.className = 'hint';
   layoutNote.textContent =
-    'へりあきは面材の縁から釘の中心までの距離です。面材の種類と釘の呼び径に合わせて決めてください。' +
+    'へりあきは面材の縁から釘の中心までの距離です。適用範囲 3.3(1)④ により、' +
+    '10 mm 以上かつ選んだ釘の呼び径の 5 倍以上にしてください（面材と釘を選ぶと、' +
+    '足りない面材はその値まで引き上げます）。' +
     '面材の長辺方向に走る間柱の釘列は、釘配列諸定数に含めません（3.3(1)⑧）。';
   layout.appendChild(layoutNote);
   box.appendChild(layout);

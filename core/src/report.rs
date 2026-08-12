@@ -811,6 +811,22 @@ fn build_panel_report(panel: &PanelInput, nails: &[Nail], index: usize) -> Resul
                     ("value", nail_arrangement_text(panel, nails).into()),
                 ]),
                 Value::obj([
+                    // 実際に置かれた釘の座標から測る（どの入力方式でも同じ）。
+                    ("label", "へりあき（面材の縁から釘まで）".into()),
+                    (
+                        "value",
+                        format!(
+                            "{} mm",
+                            format_dimension(layout::min_edge_clearance(
+                                nails,
+                                panel.width,
+                                panel.height
+                            ))
+                        )
+                        .into(),
+                    ),
+                ]),
+                Value::obj([
                     ("label", "釘本数 n".into()),
                     (
                         "value",
@@ -877,6 +893,8 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
 
     let mut panel_reports = Vec::with_capacity(input.panels.len());
     let mut specs = Vec::with_capacity(input.panels.len());
+    // 適用範囲 3.3(1)④ の検定に使う、面材ごとのへりあき（実測の最小値）。
+    let mut clearances = Vec::with_capacity(input.panels.len());
     for (position, panel) in input.panels.iter().enumerate() {
         let named = |error: String| {
             format!(
@@ -887,6 +905,7 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
         let nails = nails_of(panel).map_err(named)?;
         let constants =
             nail_array::compute(&nails, panel.panel_area()).map_err(|error| named(error.0))?;
+        clearances.push(layout::min_edge_clearance(&nails, panel.width, panel.height));
         panel_reports.push(with_ok(build_panel_report(panel, &nails, position)?));
         specs.push(wall::PanelSpec::new(
             &panel_label(panel, position),
@@ -919,11 +938,32 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
         Value::obj([("label", label.into()), ("value", value.into())])
     };
 
+    // 適用範囲 3.3(1)④「面材の釘列に対するへりあきは、10mm 以上かつ接合具径
+    // d ×5 以上」。d は選んだ釘で決まるので、表 3.3.1 から読み込んでいない
+    // （4.5 の試験値を直接入力した）ときは 10mm の側だけを確かめる。
+    let material = wall::find_material(&input.material_id);
+    let required_edge = match material {
+        Some(material) => material.min_edge_distance(),
+        None => wall::MIN_EDGE_DISTANCE,
+    };
+    let edge_basis = match material {
+        Some(material) => format!(
+            "10 mm かつ 釘の呼び径 φ{} mm × {} 以上",
+            format_dimension(material.nail_diameter),
+            format_dimension(wall::EDGE_DISTANCE_DIAMETER_FACTOR)
+        ),
+        None => "釘の呼び径が分からないため 10 mm のみで確認".to_string(),
+    };
+    let worst_edge = clearances.iter().copied().fold(f64::INFINITY, f64::min);
+    // 表示の桁で切り上がって「足りているのに NG」に見えないよう、丸めの幅だけ
+    // 許す（へりあきは mm 単位の入力なので、この幅で判定が変わることはない）。
+    let edge_ok = worst_edge >= required_edge - 1e-9;
+
     let mut inputs = vec![
         row("階高 H", format!("{} mm", format_int(input.height))),
         row("壁の幅 W", format!("{} mm", format_int(input.width))),
     ];
-    if let Some(material) = wall::find_material(&input.material_id) {
+    if let Some(material) = material {
         inputs.push(row(
             "面材と釘の組合せ",
             format!(
@@ -1194,6 +1234,21 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
                     ("ok", result.within_limit.into()),
                 ]),
                 Value::obj([
+                    ("label", "適用範囲 3.3(1)④ 面材のへりあき".into()),
+                    (
+                        "value",
+                        format!(
+                            "最小 へりあき {} mm {} {} mm（{}）",
+                            format_dimension(worst_edge),
+                            if edge_ok { "≧" } else { "<" },
+                            format_dimension(required_edge),
+                            edge_basis
+                        )
+                        .into(),
+                    ),
+                    ("ok", edge_ok.into()),
+                ]),
+                Value::obj([
                     ("label", "面材のせん断破壊 τN < τmax（3.3.8）".into()),
                     (
                         "value",
@@ -1241,6 +1296,7 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
         ),
         ("governing", result.governing.id().into()),
         ("withinLimit", result.within_limit.into()),
+        ("edgeDistanceOk", edge_ok.into()),
         ("shearOk", result.shear_ok.into()),
         ("bucklingOk", result.buckling_ok.into()),
     ]))
@@ -1795,6 +1851,76 @@ mod tests {
             "あり（せん断座屈の ξ = 2）".to_string()
         )));
         assert!(inputs.contains(&("面材の枚数".to_string(), "2 枚".to_string())));
+    }
+
+    /// 3.3(1)④ のへりあき（10mm 以上かつ釘の呼び径 ×5 以上）を検定する。
+    ///
+    /// 計算例の釘は N-65（呼び径 φ3.05）なので、必要なへりあきは 15.25 mm。
+    /// 表 3.2.1 の配列が前提とする 10 mm のままだと足りない。
+    #[test]
+    fn the_wall_report_checks_the_edge_distance_against_the_nail_diameter() {
+        let data = wall_example_form();
+        let report = only_wall(&data);
+
+        assert_eq!(report.get("edgeDistanceOk"), Some(&Value::Bool(false)));
+        let check = report
+            .get("checks")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check.get("label").unwrap().as_str().unwrap().contains("へりあき"))
+            .unwrap()
+            .clone();
+        let value = check.get("value").unwrap().as_str().unwrap();
+        assert!(value.contains("最小 へりあき 10 mm < 15.25 mm"), "{value}");
+        assert!(value.contains("φ3.05 mm × 5 以上"), "{value}");
+
+        // へりあきを必要な値まで広げれば通る。
+        let mut widened = data;
+        for panel in &mut widened.walls[0].panels {
+            panel.edge_distance = 15.25;
+        }
+        let report = only_wall(&widened);
+        assert_eq!(report.get("edgeDistanceOk"), Some(&Value::Bool(true)));
+    }
+
+    /// 面材と釘を表 3.3.1 から読み込んでいない（4.5 の試験値を直接入力した）
+    /// ときは、呼び径が分からないので 10mm の側だけを確かめる。
+    #[test]
+    fn the_edge_distance_falls_back_to_ten_millimetres_without_a_material() {
+        let mut data = wall_example_form();
+        data.walls[0].material_id = String::new();
+        let report = only_wall(&data);
+
+        assert_eq!(report.get("edgeDistanceOk"), Some(&Value::Bool(true)));
+        let checks = report.get("checks").unwrap().as_array().unwrap();
+        let value = checks
+            .iter()
+            .find(|check| check.get("label").unwrap().as_str().unwrap().contains("へりあき"))
+            .unwrap()
+            .get("value")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(value.contains("呼び径が分からないため"), "{value}");
+    }
+
+    /// へりあきは、割り付け・格子・座標のどの入力方式でも釘の座標から測る。
+    #[test]
+    fn the_edge_clearance_is_reported_for_every_input_mode() {
+        let coords = PanelInput {
+            mode: "coords".to_string(),
+            coords: "12, 12\n898, 12\n12, 598\n898, 598".to_string(),
+            ..example_panel()
+        };
+        let report = compute_panel(&coords, 0).unwrap();
+        let inputs = labelled(&report, "inputs", "label");
+        assert!(inputs.contains(&(
+            "へりあき（面材の縁から釘まで）".to_string(),
+            "12 mm".to_string()
+        )));
     }
 
     /// 上限を超えたら、検定の行に「超えている」と出す（計算は止めない）。

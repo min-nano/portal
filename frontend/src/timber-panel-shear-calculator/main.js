@@ -58,7 +58,9 @@ import {
   makePanel,
   makeWall,
   mergeFormData,
+  minimumEdgeDistance,
   nailNote,
+  raiseEdgeDistance,
   toRequestBody,
   verificationOf,
   verificationWarning,
@@ -171,7 +173,10 @@ function addWallPanel() {
   const wall = currentWall();
   if (!wall) return;
   captureCurrentWall();
-  wall.panels.push(makePanel());
+  // へりあきの初期値は、選んだ釘で決まる最小値（3.3(1)④）。
+  wall.panels.push(
+    makePanel({ edgeDistance: minimumEdgeDistance(materials, wall.materialId) })
+  );
   renderWallPanels(document, wall.panels, panelOptions);
   scheduleCalculate();
 }
@@ -197,6 +202,12 @@ function loadPreset(index, id) {
   if (!id || !core || !wall || !wall.panels[index]) return;
   captureCurrentWall();
   Object.assign(wall.panels[index], core.preset(id));
+  // 表 3.2.1 の配列はへりあき 10 mm が前提なので、選んだ釘で必要な値に
+  // 足りなければ引き上げる（適用範囲 3.3(1)④）。
+  raiseEdgeDistance(
+    [wall.panels[index]],
+    minimumEdgeDistance(materials, wall.materialId)
+  );
   renderWallPanels(document, wall.panels, panelOptions);
   scheduleCalculate();
 }
@@ -214,6 +225,9 @@ function loadMaterial(id) {
   if (!wall || !material) return;
   captureCurrentWall();
   Object.assign(wall, wallFieldsFromMaterial(material));
+  // 釘が変われば必要なへりあきも変わる（3.3(1)④）。足りない面材だけを
+  // 最小値まで引き上げる（設計者が広げた値は狭めない）。
+  raiseEdgeDistance(wall.panels, minimumEdgeDistance(materials, wall.materialId));
   renderCurrent();
   scheduleCalculate();
 }

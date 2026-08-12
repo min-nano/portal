@@ -18,10 +18,18 @@ import { sanitizeFileName } from '../pdf-file-ops.js';
 const DEFAULT_PANEL_WIDTH = 910;
 const DEFAULT_PANEL_HEIGHT = 1820;
 
-/** 割り付けの既定値 [mm]（尺モジュールの間柱ピッチ・釘ピッチ・へりあき）。 */
+/** 割り付けの既定値 [mm]（尺モジュールの間柱ピッチ・釘ピッチ）。 */
 const DEFAULT_STUD_PITCH = 455;
 const DEFAULT_NAIL_PITCH = 150;
-const DEFAULT_EDGE_DISTANCE = 10;
+
+/**
+ * へりあき（面材の縁から釘の中心まで）の下限 [mm]。
+ *
+ * 適用範囲 3.3(1)④「面材の釘列に対するへりあきは、10mm 以上かつ接合具径
+ * d [mm] × 5 以上とする」の 10mm 側。d の側は選んだ釘で決まるので、
+ * 表 3.3.1 の一覧が配る minEdgeDistance を使う。
+ */
+export const MIN_EDGE_DISTANCE = 10;
 
 /** 壁の既定値。階高は一般的な 1 階。 */
 const DEFAULT_WALL_HEIGHT = 2900;
@@ -57,7 +65,7 @@ export function makePanel(overrides) {
     arrangement: 'hi',
     studPitch: DEFAULT_STUD_PITCH,
     nailPitch: DEFAULT_NAIL_PITCH,
-    edgeDistance: DEFAULT_EDGE_DISTANCE,
+    edgeDistance: MIN_EDGE_DISTANCE,
     gridX: '',
     gridY: '',
     coords: '',
@@ -132,16 +140,53 @@ export function wallFieldsFromGrade(grade) {
   };
 }
 
+/** 表 3.3.1 から選んだ組合せを引く（選んでいなければ null）。 */
+export function findMaterial(materials, materialId) {
+  return (materials || []).find((entry) => entry.id === materialId) || null;
+}
+
+/**
+ * 選んだ釘で必要になる、面材のへりあきの最小値 [mm]（適用範囲 3.3(1)④）。
+ *
+ * 「10mm 以上かつ接合具径 d × 5 以上」。d の側は計算実装が組合せごとに
+ * 配るので、ここでは選んでいないとき（4.5 の試験値を直接入力する場合）の
+ * 10mm を補うだけにする。
+ */
+export function minimumEdgeDistance(materials, materialId) {
+  const material = findMaterial(materials, materialId);
+  return material && material.minEdgeDistance
+    ? material.minEdgeDistance
+    : MIN_EDGE_DISTANCE;
+}
+
 /**
  * 選んだ面材と釘の組合せを、へりあきを決めるための一言にする。
  *
- * へりあきは面材・釘の種類に合わせて設計者が決めるものなので、画面は選んだ
- * 釘の呼び径（JIS A 5508）を添えるところまでを受け持つ。
+ * へりあきは釘の呼び径で決まる（3.3(1)④）ので、選んだ釘とその径、必要な
+ * へりあきをそのまま伝える。
  */
 export function nailNote(materials, materialId) {
-  const material = (materials || []).find((entry) => entry.id === materialId);
+  const material = findMaterial(materials, materialId);
   if (!material) return '';
-  return `選んだ釘は ${material.nailLabel}（呼び径 φ${material.nailDiameter} mm）です。へりあきは面材ごとに入力できます。`;
+  return (
+    `選んだ釘は ${material.nailLabel}（呼び径 φ${material.nailDiameter} mm）です。` +
+    `適用範囲 3.3(1)④ により、面材のへりあきは ${material.minEdgeDistance} mm 以上` +
+    `（10 mm 以上かつ呼び径の 5 倍以上）にしてください。`
+  );
+}
+
+/**
+ * 面材のへりあきを、必要な最小値まで引き上げる（足りているものは触らない）。
+ *
+ * 面材と釘を選び直したとき・標準的な釘配列（表 3.2.1、へりあき 10 mm が
+ * 前提）を読み込んだときに使う。設計者が広げた値を勝手に狭めないよう、
+ * 引き上げるだけにしてある。
+ */
+export function raiseEdgeDistance(panels, minimum) {
+  (panels || []).forEach((panel) => {
+    if (!(Number(panel.edgeDistance) >= minimum)) panel.edgeDistance = minimum;
+  });
+  return panels;
 }
 
 /** 今日の日付を input[type=date] の値にする。 */

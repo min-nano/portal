@@ -117,9 +117,10 @@ fn dispatch(request: &str) -> Result<Value, String> {
                             ("label", material.label().into()),
                             ("panel", material.panel.into()),
                             ("nailLabel", material.nail_label.into()),
-                            // 釘の呼び径（JIS A 5508）。計算には使わないが、
-                            // 面材ごとのへりあきを決めるときの手がかりになる。
+                            // 釘の呼び径（JIS A 5508）と、そこから決まる
+                            // 面材のへりあきの最小値（適用範囲 3.3(1)④）。
                             ("nailDiameter", material.nail_diameter.into()),
+                            ("minEdgeDistance", material.min_edge_distance().into()),
                             ("thickness", material.thickness.into()),
                             ("shearModulus", material.shear_modulus.into()),
                             ("k", material.nail.k.into()),
@@ -164,6 +165,7 @@ fn dispatch(request: &str) -> Result<Value, String> {
             ("maxWalls", report::MAX_WALLS.into()),
             ("maxWallPanels", report::MAX_WALL_PANELS.into()),
             ("defaultEdgeDistance", layout::DEFAULT_EDGE_DISTANCE.into()),
+            ("minEdgeDistance", wall::MIN_EDGE_DISTANCE.into()),
             ("allowableShearLimit", wall::ALLOWABLE_SHEAR_LIMIT.into()),
             ("significantDigits", format::SIGNIFICANT_DIGITS.into()),
         ])),
@@ -228,8 +230,9 @@ mod tests {
         assert_eq!(materials[0].get("id").unwrap().as_str(), Some("plywood12-n50"));
         assert_eq!(materials[0].get("shearModulus").unwrap().as_f64(), Some(0.40));
         assert_eq!(materials[0].get("deltaPv").unwrap().as_f64(), Some(0.91));
-        // へりあきを決めるための釘の呼び径も一緒に配る。
+        // へりあきを決めるための釘の呼び径と、その 5 倍（3.3(1)④）も配る。
         assert_eq!(materials[0].get("nailDiameter").unwrap().as_f64(), Some(2.75));
+        assert_eq!(materials[0].get("minEdgeDistance").unwrap().as_f64(), Some(13.75));
     }
 
     #[test]

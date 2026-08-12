@@ -47,6 +47,18 @@ use crate::nail_array::Constants;
 /// 適用範囲（3.3(1)①）の許容せん断耐力の上限 [kN/m]（= 壁倍率 7 倍 × 1.96）。
 pub const ALLOWABLE_SHEAR_LIMIT: f64 = 13.72;
 
+/// 適用範囲（3.3(1)④）の、面材の釘列に対するへりあきの最小値 [mm]。
+///
+/// 「釘等のピッチは 75mm 以上かつ 1 列配置とし、面材の釘列に対するへりあきは、
+/// **10mm 以上かつ接合具径 d [mm] × 5 以上**とし、軸材の釘列に対する縁端距離は、
+/// 20mm 以上かつ接合具径 d [mm] × 5 以上とする」。
+///
+/// ここで検定できるのは面材側（面材の縁から釘の中心まで）だけ。軸材側の縁端
+/// 距離は軸材の断面が要るので、設計者が確認する前提とする。
+pub const MIN_EDGE_DISTANCE: f64 = 10.0;
+/// 同じく 3.3(1)④ の、接合具径に対するへりあきの倍率。
+pub const EDGE_DISTANCE_DIAMETER_FACTOR: f64 = 5.0;
+
 /// 変形角の逆数。K0/150 は変形角 1/150 [rad] のときのモーメント（式 3.3.1）。
 const DRIFT_DENOMINATOR: f64 = 150.0;
 
@@ -608,11 +620,10 @@ pub struct Material {
     pub thickness: f64,
     /// 釘の種類（「太め鉄丸釘(CN 釘)65」など）。
     pub nail_label: &'static str,
-    /// 釘の呼び径 [mm]（JIS A 5508）。
+    /// 釘の呼び径 d [mm]（JIS A 5508）。
     ///
-    /// 計算そのものには使わない。面材ごとに決めるへりあき（面材の縁から釘の
-    /// 中心までの距離）を、選んだ釘に合わせて決められるよう画面と計算書に
-    /// 添えるための値。
+    /// 剛性・耐力の計算そのものには使わない。適用範囲 3.3(1)④ の
+    /// へりあき（10mm 以上かつ d × 5 以上）が、この径で決まる。
     pub nail_diameter: f64,
     pub nail: NailShear,
     /// 面材のせん断弾性係数 GB [kN/mm²]（表 3.3.1 の脚注）。
@@ -622,6 +633,18 @@ pub struct Material {
 }
 
 impl Material {
+    /// この釘で必要な、面材の釘列に対するへりあきの最小値 [mm]（3.3(1)④）。
+    ///
+    /// 10mm 以上かつ接合具径 d の 5 倍以上。表 3.3.1 の釘はどれも呼び径が
+    /// 2mm を超えるので、実際に効くのは常に d × 5 の側になる。
+    pub fn min_edge_distance(&self) -> f64 {
+        let from_diameter = EDGE_DISTANCE_DIAMETER_FACTOR * self.nail_diameter;
+        // 5 × 3.76 が 18.799999999999997 になるような 2 進数の端数を落とす
+        //（この値は画面と計算書にそのまま出す）。
+        let from_diameter = (from_diameter * 1e6).round() / 1e6;
+        from_diameter.max(MIN_EDGE_DISTANCE)
+    }
+
     pub fn label(&self) -> String {
         format!(
             "{} {}mm + {}",
@@ -1291,8 +1314,8 @@ mod tests {
         }
     }
 
-    /// 釘の呼び径（JIS A 5508）。計算には使わないが、面材ごとのへりあきを
-    /// 決めるときの手がかりとして表に持たせている。
+    /// 釘の呼び径（JIS A 5508）。剛性・耐力の計算には使わないが、
+    /// 適用範囲 3.3(1)④ のへりあきがこの径で決まる。
     #[test]
     fn every_material_carries_the_nail_diameter() {
         assert_eq!(find_material("plywood12-n50").unwrap().nail_diameter, 2.75);
@@ -1309,6 +1332,27 @@ mod tests {
             assert!(
                 find_material(thick).unwrap().nail_diameter
                     > find_material(thin).unwrap().nail_diameter
+            );
+        }
+    }
+
+    /// 3.3(1)④「面材の釘列に対するへりあきは、10mm 以上かつ接合具径 d ×5 以上」。
+    #[test]
+    fn the_minimum_edge_distance_follows_the_nail_diameter() {
+        // N-50（φ2.75）→ 13.75mm、N-65（φ3.05）→ 15.25mm、CN75（φ3.76）→ 18.8mm。
+        assert_eq!(find_material("plywood12-n50").unwrap().min_edge_distance(), 13.75);
+        assert_eq!(find_material("plywood12-n65").unwrap().min_edge_distance(), 15.25);
+        assert_eq!(find_material("plywood24-cn75").unwrap().min_edge_distance(), 18.8);
+        for material in materials() {
+            // 表 3.3.1 の釘はどれも φ2mm を超えるので、10mm の側では決まらない。
+            assert!(material.min_edge_distance() > MIN_EDGE_DISTANCE, "{}", material.id);
+            assert!(
+                (material.min_edge_distance()
+                    - material.nail_diameter * EDGE_DISTANCE_DIAMETER_FACTOR)
+                    .abs()
+                    <= 1e-9,
+                "{}",
+                material.id
             );
         }
     }

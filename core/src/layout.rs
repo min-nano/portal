@@ -286,6 +286,24 @@ pub fn line_positions(low: f64, high: f64, pitch: f64) -> Vec<f64> {
     positions
 }
 
+/// 釘配列のへりあき（面材の縁から釘の中心までの距離）の最小値 [mm]。
+///
+/// 割り付けの入力欄の値ではなく、**実際に置かれた釘の座標から測る**。格子や
+/// 座標の直接入力でも同じように出せるので、適用範囲 3.3(1)④ の検定はどの
+/// 入力方式でも同じ 1 つの物差しで行える。釘が面材からはみ出していれば負に
+/// なる（はみ出しをそのまま見せる）。
+pub fn min_edge_clearance(nails: &[Nail], width: f64, height: f64) -> f64 {
+    nails
+        .iter()
+        .map(|nail| {
+            nail.x
+                .min(nail.y)
+                .min(width - nail.x)
+                .min(height - nail.y)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 /// 1 本の線に打つ釘の本数（位置を作らずに数える）。
 pub fn line_count(low: f64, high: f64, pitch: f64) -> usize {
     let span = high - low;
@@ -516,6 +534,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// へりあきは、割り付けの入力欄の値がそのまま測れる。
+    #[test]
+    fn the_edge_clearance_is_measured_from_the_nails() {
+        for edge in [10.0, 15.25, 20.0] {
+            let layout = Layout {
+                edge_distance: edge,
+                ..layout(Arrangement::Hi)
+            };
+            let clearance =
+                min_edge_clearance(&layout.nails(), layout.width, layout.height);
+            assert!((clearance - edge).abs() <= 1e-9, "{clearance} != {edge}");
+        }
+    }
+
+    /// 座標を直接入力した配列でも同じ物差しで測れる（面材の外なら負になる）。
+    #[test]
+    fn the_edge_clearance_of_arbitrary_coordinates() {
+        let nails = [
+            Nail { x: 12.0, y: 30.0 },
+            Nail { x: 500.0, y: 300.0 },
+        ];
+        assert_eq!(min_edge_clearance(&nails, 910.0, 610.0), 12.0);
+        assert_eq!(min_edge_clearance(&[Nail { x: -5.0, y: 30.0 }], 910.0, 610.0), -5.0);
     }
 
     /// 桁を間違えたピッチでも、座標を作る前に本数で気付ける。
