@@ -298,8 +298,7 @@ describe('readValues / writeValues', () => {
 
 describe('refresh', () => {
   it('JAS 規格に応じて樹種等・等級等の候補を作り直す', () => {
-    let current = values({ use_column_2: true, c2_1_jas: '無等級材' });
-    current = refresh(root, config, 'one_story', current);
+    refresh(root, config, 'one_story', values({ use_column_2: true, c2_1_jas: '無等級材' }));
     const species = root.querySelector('[data-field="c2_1_species"]');
     expect(Array.from(species.options).map((o) => o.value)).toEqual(['', 'けやき']);
     expect(species.options[0].textContent).toBe('（未選択）');

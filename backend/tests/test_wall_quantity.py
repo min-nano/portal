@@ -272,7 +272,7 @@ def test_the_bundled_template_is_never_modified():
 
 def test_a_broken_template_is_reported_as_a_server_error(monkeypatch):
     monkeypatch.setattr(wq, "_TEMPLATE_BYTES", None)
-    monkeypatch.setattr(wq, "template_bytes", lambda: _template_without_a_sheet())
+    monkeypatch.setattr(wq, "template_bytes", _template_without_a_sheet)
     with pytest.raises(WallQuantityError) as error:
         wq.build_worksheet(wq.normalize_data(one_story_body()))
     assert error.value.status == 500

@@ -18,6 +18,7 @@
 """
 
 import json
+import math
 import os
 import unicodedata
 
@@ -159,7 +160,7 @@ def _to_number(value, label: str):
         number = float(text)
     except ValueError:
         raise WallQuantityError(f"「{label}」には数値を入力してください。")
-    if number != number or number in (float("inf"), float("-inf")):
+    if not math.isfinite(number):
         raise WallQuantityError(f"「{label}」には数値を入力してください。")
     return int(number) if number == int(number) else number
 
@@ -307,7 +308,6 @@ def _format_date(text: str) -> str:
 
 def build_worksheet(data: dict) -> bytes:
     """配布物の複製へフォーム入力を書き込み、xlsx のバイト列を返す。"""
-    mapping = load_mapping()
     building = _building(data["building"])
     values = data["values"]
     sheet = building["sheet"]

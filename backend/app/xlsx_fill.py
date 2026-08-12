@@ -24,11 +24,9 @@ XML を**触る場所だけ**書き換える:
 
 import datetime
 import io
+import math
 import re
 import zipfile
-
-_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 # Excel の既定（1900 年方式）のシリアル値の起点。1900 年をうるう年として
 # 扱う Excel の癖に合わせるため 1899-12-30 を 0 とする。
