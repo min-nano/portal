@@ -1,0 +1,2524 @@
+{
+  "_readme": [
+    "公益財団法人日本住宅・木材技術センターが配布している「壁量等の基準(令和7年施行)に",
+    "対応した表計算ツール（多機能版）」への書き込み位置を定義するマッピングです。",
+    "配布物そのものが提出物なので、ツールは雛形（app/templates/wall-quantity/worksheet.xlsx）を",
+    "書き換えずに複製し、ここで定義した入力欄だけへ値を書きます。",
+    "",
+    "■ このファイルが単一の情報源",
+    "  フォームの見た目（節・表・入力欄の並び・選択肢・単位・注意書き）も、書き込み先の",
+    "  セルも、条件（どの入力があるとどの欄が要るか）も、すべてここにあります。",
+    "  バックエンドは /api/tools/wall-quantity-calculator/config でこれをそのまま配り、",
+    "  画面はそれを読んでフォームを組み立てます。画面側に定数は置きません。",
+    "",
+    "■ 配布物が改訂されたとき（重要）",
+    "  .github/workflows/howtec-worksheet-check.yml が配布ページを定期的に見て、",
+    "  同梱の xlsx と違うファイルが公開されていたら PR を出します。その PR では",
+    "  backend/tests/test_wall_quantity_template.py（雛形の番人）が、ここに書いた",
+    "  セルに想定どおりのラベル・選択肢が入っているかを確かめます。ずれていれば赤くなるので、",
+    "  配布物を開いて入力欄の位置を読み直し、このファイルを直してください。",
+    "  読み取りの手順は README.md「表計算ツールが改訂されたときの手順」を参照。",
+    "",
+    "■ 用語",
+    "  - building（建物）: 平屋建て / 2階建て。配布物ではシートが分かれている。",
+    "  - section（節）: 画面の見出しの単位。toggle を持つ節は、その",
+    "      チェックボックス（配布物のフォームコントロール）が入りのときだけ入力できる。",
+    "  - block（かたまり）: 節の中身。kind=fields は「ラベル + 入力欄」の並び、",
+    "      kind=table は柱材のように行と列で並ぶ表。",
+    "  - field（入力欄）: cell に書き込む 1 つの値。type は text / number / date / select。",
+    "  - cascade: JAS 規格を選ぶと樹種等・等級等の選択肢が決まる連動",
+    "      （配布物の INDIRECT を使ったプルダウンと同じ）。options.species / options.grade を引く。",
+    "",
+    "■ 条件（visible_when / required_when / fixed_when）",
+    "  {\"field\": <key>, \"in\": [...]} または {\"field\": <key>, \"not_in\": [...]}。",
+    "  visible_when … 条件を満たすときだけ入力できる（満たさないときは書き込まない）。",
+    "  required_when … 条件を満たすときは必須。",
+    "  fixed_when … 条件を満たすとき、値を \"value\" に固定して書き込む",
+    "      （用途を選ばない場合の地震地域係数・多雪区域は、配布物の注意書きどおり「ー」）。",
+    "",
+    "■ 日付の書き方",
+    "  作成日のセルは配布物では書式が「標準」で、シリアル値を書くと 45018 のような",
+    "  数値に見えてしまう（配布物の入力例がまさにそうなっている）。読める形で残すため、",
+    "  日付は YYYY/M/D の文字列として書き込む。"
+  ],
+  "template": {
+    "path": "templates/wall-quantity/worksheet.xlsx",
+    "source": "templates/wall-quantity/source.json",
+    "version_cell": {
+      "building": "one_story",
+      "ref": "V3"
+    }
+  },
+  "file_name": {
+    "prefix": "必要壁量 表計算ツール",
+    "extension": ".xlsx"
+  },
+  "usage": {
+    "key": "usage",
+    "title": "0. 設計の用途",
+    "note": "いずれか 1 つを選んでください（配布物のチェックボックスに反映されます）。",
+    "options": [
+      {
+        "value": "performance",
+        "label": "住宅性能表示制度を利用"
+      },
+      {
+        "value": "office",
+        "label": "非住宅（事務所建築）"
+      },
+      {
+        "value": "standard",
+        "label": "左記以外（住宅・建築基準法のみ）"
+      }
+    ]
+  },
+  "options": {
+    "qualification": [
+      "一級建築士",
+      "二級建築士",
+      "木造建築士"
+    ],
+    "seismic_zone": [
+      "ー",
+      "1.0",
+      "0.9",
+      "0.8",
+      "0.7"
+    ],
+    "base_shear": [
+      "0.2",
+      "0.3"
+    ],
+    "heavy_snow": [
+      "ー",
+      "なし(一般区域)",
+      "あり(多雪区域)"
+    ],
+    "solar": [
+      "なし(0)",
+      "あり(200)\n（部位面積あたり）",
+      "あり(任意入力)"
+    ],
+    "roof": [
+      "瓦屋根（ふき土無）",
+      "スレート屋根",
+      "金属板ぶき"
+    ],
+    "ceiling_insulation": [
+      "100\n（初期値・天井）",
+      "任意入力"
+    ],
+    "exterior_wall": [
+      "土塗り壁等",
+      "モルタル等",
+      "サイディング",
+      "金属板張",
+      "下見板張"
+    ],
+    "wall_insulation": [
+      "70（初期値）",
+      "任意入力"
+    ],
+    "jas": [
+      "JAS機械等級区分構造用製材",
+      "JAS目視等級区分構造用製材",
+      "無等級材",
+      "JAS同一等級構成集成材",
+      "JASA種構造用単板積層材"
+    ]
+  },
+  "species": {
+    "JAS機械等級区分構造用製材": [
+      "あかまつ",
+      "べいまつ",
+      "ダフリカからまつ",
+      "べいつが",
+      "えぞまつ",
+      "とどまつ",
+      "からまつ",
+      "ひのき",
+      "ひば",
+      "すぎ"
+    ],
+    "JAS目視等級区分構造用製材": [
+      "あかまつ",
+      "べいまつ",
+      "からまつ",
+      "ダフリカからまつ",
+      "ひば",
+      "ひのき",
+      "べいつが",
+      "えぞまつ",
+      "とどまつ",
+      "すぎ"
+    ],
+    "無等級材": [
+      "あかまつ",
+      "くろまつ",
+      "べいまつ",
+      "からまつ",
+      "ひば",
+      "ひのき",
+      "べいひ",
+      "べいひば",
+      "つが",
+      "べいつが",
+      "もみ",
+      "えぞまつ",
+      "とどまつ",
+      "べにまつ",
+      "すぎ",
+      "べいすぎ",
+      "スプルース",
+      "もみ",
+      "えぞまつ",
+      "とどまつ",
+      "かし",
+      "くり",
+      "なら",
+      "ぶな",
+      "けやき"
+    ],
+    "JAS同一等級構成集成材": [
+      "ー"
+    ],
+    "JASA種構造用単板積層材": [
+      "ー"
+    ]
+  },
+  "grade": {
+    "JAS機械等級区分構造用製材": [
+      "E50",
+      "E70",
+      "E90",
+      "E110",
+      "E130",
+      "E150 "
+    ],
+    "JAS目視等級区分構造用製材": [
+      "一級",
+      "二級",
+      "三級"
+    ],
+    "無等級材": [
+      "ー"
+    ],
+    "JAS同一等級構成集成材": [
+      "E190-F615(4層以上)",
+      "E170-F540(4層以上)",
+      "E150-F465(4層以上)",
+      "E135-F405(4層以上)",
+      "E120-F375(4層以上)",
+      "E105-F345(4層以上)",
+      "E95-F315(4層以上)",
+      "E85-F300(4層以上)",
+      "E75-F270(4層以上)",
+      "E65-F255(4層以上)",
+      "E55-F225(4層以上)",
+      "E190-F555(3層)",
+      "E170-F495(3層)",
+      "E150-F435(3層)",
+      "E135-F375(3層)",
+      "E120-F330(3層)",
+      "E105-F300(3層)",
+      "E95-F285(3層)",
+      "E85-F270(3層)",
+      "E75-F255(3層)",
+      "E65-F240(3層)",
+      "E55-F225(3層)",
+      "E190-F510(2層)",
+      "E170-F450(2層)",
+      "E150-F390(2層)",
+      "E135-F345(2層)",
+      "E120-F300(2層)",
+      "E105-F285(2層)",
+      "E95-F270(2層)",
+      "E85-F255(2層)",
+      "E75-F240(2層)",
+      "E65-F225(2層)",
+      "E55-F200(2層)"
+    ],
+    "JASA種構造用単板積層材": [
+      "180E　特級",
+      "180E　一級",
+      "180E　二級",
+      "160E　特級",
+      "160E　一級",
+      "160E　二級",
+      "140E　特級",
+      "140E　一級",
+      "140E　二級",
+      "120E　特級",
+      "120E　一級",
+      "120E　二級",
+      "110E　特級",
+      "110E　一級",
+      "110E　二級",
+      "100E　特級",
+      "100E　一級",
+      "100E　二級",
+      "90E　特級",
+      "90E　一級",
+      "90E　二級",
+      "80E　特級",
+      "80E　一級",
+      "80E　二級",
+      "70E　特級",
+      "70E　一級",
+      "70E　二級",
+      "60E　特級",
+      "60E　一級",
+      "60E　二級",
+      "50E　特級",
+      "50E　一級",
+      "50E　二級"
+    ]
+  },
+  "buildings": [
+    {
+      "key": "one_story",
+      "label": "平屋建て",
+      "sheet": "表計算ツール（平屋建て）",
+      "usage_cells": {
+        "performance": "W8",
+        "office": "W9",
+        "standard": "W10"
+      },
+      "sections": [
+        {
+          "key": "header",
+          "title": "作成者",
+          "blocks": [
+            {
+              "kind": "fields",
+              "fields": [
+                {
+                  "key": "created_at",
+                  "cell": "D4",
+                  "label": "作成日",
+                  "type": "date"
+                },
+                {
+                  "key": "property_name",
+                  "cell": "K4",
+                  "label": "物件名",
+                  "type": "text"
+                },
+                {
+                  "key": "designer_qualification",
+                  "cell": "D5",
+                  "label": "設計者の資格",
+                  "type": "select",
+                  "options_ref": "qualification"
+                },
+                {
+                  "key": "designer_registrar",
+                  "cell": "J5",
+                  "label": "登録した知事の都道府県",
+                  "type": "text",
+                  "note": "一級建築士は大臣登録なので空欄のままにする。"
+                },
+                {
+                  "key": "designer_registration_number",
+                  "cell": "O5",
+                  "label": "登録番号",
+                  "type": "text"
+                },
+                {
+                  "key": "designer_name",
+                  "cell": "T5",
+                  "label": "氏名",
+                  "type": "text"
+                },
+                {
+                  "key": "office_qualification",
+                  "cell": "D6",
+                  "label": "建築士事務所の種別",
+                  "type": "select",
+                  "options_ref": "qualification"
+                },
+                {
+                  "key": "office_registrar",
+                  "cell": "J6",
+                  "label": "登録した知事の都道府県",
+                  "type": "text"
+                },
+                {
+                  "key": "office_registration_number",
+                  "cell": "O6",
+                  "label": "登録番号",
+                  "type": "text"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "loads",
+          "title": "1. 単位面積当たりの必要壁量 Lw (cm/m²)",
+          "note": "入力すると、出力される表計算ツールの「出力結果」欄に必要壁量が計算されます。",
+          "blocks": [
+            {
+              "kind": "fields",
+              "fields": [
+                {
+                  "key": "height_1f",
+                  "cell": "H15",
+                  "label": "1階階高",
+                  "type": "number",
+                  "unit": "m",
+                  "step": "0.001",
+                  "min": 0,
+                  "required": true,
+                  "note": "土台上端～梁上端までの距離"
+                },
+                {
+                  "key": "ridge_minus_eaves",
+                  "cell": "H16",
+                  "label": "建物の最高高さ − 軒高さ",
+                  "type": "number",
+                  "unit": "m",
+                  "step": "0.001",
+                  "min": 0,
+                  "required": true,
+                  "note": "建物の頂点～小屋梁・桁上端までの距離"
+                },
+                {
+                  "key": "seismic_zone",
+                  "cell": "H17",
+                  "label": "地震地域係数 Z",
+                  "type": "select",
+                  "options_ref": "seismic_zone",
+                  "note": "昭55年建告第1793号第1の表の上欄に掲げる地方の区分に応じ同表下欄に掲げる数値",
+                  "visible_when": {
+                    "field": "usage",
+                    "in": [
+                      "performance"
+                    ]
+                  },
+                  "fixed_when": {
+                    "field": "usage",
+                    "not_in": [
+                      "performance"
+                    ],
+                    "value": "ー"
+                  }
+                },
+                {
+                  "key": "base_shear",
+                  "cell": "H18",
+                  "label": "標準せん断力係数 C0",
+                  "type": "select",
+                  "options_ref": "base_shear",
+                  "value_type": "number",
+                  "required": true,
+                  "note": "軟弱地盤の指定がある場合は 0.3（不明な場合は特定行政庁に確認）"
+                },
+                {
+                  "key": "heavy_snow",
+                  "cell": "H19",
+                  "label": "多雪区域の指定",
+                  "type": "select",
+                  "options_ref": "heavy_snow",
+                  "visible_when": {
+                    "field": "usage",
+                    "in": [
+                      "performance"
+                    ]
+                  },
+                  "fixed_when": {
+                    "field": "usage",
+                    "not_in": [
+                      "performance"
+                    ],
+                    "value": "ー"
+                  }
+                },
+                {
+                  "key": "snow_depth",
+                  "cell": "H20",
+                  "label": "垂直積雪量",
+                  "type": "number",
+                  "unit": "cm",
+                  "step": "1",
+                  "min": 0,
+                  "note": "解説・注意事項の表1-3を必ず参照する。入力時は単位に注意する。",
+                  "visible_when": {
+                    "field": "heavy_snow",
+                    "in": [
+                      "あり(多雪区域)"
+                    ]
+                  },
+                  "required_when": {
+                    "field": "heavy_snow",
+                    "in": [
+                      "あり(多雪区域)"
+                    ]
+                  }
+                },
+                {
+                  "key": "snow_unit_load",
+                  "cell": "H21",
+                  "label": "積雪単位荷重",
+                  "type": "number",
+                  "unit": "N/m²/cm",
+                  "step": "0.1",
+                  "min": 0,
+                  "visible_when": {
+                    "field": "heavy_snow",
+                    "in": [
+                      "あり(多雪区域)"
+                    ]
+                  },
+                  "required_when": {
+                    "field": "heavy_snow",
+                    "in": [
+                      "あり(多雪区域)"
+                    ]
+                  }
+                },
+                {
+                  "key": "floor_area_1f",
+                  "cell": "H22",
+                  "label": "1階床面積",
+                  "type": "number",
+                  "unit": "m²",
+                  "step": "0.01",
+                  "min": 0,
+                  "required": true,
+                  "note": "ここでは小屋裏面積を含めなくともよい。"
+                },
+                {
+                  "key": "eaves",
+                  "cell": "H23",
+                  "label": "軒の出",
+                  "type": "number",
+                  "unit": "m",
+                  "step": "0.001",
+                  "min": 0,
+                  "required": true,
+                  "note": "壁芯から軒先瓦の先端までの長さ"
+                },
+                {
+                  "key": "roof_pitch",
+                  "cell": "H24",
+                  "label": "屋根勾配",
+                  "type": "number",
+                  "unit": "寸",
+                  "step": "0.01",
+                  "min": 0,
+                  "required": true
+                },
+                {
+                  "key": "roof_spec",
+                  "cell": "H25",
+                  "label": "屋根の仕様",
+                  "type": "select",
+                  "options_ref": "roof",
+                  "required": true
+                },
+                {
+                  "key": "wall_spec",
+                  "cell": "H26",
+                  "label": "外壁の仕様",
+                  "type": "select",
+                  "options_ref": "exterior_wall",
+                  "required": true
+                },
+                {
+                  "key": "solar",
+                  "cell": "H27",
+                  "label": "太陽光発電設備等",
+                  "type": "select",
+                  "options_ref": "solar",
+                  "required": true,
+                  "note": "質量を自分で入れるときは「あり(任意入力)」を選ぶ（屋根面積に対する均し荷重として算定される）。"
+                },
+                {
+                  "key": "solar_mass",
+                  "cell": "R29",
+                  "label": "設備等の質量",
+                  "type": "number",
+                  "unit": "kg",
+                  "step": "0.1",
+                  "min": 0,
+                  "visible_when": {
+                    "field": "solar",
+                    "in": [
+                      "あり(任意入力)"
+                    ]
+                  },
+                  "required_when": {
+                    "field": "solar",
+                    "in": [
+                      "あり(任意入力)"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "fields",
+              "label": "天井(屋根)断熱材",
+              "fields": [
+                {
+                  "key": "ceiling_insulation",
+                  "cell": "H30",
+                  "label": "天井(屋根)断熱材",
+                  "type": "select",
+                  "options_ref": "ceiling_insulation",
+                  "required": true,
+                  "note": "密度と厚さを自分で入れるときは「任意入力」を選ぶ。"
+                }
+              ]
+            },
+            {
+              "kind": "table",
+              "label": "天井(屋根)断熱材の任意入力",
+              "columns": [
+                "",
+                "該当面積(m²)",
+                "密度(kg/m³)",
+                "厚さ(mm)"
+              ],
+              "visible_when": {
+                "field": "ceiling_insulation",
+                "in": [
+                  "任意入力"
+                ]
+              },
+              "rows": [
+                {
+                  "key": "ceiling_custom_1",
+                  "label": "仕様①",
+                  "fields": [
+                    {
+                      "key": "ceiling_custom_1_area",
+                      "cell": "O33",
+                      "label": "該当面積",
+                      "type": "number",
+                      "unit": "m²",
+                      "step": "0.01",
+                      "min": 0
+                    },
+                    {
+                      "key": "ceiling_custom_1_density",
+                      "cell": "R33",
+                      "label": "密度",
+                      "type": "number",
+                      "unit": "kg/m³",
+                      "step": "0.1",
+                      "min": 0
+                    },
+                    {
+                      "key": "ceiling_custom_1_thickness",
+                      "cell": "U33",
+                      "label": "厚さ",
+                      "type": "number",
+                      "unit": "mm",
+                      "step": "0.1",
+                      "min": 0
+                    }
+                  ]
+                },
+                {
+                  "key": "ceiling_custom_2",
+                  "label": "仕様②",
+                  "fields": [
+                    {
+                      "key": "ceiling_custom_2_area",
+                      "cell": "O34",
+                      "label": "該当面積",
+                      "type": "number",
+                      "unit": "m²",
+                      "step": "0.01",
+                      "min": 0
+                    },
+                    {
+                      "key": "ceiling_custom_2_density",
+                      "cell": "R34",
+                      "label": "密度",
+                      "type": "number",
+                      "unit": "kg/m³",
+                      "step": "0.1",
+                      "min": 0
+                    },
+                    {
+                      "key": "ceiling_custom_2_thickness",
+                      "cell": "U34",
+                      "label": "厚さ",
+                      "type": "number",
+                      "unit": "mm",
+                      "step": "0.1",
+                      "min": 0
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "fields",
+              "label": "外壁断熱材",
+              "fields": [
+                {
+                  "key": "wall_insulation",
+                  "cell": "H35",
+                  "label": "外壁断熱材",
+                  "type": "select",
+                  "options_ref": "wall_insulation",
+                  "required": true,
+                  "note": "密度と厚さを自分で入れるときは「任意入力」を選ぶ。"
+                }
+              ]
+            },
+            {
+              "kind": "table",
+              "label": "外壁断熱材の任意入力",
+              "columns": [
+                "",
+                "密度(kg/m³)",
+                "厚さ(mm)"
+              ],
+              "visible_when": {
+                "field": "wall_insulation",
+                "in": [
+                  "任意入力"
+                ]
+              },
+              "rows": [
+                {
+                  "key": "wall_custom_1",
+                  "label": "仕様①",
+                  "fields": [
+                    {
+                      "key": "wall_custom_1_density",
+                      "cell": "R37",
+                      "label": "密度",
+                      "type": "number",
+                      "unit": "kg/m³",
+                      "step": "0.1",
+                      "min": 0
+                    },
+                    {
+                      "key": "wall_custom_1_thickness",
+                      "cell": "U37",
+                      "label": "厚さ",
+                      "type": "number",
+                      "unit": "mm",
+                      "step": "0.1",
+                      "min": 0
+                    }
+                  ]
+                },
+                {
+                  "key": "wall_custom_2",
+                  "label": "仕様②",
+                  "fields": [
+                    {
+                      "key": "wall_custom_2_density",
+                      "cell": "R38",
+                      "label": "密度",
+                      "type": "number",
+                      "unit": "kg/m³",
+                      "step": "0.1",
+                      "min": 0
+                    },
+                    {
+                      "key": "wall_custom_2_thickness",
+                      "cell": "U38",
+                      "label": "厚さ",
+                      "type": "number",
+                      "unit": "mm",
+                      "step": "0.1",
+                      "min": 0
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "column_1",
+          "title": "2-1 算定式と有効細長比より柱の小径を求める場合",
+          "note": "すぎ、無等級材（平成12年建設省告示第1452号第5号）を前提として算定されます。",
+          "toggle": {
+            "key": "use_column_1",
+            "cell": "W52",
+            "label": "2-1 の算定方法を使う"
+          },
+          "blocks": []
+        },
+        {
+          "key": "column_2",
+          "title": "2-2 樹種等を選択し、算定式と有効細長比より柱の小径を求める場合",
+          "note": "階ごとに①〜④の 4 種類までの柱材が選べます。",
+          "toggle": {
+            "key": "use_column_2",
+            "cell": "W61",
+            "label": "2-2 の算定方法を使う"
+          },
+          "blocks": [
+            {
+              "kind": "table",
+              "label": "1階",
+              "columns": [
+                "",
+                "JAS規格",
+                "樹種等",
+                "等級等(積層数)"
+              ],
+              "rows": [
+                {
+                  "key": "c2_1f_①",
+                  "label": "①",
+                  "fields": [
+                    {
+                      "key": "c2_1f_①_jas",
+                      "cell": "D66",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c2_1f_①_species",
+                      "cell": "I66",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c2_1f_①_jas"
+                      }
+                    },
+                    {
+                      "key": "c2_1f_①_grade",
+                      "cell": "L66",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c2_1f_①_jas"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "c2_1f_②",
+                  "label": "②",
+                  "fields": [
+                    {
+                      "key": "c2_1f_②_jas",
+                      "cell": "D67",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c2_1f_②_species",
+                      "cell": "I67",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c2_1f_②_jas"
+                      }
+                    },
+                    {
+                      "key": "c2_1f_②_grade",
+                      "cell": "L67",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c2_1f_②_jas"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "c2_1f_③",
+                  "label": "③",
+                  "fields": [
+                    {
+                      "key": "c2_1f_③_jas",
+                      "cell": "D68",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c2_1f_③_species",
+                      "cell": "I68",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c2_1f_③_jas"
+                      }
+                    },
+                    {
+                      "key": "c2_1f_③_grade",
+                      "cell": "L68",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c2_1f_③_jas"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "fields",
+              "label": "1階④ 国土交通大臣が基準強度の数値を指定した木材等",
+              "fields": [
+                {
+                  "key": "c2_1f_④_strength",
+                  "cell": "Q69",
+                  "label": "圧縮の基準強度 Fc",
+                  "type": "number",
+                  "unit": "N/mm²",
+                  "step": "0.1",
+                  "min": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "column_3",
+          "title": "2-3 柱の小径別に柱の負担可能面積を求める場合",
+          "note": "階ごとに①〜③の 3 種類までの柱材が選べます。",
+          "toggle": {
+            "key": "use_column_3",
+            "cell": "W72",
+            "label": "2-3 の算定方法を使う"
+          },
+          "blocks": [
+            {
+              "kind": "fields",
+              "label": "任意の断面寸法",
+              "note": "105角・120角に加えて、任意の断面を 2 つまで設定できます。",
+              "fields": [
+                {
+                  "key": "free_1_long",
+                  "cell": "S78",
+                  "label": "任意入力① 長辺",
+                  "type": "number",
+                  "unit": "mm",
+                  "step": "1",
+                  "min": 0
+                },
+                {
+                  "key": "free_1_short",
+                  "cell": "T78",
+                  "label": "任意入力① 短辺",
+                  "type": "number",
+                  "unit": "mm",
+                  "step": "1",
+                  "min": 0
+                },
+                {
+                  "key": "free_2_long",
+                  "cell": "U78",
+                  "label": "任意入力② 長辺",
+                  "type": "number",
+                  "unit": "mm",
+                  "step": "1",
+                  "min": 0
+                },
+                {
+                  "key": "free_2_short",
+                  "cell": "V78",
+                  "label": "任意入力② 短辺",
+                  "type": "number",
+                  "unit": "mm",
+                  "step": "1",
+                  "min": 0
+                }
+              ]
+            },
+            {
+              "kind": "table",
+              "label": "1階 外周部の柱",
+              "columns": [
+                "",
+                "JAS規格",
+                "樹種等",
+                "等級等(積層数)"
+              ],
+              "rows": [
+                {
+                  "key": "c3_1f_out_①",
+                  "label": "①",
+                  "fields": [
+                    {
+                      "key": "c3_1f_out_①_jas",
+                      "cell": "D79",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c3_1f_out_①_species",
+                      "cell": "H79",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c3_1f_out_①_jas"
+                      }
+                    },
+                    {
+                      "key": "c3_1f_out_①_grade",
+                      "cell": "J79",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c3_1f_out_①_jas"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "c3_1f_out_②",
+                  "label": "②",
+                  "fields": [
+                    {
+                      "key": "c3_1f_out_②_jas",
+                      "cell": "D80",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c3_1f_out_②_species",
+                      "cell": "H80",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c3_1f_out_②_jas"
+                      }
+                    },
+                    {
+                      "key": "c3_1f_out_②_grade",
+                      "cell": "J80",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c3_1f_out_②_jas"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "fields",
+              "label": "1階 外周部の柱③ 国土交通大臣が基準強度の数値を指定した木材等",
+              "fields": [
+                {
+                  "key": "c3_1f_out_③_strength",
+                  "cell": "M81",
+                  "label": "圧縮の基準強度 Fc",
+                  "type": "number",
+                  "unit": "N/mm²",
+                  "step": "0.1",
+                  "min": 0
+                }
+              ]
+            },
+            {
+              "kind": "table",
+              "label": "1階 内部の柱",
+              "columns": [
+                "",
+                "JAS規格",
+                "樹種等",
+                "等級等(積層数)"
+              ],
+              "rows": [
+                {
+                  "key": "c3_1f_in_①",
+                  "label": "①",
+                  "fields": [
+                    {
+                      "key": "c3_1f_in_①_jas",
+                      "cell": "D82",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c3_1f_in_①_species",
+                      "cell": "H82",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c3_1f_in_①_jas"
+                      }
+                    },
+                    {
+                      "key": "c3_1f_in_①_grade",
+                      "cell": "J82",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c3_1f_in_①_jas"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "c3_1f_in_②",
+                  "label": "②",
+                  "fields": [
+                    {
+                      "key": "c3_1f_in_②_jas",
+                      "cell": "D83",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c3_1f_in_②_species",
+                      "cell": "H83",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c3_1f_in_②_jas"
+                      }
+                    },
+                    {
+                      "key": "c3_1f_in_②_grade",
+                      "cell": "J83",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c3_1f_in_②_jas"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "fields",
+              "label": "1階 内部の柱③ 国土交通大臣が基準強度の数値を指定した木材等",
+              "fields": [
+                {
+                  "key": "c3_1f_in_③_strength",
+                  "cell": "M84",
+                  "label": "圧縮の基準強度 Fc",
+                  "type": "number",
+                  "unit": "N/mm²",
+                  "step": "0.1",
+                  "min": 0
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "two_story",
+      "label": "2階建て",
+      "sheet": "表計算ツール（2階建て）",
+      "usage_cells": {
+        "performance": "W8",
+        "office": "W9",
+        "standard": "W10"
+      },
+      "sections": [
+        {
+          "key": "header",
+          "title": "作成者",
+          "blocks": [
+            {
+              "kind": "fields",
+              "fields": [
+                {
+                  "key": "created_at",
+                  "cell": "D4",
+                  "label": "作成日",
+                  "type": "date"
+                },
+                {
+                  "key": "property_name",
+                  "cell": "K4",
+                  "label": "物件名",
+                  "type": "text"
+                },
+                {
+                  "key": "designer_qualification",
+                  "cell": "D5",
+                  "label": "設計者の資格",
+                  "type": "select",
+                  "options_ref": "qualification"
+                },
+                {
+                  "key": "designer_registrar",
+                  "cell": "J5",
+                  "label": "登録した知事の都道府県",
+                  "type": "text",
+                  "note": "一級建築士は大臣登録なので空欄のままにする。"
+                },
+                {
+                  "key": "designer_registration_number",
+                  "cell": "O5",
+                  "label": "登録番号",
+                  "type": "text"
+                },
+                {
+                  "key": "designer_name",
+                  "cell": "T5",
+                  "label": "氏名",
+                  "type": "text"
+                },
+                {
+                  "key": "office_qualification",
+                  "cell": "D6",
+                  "label": "建築士事務所の種別",
+                  "type": "select",
+                  "options_ref": "qualification"
+                },
+                {
+                  "key": "office_registrar",
+                  "cell": "J6",
+                  "label": "登録した知事の都道府県",
+                  "type": "text"
+                },
+                {
+                  "key": "office_registration_number",
+                  "cell": "O6",
+                  "label": "登録番号",
+                  "type": "text"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "loads",
+          "title": "1. 単位面積当たりの必要壁量 Lw (cm/m²)",
+          "note": "入力すると、出力される表計算ツールの「出力結果」欄に必要壁量が計算されます。",
+          "blocks": [
+            {
+              "kind": "fields",
+              "fields": [
+                {
+                  "key": "height_2f",
+                  "cell": "H15",
+                  "label": "2階階高 h2",
+                  "type": "number",
+                  "unit": "m",
+                  "step": "0.001",
+                  "min": 0,
+                  "required": true,
+                  "note": "小屋梁・桁上端～2階床梁上端までの距離"
+                },
+                {
+                  "key": "height_1f",
+                  "cell": "H16",
+                  "label": "1階階高 h1",
+                  "type": "number",
+                  "unit": "m",
+                  "step": "0.001",
+                  "min": 0,
+                  "required": true,
+                  "note": "2階床梁上端～1階土台上端までの距離"
+                },
+                {
+                  "key": "ridge_minus_eaves",
+                  "cell": "H17",
+                  "label": "建物の最高高さ − 軒高さ",
+                  "type": "number",
+                  "unit": "m",
+                  "step": "0.001",
+                  "min": 0,
+                  "required": true,
+                  "note": "建物の頂点～小屋梁・桁上端までの距離"
+                },
+                {
+                  "key": "seismic_zone",
+                  "cell": "H18",
+                  "label": "地震地域係数 Z",
+                  "type": "select",
+                  "options_ref": "seismic_zone",
+                  "note": "昭55年建告第1793号第1の表の上欄に掲げる地方の区分に応じ同表下欄に掲げる数値",
+                  "visible_when": {
+                    "field": "usage",
+                    "in": [
+                      "performance"
+                    ]
+                  },
+                  "fixed_when": {
+                    "field": "usage",
+                    "not_in": [
+                      "performance"
+                    ],
+                    "value": "ー"
+                  }
+                },
+                {
+                  "key": "base_shear",
+                  "cell": "H19",
+                  "label": "標準せん断力係数 C0",
+                  "type": "select",
+                  "options_ref": "base_shear",
+                  "value_type": "number",
+                  "required": true,
+                  "note": "軟弱地盤の指定がある場合は 0.3（不明な場合は特定行政庁に確認）"
+                },
+                {
+                  "key": "heavy_snow",
+                  "cell": "H20",
+                  "label": "多雪区域の指定",
+                  "type": "select",
+                  "options_ref": "heavy_snow",
+                  "visible_when": {
+                    "field": "usage",
+                    "in": [
+                      "performance"
+                    ]
+                  },
+                  "fixed_when": {
+                    "field": "usage",
+                    "not_in": [
+                      "performance"
+                    ],
+                    "value": "ー"
+                  }
+                },
+                {
+                  "key": "snow_depth",
+                  "cell": "H21",
+                  "label": "垂直積雪量",
+                  "type": "number",
+                  "unit": "cm",
+                  "step": "1",
+                  "min": 0,
+                  "note": "解説・注意事項の表1-3を必ず参照する。入力時は単位に注意する。",
+                  "visible_when": {
+                    "field": "heavy_snow",
+                    "in": [
+                      "あり(多雪区域)"
+                    ]
+                  },
+                  "required_when": {
+                    "field": "heavy_snow",
+                    "in": [
+                      "あり(多雪区域)"
+                    ]
+                  }
+                },
+                {
+                  "key": "snow_unit_load",
+                  "cell": "H22",
+                  "label": "積雪単位荷重",
+                  "type": "number",
+                  "unit": "N/m²/cm",
+                  "step": "0.1",
+                  "min": 0,
+                  "visible_when": {
+                    "field": "heavy_snow",
+                    "in": [
+                      "あり(多雪区域)"
+                    ]
+                  },
+                  "required_when": {
+                    "field": "heavy_snow",
+                    "in": [
+                      "あり(多雪区域)"
+                    ]
+                  }
+                },
+                {
+                  "key": "floor_area_2f",
+                  "cell": "H23",
+                  "label": "2階床面積",
+                  "type": "number",
+                  "unit": "m²",
+                  "step": "0.01",
+                  "min": 0,
+                  "required": true,
+                  "note": "ここでは小屋裏面積を含めなくともよい。"
+                },
+                {
+                  "key": "floor_area_1f",
+                  "cell": "H24",
+                  "label": "1階床面積",
+                  "type": "number",
+                  "unit": "m²",
+                  "step": "0.01",
+                  "min": 0,
+                  "required": true,
+                  "note": "ここでは小屋裏面積を含めなくともよい。"
+                },
+                {
+                  "key": "eaves",
+                  "cell": "H25",
+                  "label": "軒の出",
+                  "type": "number",
+                  "unit": "m",
+                  "step": "0.001",
+                  "min": 0,
+                  "required": true,
+                  "note": "壁芯から軒先瓦の先端までの長さ"
+                },
+                {
+                  "key": "roof_pitch",
+                  "cell": "H26",
+                  "label": "屋根勾配",
+                  "type": "number",
+                  "unit": "寸",
+                  "step": "0.01",
+                  "min": 0,
+                  "required": true
+                },
+                {
+                  "key": "roof_spec",
+                  "cell": "H27",
+                  "label": "屋根の仕様",
+                  "type": "select",
+                  "options_ref": "roof",
+                  "required": true
+                },
+                {
+                  "key": "wall_spec",
+                  "cell": "H28",
+                  "label": "外壁の仕様",
+                  "type": "select",
+                  "options_ref": "exterior_wall",
+                  "required": true
+                },
+                {
+                  "key": "solar",
+                  "cell": "H29",
+                  "label": "太陽光発電設備等",
+                  "type": "select",
+                  "options_ref": "solar",
+                  "required": true,
+                  "note": "質量を自分で入れるときは「あり(任意入力)」を選ぶ（屋根面積に対する均し荷重として算定される）。"
+                },
+                {
+                  "key": "solar_mass",
+                  "cell": "R31",
+                  "label": "設備等の質量",
+                  "type": "number",
+                  "unit": "kg",
+                  "step": "0.1",
+                  "min": 0,
+                  "visible_when": {
+                    "field": "solar",
+                    "in": [
+                      "あり(任意入力)"
+                    ]
+                  },
+                  "required_when": {
+                    "field": "solar",
+                    "in": [
+                      "あり(任意入力)"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "fields",
+              "label": "天井(屋根)断熱材",
+              "fields": [
+                {
+                  "key": "ceiling_insulation",
+                  "cell": "H32",
+                  "label": "天井(屋根)断熱材",
+                  "type": "select",
+                  "options_ref": "ceiling_insulation",
+                  "required": true,
+                  "note": "密度と厚さを自分で入れるときは「任意入力」を選ぶ。"
+                }
+              ]
+            },
+            {
+              "kind": "table",
+              "label": "天井(屋根)断熱材の任意入力",
+              "columns": [
+                "",
+                "該当面積(m²)",
+                "密度(kg/m³)",
+                "厚さ(mm)"
+              ],
+              "visible_when": {
+                "field": "ceiling_insulation",
+                "in": [
+                  "任意入力"
+                ]
+              },
+              "rows": [
+                {
+                  "key": "ceiling_custom_1",
+                  "label": "仕様①",
+                  "fields": [
+                    {
+                      "key": "ceiling_custom_1_area",
+                      "cell": "O35",
+                      "label": "該当面積",
+                      "type": "number",
+                      "unit": "m²",
+                      "step": "0.01",
+                      "min": 0
+                    },
+                    {
+                      "key": "ceiling_custom_1_density",
+                      "cell": "R35",
+                      "label": "密度",
+                      "type": "number",
+                      "unit": "kg/m³",
+                      "step": "0.1",
+                      "min": 0
+                    },
+                    {
+                      "key": "ceiling_custom_1_thickness",
+                      "cell": "U35",
+                      "label": "厚さ",
+                      "type": "number",
+                      "unit": "mm",
+                      "step": "0.1",
+                      "min": 0
+                    }
+                  ]
+                },
+                {
+                  "key": "ceiling_custom_2",
+                  "label": "仕様②",
+                  "fields": [
+                    {
+                      "key": "ceiling_custom_2_area",
+                      "cell": "O36",
+                      "label": "該当面積",
+                      "type": "number",
+                      "unit": "m²",
+                      "step": "0.01",
+                      "min": 0
+                    },
+                    {
+                      "key": "ceiling_custom_2_density",
+                      "cell": "R36",
+                      "label": "密度",
+                      "type": "number",
+                      "unit": "kg/m³",
+                      "step": "0.1",
+                      "min": 0
+                    },
+                    {
+                      "key": "ceiling_custom_2_thickness",
+                      "cell": "U36",
+                      "label": "厚さ",
+                      "type": "number",
+                      "unit": "mm",
+                      "step": "0.1",
+                      "min": 0
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "fields",
+              "label": "外壁断熱材",
+              "fields": [
+                {
+                  "key": "wall_insulation",
+                  "cell": "H37",
+                  "label": "外壁断熱材",
+                  "type": "select",
+                  "options_ref": "wall_insulation",
+                  "required": true,
+                  "note": "密度と厚さを自分で入れるときは「任意入力」を選ぶ。"
+                }
+              ]
+            },
+            {
+              "kind": "table",
+              "label": "外壁断熱材の任意入力",
+              "columns": [
+                "",
+                "密度(kg/m³)",
+                "厚さ(mm)"
+              ],
+              "visible_when": {
+                "field": "wall_insulation",
+                "in": [
+                  "任意入力"
+                ]
+              },
+              "rows": [
+                {
+                  "key": "wall_custom_1",
+                  "label": "仕様①",
+                  "fields": [
+                    {
+                      "key": "wall_custom_1_density",
+                      "cell": "R39",
+                      "label": "密度",
+                      "type": "number",
+                      "unit": "kg/m³",
+                      "step": "0.1",
+                      "min": 0
+                    },
+                    {
+                      "key": "wall_custom_1_thickness",
+                      "cell": "U39",
+                      "label": "厚さ",
+                      "type": "number",
+                      "unit": "mm",
+                      "step": "0.1",
+                      "min": 0
+                    }
+                  ]
+                },
+                {
+                  "key": "wall_custom_2",
+                  "label": "仕様②",
+                  "fields": [
+                    {
+                      "key": "wall_custom_2_density",
+                      "cell": "R40",
+                      "label": "密度",
+                      "type": "number",
+                      "unit": "kg/m³",
+                      "step": "0.1",
+                      "min": 0
+                    },
+                    {
+                      "key": "wall_custom_2_thickness",
+                      "cell": "U40",
+                      "label": "厚さ",
+                      "type": "number",
+                      "unit": "mm",
+                      "step": "0.1",
+                      "min": 0
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "column_1",
+          "title": "2-1 算定式と有効細長比より柱の小径を求める場合",
+          "note": "すぎ、無等級材（平成12年建設省告示第1452号第5号）を前提として算定されます。",
+          "toggle": {
+            "key": "use_column_1",
+            "cell": "W52",
+            "label": "2-1 の算定方法を使う"
+          },
+          "blocks": []
+        },
+        {
+          "key": "column_2",
+          "title": "2-2 樹種等を選択し、算定式と有効細長比より柱の小径を求める場合",
+          "note": "階ごとに①〜④の 4 種類までの柱材が選べます。",
+          "toggle": {
+            "key": "use_column_2",
+            "cell": "W62",
+            "label": "2-2 の算定方法を使う"
+          },
+          "blocks": [
+            {
+              "kind": "table",
+              "label": "2階",
+              "columns": [
+                "",
+                "JAS規格",
+                "樹種等",
+                "等級等(積層数)"
+              ],
+              "rows": [
+                {
+                  "key": "c2_2f_①",
+                  "label": "①",
+                  "fields": [
+                    {
+                      "key": "c2_2f_①_jas",
+                      "cell": "D69",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c2_2f_①_species",
+                      "cell": "I69",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c2_2f_①_jas"
+                      }
+                    },
+                    {
+                      "key": "c2_2f_①_grade",
+                      "cell": "L69",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c2_2f_①_jas"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "c2_2f_②",
+                  "label": "②",
+                  "fields": [
+                    {
+                      "key": "c2_2f_②_jas",
+                      "cell": "D70",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c2_2f_②_species",
+                      "cell": "I70",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c2_2f_②_jas"
+                      }
+                    },
+                    {
+                      "key": "c2_2f_②_grade",
+                      "cell": "L70",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c2_2f_②_jas"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "c2_2f_③",
+                  "label": "③",
+                  "fields": [
+                    {
+                      "key": "c2_2f_③_jas",
+                      "cell": "D71",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c2_2f_③_species",
+                      "cell": "I71",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c2_2f_③_jas"
+                      }
+                    },
+                    {
+                      "key": "c2_2f_③_grade",
+                      "cell": "L71",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c2_2f_③_jas"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "fields",
+              "label": "2階④ 国土交通大臣が基準強度の数値を指定した木材等",
+              "fields": [
+                {
+                  "key": "c2_2f_④_strength",
+                  "cell": "Q72",
+                  "label": "圧縮の基準強度 Fc",
+                  "type": "number",
+                  "unit": "N/mm²",
+                  "step": "0.1",
+                  "min": 0
+                }
+              ]
+            },
+            {
+              "kind": "table",
+              "label": "1階",
+              "columns": [
+                "",
+                "JAS規格",
+                "樹種等",
+                "等級等(積層数)"
+              ],
+              "rows": [
+                {
+                  "key": "c2_1f_①",
+                  "label": "①",
+                  "fields": [
+                    {
+                      "key": "c2_1f_①_jas",
+                      "cell": "D73",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c2_1f_①_species",
+                      "cell": "I73",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c2_1f_①_jas"
+                      }
+                    },
+                    {
+                      "key": "c2_1f_①_grade",
+                      "cell": "L73",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c2_1f_①_jas"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "c2_1f_②",
+                  "label": "②",
+                  "fields": [
+                    {
+                      "key": "c2_1f_②_jas",
+                      "cell": "D74",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c2_1f_②_species",
+                      "cell": "I74",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c2_1f_②_jas"
+                      }
+                    },
+                    {
+                      "key": "c2_1f_②_grade",
+                      "cell": "L74",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c2_1f_②_jas"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "c2_1f_③",
+                  "label": "③",
+                  "fields": [
+                    {
+                      "key": "c2_1f_③_jas",
+                      "cell": "D75",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c2_1f_③_species",
+                      "cell": "I75",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c2_1f_③_jas"
+                      }
+                    },
+                    {
+                      "key": "c2_1f_③_grade",
+                      "cell": "L75",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c2_1f_③_jas"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "fields",
+              "label": "1階④ 国土交通大臣が基準強度の数値を指定した木材等",
+              "fields": [
+                {
+                  "key": "c2_1f_④_strength",
+                  "cell": "Q76",
+                  "label": "圧縮の基準強度 Fc",
+                  "type": "number",
+                  "unit": "N/mm²",
+                  "step": "0.1",
+                  "min": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "column_3",
+          "title": "2-3 柱の小径別に柱の負担可能面積を求める場合",
+          "note": "階ごとに①〜③の 3 種類までの柱材が選べます。",
+          "toggle": {
+            "key": "use_column_3",
+            "cell": "W77",
+            "label": "2-3 の算定方法を使う"
+          },
+          "blocks": [
+            {
+              "kind": "fields",
+              "label": "任意の断面寸法",
+              "note": "105角・120角に加えて、任意の断面を 2 つまで設定できます。",
+              "fields": [
+                {
+                  "key": "free_1_long",
+                  "cell": "S85",
+                  "label": "任意入力① 長辺",
+                  "type": "number",
+                  "unit": "mm",
+                  "step": "1",
+                  "min": 0
+                },
+                {
+                  "key": "free_1_short",
+                  "cell": "T85",
+                  "label": "任意入力① 短辺",
+                  "type": "number",
+                  "unit": "mm",
+                  "step": "1",
+                  "min": 0
+                },
+                {
+                  "key": "free_2_long",
+                  "cell": "U85",
+                  "label": "任意入力② 長辺",
+                  "type": "number",
+                  "unit": "mm",
+                  "step": "1",
+                  "min": 0
+                },
+                {
+                  "key": "free_2_short",
+                  "cell": "V85",
+                  "label": "任意入力② 短辺",
+                  "type": "number",
+                  "unit": "mm",
+                  "step": "1",
+                  "min": 0
+                }
+              ]
+            },
+            {
+              "kind": "table",
+              "label": "2階 外周部の柱",
+              "columns": [
+                "",
+                "JAS規格",
+                "樹種等",
+                "等級等(積層数)"
+              ],
+              "rows": [
+                {
+                  "key": "c3_2f_out_①",
+                  "label": "①",
+                  "fields": [
+                    {
+                      "key": "c3_2f_out_①_jas",
+                      "cell": "D86",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c3_2f_out_①_species",
+                      "cell": "H86",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c3_2f_out_①_jas"
+                      }
+                    },
+                    {
+                      "key": "c3_2f_out_①_grade",
+                      "cell": "J86",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c3_2f_out_①_jas"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "c3_2f_out_②",
+                  "label": "②",
+                  "fields": [
+                    {
+                      "key": "c3_2f_out_②_jas",
+                      "cell": "D87",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c3_2f_out_②_species",
+                      "cell": "H87",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c3_2f_out_②_jas"
+                      }
+                    },
+                    {
+                      "key": "c3_2f_out_②_grade",
+                      "cell": "J87",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c3_2f_out_②_jas"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "fields",
+              "label": "2階 外周部の柱③ 国土交通大臣が基準強度の数値を指定した木材等",
+              "fields": [
+                {
+                  "key": "c3_2f_out_③_strength",
+                  "cell": "M88",
+                  "label": "圧縮の基準強度 Fc",
+                  "type": "number",
+                  "unit": "N/mm²",
+                  "step": "0.1",
+                  "min": 0
+                }
+              ]
+            },
+            {
+              "kind": "table",
+              "label": "2階 内部の柱",
+              "columns": [
+                "",
+                "JAS規格",
+                "樹種等",
+                "等級等(積層数)"
+              ],
+              "rows": [
+                {
+                  "key": "c3_2f_in_①",
+                  "label": "①",
+                  "fields": [
+                    {
+                      "key": "c3_2f_in_①_jas",
+                      "cell": "D89",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c3_2f_in_①_species",
+                      "cell": "H89",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c3_2f_in_①_jas"
+                      }
+                    },
+                    {
+                      "key": "c3_2f_in_①_grade",
+                      "cell": "J89",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c3_2f_in_①_jas"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "c3_2f_in_②",
+                  "label": "②",
+                  "fields": [
+                    {
+                      "key": "c3_2f_in_②_jas",
+                      "cell": "D90",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c3_2f_in_②_species",
+                      "cell": "H90",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c3_2f_in_②_jas"
+                      }
+                    },
+                    {
+                      "key": "c3_2f_in_②_grade",
+                      "cell": "J90",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c3_2f_in_②_jas"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "fields",
+              "label": "2階 内部の柱③ 国土交通大臣が基準強度の数値を指定した木材等",
+              "fields": [
+                {
+                  "key": "c3_2f_in_③_strength",
+                  "cell": "M91",
+                  "label": "圧縮の基準強度 Fc",
+                  "type": "number",
+                  "unit": "N/mm²",
+                  "step": "0.1",
+                  "min": 0
+                }
+              ]
+            },
+            {
+              "kind": "table",
+              "label": "1階 外周部の柱",
+              "columns": [
+                "",
+                "JAS規格",
+                "樹種等",
+                "等級等(積層数)"
+              ],
+              "rows": [
+                {
+                  "key": "c3_1f_out_①",
+                  "label": "①",
+                  "fields": [
+                    {
+                      "key": "c3_1f_out_①_jas",
+                      "cell": "D92",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c3_1f_out_①_species",
+                      "cell": "H92",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c3_1f_out_①_jas"
+                      }
+                    },
+                    {
+                      "key": "c3_1f_out_①_grade",
+                      "cell": "J92",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c3_1f_out_①_jas"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "c3_1f_out_②",
+                  "label": "②",
+                  "fields": [
+                    {
+                      "key": "c3_1f_out_②_jas",
+                      "cell": "D93",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c3_1f_out_②_species",
+                      "cell": "H93",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c3_1f_out_②_jas"
+                      }
+                    },
+                    {
+                      "key": "c3_1f_out_②_grade",
+                      "cell": "J93",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c3_1f_out_②_jas"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "fields",
+              "label": "1階 外周部の柱③ 国土交通大臣が基準強度の数値を指定した木材等",
+              "fields": [
+                {
+                  "key": "c3_1f_out_③_strength",
+                  "cell": "M94",
+                  "label": "圧縮の基準強度 Fc",
+                  "type": "number",
+                  "unit": "N/mm²",
+                  "step": "0.1",
+                  "min": 0
+                }
+              ]
+            },
+            {
+              "kind": "table",
+              "label": "1階 内部の柱",
+              "columns": [
+                "",
+                "JAS規格",
+                "樹種等",
+                "等級等(積層数)"
+              ],
+              "rows": [
+                {
+                  "key": "c3_1f_in_①",
+                  "label": "①",
+                  "fields": [
+                    {
+                      "key": "c3_1f_in_①_jas",
+                      "cell": "D95",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c3_1f_in_①_species",
+                      "cell": "H95",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c3_1f_in_①_jas"
+                      }
+                    },
+                    {
+                      "key": "c3_1f_in_①_grade",
+                      "cell": "J95",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c3_1f_in_①_jas"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "key": "c3_1f_in_②",
+                  "label": "②",
+                  "fields": [
+                    {
+                      "key": "c3_1f_in_②_jas",
+                      "cell": "D96",
+                      "label": "JAS規格",
+                      "type": "select",
+                      "options_ref": "jas"
+                    },
+                    {
+                      "key": "c3_1f_in_②_species",
+                      "cell": "H96",
+                      "label": "樹種等",
+                      "type": "select",
+                      "cascade": {
+                        "role": "species",
+                        "of": "c3_1f_in_②_jas"
+                      }
+                    },
+                    {
+                      "key": "c3_1f_in_②_grade",
+                      "cell": "J96",
+                      "label": "等級等(積層数)",
+                      "type": "select",
+                      "cascade": {
+                        "role": "grade",
+                        "of": "c3_1f_in_②_jas"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "fields",
+              "label": "1階 内部の柱③ 国土交通大臣が基準強度の数値を指定した木材等",
+              "fields": [
+                {
+                  "key": "c3_1f_in_③_strength",
+                  "cell": "M97",
+                  "label": "圧縮の基準強度 Fc",
+                  "type": "number",
+                  "unit": "N/mm²",
+                  "step": "0.1",
+                  "min": 0
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "guard": {
+    "one_story": {
+      "A1": "壁量等の基準(令和7年施行)に対応した表計算ツール（平屋建て用）（多機能版）",
+      "V3": "ver1.2.1",
+      "A8": "０．設計の用途を選択（いずれかひとつのチェックボックスを選択してください。）",
+      "B9": "住宅性能表示制度を利用",
+      "I9": "非住宅（事務所建築）",
+      "N9": "左記以外（住宅・建築基準法のみ）",
+      "C14": "項目",
+      "H14": "入力欄",
+      "K14": "入力の注意点等",
+      "C15": "1階階高（ｍ）",
+      "C16": "建物の最高高さ―軒高さ(m)",
+      "C18": "標準せん断力係数C0",
+      "C22": "1階床面積(m2）",
+      "C23": "軒の出(m）",
+      "C24": "屋根勾配（寸）",
+      "C25": "屋根の仕様",
+      "C26": "外壁の仕様",
+      "C27": "太陽光発電設備等(N/m2)",
+      "C30": "天井(屋根)断熱材(N/m2)",
+      "C35": "外壁断熱材(N/m2)",
+      "R28": "設備等の質量（kg）",
+      "O32": "該当面積(m2)",
+      "R32": "密度(kg/m3)",
+      "U32": "厚さ(mm)",
+      "R36": "密度(kg/m3)",
+      "U36": "厚さ(mm)",
+      "B42": "出力結果",
+      "C42": "【単位面積当たりの必要壁量】",
+      "H42": "1階",
+      "A47": "２　柱の小径（令第43条第1項、第6項、平成12建告第1349号第一第2項）",
+      "B52": "2-1 算定式と有効細長比より柱の小径を求める場合",
+      "B54": "階",
+      "D54": "出力結果",
+      "D55": "de/l　*3",
+      "F55": "柱の小径de　*4\n(㎜以上)",
+      "B57": "1階",
+      "B61": "2-2　樹種等を選択し、算定式と有効細長比より柱の小径を求める場合",
+      "B64": "柱材の種類",
+      "D64": "入力値",
+      "Q64": "出力結果",
+      "D65": "JAS規格",
+      "I65": "樹種等",
+      "L65": "等級等(積層数)",
+      "Q65": "圧縮の基準強度\nFc(N/㎜2)",
+      "T65": "柱の小径\n(㎜以上)",
+      "B66": "1階",
+      "C66": "①",
+      "C67": "②",
+      "C68": "③",
+      "C69": "④",
+      "D69": "国土交通大臣が基準強度の数値を指定した木材等",
+      "L69": "使用する場合は基準強度を記入",
+      "B71": "2-3　柱の小径別に柱の負担可能面積を求める場合",
+      "B75": "柱材の種類",
+      "D75": "入力値",
+      "M75": "出力結果：柱の負担可能面積（m2）",
+      "D76": "JAS規格",
+      "H76": "樹種※",
+      "J76": "等級",
+      "M76": "圧縮の基準強度Fc\n(N/㎜2)",
+      "O76": "105角",
+      "Q76": "120角",
+      "S76": "任意入力①",
+      "U76": "任意入力②",
+      "O77": "長辺・短辺（㎜）",
+      "Q77": "長辺・短辺（㎜）",
+      "S77": "長辺(㎜)",
+      "T77": "短辺(㎜)",
+      "U77": "長辺(㎜)",
+      "V77": "短辺(㎜)",
+      "O78": "105",
+      "Q78": "120",
+      "B79": "1階\n外周部\nの柱*",
+      "C79": "①",
+      "C80": "②",
+      "C81": "③",
+      "D81": "国土交通大臣が基準強度の数値を指定した木材等",
+      "J81": "使用する場合は基準強度を記入",
+      "B82": "1階\n内部\nの柱",
+      "C82": "①",
+      "C83": "②",
+      "C84": "③"
+    },
+    "two_story": {
+      "A1": "壁量等の基準(令和7年施行)に対応した表計算ツール（２階建て用）（多機能版）",
+      "V3": "ver1.2.1",
+      "A8": "０．設計の用途を選択（いずれかひとつのチェックボックスを選択してください。）",
+      "B9": "住宅性能表示制度を利用",
+      "I9": "非住宅（事務所建築）",
+      "N9": "左記以外（住宅・建築基準法のみ）",
+      "C14": "項目",
+      "H14": "入力欄",
+      "K14": "入力の注意点等",
+      "C15": "2階階高h2（ｍ）",
+      "C16": "1階階高h1（ｍ）",
+      "C17": "建物の最高高さ―軒高さ(m)",
+      "C19": "標準せん断力係数C0",
+      "C23": "2階床面積(m2）",
+      "C24": "1階床面積(m2）",
+      "C25": "軒の出(m）",
+      "C26": "屋根勾配（寸）",
+      "C27": "屋根の仕様",
+      "C28": "外壁の仕様",
+      "C29": "太陽光発電設備等(N/m2)",
+      "C32": "天井(屋根)断熱材(N/m2)",
+      "C37": "外壁断熱材(N/m2)",
+      "R30": "設備等の質量（kg）",
+      "O34": "該当面積(m2)",
+      "R34": "密度(kg/m3)",
+      "U34": "厚さ(mm)",
+      "R38": "密度(kg/m3)",
+      "U38": "厚さ(mm)",
+      "B44": "出力結果",
+      "C44": "【単位面積当たりの必要壁量】",
+      "H44": "1階",
+      "J44": "2階",
+      "A49": "２　柱の小径（令第43条第1項、第6項、平成12建告第1349号第一第2項）",
+      "B54": "2-1 算定式と有効細長比より柱の小径を求める場合",
+      "B56": "階",
+      "D56": "出力結果",
+      "D57": "de/l　*3",
+      "F57": "柱の小径de　*4\n(㎜以上)",
+      "B59": "2階",
+      "B60": "1階",
+      "B64": "2-2　樹種等を選択し、算定式と有効細長比より柱の小径を求める場合",
+      "B67": "柱材の種類",
+      "D67": "入力値",
+      "Q67": "出力結果",
+      "D68": "JAS規格",
+      "I68": "樹種等",
+      "L68": "等級等(積層数)",
+      "Q68": "圧縮の基準強度\nFc(N/㎜2)",
+      "T68": "柱の小径\n(㎜以上)",
+      "B69": "2階",
+      "C69": "①",
+      "C70": "②",
+      "C71": "③",
+      "C72": "④",
+      "D72": "国土交通大臣が基準強度の数値を指定した木材等",
+      "L72": "使用する場合は基準強度を記入",
+      "B73": "1階",
+      "C73": "①",
+      "C74": "②",
+      "C75": "③",
+      "C76": "④",
+      "D76": "国土交通大臣が基準強度の数値を指定した木材等",
+      "L76": "使用する場合は基準強度を記入",
+      "B78": "2-3　柱の小径別に柱の負担可能面積を求める場合",
+      "B82": "柱材の種類",
+      "D82": "入力値",
+      "M82": "出力結果：柱の負担可能面積（m2）",
+      "D83": "JAS規格",
+      "H83": "樹種※",
+      "J83": "等級",
+      "M83": "圧縮の基準強度Fc\n(N/㎜2)",
+      "O83": "105角",
+      "Q83": "120角",
+      "S83": "任意入力①",
+      "U83": "任意入力②",
+      "O84": "長辺・短辺（㎜）",
+      "Q84": "長辺・短辺（㎜）",
+      "S84": "長辺(㎜)",
+      "T84": "短辺(㎜)",
+      "U84": "長辺(㎜)",
+      "V84": "短辺(㎜)",
+      "O85": "105",
+      "Q85": "120",
+      "B86": "2階\n外周部\nの柱*",
+      "C86": "①",
+      "C87": "②",
+      "C88": "③",
+      "D88": "国土交通大臣が基準強度の数値を指定した木材等",
+      "J88": "使用する場合は基準強度を記入",
+      "B89": "2階\n内部\nの柱",
+      "C89": "①",
+      "C90": "②",
+      "C91": "③",
+      "B92": "1階\n外周部\nの柱*",
+      "C92": "①",
+      "C93": "②",
+      "C94": "③",
+      "B95": "1階\n内部\nの柱",
+      "C95": "①",
+      "C96": "②",
+      "C97": "③"
+    },
+    "strength": {
+      "I1": "JAS機械等級区分構造用製材",
+      "J1": "JAS目視等級区分構造用製材",
+      "K1": "無等級材",
+      "L1": "JAS同一等級構成集成材",
+      "M1": "JASA種構造用単板積層材",
+      "A3": "VLOOKUP引き当て用",
+      "B3": "JAS規格",
+      "C3": "樹種",
+      "D3": "等級",
+      "F3": "圧縮基準強度Fc（N/mm２）"
+    }
+  }
+}

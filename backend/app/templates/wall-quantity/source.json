@@ -1,0 +1,27 @@
+{
+  "_readme": [
+    "同梱している表計算ツール（worksheet.xlsx）の出所です。ここが更新の基準になります。",
+    "",
+    ".github/workflows/howtec-worksheet-check.yml が page_url を定期的に読み、",
+    "配布されている xlsx の中身が sha256 と違えば、worksheet.xlsx と このファイルを",
+    "差し替える PR を出します（ページの構造が変わって拾えないときは issue を立てます）。",
+    "",
+    "file_url / file_name / retrieved_at は、ワークフローが配布ページから取得したときに",
+    "書き込みます。最初の 1 つは手元のダウンロード済みファイルから取り込んだため空です",
+    "（sha256 と version は同梱ファイルそのものから求めています）。",
+    "",
+    "配布物は無償で公開されている参考ツールで、このリポジトリは社内ポータルから",
+    "同じファイルを配るためだけに複製しています。改変はしません（利用者が入力した値を",
+    "書き込んだ複製を渡すだけで、同梱している worksheet.xlsx 自体は書き換えません）。"
+  ],
+  "name": "壁量等の基準(令和7年施行)に対応した表計算ツール（多機能版）",
+  "publisher": "公益財団法人日本住宅・木材技術センター",
+  "page_url": "https://www.howtec.or.jp/publics/index/441/",
+  "file_url": "",
+  "file_name": "",
+  "version": "1.2.1",
+  "version_updated_on": "2025-07-29",
+  "retrieved_at": "",
+  "sha256": "f8411fd3d22b80e6ec1bf6d14e4c4ac42875554130a828a1dee017269d035948",
+  "size": 243262
+}
