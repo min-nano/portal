@@ -181,11 +181,21 @@ describe('計算実装（wasm）', () => {
 
   it('グレー本 3.3 の計算例（図 3.3.10）を、本と同じ答えで返す', async () => {
     // 面材は表 3.2.1 の配列をそのまま壁の中へ置く。釘 1 本あたりの数値は、
-    // 本文が計算に使っているものをそのまま入れる。
+    // 本文が計算に使っているものを面材ごとに入れる（面材と釘の仕様は面材
+    // ごとの入力で、この計算例は 2 枚とも同じ組合せ）。
     const loaded = await core();
-    const panels = ['910x1820-s455-n75-hi', '910x910-s455-n75-ro'].map((id) =>
-      loaded.preset(id)
-    );
+    const panels = ['910x1820-s455-n75-hi', '910x910-s455-n75-ro'].map((id) => ({
+      ...loaded.preset(id),
+      thickness: 12,
+      shearModulus: 0.4,
+      k: 0.483,
+      deltaV: 2.3,
+      deltaU: 17,
+      deltaPv: 1.13,
+      tauMax: 3.6,
+      e1: 3500,
+      e2: 5500,
+    }));
 
     const { walls } = loaded.computeAll({
       walls: [
@@ -194,15 +204,6 @@ describe('計算実装（wasm）', () => {
           wallName: 'グレー本 3.3 の計算例',
           height: 3000,
           width: 910,
-          thickness: 12,
-          shearModulus: 0.4,
-          k: 0.483,
-          deltaV: 2.3,
-          deltaU: 17,
-          deltaPv: 1.13,
-          tauMax: 3.6,
-          e1: 3500,
-          e2: 5500,
           hasIntermediateStud: true,
           panels,
         },
@@ -226,6 +227,53 @@ describe('計算実装（wasm）', () => {
     expect(walls[0].shearOk).toBe(true);
     expect(walls[0].bucklingOk).toBe(true);
     expect(walls[0].buckling.every((panel) => panel.ok)).toBe(true);
+    // 面材ごとの面材と釘も、そのまま表として返る。
+    expect(walls[0].specs.map((spec) => spec.cells[0])).toEqual(['12', '12']);
+  });
+
+  it('1 枚の壁でも、面材ごとに違う面材と釘を使える', async () => {
+    const loaded = await core();
+    const spec = (id) => {
+      const material = loaded.materials().find((entry) => entry.id === id);
+      return {
+        thickness: material.thickness,
+        shearModulus: material.shearModulus,
+        k: material.k,
+        deltaV: material.deltaV,
+        deltaU: material.deltaU,
+        deltaPv: material.deltaPv,
+        tauMax: material.tauMax,
+        e1: material.e1,
+        e2: material.e2,
+      };
+    };
+    const wallOfSpecs = (lower, upper) => ({
+      walls: [
+        {
+          wallId: 'w1',
+          height: 3000,
+          width: 910,
+          hasIntermediateStud: true,
+          panels: [
+            { ...loaded.preset('910x1820-s455-n75-hi'), ...spec(lower) },
+            { ...loaded.preset('910x910-s455-n75-ro'), ...spec(upper) },
+          ],
+        },
+      ],
+    });
+
+    const mixed = loaded.computeAll(wallOfSpecs('plywood12-n50', 'plywood12-cn50'));
+    const allN50 = loaded.computeAll(wallOfSpecs('plywood12-n50', 'plywood12-n50'));
+    const allCn50 = loaded.computeAll(wallOfSpecs('plywood12-cn50', 'plywood12-cn50'));
+
+    expect(mixed.walls[0].ok).toBe(true);
+    // 面材ごとの値は、その面材の仕様だけで決まる（隣の面材に引きずられない）。
+    const my = (reports, index) => reports.walls[0].panels[index].cells[5];
+    expect(my(mixed, 0)).toBe(my(allN50, 0));
+    expect(my(mixed, 1)).toBe(my(allCn50, 1));
+    expect(my(allN50, 1)).not.toBe(my(allCn50, 1));
+    // 面材ごとの ΔPv が、そのまま面材ごとの表に並ぶ。
+    expect(mixed.walls[0].specs.map((entry) => entry.cells[5])).toEqual(['0.91', '0.94']);
   });
 
   it('計算できない壁は、理由を添えて ok: false で返る', async () => {

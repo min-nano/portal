@@ -24,6 +24,15 @@ from app import nail_core, panel_shear
 EXAMPLE_PANEL = dict(panel_shear.EXAMPLE_PANEL, panelId="w1-p1")
 
 
+# 面材と釘は面材ごとの入力（1 枚の壁でも張り分けられる）。
+EXAMPLE_MATERIAL = panel_shear.material(panel_shear.EXAMPLE_WALL_MATERIAL)
+
+
+def make_panel(**overrides):
+    """グレー本 3.2 の計算例の面材 1 枚（面材と釘は 3.3 の計算例のもの）。"""
+    return {**EXAMPLE_MATERIAL, **EXAMPLE_PANEL, **overrides}
+
+
 def make_data(**overrides):
     """グレー本 3.2 の計算例の面材を 1 枚だけ張った壁。"""
     body = {
@@ -31,10 +40,9 @@ def make_data(**overrides):
         "issuedOn": "2026-08-11",
         "walls": [
             {
-                **panel_shear.material(panel_shear.EXAMPLE_WALL_MATERIAL),
                 **panel_shear.EXAMPLE_WALL,
                 "wallId": "w1",
-                "panels": [dict(EXAMPLE_PANEL)],
+                "panels": [make_panel()],
             }
         ],
     }
@@ -232,8 +240,15 @@ def test_the_wall_inputs_name_the_nail_diameter():
     """へりあきを決める手がかりとして、選んだ釘の呼び径を控えに残す。"""
     report = panel_shear.compute_all(panel_shear.example_wall_data())["walls"][0]
 
+    # 面材と釘は面材ごとの入力なので、壁の控えは「全ての面材で同じ組合せ」の
+    # ときだけその名前を出す（面材ごとの数値は面材ごとの表と各面材の計算に）。
     inputs = {row["label"]: row["value"] for row in report["inputs"]}
-    assert inputs["面材と釘の組合せ"] == (
+    assert inputs["面材と釘"] == "構造用合板 12mm + 鉄丸釘 N-65（釘の呼び径 φ3.05 mm）"
+
+    panel_inputs = {
+        row["label"]: row["value"] for row in report["panelReports"][0]["inputs"]
+    }
+    assert panel_inputs["面材と釘の組合せ"] == (
         "構造用合板 12mm + 鉄丸釘 N-65（釘の呼び径 φ3.05 mm）"
     )
 
@@ -264,13 +279,13 @@ def test_the_edge_distance_is_measured_for_every_input_mode():
     """へりあきは、割り付けでも座標入力でも釘の座標から測る。"""
     data = make_data()
     data["walls"][0]["panels"] = [
-        {
-            "panelName": "座標入力",
-            "width": 910,
-            "height": 610,
-            "mode": "coords",
-            "coords": "20, 20\n890, 20\n20, 590\n890, 590",
-        }
+        make_panel(
+            panelName="座標入力",
+            width=910,
+            height=610,
+            mode="coords",
+            coords="20, 20\n890, 20\n20, 590\n890, 590",
+        )
     ]
     data = panel_shear.normalize_data(data)
 
@@ -285,7 +300,8 @@ def test_the_edge_distance_is_measured_for_every_input_mode():
 def test_a_thin_panel_fails_the_shear_check():
     """面材を薄くすれば τN が上がり、せん断破壊で NG になる。"""
     data = panel_shear.example_wall_data()
-    data["walls"][0]["thickness"] = 3
+    for panel in data["walls"][0]["panels"]:
+        panel["thickness"] = 3
 
     report = panel_shear.compute_all(data)["walls"][0]
 
@@ -293,6 +309,59 @@ def test_a_thin_panel_fails_the_shear_check():
     assert report["buckling"][0]["cells"][-1] == "NG"
     failure = next(check for check in report["checks"] if "せん断破壊" in check["label"])
     assert failure["ok"] is False
+
+
+def test_a_wall_can_mix_the_specification_of_its_panels():
+    """1 枚の壁でも、面材ごとに違う面材と釘を張り分けられる。"""
+    data = panel_shear.example_wall_data()
+    data["walls"][0]["panels"][1].update(panel_shear.material("plywood12-cn50"))
+
+    report = panel_shear.compute_all(data)["walls"][0]
+
+    assert report["ok"] is True
+    # 面材ごとの表に、それぞれの釘の数値（ΔPv）が並ぶ。
+    assert [spec["cells"][5] for spec in report["specs"]] == ["1.13", "0.94"]
+    # 壁の控えは「面材ごとに異なる」とし、面材の名前で組合せを案内する。
+    inputs = {row["label"]: row["value"] for row in report["inputs"]}
+    assert "面材ごとに異なる" in inputs["面材と釘"]
+    assert any("太め鉄丸釘(CN 釘)50" in value for value in inputs.values())
+
+
+def test_the_specification_of_a_panel_travels_with_the_saved_pdf():
+    """面材ごとの面材と釘は、保存した PDF から読み戻しても面材ごとのまま。"""
+    data = panel_shear.example_wall_data()
+    data["walls"][0]["panels"][1].update(panel_shear.material("plywood12-cn50"))
+    pdf_bytes = panel_shear.build_pdf(data, panel_shear.validate(data))
+
+    parsed = panel_shear.parse_pdf(pdf_bytes)
+
+    panels = parsed["walls"][0]["panels"]
+    assert panels[0]["materialId"] == "plywood12-n65"
+    assert panels[1]["materialId"] == "plywood12-cn50"
+    assert panels[1]["deltaPv"] == 0.94
+
+
+def test_the_specification_of_an_older_pdf_moves_onto_every_panel():
+    """面材と釘を壁が持っていた版の入力は、読み込みで全ての面材へ配る。"""
+    parsed = panel_shear.normalize_data(
+        {
+            **panel_shear.EXAMPLE_WALL,
+            "walls": [
+                {
+                    **EXAMPLE_MATERIAL,
+                    **panel_shear.EXAMPLE_WALL,
+                    "panels": [dict(EXAMPLE_PANEL), dict(EXAMPLE_PANEL, panelId="w1-p2")],
+                }
+            ],
+        }
+    )
+
+    wall = parsed["walls"][0]
+    assert all(panel["materialId"] == "plywood12-n65" for panel in wall["panels"])
+    assert all(panel["deltaPv"] == 1.13 for panel in wall["panels"])
+    # 壁の側には面材と釘の欄を残さない（今の形は面材ごとの入力だけ）。
+    assert "materialId" not in wall
+    assert "thickness" not in wall
 
 
 def test_compute_all_reports_a_broken_wall_without_losing_the_others():
@@ -464,7 +533,7 @@ def build_example_pdf(**overrides) -> tuple[dict, bytes]:
 def test_pdf_has_one_page_per_panel_and_one_per_wall():
     data = make_data()
     data["walls"][0]["panels"].append(
-        dict(EXAMPLE_PANEL, panelId="w1-p2", panelName="南面 上")
+        make_panel(panelId="w1-p2", panelName="南面 上")
     )
     pdf_bytes = panel_shear.build_pdf(data, panel_shear.validate(data))
 
@@ -517,10 +586,13 @@ def test_pdf_prints_the_wall_calculation():
     wall = reports["walls"][0]
 
     assert "グレー本 3.3 の計算例" in text
-    # 入力（階高・壁幅・釘 1 本あたりの数値）。
+    # 入力（階高・壁幅と、全ての面材で共通の面材と釘）。
     assert "3,000 mm" in text
     assert "910 mm" in text
-    assert "ΔPv = 1.13000 kN" in text
+    assert "構造用合板 12mm + 鉄丸釘 N-65" in text
+    # 面材ごとの面材と釘の表（面材ごとに張り分けられるので壁のページにも残す）。
+    assert "ΔPv [kN]" in text
+    assert wall["specs"][0]["cells"][5] == "1.13"
     # 画面に出るのと同じ桁の結果と、式番号つきの途中経過。
     for item in wall["summary"]:
         assert item["value"] in text
@@ -588,14 +660,14 @@ def test_pdf_round_trips_the_form_input():
 def test_pdf_round_trips_coordinate_input():
     data = make_data()
     data["walls"][0]["panels"] = [
-        {
-            "panelId": "w1-p9",
-            "panelName": "座標入力",
-            "width": 910,
-            "height": 2730,
-            "mode": "coords",
-            "coords": "0, 0\n0, 455\n455, 910",
-        }
+        make_panel(
+            panelId="w1-p9",
+            panelName="座標入力",
+            width=910,
+            height=2730,
+            mode="coords",
+            coords="0, 0\n0, 455\n455, 910",
+        )
     ]
     data = panel_shear.normalize_data(data)
     pdf_bytes = panel_shear.build_pdf(data, panel_shear.validate(data))
