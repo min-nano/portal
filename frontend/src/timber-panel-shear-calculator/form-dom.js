@@ -195,11 +195,19 @@ export function readWall(root) {
     deltaV: number('wallDeltaV'),
     deltaU: number('wallDeltaU'),
     deltaPv: number('wallDeltaPv'),
+    gradeId: element(root, 'gradeSelect').value,
+    tauMax: number('wallTauMax'),
+    e1: number('wallE1'),
+    e2: number('wallE2'),
+    hasIntermediateStud: element(root, 'wallHasStud').checked,
     // まだ選んでいない行（patternId が空）も、そのまま残して持ち帰る。ここで
     // 落とすと「＋ 面材を追加」で出した行が、次の再計算で消えてしまう。
     // 空の行は計算実装（wasm）が読むときに落ちる。
     panels: Array.from(root.querySelectorAll('select[data-wall-panel]')).map(
-      (select) => ({ patternId: select.value })
+      (select, index) => ({
+        patternId: select.value,
+        grain: root.querySelectorAll('select[data-wall-grain]')[index].value,
+      })
     ),
   };
 }
@@ -214,6 +222,8 @@ export function applyWall(root, wall, choices) {
   element(root, 'wallHeight').value = wall.height || '';
   element(root, 'wallWidth').value = wall.width || '';
   element(root, 'materialSelect').value = wall.materialId || '';
+  element(root, 'gradeSelect').value = wall.gradeId || '';
+  element(root, 'wallHasStud').checked = wall.hasIntermediateStud !== false;
   [
     ['wallThickness', 'thickness'],
     ['wallShearModulus', 'shearModulus'],
@@ -221,6 +231,9 @@ export function applyWall(root, wall, choices) {
     ['wallDeltaV', 'deltaV'],
     ['wallDeltaU', 'deltaU'],
     ['wallDeltaPv', 'deltaPv'],
+    ['wallTauMax', 'tauMax'],
+    ['wallE1', 'e1'],
+    ['wallE2', 'e2'],
   ].forEach(([id, key]) => {
     element(root, id).value = wall[key] === '' || wall[key] === undefined ? '' : wall[key];
   });
@@ -232,15 +245,25 @@ export function applyWall(root, wall, choices) {
  * 一覧は計算実装（wasm）が配るものをそのまま並べる。
  */
 export function renderMaterialOptions(root, materials) {
-  const select = element(root, 'materialSelect');
-  const document_ = select.ownerDocument;
-  // 先頭の「選択すると…」だけ残して組み立て直す。
-  while (select.options.length > 1) select.remove(1);
+  fillSelect(element(root, 'materialSelect'), materials);
+}
 
-  materials.forEach((material) => {
+/**
+ * グレー本 表 3.3.2 の面材の規格を、選べる一覧にする。
+ * せん断破壊・せん断座屈の検定に使う τmax・E1・E2 がここで決まる。
+ */
+export function renderGradeOptions(root, grades) {
+  fillSelect(element(root, 'gradeSelect'), grades);
+}
+
+/** { id, label } の一覧を select へ並べ直す（先頭の案内だけ残す）。 */
+function fillSelect(select, entries) {
+  const document_ = select.ownerDocument;
+  while (select.options.length > 1) select.remove(1);
+  entries.forEach((entry) => {
     const option = document_.createElement('option');
-    option.value = material.id;
-    option.textContent = material.label;
+    option.value = entry.id;
+    option.textContent = entry.label;
     select.appendChild(option);
   });
 }
@@ -277,13 +300,28 @@ export function renderWallPanels(root, panels, choices) {
       ? panel.patternId
       : '';
 
+    // 繊維方向（せん断座屈の a・b をどちらの辺に取るか）。
+    const grain = document_.createElement('select');
+    grain.setAttribute('data-wall-grain', String(index));
+    [
+      { value: '', text: '繊維方向: 長辺' },
+      { value: 'height', text: '繊維方向: 高さ' },
+      { value: 'width', text: '繊維方向: 幅' },
+    ].forEach(({ value, text }) => {
+      const option = document_.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      grain.appendChild(option);
+    });
+    grain.value = panel.grain || '';
+
     const remove = document_.createElement('button');
     remove.type = 'button';
     remove.className = 'secondary';
     remove.textContent = '削除';
     remove.setAttribute('data-remove-wall-panel', String(index));
 
-    row.append(select, remove);
+    row.append(select, grain, remove);
     container.appendChild(row);
   });
 }
@@ -328,10 +366,12 @@ export function renderWallResult(root, report) {
   const head = element(root, 'wallPanelHead');
   const body = element(root, 'wallPanelBody');
   const steps = element(root, 'wallStepsBody');
+  const bucklingHead = element(root, 'wallBucklingHead');
+  const bucklingBody = element(root, 'wallBucklingBody');
   const checks = element(root, 'wallChecksBody');
   const document_ = summary.ownerDocument;
 
-  [summary, head, body, steps, checks].forEach((node) => {
+  [summary, head, body, steps, bucklingHead, bucklingBody, checks].forEach((node) => {
     node.innerHTML = '';
   });
 
@@ -355,21 +395,26 @@ export function renderWallResult(root, report) {
     summary.appendChild(box);
   });
 
-  const headRow = document_.createElement('tr');
-  report.panelColumns.forEach((column, index) => {
-    const th = document_.createElement('th');
-    th.className = index === 0 ? 'step-label' : 'step-value';
-    th.textContent = column;
-    headRow.appendChild(th);
-  });
-  head.appendChild(headRow);
+  const appendTable = (headNode, bodyNode, columns, rows) => {
+    const headRow = document_.createElement('tr');
+    columns.forEach((column, index) => {
+      const th = document_.createElement('th');
+      th.className = index === 0 ? 'step-label' : 'step-value';
+      th.textContent = column;
+      headRow.appendChild(th);
+    });
+    headNode.appendChild(headRow);
 
-  report.panels.forEach((panel) => {
-    appendRow(body, [
-      { text: panel.label, className: 'step-label' },
-      ...panel.cells.map((cell) => ({ text: cell, className: 'step-value' })),
-    ]);
-  });
+    rows.forEach((panel) => {
+      appendRow(bodyNode, [
+        { text: panel.label, className: 'step-label' },
+        ...panel.cells.map((cell) => ({ text: cell, className: 'step-value' })),
+      ]);
+    });
+  };
+
+  appendTable(head, body, report.panelColumns, report.panels);
+  appendTable(bucklingHead, bucklingBody, report.bucklingColumns, report.buckling);
 
   report.steps.forEach((row) => {
     appendRow(steps, [

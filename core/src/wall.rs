@@ -20,14 +20,27 @@
 //! 壁が複数枚の面材で構成される場合、K0・My・Mu は面材ごとの値の和、塑性率
 //! μ は面材ごとの値の最小値とする（グレー本 3.3(3) の計算例の手順 4)〜8)）。
 //!
-//! # このモジュールが受け持たない検討
+//! あわせて、3.3【解説】の面材のせん断破壊・せん断座屈の検定（式 3.3.8〜
+//! 3.3.11）を面材 1 枚ごとに行う。
 //!
-//! 3.3【解説】の面材のせん断破壊・せん断座屈の検定（式 3.3.8〜3.3.11）は
-//! ここには入れていない。グレー本自身が「表 3.2.1 と表 3.3.1 の全ての
-//! 組合せに対しては、下記検定式により検討を行い、面材のせん断破壊とせん断
-//! 座屈が生じないことを確認している」と述べており、3.3(3) の計算例でも
-//! 検定は行っていないため。適用範囲（3.3(1)）の①許容せん断耐力の上限
-//! 13.72 kN/m だけは、数値で機械的に確かめられるのでここで判定する。
+//! ```text
+//!   τN < τmax かつ τN < τcr                              … 式 3.3.8
+//!   τN  = Cxy・Zxy・ΔPv / t                              … 式 3.3.9
+//!   τcr = ξ・t²・Ca・S / (3a²) ・ (E1³・E2)^(1/4)         … 式 3.3.11a
+//!   Ca  = 10.846β² − 10.82β + 13.729                     … 式 3.3.11b
+//!   S   = 0.79α + 0.17β + 0.93                           … 式 3.3.11c
+//!   α   = GB / √(E1・E2)                                 … 式 3.3.11d
+//!   β   = (a/b)・(E2/E1)^(1/4) 、β > 1.5 なら β = 1.5     … 式 3.3.11e
+//! ```
+//!
+//! 座屈の式は **四周打ち**（式 3.3.11）だけを持つ。面材張り大壁は適用範囲
+//! 3.3(1)⑤ で「面材の四周は必ず釘打ちされていること」と定められているため、
+//! 川の字打ちの式（式 3.3.10）が要るのは大壁以外の耐力要素だけになる。
+//!
+//! 適用範囲（3.3(1)）のうち、①許容せん断耐力の上限 13.72 kN/m も数値で
+//! 機械的に確かめられるのでここで判定する。②〜⑧（面材と釘の組合せ、釘の
+//! ピッチとへりあき、端部および継目の材の断面、中間材の配置など）は寸法と
+//! 納まりの話なので、設計者が確認する前提とする。
 
 use crate::nail_array::Constants;
 
@@ -62,13 +75,19 @@ pub struct NailShear {
     pub delta_pv: f64,
 }
 
-/// 面材そのものの諸元。
+/// 面材そのものの諸元（表 3.3.1 の脚注と表 3.3.2）。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Sheathing {
     /// 厚さ t [mm]。
     pub thickness: f64,
     /// せん断弾性係数 GB [kN/mm²]。
     pub shear_modulus: f64,
+    /// せん断強度 τmax [N/mm²]（表 3.3.2）。
+    pub tau_max: f64,
+    /// 繊維直交方向の曲げヤング係数 E1 [N/mm²]（表 3.3.2）。
+    pub e1: f64,
+    /// 繊維平行方向の曲げヤング係数 E2 [N/mm²]（表 3.3.2）。
+    pub e2: f64,
 }
 
 impl Sheathing {
@@ -76,9 +95,71 @@ impl Sheathing {
     pub fn shear_rigidity(self) -> f64 {
         self.shear_modulus * self.thickness
     }
+
+    /// せん断弾性係数 GB を N/mm² で返す（座屈の式は E1・E2 と単位をそろえる）。
+    pub fn shear_modulus_in_newton(self) -> f64 {
+        self.shear_modulus * 1000.0
+    }
 }
 
-/// 壁を構成する面材 1 枚分の入力（面積と釘配列諸定数）。
+/// 面材の表面単板の繊維方向。座屈の式の a・b をどちらの辺に取るかを決める。
+///
+/// 式 3.3.11 の a は E1 方向（＝繊維直交方向）、b は E2 方向（＝繊維平行方向）の
+/// 面材長さ。3 × 6 板のように長辺方向へ繊維が走る使い方が多いので、指定が
+/// 無ければ長辺を繊維平行方向とみなす。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Grain {
+    /// 指定なし（長辺方向を繊維平行方向とみなす）。
+    LongSide,
+    /// 面材の幅方向。
+    Width,
+    /// 面材の高さ方向。
+    Height,
+}
+
+impl Grain {
+    pub fn id(self) -> &'static str {
+        match self {
+            Grain::LongSide => "",
+            Grain::Width => "width",
+            Grain::Height => "height",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Grain {
+        match id {
+            "width" => Grain::Width,
+            "height" => Grain::Height,
+            _ => Grain::LongSide,
+        }
+    }
+
+    pub fn label(self, width: f64, height: f64) -> &'static str {
+        match self.resolve(width, height) {
+            Grain::Width => "幅方向",
+            _ => "高さ方向",
+        }
+    }
+
+    /// 「長辺方向」を実際の向きへ解く。正方形は高さ方向とする。
+    fn resolve(self, width: f64, height: f64) -> Grain {
+        match self {
+            Grain::LongSide if width > height => Grain::Width,
+            Grain::LongSide => Grain::Height,
+            other => other,
+        }
+    }
+
+    /// 面材の幅・高さから (a, b) を決める。a は繊維直交方向、b は繊維平行方向。
+    pub fn dimensions(self, width: f64, height: f64) -> (f64, f64) {
+        match self.resolve(width, height) {
+            Grain::Width => (height, width),
+            _ => (width, height),
+        }
+    }
+}
+
+/// 壁を構成する面材 1 枚分の入力（寸法と釘配列諸定数）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelSpec {
     /// 画面・計算書で面材を指し示す名前（釘配列パターン名）。
@@ -91,17 +172,33 @@ pub struct PanelSpec {
     pub zxy: f64,
     /// 釘配列降伏終局比 Cxy（式 3.2.5）。
     pub cxy: f64,
+    /// E1 方向（繊維直交方向）の面材長さ a [mm]（式 3.3.11）。
+    pub a: f64,
+    /// E2 方向（繊維平行方向）の面材長さ b [mm]（式 3.3.11）。
+    pub b: f64,
+    /// 繊維方向の見出し（「高さ方向」など。計算書に何を仮定したかを残す）。
+    pub grain_label: &'static str,
 }
 
 impl PanelSpec {
-    /// 釘配列諸定数の計算結果（3.2 節）から、そのまま 1 枚分の入力を作る。
-    pub fn from_constants(label: &str, constants: &Constants) -> PanelSpec {
+    /// 釘配列諸定数の計算結果（3.2 節）と面材寸法から、1 枚分の入力を作る。
+    pub fn new(
+        label: &str,
+        constants: &Constants,
+        width: f64,
+        height: f64,
+        grain: Grain,
+    ) -> PanelSpec {
+        let (a, b) = grain.dimensions(width, height);
         PanelSpec {
             label: label.to_string(),
             area: constants.panel_area,
             ixy: constants.ixy,
             zxy: constants.zxy,
             cxy: constants.cxy,
+            a,
+            b,
+            grain_label: grain.label(width, height),
         }
     }
 }
@@ -118,6 +215,16 @@ pub struct PanelResult {
     pub mu: f64,
     /// 塑性率 μ（式 3.3.7）。
     pub ductility: f64,
+    /// 終局せん断応力度 τN [N/mm²]（式 3.3.9）。
+    pub tau_n: f64,
+    /// 座屈の式の β（式 3.3.11e、1.5 で頭打ち）。
+    pub beta: f64,
+    /// 臨界せん断座屈応力度 τcr [N/mm²]（式 3.3.11a）。
+    pub tau_cr: f64,
+    /// τN < τmax（面材のせん断破壊が生じない）。
+    pub shear_ok: bool,
+    /// τN < τcr（面材のせん断座屈が生じない）。
+    pub buckling_ok: bool,
 }
 
 /// 許容せん断耐力 Pa を決めた項（式 3.3.1 の min{} のどれか）。
@@ -159,6 +266,8 @@ pub struct Wall {
     pub width: f64,
     pub sheathing: Sheathing,
     pub nail: NailShear,
+    /// 中間材（間柱等）を設けるか。せん断座屈の ξ になる（式 3.3.11e の下）。
+    pub has_intermediate_stud: bool,
     /// 壁を構成する面材（1 枚以上）。
     pub panels: Vec<PanelSpec>,
 }
@@ -189,6 +298,12 @@ pub struct WallResult {
     pub delta_pa: f64,
     /// ΔPa が適用範囲の上限 13.72 kN/m 以下か（3.3(1)①）。
     pub within_limit: bool,
+    /// せん断座屈の ξ（中間材ありで 2、なしで 1）。
+    pub xi: f64,
+    /// すべての面材で τN < τmax（式 3.3.8 の前半）。
+    pub shear_ok: bool,
+    /// すべての面材で τN < τcr（式 3.3.8 の後半）。
+    pub buckling_ok: bool,
 }
 
 // --- 式ごとの計算 ------------------------------------------------------------
@@ -275,6 +390,79 @@ pub fn ultimate_term(ductility: f64, mu: f64) -> Result<f64, WallError> {
     Ok(0.2 * inside.sqrt() * mu)
 }
 
+/// 中間材（間柱等）の有無で決まるせん断座屈の係数 ξ を返す。
+///
+/// 「間柱なしの場合は 1、間柱ありの場合その本数によらず 2」（式 3.3.11e の下）。
+pub fn buckling_factor(has_intermediate_stud: bool) -> f64 {
+    if has_intermediate_stud {
+        2.0
+    } else {
+        1.0
+    }
+}
+
+/// 面材釘のせん断抵抗により面材に作用する終局せん断応力度 τN を求める（式 3.3.9）。
+///
+/// τN = Cxy・Zxy・ΔPv / t   [N/mm²]
+///
+/// ΔPv は式のうえでは N なので、kN で受け取った値を 1000 倍する。
+pub fn ultimate_shear_stress(
+    cxy: f64,
+    zxy: f64,
+    delta_pv: f64,
+    thickness: f64,
+) -> Result<f64, WallError> {
+    if !(thickness > 0.0) {
+        return Err(WallError::new("面材の厚さ t が 0 以下です。"));
+    }
+    Ok(cxy * zxy * (delta_pv * 1000.0) / thickness)
+}
+
+/// せん断座屈の式の β を求める（式 3.3.11e）。
+///
+/// β = (a/b)・(E2/E1)^(1/4) 、ただし β > 1.5 となる場合は β = 1.5 とする。
+pub fn buckling_aspect_ratio(a: f64, b: f64, e1: f64, e2: f64) -> Result<f64, WallError> {
+    if !(b > 0.0) || !(e1 > 0.0) {
+        return Err(WallError::new(
+            "面材長さ b と曲げヤング係数 E1 は正の数値である必要があります。",
+        ));
+    }
+    let beta = (a / b) * (e2 / e1).powf(0.25);
+    Ok(beta.min(1.5))
+}
+
+/// 臨界せん断座屈応力度 τcr を求める（式 3.3.11a〜d、四周打ち）。
+///
+/// τcr = ξ・t²・Ca・S / (3a²) ・ (E1³・E2)^(1/4)   [N/mm²]
+///
+/// 面材張り大壁は適用範囲 3.3(1)⑤ により四周打ちなので、川の字打ちの式
+/// （3.3.10）は持たない。
+pub fn critical_buckling_stress(
+    sheathing: Sheathing,
+    a: f64,
+    beta: f64,
+    xi: f64,
+) -> Result<f64, WallError> {
+    if !(a > 0.0) {
+        return Err(WallError::new(
+            "面材長さ a は正の数値である必要があります。",
+        ));
+    }
+    let (e1, e2) = (sheathing.e1, sheathing.e2);
+    if !(e1 > 0.0) || !(e2 > 0.0) {
+        return Err(WallError::new(
+            "曲げヤング係数 E1・E2 は正の数値である必要があります。",
+        ));
+    }
+    // (3.3.11d) α = GB / √(E1・E2)。GB だけ kN/mm² なので N/mm² へそろえる。
+    let alpha = sheathing.shear_modulus_in_newton() / (e1 * e2).sqrt();
+    // (3.3.11b) (3.3.11c)
+    let ca = 10.846 * beta * beta - 10.82 * beta + 13.729;
+    let s = 0.79 * alpha + 0.17 * beta + 0.93;
+    let t = sheathing.thickness;
+    Ok(xi * (t * t * ca * s) / (3.0 * a * a) * (e1.powi(3) * e2).powf(0.25))
+}
+
 // --- 入力の検証 --------------------------------------------------------------
 
 fn positive(value: f64, label: &str) -> Result<(), WallError> {
@@ -292,6 +480,9 @@ pub fn validate_input(wall: &Wall) -> Result<(), WallError> {
     positive(wall.width, "壁の幅 W")?;
     positive(wall.sheathing.thickness, "面材の厚さ t")?;
     positive(wall.sheathing.shear_modulus, "面材のせん断弾性係数 GB")?;
+    positive(wall.sheathing.tau_max, "面材のせん断強度 τmax")?;
+    positive(wall.sheathing.e1, "繊維直交方向の曲げヤング係数 E1")?;
+    positive(wall.sheathing.e2, "繊維平行方向の曲げヤング係数 E2")?;
     positive(wall.nail.k, "釘 1 本あたりのせん断剛性 k")?;
     positive(wall.nail.delta_v, "釘の降伏点変位 δv")?;
     positive(wall.nail.delta_u, "釘の終局変位 δu")?;
@@ -308,6 +499,8 @@ pub fn validate_input(wall: &Wall) -> Result<(), WallError> {
     }
     for panel in &wall.panels {
         positive(panel.area, &format!("「{}」の面材面積 Aw", panel.label))?;
+        positive(panel.a, &format!("「{}」の面材長さ a", panel.label))?;
+        positive(panel.b, &format!("「{}」の面材長さ b", panel.label))?;
     }
     Ok(())
 }
@@ -319,17 +512,33 @@ pub fn compute(wall: &Wall) -> Result<WallResult, WallError> {
     validate_input(wall)?;
 
     let shear_rigidity = wall.sheathing.shear_rigidity();
+    let xi = buckling_factor(wall.has_intermediate_stud);
 
-    // 4)〜8) 面材ごとに K0・My・Mu・μ を求める。
+    // 4)〜8) 面材ごとに K0・My・Mu・μ を求め、あわせて面材のせん断破壊・
+    // せん断座屈の検定（式 3.3.8〜3.3.11）も行う。
     let mut panels = Vec::with_capacity(wall.panels.len());
     for spec in &wall.panels {
         let k0 = rotational_stiffness(spec.area, spec.ixy, wall.nail.k, shear_rigidity)?;
         let my = yield_moment(spec.area, spec.zxy, wall.nail.delta_pv);
+        let tau_n = ultimate_shear_stress(
+            spec.cxy,
+            spec.zxy,
+            wall.nail.delta_pv,
+            wall.sheathing.thickness,
+        )?;
+        let beta =
+            buckling_aspect_ratio(spec.a, spec.b, wall.sheathing.e1, wall.sheathing.e2)?;
+        let tau_cr = critical_buckling_stress(wall.sheathing, spec.a, beta, xi)?;
         panels.push(PanelResult {
             k0,
             my,
             mu: ultimate_moment(spec.cxy, my),
             ductility: ductility_factor(wall.nail, spec.ixy, shear_rigidity)?,
+            tau_n,
+            beta,
+            tau_cr,
+            shear_ok: tau_n < wall.sheathing.tau_max,
+            buckling_ok: tau_n < tau_cr,
             spec: spec.clone(),
         });
     }
@@ -370,6 +579,9 @@ pub fn compute(wall: &Wall) -> Result<WallResult, WallError> {
 
     Ok(WallResult {
         k: shear_stiffness(k0, wall.height)?,
+        xi,
+        shear_ok: panels.iter().all(|panel| panel.shear_ok),
+        buckling_ok: panels.iter().all(|panel| panel.buckling_ok),
         panels,
         k0,
         m150,
@@ -399,6 +611,8 @@ pub struct Material {
     pub nail: NailShear,
     /// 面材のせん断弾性係数 GB [kN/mm²]（表 3.3.1 の脚注）。
     pub shear_modulus: f64,
+    /// 既定で組み合わせる表 3.3.2 の規格（構造用合板は JAS 1 級）。
+    pub grade_id: &'static str,
 }
 
 impl Material {
@@ -411,12 +625,65 @@ impl Material {
         )
     }
 
+    /// 既定の規格（表 3.3.2）と組み合わせた面材の諸元。
     pub fn sheathing(&self) -> Sheathing {
+        let grade = find_grade(self.grade_id).expect("既定の規格は表 3.3.2 にある");
         Sheathing {
             thickness: self.thickness,
             shear_modulus: self.shear_modulus,
+            tau_max: grade.tau_max,
+            e1: grade.e1,
+            e2: grade.e2,
         }
     }
+}
+
+/// 表 3.3.2「面材のせん断強度及び曲げヤング係数」の 1 行。
+///
+/// せん断強度も曲げヤング係数も厚さには依らないので、面材の種類と規格だけで
+/// 引ける形にしてある（表は「構造用合板 12mm」「同 24mm、又は、28mm」を
+/// 別の行にしているが、数値はどちらも同じ）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Grade {
+    pub id: &'static str,
+    /// 面材の種類。
+    pub panel: &'static str,
+    /// 規格（「JAS 1 級」「JIS A 5905」など）。
+    pub grade: &'static str,
+    /// せん断強度 τmax [N/mm²]。
+    pub tau_max: f64,
+    /// 繊維直交方向の曲げヤング係数 E1 [N/mm²]。
+    pub e1: f64,
+    /// 繊維平行方向の曲げヤング係数 E2 [N/mm²]。
+    pub e2: f64,
+}
+
+impl Grade {
+    pub fn label(&self) -> String {
+        format!("{} {}", self.panel, self.grade)
+    }
+}
+
+/// 表 3.3.2 の規格。
+///
+/// 構造用合板の E1・E2 が JAS 1 級と 2 級で同じなのは、表の注 *1 のとおり
+/// 「JAS 2 級であったとしても JAS 1 級相当とみなし、面材のせん断座屈の検討に
+/// 限り、E1 と E2 は JAS 1 級の値を用いてもよい」ため。
+const GRADES: &[Grade] = &[
+    Grade { id: "plywood-jas1", panel: "構造用合板", grade: "JAS 1 級", tau_max: 3.6, e1: 3500.0, e2: 5500.0 },
+    Grade { id: "plywood-jas2", panel: "構造用合板", grade: "JAS 2 級", tau_max: 2.4, e1: 3500.0, e2: 5500.0 },
+    Grade { id: "mdf", panel: "構造用 MDF", grade: "JIS A 5905", tau_max: 6.0, e1: 2000.0, e2: 2000.0 },
+    Grade { id: "particleboard", panel: "構造用パーティクルボード", grade: "JIS A 5908", tau_max: 4.0, e1: 3000.0, e2: 3000.0 },
+];
+
+/// 表 3.3.2 の規格を、表と同じ並びで返す。
+pub fn grades() -> &'static [Grade] {
+    GRADES
+}
+
+/// id から規格を引く（知らない id なら None）。
+pub fn find_grade(id: &str) -> Option<&'static Grade> {
+    GRADES.iter().find(|grade| grade.id == id)
 }
 
 /// 日本農林規格の構造用合板のせん断弾性係数 GB [kN/mm²]。
@@ -436,6 +703,7 @@ const fn material(
     delta_u: f64,
     delta_pv: f64,
     shear_modulus: f64,
+    grade_id: &'static str,
 ) -> Material {
     Material {
         id,
@@ -449,6 +717,7 @@ const fn material(
             delta_pv,
         },
         shear_modulus,
+        grade_id,
     }
 }
 
@@ -462,22 +731,21 @@ const fn material(
 /// 同じ長さなら太め鉄丸釘(CN 釘)のほうが軸径が太く、50 の行（N-50 は
 /// k = 0.430・ΔPv = 0.91、CN 釘 50 は k = 0.467・ΔPv = 0.94）と同じく
 /// 剛性・耐力とも大きくなる側が CN 釘である。
-/// なお 3.3(3) の計算例は「CN65」と書きながら訂正前の値
-/// （k = 0.483、δv = 2.3、ΔPv = 1.13 ＝ 訂正後の N-65）で計算している。
-/// 計算例をなぞるときは、一覧から選ぶのではなく数値を直接入力する。
+/// 3.3(3) の計算例が「CN65」として使っている k = 0.483、δv = 2.3、δu = 17.0、
+/// ΔPv = 1.13 は訂正後の N-65 の値なので、計算例の釘は N-65 として扱う。
 const TABLE: &[Material] = &[
-    material("plywood12-n50", "構造用合板", 12.0, "鉄丸釘 N-50", 0.430, 2.1, 17.1, 0.91, PLYWOOD_G),
-    material("plywood12-n65", "構造用合板", 12.0, "鉄丸釘 N-65", 0.483, 2.3, 17.0, 1.13, PLYWOOD_G),
-    material("plywood12-cn50", "構造用合板", 12.0, "太め鉄丸釘(CN 釘)50", 0.467, 2.0, 17.1, 0.94, PLYWOOD_G),
-    material("plywood12-cn65", "構造用合板", 12.0, "太め鉄丸釘(CN 釘)65", 0.605, 2.1, 17.0, 1.29, PLYWOOD_G),
-    material("plywood24-n75", "構造用合板", 24.0, "鉄丸釘 N-75", 0.651, 2.5, 17.1, 1.62, PLYWOOD_G),
-    material("plywood24-cn65", "構造用合板", 24.0, "太め鉄丸釘(CN 釘)65", 0.878, 1.5, 13.2, 1.31, PLYWOOD_G),
-    material("plywood24-cn75", "構造用合板", 24.0, "太め鉄丸釘(CN 釘)75", 1.013, 1.8, 21.4, 1.85, PLYWOOD_G),
-    material("plywood28-n75", "構造用合板", 28.0, "鉄丸釘 N-75", 0.651, 2.5, 17.1, 1.62, PLYWOOD_G),
-    material("plywood28-cn65", "構造用合板", 28.0, "太め鉄丸釘(CN 釘)65", 0.878, 1.5, 13.2, 1.31, PLYWOOD_G),
-    material("plywood28-cn75", "構造用合板", 28.0, "太め鉄丸釘(CN 釘)75", 1.013, 1.8, 21.4, 1.85, PLYWOOD_G),
-    material("mdf9-cn50", "構造用 MDF", 9.0, "太め鉄丸釘(CN 釘)50", 0.636, 1.5, 17.1, 0.93, MDF_G),
-    material("particleboard9-cn50", "構造用パーティクルボード", 9.0, "太め鉄丸釘(CN 釘)50", 0.732, 1.2, 15.6, 0.85, PARTICLE_BOARD_G),
+    material("plywood12-n50", "構造用合板", 12.0, "鉄丸釘 N-50", 0.430, 2.1, 17.1, 0.91, PLYWOOD_G, "plywood-jas1"),
+    material("plywood12-n65", "構造用合板", 12.0, "鉄丸釘 N-65", 0.483, 2.3, 17.0, 1.13, PLYWOOD_G, "plywood-jas1"),
+    material("plywood12-cn50", "構造用合板", 12.0, "太め鉄丸釘(CN 釘)50", 0.467, 2.0, 17.1, 0.94, PLYWOOD_G, "plywood-jas1"),
+    material("plywood12-cn65", "構造用合板", 12.0, "太め鉄丸釘(CN 釘)65", 0.605, 2.1, 17.0, 1.29, PLYWOOD_G, "plywood-jas1"),
+    material("plywood24-n75", "構造用合板", 24.0, "鉄丸釘 N-75", 0.651, 2.5, 17.1, 1.62, PLYWOOD_G, "plywood-jas1"),
+    material("plywood24-cn65", "構造用合板", 24.0, "太め鉄丸釘(CN 釘)65", 0.878, 1.5, 13.2, 1.31, PLYWOOD_G, "plywood-jas1"),
+    material("plywood24-cn75", "構造用合板", 24.0, "太め鉄丸釘(CN 釘)75", 1.013, 1.8, 21.4, 1.85, PLYWOOD_G, "plywood-jas1"),
+    material("plywood28-n75", "構造用合板", 28.0, "鉄丸釘 N-75", 0.651, 2.5, 17.1, 1.62, PLYWOOD_G, "plywood-jas1"),
+    material("plywood28-cn65", "構造用合板", 28.0, "太め鉄丸釘(CN 釘)65", 0.878, 1.5, 13.2, 1.31, PLYWOOD_G, "plywood-jas1"),
+    material("plywood28-cn75", "構造用合板", 28.0, "太め鉄丸釘(CN 釘)75", 1.013, 1.8, 21.4, 1.85, PLYWOOD_G, "plywood-jas1"),
+    material("mdf9-cn50", "構造用 MDF", 9.0, "太め鉄丸釘(CN 釘)50", 0.636, 1.5, 17.1, 0.93, MDF_G, "mdf"),
+    material("particleboard9-cn50", "構造用パーティクルボード", 9.0, "太め鉄丸釘(CN 釘)50", 0.732, 1.2, 15.6, 0.85, PARTICLE_BOARD_G, "particleboard"),
 ];
 
 /// 表 3.3.1 の組合せを、表と同じ並びで返す。
@@ -495,8 +763,9 @@ mod tests {
     //! テストの構成:
     //!   1. グレー本 3.3(3) の計算例（図 3.3.10）を再現する統合テスト。
     //!   2. 各式単位のユニットテスト。
-    //!   3. 入力検証・エッジケース。
-    //!   4. 表 3.3.1 の一覧。
+    //!   3. 面材のせん断破壊・せん断座屈の検定（式 3.3.8〜3.3.11）。
+    //!   4. 入力検証・エッジケース。
+    //!   5. 表 3.3.1 / 表 3.3.2 の一覧。
 
     use super::*;
     use crate::{nail_array, presets};
@@ -521,43 +790,50 @@ mod tests {
     // 使う。本の表は小数 2〜4 桁に丸めてあるので、結果も本の表示値からその分
     // だけずれる（Pa = 8.39 kN に対して本は 8.37 kN）。
 
-    /// 計算例の釘 1 本あたりの一面せん断データ。
+    /// 計算例の面材と釘（構造用合板 12mm・JAS 1 級 ＋ 鉄丸釘 N-65）。
     ///
-    /// 本文は「表 3.3.1 より、構造用合板 12〔mm〕＋ CN65」としているが、表の
-    /// CN65 と N-65 は入れ替わっている（TABLE のコメント参照）。ここは本が
-    /// 実際に計算に使った数値をそのまま置く。
-    const EXAMPLE_NAIL: NailShear = NailShear {
-        k: 0.483,
-        delta_v: 2.3,
-        delta_u: 17.0,
-        delta_pv: 1.13,
-    };
-
-    const EXAMPLE_SHEATHING: Sheathing = Sheathing {
-        thickness: 12.0,
-        shear_modulus: 0.40,
-    };
+    /// 本文は「表 3.3.1 より、構造用合板 12〔mm〕＋ CN65」としているが、印刷
+    /// された表は CN65 と N-65 が入れ替わっており、本文が計算に使っている
+    /// k = 0.483・δv = 2.3・δu = 17.0・ΔPv = 1.13 は訂正後の N-65 の値
+    /// （TABLE のコメント参照）。よってこの釘は N-65 として扱う。
+    fn example_material() -> &'static Material {
+        find_material("plywood12-n65").unwrap()
+    }
 
     /// 表 3.2.1 の配列 id から、計算例の面材 1 枚分の入力を作る。
+    ///
+    /// 繊維方向は指定しない（長辺方向とみなす）。3 × 6 板を縦置きにした
+    /// 下側の面材は b = 1820・a = 910、正方形の上側の面材は a = b = 910。
     fn example_panel(id: &str) -> PanelSpec {
         let preset = presets::find(id).expect("表 3.2.1 にある配列");
         let constants =
             nail_array::compute(&preset.nails(), preset.width * preset.height).unwrap();
-        PanelSpec::from_constants(&preset.label(), &constants)
+        PanelSpec::new(
+            &preset.label(),
+            &constants,
+            preset.width,
+            preset.height,
+            Grain::LongSide,
+        )
     }
 
-    fn example() -> WallResult {
-        compute(&Wall {
+    fn example_wall() -> Wall {
+        Wall {
             height: 3000.0,
             width: 910.0,
-            sheathing: EXAMPLE_SHEATHING,
-            nail: EXAMPLE_NAIL,
+            sheathing: example_material().sheathing(),
+            nail: example_material().nail,
+            // 間柱 30 × 105 を @455 で入れている（図 3.3.10）。
+            has_intermediate_stud: true,
             panels: vec![
                 example_panel("910x1820-s455-n75-hi"),
                 example_panel("910x910-s455-n75-ro"),
             ],
-        })
-        .unwrap()
+        }
+    }
+
+    fn example() -> WallResult {
+        compute(&example_wall()).unwrap()
     }
 
     /// 手順 3) 釘配列諸定数は表 3.2.1 の値（丸め）とほぼ同じ。
@@ -676,19 +952,20 @@ mod tests {
     #[test]
     fn ductility_factor_matches_the_book() {
         let rigidity = 0.40 * 12.0;
-        close(ductility_factor(EXAMPLE_NAIL, 4.99, rigidity).unwrap(), 5.25, 0.005);
-        close(ductility_factor(EXAMPLE_NAIL, 3.84, rigidity).unwrap(), 5.61, 0.005);
+        close(ductility_factor(example_material().nail, 4.99, rigidity).unwrap(), 5.25, 0.005);
+        close(ductility_factor(example_material().nail, 3.84, rigidity).unwrap(), 5.61, 0.005);
     }
 
     /// 面材のせん断変形が無い（GB・t → ∞）極限では、釘そのものの塑性率
     /// δu/δv に一致する。
     #[test]
     fn ductility_factor_approaches_the_nail_ratio_for_a_rigid_panel() {
-        let ratio = EXAMPLE_NAIL.delta_u / EXAMPLE_NAIL.delta_v;
-        let stiff = ductility_factor(EXAMPLE_NAIL, 4.99, 1e12).unwrap();
+        let nail = example_material().nail;
+        let ratio = nail.delta_u / nail.delta_v;
+        let stiff = ductility_factor(nail, 4.99, 1e12).unwrap();
         close(stiff, ratio, 1e-6);
         // 面材が柔らかいほど、壁としての塑性率は小さくなる。
-        assert!(ductility_factor(EXAMPLE_NAIL, 4.99, 4.8).unwrap() < ratio);
+        assert!(ductility_factor(nail, 4.99, 4.8).unwrap() < ratio);
     }
 
     /// 式 3.3.2。
@@ -707,15 +984,151 @@ mod tests {
         assert!(ultimate_term(0.4, 100.0).is_err());
     }
 
-    // --- 3. 入力検証・エッジケース ------------------------------------------
+    // --- 3. 面材のせん断破壊・せん断座屈（式 3.3.8〜3.3.11） ----------------
+
+    /// 計算例の面材は、どちらも τN が τmax・τcr に対して十分に小さい。
+    ///
+    /// グレー本は「表 3.2.1 と表 3.3.1 の全ての組合せに対しては…面材の
+    /// せん断破壊とせん断座屈が生じないことを確認している」としており、その
+    /// 確認を計算例でなぞる形になる。
+    #[test]
+    fn the_example_passes_the_shear_and_buckling_checks() {
+        let example = example();
+        assert!(example.shear_ok && example.buckling_ok);
+        assert_eq!(example.xi, 2.0);
+
+        // 下側の面材 910 × 1820（繊維は長辺方向なので a = 910、b = 1820）。
+        let lower = &example.panels[0];
+        assert_eq!((lower.spec.a, lower.spec.b), (910.0, 1820.0));
+        close(lower.beta, 0.5598, 0.0005); // (910/1820)×(5500/3500)^(1/4)
+        close(lower.tau_n, 1.376, 0.005);
+        close(lower.tau_cr, 5.518, 0.01);
+
+        // 上側の面材 910 × 910（正方形なので a = b）。
+        let upper = &example.panels[1];
+        assert_eq!((upper.spec.a, upper.spec.b), (910.0, 910.0));
+        close(upper.beta, 1.1196, 0.0005);
+        close(upper.tau_n, 1.399, 0.005);
+        close(upper.tau_cr, 8.239, 0.01);
+
+        // τmax（構造用合板 JAS 1 級）= 3.6 N/mm² のほうが先に効く余裕度。
+        for panel in &example.panels {
+            assert!(panel.tau_n < 3.6);
+            assert!(panel.tau_n < panel.tau_cr);
+        }
+    }
+
+    /// 式 3.3.9。ΔPv は kN で受け取り、式のうえの N へ直す。
+    #[test]
+    fn ultimate_shear_stress_converts_the_nail_strength_to_newton() {
+        // 1.17732 × 0.0124144 × 1130 N / 12mm
+        close(
+            ultimate_shear_stress(1.17732, 0.0124144, 1.13, 12.0).unwrap(),
+            1.3764,
+            0.0005,
+        );
+        assert!(ultimate_shear_stress(1.0, 0.01, 1.0, 0.0).is_err());
+    }
+
+    /// 式 3.3.11e。β は 1.5 で頭打ちにする。
+    #[test]
+    fn buckling_aspect_ratio_is_capped_at_one_and_a_half() {
+        close(
+            buckling_aspect_ratio(910.0, 1820.0, 3500.0, 5500.0).unwrap(),
+            0.5598,
+            0.0005,
+        );
+        // 細長い面材でも 1.5 を超えない。
+        assert_eq!(
+            buckling_aspect_ratio(3000.0, 910.0, 3500.0, 5500.0).unwrap(),
+            1.5
+        );
+        assert!(buckling_aspect_ratio(910.0, 0.0, 3500.0, 5500.0).is_err());
+    }
+
+    /// 式 3.3.11a〜d。中間材（間柱）があれば τcr は 2 倍になる。
+    #[test]
+    fn critical_buckling_stress_doubles_with_an_intermediate_stud() {
+        let sheathing = example_material().sheathing();
+        let beta = buckling_aspect_ratio(910.0, 1820.0, sheathing.e1, sheathing.e2).unwrap();
+
+        let without = critical_buckling_stress(sheathing, 910.0, beta, 1.0).unwrap();
+        let with = critical_buckling_stress(sheathing, 910.0, beta, 2.0).unwrap();
+        close(with, without * 2.0, 1e-9);
+        close(with, 5.518, 0.01);
+
+        assert_eq!(buckling_factor(true), 2.0);
+        assert_eq!(buckling_factor(false), 1.0);
+    }
+
+    /// τcr は a²（繊維直交方向の長さ）に反比例する。
+    #[test]
+    fn critical_buckling_stress_falls_with_the_square_of_a() {
+        let sheathing = example_material().sheathing();
+        let narrow = critical_buckling_stress(sheathing, 455.0, 1.0, 2.0).unwrap();
+        let wide = critical_buckling_stress(sheathing, 910.0, 1.0, 2.0).unwrap();
+        close(narrow, wide * 4.0, 1e-9);
+    }
+
+    /// 薄い面材・弱い規格にすると、せん断破壊とせん断座屈が NG になる。
+    #[test]
+    fn a_thin_panel_fails_both_checks() {
+        let mut wall = example_wall();
+        wall.sheathing.thickness = 2.0;
+        wall.sheathing.tau_max = 1.0;
+        let result = compute(&wall).unwrap();
+
+        assert!(!result.shear_ok);
+        assert!(!result.buckling_ok);
+        assert!(result.panels.iter().all(|panel| !panel.shear_ok));
+    }
+
+    /// 繊維方向は a・b の取り方を入れ替える。
+    #[test]
+    fn the_grain_direction_swaps_a_and_b() {
+        assert_eq!(Grain::LongSide.dimensions(910.0, 1820.0), (910.0, 1820.0));
+        assert_eq!(Grain::LongSide.dimensions(1820.0, 910.0), (910.0, 1820.0));
+        assert_eq!(Grain::Width.dimensions(910.0, 1820.0), (1820.0, 910.0));
+        assert_eq!(Grain::Height.dimensions(1820.0, 910.0), (1820.0, 910.0));
+        // 正方形は高さ方向とみなす。
+        assert_eq!(Grain::LongSide.label(910.0, 910.0), "高さ方向");
+        assert_eq!(Grain::LongSide.label(1820.0, 910.0), "幅方向");
+        assert_eq!(Grain::from_id("width"), Grain::Width);
+        assert_eq!(Grain::from_id("なにか"), Grain::LongSide);
+        assert_eq!(Grain::LongSide.id(), "");
+    }
+
+    /// 同じ面材でも、繊維方向を変えれば τcr が変わる（a と β が変わるため）。
+    #[test]
+    fn the_grain_direction_changes_the_buckling_stress() {
+        let preset = presets::find("910x1820-s455-n75-hi").unwrap();
+        let constants =
+            nail_array::compute(&preset.nails(), preset.width * preset.height).unwrap();
+        let across = |grain| {
+            let panels = vec![PanelSpec::new(
+                "面材",
+                &constants,
+                preset.width,
+                preset.height,
+                grain,
+            )];
+            compute(&wall_with(panels)).unwrap().panels[0].tau_cr
+        };
+
+        // 910 × 1820 の面材で繊維が高さ方向なら a = 910、幅方向なら a = 1820。
+        // a² で効くぶん τcr は下がるが、β（1.5 で頭打ち）も動くので 1/4 に
+        // なるわけではない。
+        close(across(Grain::Height), 5.518, 0.01);
+        close(across(Grain::Width), 3.127, 0.01);
+        assert!(across(Grain::Width) < across(Grain::Height));
+    }
+
+    // --- 4. 入力検証・エッジケース ------------------------------------------
 
     fn wall_with(panels: Vec<PanelSpec>) -> Wall {
         Wall {
-            height: 3000.0,
-            width: 910.0,
-            sheathing: EXAMPLE_SHEATHING,
-            nail: EXAMPLE_NAIL,
             panels,
+            ..example_wall()
         }
     }
 
@@ -726,16 +1139,22 @@ mod tests {
             ixy: 4.99,
             zxy: 0.0124,
             cxy: 1.18,
+            a: 910.0,
+            b: 1820.0,
+            grain_label: "高さ方向",
         }]
     }
 
     #[test]
     fn rejects_non_positive_dimensions_and_nail_data() {
-        let cases: [(&dyn Fn(&mut Wall), &str); 6] = [
+        let cases: [(&dyn Fn(&mut Wall), &str); 9] = [
             (&|wall: &mut Wall| wall.height = 0.0, "階高 H"),
             (&|wall: &mut Wall| wall.width = -1.0, "壁の幅 W"),
             (&|wall: &mut Wall| wall.sheathing.thickness = 0.0, "面材の厚さ t"),
             (&|wall: &mut Wall| wall.sheathing.shear_modulus = 0.0, "せん断弾性係数 GB"),
+            (&|wall: &mut Wall| wall.sheathing.tau_max = 0.0, "せん断強度 τmax"),
+            (&|wall: &mut Wall| wall.sheathing.e1 = 0.0, "曲げヤング係数 E1"),
+            (&|wall: &mut Wall| wall.sheathing.e2 = -1.0, "曲げヤング係数 E2"),
             (&|wall: &mut Wall| wall.nail.k = 0.0, "せん断剛性 k"),
             (&|wall: &mut Wall| wall.nail.delta_pv = 0.0, "降伏耐力 ΔPv"),
         ];
@@ -821,7 +1240,7 @@ mod tests {
         assert!(!result.within_limit);
     }
 
-    // --- 4. 表 3.3.1 の一覧 --------------------------------------------------
+    // --- 5. 表 3.3.1 / 表 3.3.2 の一覧 --------------------------------------
 
     #[test]
     fn the_material_table_covers_every_combination_of_the_book() {
@@ -853,6 +1272,34 @@ mod tests {
             assert!(thick.nail.k > thin.nail.k, "{}", thick.id);
             assert!(thick.nail.delta_pv > thin.nail.delta_pv, "{}", thick.id);
         }
+    }
+
+    #[test]
+    fn the_grade_table_covers_every_row_of_the_book() {
+        let grades = grades();
+        assert_eq!(grades.len(), 4);
+        assert_eq!(find_grade("plywood-jas1").unwrap().tau_max, 3.6);
+        assert_eq!(find_grade("plywood-jas2").unwrap().tau_max, 2.4);
+        // 注 *1 のとおり、JAS 2 級でも座屈の検討に使う E1・E2 は 1 級と同じ。
+        assert_eq!(
+            (find_grade("plywood-jas1").unwrap().e1, find_grade("plywood-jas1").unwrap().e2),
+            (find_grade("plywood-jas2").unwrap().e1, find_grade("plywood-jas2").unwrap().e2)
+        );
+        assert_eq!(find_grade("mdf").unwrap().label(), "構造用 MDF JIS A 5905");
+        assert_eq!(find_grade("なにか"), None);
+    }
+
+    /// 表 3.3.1 の組合せは、必ず表 3.3.2 の規格を 1 つ指している。
+    #[test]
+    fn every_material_points_at_a_grade() {
+        for material in materials() {
+            let sheathing = material.sheathing();
+            assert!(sheathing.tau_max > 0.0, "{}", material.id);
+            assert!(sheathing.e1 > 0.0 && sheathing.e2 > 0.0, "{}", material.id);
+            assert_eq!(sheathing.thickness, material.thickness);
+        }
+        // 構造用合板は既定で JAS 1 級（適用範囲 3.3(1)③ の基本）。
+        assert_eq!(find_material("plywood12-n65").unwrap().grade_id, "plywood-jas1");
     }
 
     #[test]

@@ -60,25 +60,22 @@ EXAMPLE_PATTERN = {
 # グレー本 3.3(3)「面材張り大壁の許容せん断耐力の計算例」（図 3.3.10）。
 #
 # 階高 3000・幅 910 の準耐力壁形式の大壁で、下側に 1820 × 910、上側に
-# 910 × 910 の構造用合板 12mm を CN65 @75 で四周打ちしたもの。面材の釘配列は
-# 表 3.2.1 の配列（EXAMPLE_WALL_PRESETS）をそのまま使う。
+# 910 × 910 の構造用合板 12mm を @75 で四周打ちしたもの。面材の釘配列は
+# 表 3.2.1 の配列（EXAMPLE_WALL_PRESETS）をそのまま使い、面材と釘の数値は
+# 表 3.3.1 の組合せ（EXAMPLE_WALL_MATERIAL）から読み込む。
 #
-# 釘 1 本あたりの数値は、本文が計算に使っているものをそのまま置く。表 3.3.1 は
-# 構造用合板 12mm の N-65 と CN65 が入れ替わっており（正誤表による訂正あり）、
-# 本文は「CN65」と書きながら訂正後の N-65 の値で計算している。詳しくは
-# core/src/wall.rs の TABLE のコメント。
+# 本文は釘を「CN65」としているが、印刷された表 3.3.1 は構造用合板 12mm の
+# N-65 と CN65 が入れ替わっており（正誤表による訂正あり）、本文が計算に使って
+# いる k = 0.483・δv = 2.3・δu = 17.0・ΔPv = 1.13 は訂正後の N-65 の値。
+# よってこの計算例の釘は N-65 として扱う（core/src/wall.rs の TABLE 参照）。
 EXAMPLE_WALL_PRESETS = ("910x1820-s455-n75-hi", "910x910-s455-n75-ro")
+EXAMPLE_WALL_MATERIAL = "plywood12-n65"
 EXAMPLE_WALL = {
     "wallName": "グレー本 3.3 の計算例",
     "height": 3000,
     "width": 910,
-    "materialId": "",
-    "thickness": 12,
-    "shearModulus": 0.40,
-    "k": 0.483,
-    "deltaV": 2.3,
-    "deltaU": 17.0,
-    "deltaPv": 1.13,
+    # 間柱 30 × 105 を @455 で入れている（図 3.3.10）。
+    "hasIntermediateStud": True,
     "panels": [{"patternId": "p1"}, {"patternId": "p2"}],
 }
 
@@ -136,6 +133,30 @@ def preset_pattern(preset_id: str) -> dict:
         raise PanelShearError(str(error)) from error
 
 
+def material(material_id: str) -> dict:
+    """グレー本 表 3.3.1 の組合せを、壁の入力欄へ入れる形で返す。
+
+    表 3.3.2 の既定の規格（構造用合板なら JAS 1 級）も一緒に付いてくるので、
+    これだけで面材のせん断破壊・せん断座屈の検定まで数値がそろう。
+    """
+    for entry in nail_core.call({"op": "materials"})["materials"]:
+        if entry["id"] == material_id:
+            return {
+                "materialId": entry["id"],
+                "thickness": entry["thickness"],
+                "shearModulus": entry["shearModulus"],
+                "k": entry["k"],
+                "deltaV": entry["deltaV"],
+                "deltaU": entry["deltaU"],
+                "deltaPv": entry["deltaPv"],
+                "gradeId": entry["gradeId"],
+                "tauMax": entry["tauMax"],
+                "e1": entry["e1"],
+                "e2": entry["e2"],
+            }
+    raise PanelShearError(f"知らない面材と釘の組合せです: {material_id}")
+
+
 def example_wall_data() -> dict:
     """グレー本 3.3(3) の計算例を、そのまま計算・作図できるフォーム入力にする。"""
     return normalize_data(
@@ -145,7 +166,7 @@ def example_wall_data() -> dict:
                 dict(preset_pattern(preset_id), patternId=f"p{index + 1}")
                 for index, preset_id in enumerate(EXAMPLE_WALL_PRESETS)
             ],
-            "walls": [dict(EXAMPLE_WALL)],
+            "walls": [{**material(EXAMPLE_WALL_MATERIAL), **EXAMPLE_WALL}],
         }
     )
 
@@ -263,12 +284,13 @@ _FOOTNOTE = (
 _WALL_TITLE = "面材張り大壁 剛性・許容せん断耐力 計算書"
 _WALL_SUBTITLE = (
     "グレー本『木造軸組工法住宅の許容応力度設計』"
-    "3.3 面材張り大壁の詳細計算法（式 3.3.1〜3.3.7）に準拠"
+    "3.3 面材張り大壁の詳細計算法（式 3.3.1〜3.3.11）に準拠"
 )
 _WALL_FOOTNOTE = (
-    "適用範囲（3.3(1)）のうち、機械的に判定できる①許容せん断耐力の上限のみを検定している。"
-    "面材と釘の組合せ・釘のピッチとへりあき・面材四周の釘打ち・端部および継目の材の断面・"
-    "中間材（間柱等）の配置は、設計者が 3.3(1) の②〜⑧に照らして確認すること。"
+    "面材のせん断座屈は四周打ち（式 3.3.11）で検定している（適用範囲 3.3(1)⑤ により、"
+    "面材張り大壁は面材の四周を釘打ちする）。適用範囲のうち機械的に判定できるのは"
+    "①許容せん断耐力の上限のみで、面材と釘の組合せ・釘のピッチとへりあき・端部および"
+    "継目の材の断面・中間材（間柱等）の配置は、設計者が 3.3(1) の②〜⑧に照らして確認すること。"
 )
 
 # 面材ごとの値の表で、面材名の欄に取る幅 [pt]。残りを数値の列で等分する。
@@ -444,9 +466,10 @@ def _shrink_to_fit(page: pdf_write.Page, text: str, size: float, width: float) -
 
 
 def _draw_panel_table(page: pdf_write.Page, left: float, right: float, cursor: float,
-                      report: dict) -> float:
-    """壁を構成する面材ごとの値（Aw・釘配列諸定数・K0・My・Mu・μ）を表に組む。"""
-    columns = report["panelColumns"]
+                      report: dict, columns_key: str = "panelColumns",
+                      rows_key: str = "panels") -> float:
+    """面材ごとの値を表に組む（1 列目が面材名、残りは右寄せの数値）。"""
+    columns = report[columns_key]
     value_width = (right - left - _PANEL_NAME_WIDTH) / (len(columns) - 1)
 
     def value_x(position: int) -> float:
@@ -462,7 +485,7 @@ def _draw_panel_table(page: pdf_write.Page, left: float, right: float, cursor: f
     page.line(left, cursor, right, cursor, 0.5, 0.55)
     cursor -= 11
 
-    for panel in report["panels"]:
+    for panel in report[rows_key]:
         size = _shrink_to_fit(page, panel["label"], 7.5, _PANEL_NAME_WIDTH - 6)
         page.text(left + 3, cursor, panel["label"], size)
         for position, cell in enumerate(panel["cells"]):
@@ -535,12 +558,22 @@ def _draw_wall_page(page: pdf_write.Page, data: dict, report: dict,
         cursor -= 13
     cursor -= 8
 
-    # --- 5. 検定 ---
-    _draw_section(page, left, right, cursor, "5. 判定")
+    # --- 5. 面材のせん断破壊・せん断座屈（式 3.3.8〜3.3.11） ---
+    cursor = _draw_section(
+        page, left, right, cursor, "5. 面材のせん断破壊・せん断座屈の検定"
+    )
+    cursor = _draw_panel_table(
+        page, left, right, cursor, report, "bucklingColumns", "buckling"
+    )
+
+    # --- 6. 判定 ---
+    _draw_section(page, left, right, cursor, "6. 判定")
     cursor -= 20
     for check in report["checks"]:
         page.text(left + 8, cursor, check["label"], 8.5, gray=0.45)
-        page.text(left + 250, cursor, check["value"], 9)
+        value = check["value"]
+        size = _shrink_to_fit(page, value, 9, right - left - 258)
+        page.text(left + 230, cursor, value, size)
         page.text(right - 8, cursor, "OK" if check["ok"] else "NG", 9, align="right")
         cursor -= 13
 

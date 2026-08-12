@@ -40,6 +40,7 @@ import {
   applyWall,
   readPattern,
   readWall,
+  renderGradeOptions,
   renderMaterialOptions,
   renderPatternBar,
   renderPresetOptions,
@@ -65,6 +66,7 @@ import {
   toRequestBody,
   verificationOf,
   verificationWarning,
+  wallFieldsFromGrade,
   wallFieldsFromMaterial,
   wallLabel,
 } from './form-logic.js';
@@ -85,6 +87,7 @@ let currentIndex = 0;
 let currentWallIndex = 0;
 let reports = { patterns: [], walls: [] }; // パターン・壁ごとの計算結果
 let materials = []; // グレー本 表 3.3.1 の面材と釘の組合せ
+let grades = []; // グレー本 表 3.3.2 の面材の規格
 let panelChoiceSignature = ''; // 壁の面材として選べるパターンの一覧（前回の内容）
 let calculateTimer = null;
 
@@ -223,13 +226,29 @@ function removeWallPanel(index) {
   scheduleCalculate();
 }
 
-/** グレー本 表 3.3.1 の面材と釘の組合せを、今の壁の入力欄へ読み込む。 */
+/**
+ * グレー本 表 3.3.1 の面材と釘の組合せを、今の壁の入力欄へ読み込む。
+ *
+ * 表 3.3.2 の既定の規格（構造用合板なら JAS 1 級）も一緒に入るので、この
+ * 1 回でせん断破壊・せん断座屈の検定に要る τmax・E1・E2 までそろう。
+ */
 function loadMaterial(id) {
   const wall = currentWall();
   const material = materials.find((entry) => entry.id === id);
   if (!wall || !material) return;
   captureCurrentPattern();
   Object.assign(wall, wallFieldsFromMaterial(material));
+  renderCurrent();
+  scheduleCalculate();
+}
+
+/** グレー本 表 3.3.2 の面材の規格を、今の壁の入力欄へ読み込む。 */
+function loadGrade(id) {
+  const wall = currentWall();
+  const grade = grades.find((entry) => entry.id === id);
+  if (!wall || !grade) return;
+  captureCurrentPattern();
+  Object.assign(wall, wallFieldsFromGrade(grade));
   renderCurrent();
   scheduleCalculate();
 }
@@ -556,6 +575,9 @@ async function start() {
   document.getElementById('materialSelect').addEventListener('change', (event) => {
     loadMaterial(event.target.value);
   });
+  document.getElementById('gradeSelect').addEventListener('change', (event) => {
+    loadGrade(event.target.value);
+  });
   watchInputs();
 
   // ページを閉じる・再読み込みするときも、未保存の入力があれば引き止める。
@@ -581,6 +603,8 @@ async function start() {
   renderPresetOptions(document, core.presets());
   materials = core.materials();
   renderMaterialOptions(document, materials);
+  grades = core.grades();
+  renderGradeOptions(document, grades);
 
   data = emptyFormData();
   setSourceFile(null);

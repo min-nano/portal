@@ -120,7 +120,25 @@ describe('計算実装（wasm）', () => {
       shearModulus: 0.4,
       k: 0.43,
       deltaPv: 0.91,
+      // 表 3.3.2 の既定の規格（構造用合板は JAS 1 級）も一緒に付いてくる。
+      gradeId: 'plywood-jas1',
+      tauMax: 3.6,
+      e1: 3500,
+      e2: 5500,
     });
+  });
+
+  it('グレー本 表 3.3.2 の面材の規格を一覧する', async () => {
+    const grades = (await core()).grades();
+
+    expect(grades.map((grade) => grade.id)).toEqual([
+      'plywood-jas1',
+      'plywood-jas2',
+      'mdf',
+      'particleboard',
+    ]);
+    // JAS 2 級はせん断強度だけが下がる（注 *1 により E1・E2 は 1 級と同じ）。
+    expect(grades[1]).toMatchObject({ tauMax: 2.4, e1: 3500, e2: 5500 });
   });
 
   it('グレー本 3.3 の計算例（図 3.3.10）を、本と同じ答えで返す', async () => {
@@ -145,6 +163,10 @@ describe('計算実装（wasm）', () => {
           deltaV: 2.3,
           deltaU: 17,
           deltaPv: 1.13,
+          tauMax: 3.6,
+          e1: 3500,
+          e2: 5500,
+          hasIntermediateStud: true,
           panels: [{ patternId: 'p1' }, { patternId: 'p2' }],
         },
       ],
@@ -160,12 +182,26 @@ describe('計算実装（wasm）', () => {
       '1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）',
       '910×910 縦置・ロ型（間柱・根太 @455 / 釘 @75）',
     ]);
+    // 面材のせん断破壊・せん断座屈（式 3.3.8〜3.3.11）も、どちらも通る。
+    expect(walls[0].shearOk).toBe(true);
+    expect(walls[0].bucklingOk).toBe(true);
+    expect(walls[0].buckling.every((panel) => panel.ok)).toBe(true);
   });
 
   it('計算できない壁は、理由を添えて ok: false で返る', async () => {
     const { walls } = (await core()).computeAll({
       patterns: [EXAMPLE],
-      walls: [{ wallId: 'w1', height: 3000, width: 910, panels: [] }],
+      walls: [
+        {
+          wallId: 'w1',
+          height: 3000,
+          width: 910,
+          tauMax: 3.6,
+          e1: 3500,
+          e2: 5500,
+          panels: [],
+        },
+      ],
     });
 
     expect(walls[0].ok).toBe(false);

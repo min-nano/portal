@@ -107,6 +107,9 @@ def test_compute_all_calculates_the_walls_of_the_book_example():
     assert report["ok"] is True
     assert report["governing"] == "drift"
     assert report["withinLimit"] is True
+    # 面材のせん断破壊・せん断座屈（式 3.3.8）も、どちらも余裕をもって通る。
+    assert report["shearOk"] is True
+    assert report["bucklingOk"] is True
     assert abs(report["result"]["Pa"] - 8.37) <= 0.03
     assert abs(report["result"]["dPa"] - 9.20) <= 0.03
     # 壁を構成する 2 枚の面材が、選んだ釘配列パターンの名前で並ぶ。
@@ -114,6 +117,32 @@ def test_compute_all_calculates_the_walls_of_the_book_example():
         "1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）",
         "910×910 縦置・ロ型（間柱・根太 @455 / 釘 @75）",
     ]
+
+
+def test_compute_all_checks_the_shear_failure_and_buckling_of_each_panel():
+    """式 3.3.8〜3.3.11。面材ごとに τN・τmax・τcr を出して判定する。"""
+    report = panel_shear.compute_all(panel_shear.example_wall_data())["walls"][0]
+
+    assert len(report["buckling"]) == 2
+    assert report["bucklingColumns"][-1] == "判定"
+    # 下側の面材 910 × 1820 は、繊維が長辺（高さ）方向なので a = 910、b = 1820。
+    lower = report["buckling"][0]["cells"]
+    assert (lower[0], lower[1], lower[2]) == ("高さ方向", "910", "1,820")
+    assert lower[-1] == "OK"
+    assert all(panel["ok"] for panel in report["buckling"])
+
+
+def test_a_thin_panel_fails_the_shear_check():
+    """面材を薄くすれば τN が上がり、せん断破壊で NG になる。"""
+    data = panel_shear.example_wall_data()
+    data["walls"][0]["thickness"] = 3
+
+    report = panel_shear.compute_all(data)["walls"][0]
+
+    assert report["shearOk"] is False
+    assert report["buckling"][0]["cells"][-1] == "NG"
+    failure = next(check for check in report["checks"] if "せん断破壊" in check["label"])
+    assert failure["ok"] is False
 
 
 def test_compute_all_reports_a_broken_wall_without_losing_the_others():
@@ -330,9 +359,12 @@ def test_pdf_prints_the_wall_calculation():
     # 面材ごとの表（釘配列パターン名と、そのパターンの Ixy）。
     assert "1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）" in text
     assert wall["panels"][0]["cells"][1] in text
-    # 判定（適用範囲 3.3(1)① の上限）。
+    # 面材のせん断破壊・せん断座屈の検定（式 3.3.8〜3.3.11）。
+    assert "τcr [N/mm²]" in text
+    assert wall["buckling"][0]["cells"][-2] in text  # τcr
+    # 判定（適用範囲 3.3(1)① の上限と、せん断破壊・せん断座屈）。
     assert "13.7200" in text
-    assert "OK" in text
+    assert text.count("OK") >= 3
 
 
 def test_pdf_marks_a_wall_over_the_upper_limit_as_ng():
@@ -354,7 +386,10 @@ def test_pdf_round_trips_a_form_with_walls():
     parsed = panel_shear.parse_pdf(pdf_bytes)
 
     assert parsed == data
-    assert parsed["walls"][0]["panels"] == [{"patternId": "p1"}, {"patternId": "p2"}]
+    assert parsed["walls"][0]["panels"] == [
+        {"patternId": "p1", "grain": ""},
+        {"patternId": "p2", "grain": ""},
+    ]
 
 
 def test_verify_points_at_a_wall_value_that_differs():

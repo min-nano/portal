@@ -68,12 +68,23 @@ export function makeWall(overrides) {
     deltaV: '',
     deltaU: '',
     deltaPv: '',
+    gradeId: '',
+    tauMax: '',
+    e1: '',
+    e2: '',
+    // 適用範囲 3.3(1)⑦ は中間材（間柱等）を求めているので、既定は「あり」。
+    hasIntermediateStud: true,
     panels: [],
     ...(overrides || {}),
   };
 }
 
-/** 表 3.3.1 の 1 行を、壁の入力欄へ入れる形にする。 */
+/**
+ * 表 3.3.1 の 1 行を、壁の入力欄へ入れる形にする。
+ *
+ * 表 3.3.2 の既定の規格（構造用合板なら JAS 1 級）も一緒に入るので、これ
+ * 1 回の選択で面材のせん断破壊・せん断座屈の検定まで数値がそろう。
+ */
 export function wallFieldsFromMaterial(material) {
   return {
     materialId: material.id,
@@ -83,6 +94,22 @@ export function wallFieldsFromMaterial(material) {
     deltaV: material.deltaV,
     deltaU: material.deltaU,
     deltaPv: material.deltaPv,
+    ...wallFieldsFromGrade({
+      id: material.gradeId,
+      tauMax: material.tauMax,
+      e1: material.e1,
+      e2: material.e2,
+    }),
+  };
+}
+
+/** 表 3.3.2 の 1 行（面材の規格）を、壁の入力欄へ入れる形にする。 */
+export function wallFieldsFromGrade(grade) {
+  return {
+    gradeId: grade.id,
+    tauMax: grade.tauMax,
+    e1: grade.e1,
+    e2: grade.e2,
   };
 }
 
@@ -144,10 +171,17 @@ export function mergeFormData(parsed) {
       deltaV: Number(wall.deltaV) || 0,
       deltaU: Number(wall.deltaU) || 0,
       deltaPv: Number(wall.deltaPv) || 0,
+      gradeId: String(wall.gradeId || ''),
+      tauMax: Number(wall.tauMax) || 0,
+      e1: Number(wall.e1) || 0,
+      e2: Number(wall.e2) || 0,
+      hasIntermediateStud: wall.hasIntermediateStud !== false,
       panels: (Array.isArray(wall.panels) ? wall.panels : [])
-        .map((panel) => String((panel && panel.patternId) || ''))
-        .filter(Boolean)
-        .map((patternId) => ({ patternId })),
+        .filter((panel) => panel && panel.patternId)
+        .map((panel) => ({
+          patternId: String(panel.patternId),
+          grain: String(panel.grain || ''),
+        })),
     })
   );
 

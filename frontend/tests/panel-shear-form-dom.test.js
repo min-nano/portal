@@ -10,6 +10,7 @@ import {
   applyWall,
   readPattern,
   readWall,
+  renderGradeOptions,
   renderMaterialOptions,
   renderPatternBar,
   renderPresetOptions,
@@ -300,18 +301,30 @@ const WALL_MARKUP = `
       <input type="text" id="wallName">
       <input type="number" id="wallHeight">
       <input type="number" id="wallWidth">
-      <select id="materialSelect"><option value="">選択すると…</option></select>
+      <select id="materialSelect">
+        <option value="">選択すると…</option>
+        <option value="plywood12-n65">構造用合板 12mm + 鉄丸釘 N-65</option>
+      </select>
       <input type="number" id="wallThickness">
       <input type="number" id="wallShearModulus">
       <input type="number" id="wallK">
       <input type="number" id="wallDeltaV">
       <input type="number" id="wallDeltaU">
       <input type="number" id="wallDeltaPv">
+      <select id="gradeSelect">
+        <option value="">選択すると…</option>
+        <option value="plywood-jas1">構造用合板 JAS 1 級</option>
+      </select>
+      <input type="number" id="wallTauMax">
+      <input type="number" id="wallE1">
+      <input type="number" id="wallE2">
+      <input type="checkbox" id="wallHasStud" checked>
       <div id="wallPanels"></div>
       <div id="wallError" hidden></div>
       <div id="wallSummary"></div>
       <table><thead id="wallPanelHead"></thead><tbody id="wallPanelBody"></tbody></table>
       <table><tbody id="wallStepsBody"></tbody></table>
+      <table><thead id="wallBucklingHead"></thead><tbody id="wallBucklingBody"></tbody></table>
       <table><tbody id="wallChecksBody"></tbody></table>
     </div>
   </form>
@@ -322,14 +335,22 @@ const WALL = {
   wallName: 'グレー本 3.3 の計算例',
   height: 3000,
   width: 910,
-  materialId: '',
+  materialId: 'plywood12-n65',
   thickness: 12,
   shearModulus: 0.4,
   k: 0.483,
   deltaV: 2.3,
   deltaU: 17,
   deltaPv: 1.13,
-  panels: [{ patternId: 'p1' }, { patternId: 'p2' }],
+  gradeId: 'plywood-jas1',
+  tauMax: 3.6,
+  e1: 3500,
+  e2: 5500,
+  hasIntermediateStud: true,
+  panels: [
+    { patternId: 'p1', grain: '' },
+    { patternId: 'p2', grain: 'width' },
+  ],
 };
 
 const CHOICES = [
@@ -353,6 +374,11 @@ const WALL_REPORT = {
     { key: 'ΔPa', unit: 'kN/m', value: '9.21715' },
   ],
   steps: [{ label: '許容せん断耐力 Pa', eq: '(3.3.1)', value: '8.38761 kN' }],
+  bucklingColumns: ['面材（釘配列パターン）', 'τN [N/mm²]', '判定'],
+  buckling: [
+    { label: '下側の面材', ok: true, cells: ['1.37631', 'OK'] },
+    { label: '上側の面材', ok: true, cells: ['1.39882', 'OK'] },
+  ],
   checks: [
     { label: 'Pa を決めた項', value: '変形角 1/150 時のモーメント K0/150', ok: true },
     { label: '適用範囲 3.3(1)①', value: 'ΔPa = 9.21715 kN/m ≦ 13.7200 kN/m', ok: true },
@@ -394,6 +420,11 @@ describe('applyWall / readWall', () => {
       '上側の面材',
     ]);
     expect(selects[1].value).toBe('p2');
+    // 繊維方向（せん断座屈の a・b の取り方）も行ごとに選べる。
+    const grains = document.querySelectorAll('select[data-wall-grain]');
+    expect(grains).toHaveLength(2);
+    expect(grains[0].value).toBe('');
+    expect(grains[1].value).toBe('width');
   });
 
   it('消されたパターンを指していた面材は、未選択に戻す', () => {
@@ -405,8 +436,8 @@ describe('applyWall / readWall', () => {
     // 行そのものは残す（消すと「＋ 面材を追加」で出した行が消えてしまう）。
     // 未選択の面材は、計算実装が読むときに落ちる。
     expect(readWall(document).panels).toEqual([
-      { patternId: 'p1' },
-      { patternId: '' },
+      { patternId: 'p1', grain: '' },
+      { patternId: '', grain: 'width' },
     ]);
   });
 
@@ -417,6 +448,23 @@ describe('applyWall / readWall', () => {
     expect(wall.k).toBe('');
     expect(wall.deltaPv).toBe('');
     expect(wall.thickness).toBe(12);
+  });
+});
+
+describe('renderGradeOptions', () => {
+  beforeEach(() => {
+    document.body.innerHTML = WALL_MARKUP;
+  });
+
+  it('グレー本 表 3.3.2 の規格を選べるようにする', () => {
+    renderGradeOptions(document, [
+      { id: 'plywood-jas1', label: '構造用合板 JAS 1 級' },
+      { id: 'mdf', label: '構造用 MDF JIS A 5905' },
+    ]);
+
+    const select = document.getElementById('gradeSelect');
+    expect(select.options).toHaveLength(3); // 先頭の案内 + 2 件
+    expect(select.options[1].value).toBe('plywood-jas1');
   });
 });
 
@@ -501,6 +549,9 @@ describe('renderWallResult', () => {
     expect(rows[0].children[1].textContent).toBe('1,656,200');
 
     expect(document.querySelectorAll('#wallStepsBody tr')).toHaveLength(1);
+    // せん断破壊・せん断座屈の検定も、面材ごとの表で出す。
+    expect(document.querySelectorAll('#wallBucklingHead th')).toHaveLength(3);
+    expect(document.querySelectorAll('#wallBucklingBody tr')).toHaveLength(2);
     expect(document.querySelectorAll('#wallChecksBody tr')).toHaveLength(2);
   });
 
@@ -532,5 +583,6 @@ describe('renderWallResult', () => {
     expect(document.getElementById('wallError').hidden).toBe(true);
     expect(document.querySelectorAll('#wallSummary .result-box')).toHaveLength(0);
     expect(document.querySelectorAll('#wallPanelBody tr')).toHaveLength(0);
+    expect(document.querySelectorAll('#wallBucklingBody tr')).toHaveLength(0);
   });
 });

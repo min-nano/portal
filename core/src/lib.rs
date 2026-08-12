@@ -15,6 +15,7 @@
 //! {"op": "presets"}                    → {"ok": true,  "presets": [...]}
 //! {"op": "preset",     "data": {...}}  → {"ok": true,  "preset": {...}, "pattern": {...}}
 //! {"op": "materials"}                  → {"ok": true,  "materials": [...]}
+//! {"op": "grades"}                     → {"ok": true,  "grades": [...]}
 //! {"op": "config"}                     → {"ok": true,  "version": "1.0.0", ...}
 //! 失敗                                  → {"ok": false, "error": "利用者に見せる日本語"}
 //! ```
@@ -107,6 +108,9 @@ fn dispatch(request: &str) -> Result<Value, String> {
                 wall::materials()
                     .iter()
                     .map(|material| {
+                        // 表 3.3.2 の既定の規格も一緒に配って、1 回の選択で
+                        // せん断破壊・せん断座屈の検定まで数値がそろうようにする。
+                        let sheathing = material.sheathing();
                         Value::obj([
                             ("id", material.id.into()),
                             ("label", material.label().into()),
@@ -118,6 +122,31 @@ fn dispatch(request: &str) -> Result<Value, String> {
                             ("deltaV", material.nail.delta_v.into()),
                             ("deltaU", material.nail.delta_u.into()),
                             ("deltaPv", material.nail.delta_pv.into()),
+                            ("gradeId", material.grade_id.into()),
+                            ("tauMax", sheathing.tau_max.into()),
+                            ("e1", sheathing.e1.into()),
+                            ("e2", sheathing.e2.into()),
+                        ])
+                    })
+                    .collect(),
+            ),
+        )])),
+        // グレー本 表 3.3.2「面材のせん断強度及び曲げヤング係数」。
+        // JAS 2 級の合板を使うときなど、規格だけを差し替えるための一覧。
+        "grades" => Ok(Value::obj([(
+            "grades",
+            Value::Arr(
+                wall::grades()
+                    .iter()
+                    .map(|grade| {
+                        Value::obj([
+                            ("id", grade.id.into()),
+                            ("label", grade.label().into()),
+                            ("panel", grade.panel.into()),
+                            ("grade", grade.grade.into()),
+                            ("tauMax", grade.tau_max.into()),
+                            ("e1", grade.e1.into()),
+                            ("e2", grade.e2.into()),
                         ])
                     })
                     .collect(),
@@ -172,10 +201,12 @@ mod tests {
                  "walls": [
                    {"wallId": "w1", "height": 3000, "width": 910, "thickness": 12,
                     "shearModulus": 0.4, "k": 0.483, "deltaV": 2.3, "deltaU": 17,
-                    "deltaPv": 1.13, "panels": [{"patternId": "p1"}]},
+                    "deltaPv": 1.13, "tauMax": 3.6, "e1": 3500, "e2": 5500,
+                    "hasIntermediateStud": true, "panels": [{"patternId": "p1"}]},
                    {"wallId": "w2", "height": 3000, "width": 910, "thickness": 12,
                     "shearModulus": 0.4, "k": 0.483, "deltaV": 2.3, "deltaU": 17,
-                    "deltaPv": 1.13, "panels": []}
+                    "deltaPv": 1.13, "tauMax": 3.6, "e1": 3500, "e2": 5500,
+                    "hasIntermediateStud": true, "panels": []}
                  ]}}"#,
         );
 
@@ -215,6 +246,7 @@ mod tests {
                  "walls": [{"wallName": "南面", "height": 3000, "width": 910,
                             "thickness": 12, "shearModulus": 0.4, "k": 0.483,
                             "deltaV": 2.3, "deltaU": 17, "deltaPv": 1.13,
+                            "tauMax": 3.6, "e1": 3500, "e2": 5500,
                             "panels": []}]}}"#,
         );
 

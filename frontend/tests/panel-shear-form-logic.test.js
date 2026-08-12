@@ -15,6 +15,7 @@ import {
   toRequestBody,
   verificationOf,
   verificationWarning,
+  wallFieldsFromGrade,
   wallFieldsFromMaterial,
   wallLabel,
 } from '../src/timber-panel-shear-calculator/form-logic.js';
@@ -255,6 +256,9 @@ describe('壁（グレー本 3.3）', () => {
 
     expect(wall.panels).toEqual([]);
     expect([wall.k, wall.deltaV, wall.deltaU, wall.deltaPv]).toEqual(['', '', '', '']);
+    expect([wall.tauMax, wall.e1, wall.e2]).toEqual(['', '', '']);
+    // 適用範囲 3.3(1)⑦ は中間材（間柱等）を求めているので、既定は「あり」。
+    expect(wall.hasIntermediateStud).toBe(true);
     // 階高と壁の幅だけは、よくある寸法を入れておく。
     expect(wall.height).toBeGreaterThan(0);
     expect(wall.width).toBeGreaterThan(0);
@@ -264,7 +268,7 @@ describe('壁（グレー本 3.3）', () => {
     expect(new Set([makeWall().wallId, makeWall().wallId]).size).toBe(2);
   });
 
-  it('表 3.3.1 の 1 行は、そのまま入力欄の値になる', () => {
+  it('表 3.3.1 の 1 行は、規格（表 3.3.2）ごと入力欄の値になる', () => {
     const material = {
       id: 'plywood12-n50',
       label: '構造用合板 12mm + 鉄丸釘 N-50',
@@ -275,8 +279,13 @@ describe('壁（グレー本 3.3）', () => {
       deltaV: 2.1,
       deltaU: 17.1,
       deltaPv: 0.91,
+      gradeId: 'plywood-jas1',
+      tauMax: 3.6,
+      e1: 3500,
+      e2: 5500,
     };
 
+    // 1 回の選択で、せん断破壊・せん断座屈の検定に要る数値までそろう。
     expect(wallFieldsFromMaterial(material)).toEqual({
       materialId: 'plywood12-n50',
       thickness: 12,
@@ -285,6 +294,21 @@ describe('壁（グレー本 3.3）', () => {
       deltaV: 2.1,
       deltaU: 17.1,
       deltaPv: 0.91,
+      gradeId: 'plywood-jas1',
+      tauMax: 3.6,
+      e1: 3500,
+      e2: 5500,
+    });
+  });
+
+  it('表 3.3.2 の 1 行（面材の規格）だけを差し替えられる', () => {
+    const grade = { id: 'plywood-jas2', label: '構造用合板 JAS 2 級', tauMax: 2.4, e1: 3500, e2: 5500 };
+
+    expect(wallFieldsFromGrade(grade)).toEqual({
+      gradeId: 'plywood-jas2',
+      tauMax: 2.4,
+      e1: 3500,
+      e2: 5500,
     });
   });
 
@@ -329,7 +353,12 @@ describe('mergeFormData（壁）', () => {
           deltaV: 2.3,
           deltaU: 17,
           deltaPv: 1.13,
-          panels: [{ patternId: 'p1' }, { patternId: '' }, {}],
+          gradeId: 'plywood-jas1',
+          tauMax: 3.6,
+          e1: 3500,
+          e2: 5500,
+          hasIntermediateStud: false,
+          panels: [{ patternId: 'p1', grain: 'width' }, { patternId: '' }, {}],
           junk: 1,
         },
       ],
@@ -339,7 +368,9 @@ describe('mergeFormData（壁）', () => {
     expect(data.walls[0].junk).toBeUndefined();
     expect(data.walls[0].height).toBe(3000);
     // 未選択の面材の行は落とす。
-    expect(data.walls[0].panels).toEqual([{ patternId: 'p1' }]);
+    expect(data.walls[0].panels).toEqual([{ patternId: 'p1', grain: 'width' }]);
+    expect(data.walls[0].hasIntermediateStud).toBe(false);
+    expect(data.walls[0].tauMax).toBe(3.6);
   });
 
   it('壁を持たない（この節より前に保存した）PDF も読める', () => {

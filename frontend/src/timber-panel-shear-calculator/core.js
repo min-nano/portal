@@ -85,6 +85,14 @@ class Core {
   materials() {
     return this.call({ op: 'materials' }).materials;
   }
+
+  /**
+   * グレー本 表 3.3.2「面材のせん断強度及び曲げヤング係数」の一覧。
+   * JAS 2 級の合板を使うときなど、規格だけを差し替えるために使う。
+   */
+  grades() {
+    return this.call({ op: 'grades' }).grades;
+  }
 }
 
 /**
