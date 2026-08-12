@@ -63,7 +63,7 @@ const PDF_MIME = 'application/pdf';
 // よい。ここで抑えているのは、釘が多いときの再描画の回数。
 const CALCULATE_DEBOUNCE_MS = 60;
 
-let config = null; // /config の応答（既定ファイル名・計算例・計算実装の在り処）
+let config = null; // /config の応答（既定ファイル名・計算実装の在り処）
 let core = null; // 計算実装（wasm）。サーバと同じバイト列。
 let data = null; // 画面が編集中の内容 { projectName, issuedOn, patterns }
 let currentIndex = 0;
@@ -144,18 +144,14 @@ function removePattern() {
   scheduleCalculate();
 }
 
-/** グレー本 解説の計算例を、今のパターンへ読み込む。 */
-function loadExample() {
-  Object.assign(currentPattern(), config.example);
-  renderCurrent();
-  scheduleCalculate();
-}
-
 /**
  * グレー本 表 3.2.1 の標準的な釘配列を、今のパターンへ読み込む。
  *
  * 釘座標は計算実装（wasm）が組み立てる。表に載っているのは Ixy・Zxy・Cxy
  * だけなので、そこから配列を起こす規則も計算と同じ場所に置いてある。
+ *
+ * 解説（図 3.2.2）の計算例もこの一覧の中にある（910×610 横置・川型）ので、
+ * 計算例だけを読み込む専用の操作は置いていない。
  */
 function loadPreset(id) {
   if (!id || !core) return;
@@ -426,7 +422,6 @@ async function start() {
   document.getElementById('uploadInput').addEventListener('change', uploadFile);
   document.getElementById('submitBtn').addEventListener('click', saveCurrent);
   document.getElementById('saveAsBtn').addEventListener('click', () => save('new'));
-  document.getElementById('exampleBtn').addEventListener('click', loadExample);
   document.getElementById('presetSelect').addEventListener('change', (event) => {
     loadPreset(event.target.value);
     // 読み込んだあとは、続けて同じものを選び直せるように戻しておく

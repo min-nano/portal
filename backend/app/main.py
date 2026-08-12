@@ -538,7 +538,7 @@ async def parse_drive_certificate(
 
 @app.get(f"{_PANEL_PREFIX}/config")
 async def get_panel_shear_config(user: User = Depends(require_user)):
-    """既定のファイル名・グレー本の計算例・計算実装の在り処を配信する。"""
+    """既定のファイル名と、計算実装の在り処を配信する。"""
     return panel_shear.form_config(f"{_PANEL_PREFIX}/core.wasm")
 
 
