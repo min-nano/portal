@@ -24,7 +24,6 @@ XML を**触る場所だけ**書き換える:
 
 import datetime
 import io
-import math
 import re
 import zipfile
 
