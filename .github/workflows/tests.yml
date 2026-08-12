@@ -12,40 +12,28 @@ permissions:
 
 jobs:
   test-core:
-    name: Core (cargo + wasm)
+    name: Core (cargo)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Set up Rust
-        # toolchain は core/rust-toolchain.toml で固定してある（成果物の
-        # バイト列を再現できるようにするため）。cargo を 1 度呼べば、rustup が
-        # その toolchain と wasm32 ターゲットを取ってくる。
-        run: |
-          cd core
-          cargo --version
       - name: Run tests
-        # 式ごとの検証（グレー本の計算例・各関数・入力検証）はここにある。
+        # 釘配列諸定数の計算そのものを検証するのはここだけ（グレー本の計算例・
+        # 各関数・入力検証）。画面もサーバも、この実装を wasm として動かす。
+        # toolchain は core/rust-toolchain.toml で固定してあり、cargo を呼べば
+        # rustup がそれを取ってくる。
         run: |
           cd core
           cargo test
-      - name: Check the committed wasm is up to date
-        # backend/app/wasm/*.wasm はコミットしてある成果物。ソースを変えた
-        # のに作り直していないと、画面とサーバが古い計算のまま動いてしまう。
-        # 同じ toolchain なら同じバイト列が出るので、突き合わせて確かめる。
-        run: |
-          cd core
-          cargo build --release --target wasm32-unknown-unknown
-          if ! cmp -s target/wasm32-unknown-unknown/release/nail_array_core.wasm \
-                     ../backend/app/wasm/nail_array_core.wasm; then
-            echo "::error file=backend/app/wasm/nail_array_core.wasm::core/ の変更が成果物に反映されていません。core/build.sh を実行して、作り直した .wasm もコミットしてください。"
-            exit 1
-          fi
 
   test-backend:
     name: Backend (pytest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build the calculation core
+        # .wasm はコミットしていないので、使う側のジョブがそのつど作る。
+        # toolchain を固定してあるため、どのジョブで作っても同じバイト列。
+        run: core/build.sh
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -65,6 +53,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build the calculation core
+        # 画面のテストは、本番と同じ .wasm を実際に読み込んで計算を確かめる。
+        # ビルドそのもの（npm run build）には要らない（画面は実行時に
+        # バックエンドから受け取るため）。
+        run: core/build.sh
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:

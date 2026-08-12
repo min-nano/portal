@@ -9,6 +9,9 @@ JSON を受け取るだけの薄い口。**画面（ブラウザ）が動かす�
                                     ├─ ここ（サーバ）が読み込む
                                     └─ /core.wasm で画面へ配る
 
+.wasm はコミットしていない。テストとデプロイのたびに CI が作り直すので、
+手元で動かすときは最初に 1 度 core/build.sh を実行すること。
+
 呼び出しの手順（線形メモリの受け渡し）は core/src/abi.rs に書いてある。
 """
 
@@ -92,8 +95,21 @@ def core() -> _Core:
     if _core is None:
         with _load_lock:
             if _core is None:
-                _core = _Core(WASM_PATH.read_bytes())
+                _core = _Core(_read_wasm())
     return _core
+
+
+def _read_wasm() -> bytes:
+    try:
+        return WASM_PATH.read_bytes()
+    except FileNotFoundError as error:
+        # 成果物はコミットしていないので、作る前に動かすとここへ来る。
+        # 何をすればよいかを、その場で言い切る。
+        raise RuntimeError(
+            f"計算実装（wasm）がありません: {WASM_PATH}\n"
+            "リポジトリ直下で core/build.sh を実行して作成してください"
+            "（要 rustup。README「計算の一元管理（Rust → wasm）」参照）。"
+        ) from error
 
 
 def call(request: dict) -> dict:

@@ -2,10 +2,11 @@
 node_modules/
 frontend/dist/
 
-# Rust（計算実装）。ビルド結果 backend/app/wasm/*.wasm はコミットする
-# （core/build.sh 参照。フロントエンドと Cloud Run のビルドに Rust を
-# 要らなくするため）。
+# Rust（計算実装）とそのビルド結果。.wasm はコミットせず、テストとデプロイの
+# たびに core/build.sh で作り直す（リポジトリに古い実装が残らないように）。
+# 手元で動かすときも、最初に 1 度 core/build.sh を実行すること。
 core/target/
+backend/app/wasm/
 
 # Python
 __pycache__/

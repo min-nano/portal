@@ -1,0 +1,18 @@
+# gcloud run deploy --source backend が Cloud Build へ送るときに除外するもの。
+#
+# **このファイルを消さないこと**。無い場合、gcloud は同じ場所の .gitignore や
+# 既定の除外規則から中身を組み立てる。計算実装 app/wasm/*.wasm は成果物なので
+# リポジトリの .gitignore に載っているが、デプロイには必須（これが抜けると
+# 釘配列諸定数の計算が動かない）。除外するものをここで明示して、自動生成の
+# 振る舞いに左右されないようにする。
+#
+# イメージに入るのは Dockerfile が COPY するものだけ（.dockerignore 参照）。
+# ここで削っているのは、Cloud Build へ送る前の段階で明らかに不要なもの。
+.git
+.gitignore
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+requirements-dev.txt

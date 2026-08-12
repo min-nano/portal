@@ -76,6 +76,11 @@ jobs:
           issuer="$(.github/scripts/clerk-issuer.sh "$KEY" pk_test_ CLERK_PUBLISHABLE_KEY_TEST)"
           echo "CLERK_ISSUER_TEST=$issuer" >> "$GITHUB_ENV"
           echo "プレビューの Clerk issuer: $issuer"
+      - name: Build the calculation core
+        # 釘配列諸定数の唯一の計算実装（core/）を wasm にして
+        # backend/app/wasm/ へ置く。成果物はコミットしていないので、デプロイの
+        # たびにここで作る（本番の deploy.yml と同じ）。
+        run: core/build.sh
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:

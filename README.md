@@ -126,7 +126,8 @@ backend/                      # Cloud Run サービス (FastAPI)
   app/panel_shear.py          # 計算書 PDF の組み立てと読み戻し・保存時の突き合わせ
   app/pdf_write.py            # 日本語まじりの PDF を組み立てる最小限のライター
   app/fonts/                  # 計算書 PDF に埋め込む日本語フォント（Noto Sans JP, OFL 1.1）
-  app/wasm/                   # core/ をビルドした .wasm（コミットする成果物）
+  app/wasm/                   # core/ をビルドした .wasm の置き場（コミットしない）
+  .gcloudignore               # Cloud Build へ送るものの指定（app/wasm/ を落とさないため）
 core/                         # 釘配列諸定数の唯一の計算実装（Rust → wasm）
   src/nail_array.rs           # グレー本 3.2 の式（3.2.1〜3.2.7）
   src/report.rs               # 入力の解釈と、画面・PDF が共有する結果の組み立て
@@ -512,6 +513,11 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 ## 🧑‍💻 ローカル開発
 
 ```bash
+# 計算実装（Rust → wasm）。最初に 1 度、そして core/ を触るたびに実行する。
+# 要 rustup（toolchain は core/rust-toolchain.toml が指定する）。成果物は
+# コミットしていないので、これを作らないとバックエンドもテストも動かない。
+./core/build.sh
+
 # バックエンド（要: SA の JSON 鍵 or gcloud ADC。Drive/Firestore を触らない範囲なら無くても起動する）
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
@@ -534,14 +540,6 @@ npm install
 npm run dev
 ```
 
-計算実装（`core/`）を触るときだけ Rust が要ります。触らないなら、コミットしてある `backend/app/wasm/nail_array_core.wasm` がそのまま使われるので、上の手順だけで動きます。
-
-```bash
-# 計算実装を変更したとき（要: rustup。toolchain は core/rust-toolchain.toml が指定する）
-cd core
-./build.sh   # cargo test → wasm ビルド → backend/app/wasm/ へ配置
-```
-
 ## 🧪 テスト
 
 旧リポジトリのテスト（Cloud Function の pytest・GAS の jest）を新構成に移植しています。CI（`.github/workflows/tests.yml`）が push / PR ごとに実行します。
@@ -552,6 +550,9 @@ cd core
 # この実装を wasm として動かすため）。
 cd core && cargo test
 
+# 下の 2 つは、ビルドした .wasm（./core/build.sh）があることが前提。
+# 無ければ、その旨のエラーで落ちる。
+
 # バックエンド: API 経由の Excel 生成・証明書 PDF の生成と解析・計算書 PDF の往復と
 # 保存時の突き合わせ・雛形設定・JWT 検証
 # （Drive/Docs/Firestore と認証はテスト内でフェイク）
@@ -559,7 +560,7 @@ cd backend && python -m pytest
 
 # フロントエンド: フォームの純粋ロジック（バリデーション・数値正規化・ファイル名の組み立て・
 # 釘配列図の縮尺）、画面とデータの往復、Google Picker の呼び出し、
-# コミットしてある .wasm を実際に読み込んでの計算
+# ビルドした .wasm を実際に読み込んでの計算
 # （gapi / GIS / Picker はテスト内でフェイク）
 cd frontend && npm test
 
@@ -649,7 +650,7 @@ for line in pages[0].lines:
 
 ```
 core/src/*.rs
-  └─ core/build.sh ─→ backend/app/wasm/nail_array_core.wasm   ← コミットする成果物
+  └─ core/build.sh ─→ backend/app/wasm/nail_array_core.wasm   ← ビルド成果物（コミットしない）
                         ├─ バックエンド（wasmtime）が読み込んで計算する
                         └─ GET /api/tools/timber-panel-shear-calculator/core.wasm
                              └─ 画面がそのバイト列を受け取り、編集中の計算に使う
@@ -672,19 +673,32 @@ core/src/*.rs
 
 同じ `.wasm` を動かしている以上ふつうは 1 ビットも違いません。それでも突き合わせるのは、「違わないはずのものが違ったとき」に黙って通さないためです。
 
+### ビルドと配布
+
+**`.wasm` はコミットしません**。CI がそのつどビルドします。
+
+| いつ | どこで作るか |
+| --- | --- |
+| テスト（`tests.yml`） | Backend / Frontend の各ジョブが `core/build.sh` を実行してから走る |
+| デプロイ（`deploy.yml` / `preview.yml`） | `gcloud run deploy --source backend` の前に `core/build.sh`。作った `.wasm` がイメージに入る |
+| 手元 | 最初に 1 度 `core/build.sh`（`core/` を触るたびに再実行） |
+
+`core/rust-toolchain.toml` で toolchain を固定してあり、この crate は外部クレートに依存していないため、**どこでビルドしても同じバイト列**になります（`cmp` で一致することを確認済み）。ジョブごとにビルドしても食い違いません。
+
+`backend/.gcloudignore` は消さないでください。無い場合 gcloud は除外規則を自動で組み立てるため、`.gitignore` に載っている `app/wasm/` が Cloud Build へ送られず、**計算だけが動かないイメージ**が出来上がる余地があります。念のため `backend/Dockerfile` でも、`.wasm` が無ければイメージのビルド自体を失敗させています（動かしてみるまで気付けない壊れ方を作らないため）。
+
 ### 触るときの手順
 
 ```bash
 cd core
 cargo test          # 式ごとの検証（グレー本の計算例・各関数・入力検証）はここ
-./build.sh          # テスト → wasm ビルド → backend/app/wasm/ へ配置
+./build.sh          # wasm ビルド → backend/app/wasm/ へ配置
 ```
 
-* **`.wasm` はコミットします**。フロントエンドのビルド（`npm run build`）にも Cloud Run のビルド（`gcloud run deploy --source backend`）にも Rust を要らなくするためです。`core/` を触ったら `build.sh` を実行し、作り直した `.wasm` も一緒にコミットしてください。
-* toolchain は `core/rust-toolchain.toml` で固定してあり、同じソースからは同じバイト列が出ます。CI（`tests.yml` の Core ジョブ）が作り直して突き合わせるので、**更新し忘れはそこで落ちます**。
 * 外部クレートには依存していません（JSON の読み書きも自前）。`.wasm` を小さく保ち、ビルドを再現しやすくし、計算の信頼性を crates.io の外に置かないためです。
-* 計算の中身を変えたときは `core/Cargo.toml` の `version` も上げてください。突き合わせで「画面が古い」を検出できるのはこの値です。
+* 計算の中身を変えたときは `core/Cargo.toml` の `version` も上げてください。保存時の突き合わせで「画面が古い」を検出できるのはこの値です。
 * 画面が受け取る URL には中身のハッシュが付きます（`/config` が配る `core.url`）。内容が変われば URL が変わるので、古い実装がブラウザのキャッシュに残り続けることはありません。
+* `.wasm` が無いまま動かすと、バックエンドも画面のテストも「`core/build.sh` を実行してください」と言って落ちます（黙って古い計算に落ちることはありません）。
 
 ## 🧮 計算書 PDF（釘配列諸定数）
 

@@ -1,9 +1,12 @@
 // 画面が編集中に使う計算実装（wasm）のテスト。
 //
-// 読み込むのは、リポジトリにコミットしてある **本物の .wasm**
+// 読み込むのは、core/build.sh がビルドした **本物の .wasm**
 // （backend/app/wasm/nail_array_core.wasm）。本番の画面はこれと同じバイト列を
 // /api/tools/timber-panel-shear-calculator/core.wasm から受け取るので、ここで
 // 通ることは「サーバと同じ計算が画面でもできる」ことの確認になる。
+//
+// .wasm はコミットしていない。手元で初めて動かすときは、先に core/build.sh を
+// 実行すること（無ければ、その旨のエラーで落ちる）。
 //
 // 式ごとの検証は core/src/*.rs の `cargo test` にある。ここで確かめるのは、
 // JavaScript から正しく呼べること（線形メモリの受け渡し）と、グレー本の
@@ -21,6 +24,19 @@ const WASM_PATH = new URL(
   import.meta.url
 );
 
+/** ビルド済みの .wasm を読む。無ければ、何をすればよいかを言って落ちる。 */
+async function wasmBytes() {
+  try {
+    return await readFile(WASM_PATH);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    throw new Error(
+      '計算実装（wasm）がありません。リポジトリ直下で core/build.sh を' +
+        '実行してから、もう一度テストしてください（要 rustup）。'
+    );
+  }
+}
+
 // グレー本 3.2【解説】の計算例（図 3.2.2）。
 const EXAMPLE = {
   patternId: 'p1',
@@ -34,7 +50,7 @@ const EXAMPLE = {
 };
 
 async function core() {
-  return instantiateCore(await readFile(WASM_PATH));
+  return instantiateCore(await wasmBytes());
 }
 
 describe('計算実装（wasm）', () => {
@@ -105,7 +121,7 @@ describe('loadCore', () => {
     const fetched = [];
     const loaded = await loadCore('/core.wasm?v=abc', async (url) => {
       fetched.push(url);
-      return readFile(WASM_PATH);
+      return wasmBytes();
     });
 
     expect(fetched).toEqual(['/core.wasm?v=abc']);
