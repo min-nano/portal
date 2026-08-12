@@ -43,30 +43,54 @@ export function mergeFormData(config, parsed) {
   return data;
 }
 
+// --- 項目どうしの前提条件 ---------------------------------------------------
+//
+// 証明書には「その選択肢を選んだときだけ書く欄」（「６ その他」の内容など）と
+// 「その欄を書いたときだけ選ぶ選択肢」（プログラムの大臣認定）がある。前提が
+// 外れている項目は入力させず、必須の判定からも外す。前提は連鎖する
+// （プログラムの名称 → 大臣の認定 → 認定番号）。
+
+/** 記入欄 → それを有効にする選択肢。前提の無い欄は含めない。 */
+export function fieldDependencies(config) {
+  const dependencies = new Map();
+  config.choice_groups.forEach((group) => {
+    group.options.forEach((option) => {
+      if (option.requires_field) {
+        dependencies.set(option.requires_field, { choice: group.key, option });
+      }
+    });
+  });
+  return dependencies;
+}
+
+/** 記入欄が有効か（紐づく選択肢を選んでいるか）。 */
+export function isFieldActive(dependency, data) {
+  return !dependency || data.choices[dependency.choice] === dependency.option.value;
+}
+
+/** 選択肢が有効か（前提となる記入欄が埋まっているか）。 */
+export function isGroupActive(group, data) {
+  const gate = group.depends_on_field;
+  return !gate || Boolean(String(data.fields[gate] || '').trim());
+}
+
 /** 未入力の必須項目を日本語のラベルで列挙する。 */
 export function validateFormData(config, data) {
   const missing = [];
+  const dependencies = fieldDependencies(config);
 
   config.text_fields.forEach((field) => {
-    if (field.required && !String(data.fields[field.key] || '').trim()) {
+    if (!field.required || !isFieldActive(dependencies.get(field.key), data)) return;
+    if (!String(data.fields[field.key] || '').trim()) {
       missing.push(field.label);
     }
   });
 
   config.choice_groups.forEach((group) => {
-    if (group.required && !data.choices[group.key]) {
+    if (!group.required || !isGroupActive(group, data)) return;
+    if (!data.choices[group.key]) {
       missing.push(group.label);
     }
-    // 「６ その他」のように、選んだときだけ必要になる入力欄。
-    group.options.forEach((option) => {
-      if (!option.requires_field) return;
-      if (data.choices[group.key] !== option.value) return;
-      if (String(data.fields[option.requires_field] || '').trim()) return;
-      const dependent = config.text_fields.find(
-        (f) => f.key === option.requires_field
-      );
-      missing.push(dependent ? dependent.label : option.requires_field);
-    });
   });
 
   return missing;

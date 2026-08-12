@@ -84,6 +84,7 @@ def form_config() -> dict:
                 "key": g["key"],
                 "label": g["label"],
                 "required": bool(g.get("required")),
+                "depends_on_field": g.get("depends_on_field", ""),
                 "options": [
                     {
                         "value": o["value"],
@@ -114,6 +115,51 @@ def _choice_definitions() -> dict:
     return {g["key"]: g for g in load_mapping()["choice_groups"]}
 
 
+def _field_gates() -> dict:
+    """記入欄 → それを有効にする選択肢（グループのキー, 選択肢の値）。"""
+    gates = {}
+    for key, group in _choice_definitions().items():
+        for option in group["options"]:
+            dependent = option.get("requires_field")
+            if dependent:
+                gates[dependent] = (key, option["value"])
+    return gates
+
+
+def _field_is_active(key: str, data: dict) -> bool:
+    """その記入欄が意味を持つ状態か（紐づく選択肢を選んでいるか）。"""
+    gate = _field_gates().get(key)
+    return gate is None or data["choices"].get(gate[0]) == gate[1]
+
+
+def _group_is_active(group: dict, data: dict) -> bool:
+    """その選択肢が意味を持つ状態か（前提となる記入欄が埋まっているか）。"""
+    gate = group.get("depends_on_field")
+    return not gate or bool(data["fields"].get(gate))
+
+
+def _clear_inactive(data: dict):
+    """前提が外れている選択・記入欄を空にする。
+
+    「その選択肢を選んだときだけ意味を持つ入力欄」と「その欄を入力したときだけ
+    意味を持つ選択肢」は、前提が外れていれば証明書に載らない。前の入力が
+    残らないよう空にする。前提は連鎖する（プログラムの名称 → 大臣の認定 →
+    認定番号）ので、変化が無くなるまで繰り返す。
+    """
+    while True:
+        changed = False
+        for key, group in _choice_definitions().items():
+            if data["choices"].get(key) and not _group_is_active(group, data):
+                data["choices"][key] = ""
+                changed = True
+        for key in _field_definitions():
+            if data["fields"].get(key) and not _field_is_active(key, data):
+                data["fields"][key] = ""
+                changed = True
+        if not changed:
+            return
+
+
 def normalize_data(data) -> dict:
     """API で受け取った本文を {"fields": {...}, "choices": {...}} に整える。
 
@@ -139,35 +185,28 @@ def normalize_data(data) -> dict:
         allowed = {o["value"] for o in group["options"]}
         choices[key] = value if value in allowed else ""
 
-    # 「その他」のような、特定の選択肢を選んだときだけ意味を持つ入力欄は、
-    # その選択肢が外れていれば空にする（前の入力が証明書に残らないように）。
-    for key, group in _choice_definitions().items():
-        for option in group["options"]:
-            dependent = option.get("requires_field")
-            if dependent and choices.get(key) != option["value"]:
-                fields[dependent] = ""
-
-    return {"fields": fields, "choices": choices}
+    normalized = {"fields": fields, "choices": choices}
+    _clear_inactive(normalized)
+    return normalized
 
 
 def validate(data: dict):
-    """必須項目が埋まっているか確認する。埋まっていなければ 400 で返す。"""
+    """必須項目が埋まっているか確認する。埋まっていなければ 400 で返す。
+
+    前提のある項目（「６ その他」の内容、大臣の認定など）は、前提を満たして
+    いるときだけ必須になる。満たしていなければ空欄のままでよい。
+    """
     missing = []
     for key, definition in _field_definitions().items():
-        if definition.get("required") and not data["fields"].get(key):
+        if not definition.get("required") or not _field_is_active(key, data):
+            continue
+        if not data["fields"].get(key):
             missing.append(definition["label"])
     for key, group in _choice_definitions().items():
-        if group.get("required") and not data["choices"].get(key):
+        if not group.get("required") or not _group_is_active(group, data):
+            continue
+        if not data["choices"].get(key):
             missing.append(group["label"])
-
-    # 選択肢に紐づく入力欄（「６ その他」の内容など）も、選ばれていれば必須。
-    for key, group in _choice_definitions().items():
-        for option in group["options"]:
-            dependent = option.get("requires_field")
-            if not dependent or data["choices"].get(key) != option["value"]:
-                continue
-            if not data["fields"].get(dependent):
-                missing.append(_field_definitions()[dependent]["label"])
 
     if missing:
         raise CertificateError("次の項目を入力してください: " + "、".join(missing))

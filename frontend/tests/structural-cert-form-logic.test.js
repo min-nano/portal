@@ -27,9 +27,16 @@ const config = {
     { key: 'building_area', label: '建築面積', required: true, unit: 'm²', hint: '' },
     { key: 'program_name', label: 'プログラムの名称', required: false, unit: '', hint: '' },
     {
+      key: 'program_cert_number',
+      label: 'プログラムの認定番号',
+      required: true,
+      unit: '',
+      hint: '',
+    },
+    {
       key: 'other_calc_type',
       label: 'その他の構造計算の種類',
-      required: false,
+      required: true,
       unit: '',
       hint: '',
     },
@@ -47,9 +54,10 @@ const config = {
     {
       key: 'program_certified',
       label: '大臣の認定',
-      required: false,
+      required: true,
+      depends_on_field: 'program_name',
       options: [
-        { value: '有', label: '有', requires_field: '' },
+        { value: '有', label: '有', requires_field: 'program_cert_number' },
         { value: '無', label: '無', requires_field: '' },
       ],
     },
@@ -73,6 +81,7 @@ describe('emptyFormData', () => {
         building_name: '',
         building_area: '',
         program_name: '',
+        program_cert_number: '',
         other_calc_type: '',
       },
       choices: { calc_type: '', program_certified: '' },
@@ -138,6 +147,43 @@ describe('validateFormData', () => {
       validateFormData(
         config,
         data({ ...base, other_calc_type: '限界耐力計算' }, { calc_type: '6' })
+      )
+    ).toEqual([]);
+  });
+
+  it('入力があるときだけ選ぶ選択肢は、その欄を埋めたときだけ必須になる', () => {
+    const base = { building_name: 'A', building_area: '1' };
+
+    // プログラムを使わない（名称が空欄）なら、認定の有無は選ばなくてよい。
+    expect(validateFormData(config, data(base, { calc_type: '1' }))).toEqual([]);
+    // 名称を入れたら、有無のどちらかを必ず選ぶ。
+    expect(
+      validateFormData(config, data({ ...base, program_name: 'X' }, { calc_type: '1' }))
+    ).toEqual(['大臣の認定']);
+    expect(
+      validateFormData(
+        config,
+        data({ ...base, program_name: 'X' }, { calc_type: '1', program_certified: '無' })
+      )
+    ).toEqual([]);
+  });
+
+  it('認定番号は「有」を選んだときだけ必須になる', () => {
+    const named = { building_name: 'A', building_area: '1', program_name: 'X' };
+
+    expect(
+      validateFormData(
+        config,
+        data(named, { calc_type: '1', program_certified: '有' })
+      )
+    ).toEqual(['プログラムの認定番号']);
+    expect(
+      validateFormData(
+        config,
+        data({ ...named, program_cert_number: 'TPRG-1234' }, {
+          calc_type: '1',
+          program_certified: '有',
+        })
       )
     ).toEqual([]);
   });

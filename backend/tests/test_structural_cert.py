@@ -123,6 +123,55 @@ def test_normalize_keeps_fields_of_selected_options():
     assert data["fields"]["other_calc_type"] == "限界耐力計算"
 
 
+def test_normalize_clears_the_certification_without_a_program_name():
+    # プログラムを使っていない（名称が空）なら、認定の有無も認定番号も残さない。
+    data = sample_data(fields={"program_name": ""}, choices={"program_certified": "有"})
+
+    assert data["choices"]["program_certified"] == ""
+    assert data["fields"]["program_cert_number"] == ""
+
+
+def test_normalize_clears_the_certification_number_when_not_certified():
+    data = sample_data(choices={"program_certified": "無"})
+
+    assert data["fields"]["program_cert_number"] == ""
+
+
+def test_normalize_keeps_the_certification_number_when_certified():
+    data = sample_data(choices={"program_certified": "有"})
+
+    assert data["fields"]["program_cert_number"] == "TPRG-1234"
+
+
+def test_validate_requires_the_certification_when_a_program_is_named():
+    data = sample_data(choices={"program_certified": ""})
+
+    with pytest.raises(CertificateError) as excinfo:
+        structural_cert.validate(data)
+
+    assert "国土交通大臣の認定" in str(excinfo.value)
+
+
+def test_validate_skips_the_certification_without_a_program_name():
+    # 名称が空欄なら、認定の有無は選ばなくてよい（選べもしない）。
+    structural_cert.validate(sample_data(fields={"program_name": ""}))
+
+
+def test_validate_requires_the_certification_number_when_certified():
+    data = sample_data(
+        choices={"program_certified": "有"}, fields={"program_cert_number": ""}
+    )
+
+    with pytest.raises(CertificateError) as excinfo:
+        structural_cert.validate(data)
+
+    assert "プログラムの認定番号" in str(excinfo.value)
+
+
+def test_validate_skips_the_certification_number_when_not_certified():
+    structural_cert.validate(sample_data(choices={"program_certified": "無"}))
+
+
 def test_validate_reports_every_missing_item_at_once():
     data = sample_data(fields={"building_name": "", "structure": ""}, choices={"calc_type": ""})
 
@@ -133,6 +182,19 @@ def test_validate_reports_every_missing_item_at_once():
     assert "建築物の名称" in message
     assert "構造" in message
     assert "構造計算の種類" in message
+
+
+def test_validate_requires_the_eaves_height():
+    data = sample_data(fields={"eaves_height": ""})
+
+    with pytest.raises(CertificateError) as excinfo:
+        structural_cert.validate(data)
+
+    assert "最高の軒の高さ" in str(excinfo.value)
+
+
+def test_validate_allows_an_empty_remarks():
+    structural_cert.validate(sample_data(fields={"remarks": ""}))
 
 
 def test_validate_requires_the_field_of_the_selected_option():
@@ -156,6 +218,7 @@ def test_build_replacements_covers_all_placeholders_including_empty_fields():
     replacements = structural_cert.build_replacements(data)
 
     assert replacements["{{建物名称}}"] == "サンプル邸"
+    assert replacements["{{備考}}"] == "特記事項なし"
     # 未入力でも置換対象にする（プレースホルダーが証明書に残らないように）。
     assert replacements["{{プログラム名}}"] == ""
     # 雛形の表記ゆれ（波括弧 1 つ）にも両方対応する。
@@ -335,6 +398,7 @@ def test_parse_falls_back_to_the_document_body():
     assert fields["structure_part"] == "鉄筋コンクリート"
     assert fields["program_name"] == "サンプル構造計算"
     assert fields["program_cert_number"] == "TPRG-1234"
+    assert fields["remarks"] == "特記事項なし"
     # ○ はベクター図形なので、位置から選択を復元できる。
     assert parsed["choices"] == data["choices"]
 

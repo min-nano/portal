@@ -145,6 +145,7 @@ SAMPLE_FIELDS = {
     "other_calc_type": "",
     "program_name": "サンプル構造計算",
     "program_cert_number": "TPRG-1234",
+    "remarks": "特記事項なし",
 }
 
 
@@ -205,6 +206,7 @@ def certificate_lines(fields: dict | None = None) -> list[tuple]:
         ("２国土交通大臣の認定□有□無", VALUE_X, 126.5),
         (f"３認定番号（{f['program_cert_number']}", VALUE_X, 107.8),
         ("備考", LABEL_X, 88.4),
+        (f["remarks"], VALUE_X, 88.4),
     ]
 
 
