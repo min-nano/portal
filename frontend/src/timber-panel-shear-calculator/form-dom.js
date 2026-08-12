@@ -506,12 +506,17 @@ function buildPanelEditor(document_, panel, index, options) {
   const body = document_.createElement('tbody');
   body.setAttribute('data-panel-steps', String(index));
   steps.appendChild(body);
+  // 途中経過の表は値が長い（「34,647,000 mm²」など）ので、狭い画面では
+  // ページごと横に広げず、表の中だけを横スクロールさせる。
+  const stepsBox = document_.createElement('div');
+  stepsBox.className = 'table-scroll';
+  stepsBox.appendChild(steps);
   const diagram = document_.createElementNS(SVG_NS, 'svg');
   diagram.setAttribute('data-panel-diagram', String(index));
   diagram.setAttribute('role', 'img');
   diagram.setAttribute('aria-label', '釘配列図');
   diagram.setAttribute('hidden', '');
-  result.append(error, summary, steps, diagram);
+  result.append(error, summary, stepsBox, diagram);
   box.appendChild(result);
 
   return box;

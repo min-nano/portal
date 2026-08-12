@@ -282,6 +282,13 @@ describe('renderWallPanels', () => {
     expect(value(panels[1], 'grain')).toBe('width');
   });
 
+  it('途中経過の表は、横スクロールする器に入れる（画面ごと広げない）', () => {
+    renderWallPanels(document, [PANEL], OPTIONS);
+
+    const steps = document.querySelector('[data-panel-steps]').closest('table');
+    expect(steps.parentElement.className).toBe('table-scroll');
+  });
+
   it('割り付けの型は、計算実装が配る一覧から選ぶ', () => {
     renderWallPanels(document, [PANEL], OPTIONS);
 

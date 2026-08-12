@@ -225,9 +225,13 @@ button.secondary:disabled { background-color: #aaa; }
 /* 壁の計算結果の中の、表ごとの小見出し。 */
 .result-heading { margin: 14px 0 0; font-size: 0.9em; color: #333; }
 .panel-result { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #d6d6e0; }
-.wall-result { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e3e3ef; }
-.wall-result h4 { margin: 0; font-size: 0.95em; color: #333; }
-.wall-result .steps-table { overflow-x: auto; display: block; }
+/* 結果の表は、面材ごとの値・面材と釘・検定と列が多い。狭い画面ではページ
+   ごと横に広げず、表の中だけを横スクロールさせる（ページが横にはみ出すと、
+   スマートフォンでは本文の幅まで縮んでしまう）。 */
+.table-scroll { overflow-x: auto; }
+/* 面材名の欄が 1 文字ずつ縦に積まれないだけの幅を持たせる（表は横スクロール
+   するので、狭い画面でも読める幅を優先する）。 */
+.table-scroll .steps-table .step-label { min-width: 9em; }
 
 /* 釘配列図。狭い画面でも縮めて収める。 */
 .diagram-box, .panel-result svg { margin-top: 12px; overflow-x: auto; }
