@@ -9,10 +9,17 @@
 // 計算し直さない）。ダウンロードした xlsx を Excel で開いた時点で計算される。
 
 import '../styles.css';
+import '../components/index.js';
 import { requireSignIn } from '../auth.js';
 import { redirectToCanonicalHost } from '../canonical-host.js';
 import { apiGet, apiPostForBlob } from '../api.js';
-import { buildForm, readValues, refresh, writeValues } from './form-dom.js';
+import {
+  buildForm,
+  readValues,
+  refresh,
+  revealMissingFields,
+  writeValues,
+} from './form-dom.js';
 import {
   buildPayload,
   collectErrors,
@@ -86,6 +93,8 @@ async function submitForm() {
   const errors = collectErrors(config, building, values);
   showErrors(errors);
   if (errors.length > 0) {
+    // 折り畳んだ節の中に入力漏れが隠れないよう、その節を開いてから知らせる。
+    revealMissingFields(formRoot());
     showMessage('入力を確認してください。', 'red');
     return;
   }

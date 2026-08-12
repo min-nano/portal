@@ -24,6 +24,7 @@
 // 切り替えて編集する。
 
 import '../styles.css';
+import '../components/index.js';
 import { requireSignIn } from '../auth.js';
 import { redirectToCanonicalHost } from '../canonical-host.js';
 import { apiGet, apiGetBytes, apiPostFile, apiSendJson } from '../api.js';

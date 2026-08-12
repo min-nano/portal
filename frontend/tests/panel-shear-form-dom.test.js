@@ -333,6 +333,30 @@ describe('renderWallPanels', () => {
     expect(document.querySelector('[data-panel-area]').textContent).toBe('-');
   });
 
+  it('折り畳んだ面材は、描き直しても畳んだままにする', () => {
+    renderWallPanels(document, WALL.panels, OPTIONS);
+    document.querySelectorAll('[data-panel-index]')[0].open = false;
+
+    // 面材を 1 枚足したときの描き直し。畳んでおいた面材は開かず、
+    // これから入力する面材だけが開いた状態で増える。
+    const added = { ...PANEL, panelId: 'pn3', panelName: '' };
+    renderWallPanels(document, [...WALL.panels, added], OPTIONS);
+
+    const panels = document.querySelectorAll('[data-panel-index]');
+    expect(panels[0].open).toBe(false);
+    expect(panels[1].open).toBe(true);
+    expect(panels[2].open).toBe(true);
+  });
+
+  it('面材を減らしても、残った面材の折り畳みはそのまま', () => {
+    renderWallPanels(document, WALL.panels, OPTIONS);
+    document.querySelectorAll('[data-panel-index]')[1].open = false;
+
+    renderWallPanels(document, [WALL.panels[1]], OPTIONS);
+
+    expect(document.querySelector('[data-panel-index]').open).toBe(false);
+  });
+
   it('描き直しても入力欄が積み上がらない', () => {
     renderWallPanels(document, WALL.panels, OPTIONS);
     renderWallPanels(document, WALL.panels, OPTIONS);
@@ -346,6 +370,20 @@ describe('renderWallPanels', () => {
     const buttons = document.querySelectorAll('[data-remove-wall-panel]');
     expect([...buttons].map((button) => button.getAttribute('data-remove-wall-panel')))
       .toEqual(['0', '1']);
+  });
+
+  it('面材 1 枚ごとに折り畳める（面材名と削除ボタンは開閉の行に残す）', () => {
+    renderWallPanels(document, WALL.panels, OPTIONS);
+
+    const panel = document.querySelector('[data-panel-index]');
+    expect(panel.tagName.toLowerCase()).toBe('portal-section');
+    expect(panel.open).toBe(true);
+    expect(panel.querySelector('[slot="title"]').textContent).toBe('下段');
+    expect(panel.querySelector('[data-remove-wall-panel]').slot).toBe('actions');
+
+    // 折り畳んでも入力欄は残る（読み戻す内容は変わらない）。
+    panel.open = false;
+    expect(readPanels(document)[0].width).toBe(910);
   });
 });
 

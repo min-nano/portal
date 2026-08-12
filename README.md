@@ -146,6 +146,30 @@ GAS 版の機能をそのまま移植しています。
 
 **配布物の改訂には自動で気付きます**。`.github/workflows/howtec-worksheet-check.yml` が週に 1 度、配布ページを見に行きます。詳しくは「表計算ツールが改訂されたときの手順」を参照してください。
 
+### 画面共通の部品（Web Components）
+
+ページをまたいで同じものが出てくる部分は、`frontend/src/components/` に**カスタム要素**としてまとめてあります。フレームワークは入れていません（素の Web Components で足りているため。必要になったら、この境界のままフレームワークへ寄せられます）。
+
+| 要素 | 役割 |
+| --- | --- |
+| `<portal-header>` | ヘッダー（ポータル名・サインイン中のアカウント欄） |
+| `<portal-auth-gate>` | サインインゲート（Clerk のサインイン画面のマウント先） |
+| `<portal-section>` | **折り畳めるセクション** |
+| `<portal-section-controls>` | セクションの一括開閉（すべて展開 / すべて折りたたむ） |
+| `<portal-edit-bar>` | 編集中のファイル（PDF ツール共通） |
+| `<portal-save-bar>` | 保存欄（PDF ツール共通） |
+| `<portal-save-dialogs>` | 未保存の確認・名前を付けて保存（PDF ツール共通） |
+
+**入力・計算の量が増えたので、各ページの節は折り畳めます**。入力の済んだ節を閉じておけば、次に入力する箇所を見つけやすくなります。
+
+* 既定はすべて開いた状態。見出しの行（つまみ・見出しのどこでも）を押すと開閉する
+* フォームの右上の「すべて折りたたむ」で、節の見出しだけが並ぶ目次になる
+* 折り畳んでも入力欄は画面の中に残る（保存・出力する内容は開閉で変わらない）
+* 節の中に**入力漏れ**があるまま保存・出力しようとすると、その節は自動で開く
+* 面材張り大壁ツールは**面材 1 枚ごと**、現況検査レポートは**部屋 1 つごと**にも折り畳める。閉じているあいだも、見出しの行には見分けが付く情報（面材名 / 部屋の階数・部屋名）を残す
+
+部品を足すときの約束事は `frontend/src/components/index.js` の冒頭に書いてあります（要点は「名前は `portal-` で始める」「中身は原則 light DOM に作り、ページ共通の CSS と既存の id 参照をそのまま使えるようにする」「shadow DOM はページ側の CSS から隔てたい部分だけに使い、外から整えたいところは `part` で出す」）。
+
 ## 📁 リポジトリ構成
 
 ```
@@ -155,6 +179,13 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   tools/structural-cert-formatter/index.html
   tools/timber-panel-shear-calculator/index.html
   tools/wall-quantity-calculator/index.html
+  src/components/             # 画面共通の部品（Web Components）
+    index.js                  # 部品の読み込み口と、部品を足すときの約束事
+    page-header.js            # <portal-header>（ヘッダー・アカウント欄）
+    auth-gate.js              # <portal-auth-gate>（サインインゲート）
+    collapsible-section.js    # <portal-section>（折り畳めるセクション）
+    section-controls.js       # <portal-section-controls>（一括開閉）
+    pdf-file-ui.js            # <portal-edit-bar> / <portal-save-bar> / <portal-save-dialogs>
   src/auth.js                 # Clerk（サインインゲート・トークン取得）
   src/api.js                  # Bearer 付き fetch ラッパー
   src/google-picker.js        # 公式 Google Picker（Drive のファイル選択）
@@ -623,7 +654,8 @@ cd core && cargo test
 cd backend && python -m pytest
 
 # フロントエンド: フォームの純粋ロジック（バリデーション・数値正規化・ファイル名の組み立て・
-# 釘配列図の縮尺）、画面とデータの往復、Google Picker の呼び出し、
+# 釘配列図の縮尺）、画面とデータの往復、画面共通の部品（セクションの開閉・
+# 各ページが id で探すマークアップ）、Google Picker の呼び出し、
 # ビルドした .wasm を実際に読み込んでの計算
 # （gapi / GIS / Picker はテスト内でフェイク）
 cd frontend && npm test

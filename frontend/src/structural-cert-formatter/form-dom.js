@@ -5,6 +5,8 @@
 // この画面には項目を持たないので、雛形の改訂にはマッピングの編集だけで
 // 追従できる。
 
+// 節は折り畳めるセクション（<portal-section>）で作る。
+import { revealSection } from '../components/collapsible-section.js';
 import {
   dateFieldsFromIso,
   emptyFormData,
@@ -28,6 +30,8 @@ const DECIMAL_UNITS = ['m', 'm²'];
 export function buildField(doc, field, { hideLabel, labelledBy, dependency } = {}) {
   const wrap = doc.createElement('div');
   wrap.className = 'cert-field';
+  // 未入力のまま保存しようとしたとき、その項目を含む節を開いて示すための目印。
+  if (field.required) wrap.dataset.required = '';
 
   // セクションの見出しと同じ名前なら、ラベルは出さない（見出しが名前を担う）。
   if (!hideLabel) {
@@ -122,6 +126,7 @@ function isDateRequired(spec, fieldsByKey) {
 export function buildDateField(doc, spec, fieldsByKey, { hideLabel, labelledBy } = {}) {
   const wrap = doc.createElement('div');
   wrap.className = 'cert-field cert-date';
+  if (isDateRequired(spec, fieldsByKey)) wrap.dataset.required = '';
 
   // セクションの見出しと同じ名前なら、ラベルは出さない（見出しが名前を担う）。
   if (!hideLabel) {
@@ -235,6 +240,7 @@ export function buildChoiceGroup(doc, group, { hideLegend, labelledBy, gate } = 
   wrap.className = hideLegend ? 'cert-choices bare' : 'cert-choices';
   if (labelledBy) wrap.setAttribute('aria-labelledby', labelledBy);
   if (gate) wrap.dataset.requiresField = gate.key;
+  if (group.required) wrap.dataset.required = '';
 
   if (!hideLegend) {
     const legend = doc.createElement('legend');
@@ -281,7 +287,7 @@ export function buildForm(root, config) {
   const dependencyByField = fieldDependencies(config);
 
   config.sections.forEach((section, index) => {
-    const wrap = doc.createElement('section');
+    const wrap = doc.createElement('portal-section');
     wrap.className = 'cert-section';
 
     // 見出しがそのまま名前になっている項目は、セクションの見出しにまとめる
@@ -304,6 +310,8 @@ export function buildForm(root, config) {
     const heading = doc.createElement('h3');
     heading.id = `cert-section-${index}`;
     heading.textContent = section.title + (required ? ' *' : '');
+    // 見出しは折り畳んでも見えるところ（セクションの開閉の行）に置く。
+    heading.slot = 'title';
     wrap.appendChild(heading);
 
     section.items.forEach((item) => {
@@ -347,6 +355,26 @@ export function buildForm(root, config) {
 
   // 未選択を既定にする（必須でないグループの「（指定しない）」を選んでおく）。
   applyFormData(root, emptyFormData(config));
+}
+
+/**
+ * 未入力の必須項目がある節を開く。
+ *
+ * 節は折り畳めるので、閉じた中に入力漏れが隠れたままにならないよう、
+ * 保存できなかったときに呼ぶ（どの項目が足りないかは画面下の文言が出す）。
+ */
+export function revealMissingFields(root) {
+  root.querySelectorAll('[data-required]').forEach((wrap) => {
+    // 前提が外れている項目（入力・選択できない状態）は、証明書にも載らない
+    // ので数えない（validateFormData と同じ扱い）。
+    if (wrap.classList.contains('disabled')) return;
+    const missing = wrap.classList.contains('cert-choices')
+      ? !wrap.querySelector('[data-choice]:checked')
+      : Array.from(wrap.querySelectorAll('[data-field]')).some(
+          (input) => !input.disabled && !input.value.trim()
+        );
+    if (missing) revealSection(wrap);
+  });
 }
 
 export function collectFormData(root, config) {

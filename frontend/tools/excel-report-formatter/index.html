@@ -6,18 +6,10 @@
   <title>現況検査レポート作成ツール</title>
 </head>
 <body>
-  <header class="portal-header">
-    <span class="title"><a href="/">%PORTAL_TITLE%</a></span>
-    <span class="account" id="accountArea" hidden>
-      <span id="accountEmail"></span>
-      <button type="button" id="signOutBtn">サインアウト</button>
-    </span>
-  </header>
+  <!-- ヘッダーとサインインゲートは全ページ共通の部品（src/components/）。 -->
+  <portal-header class="portal-header" portal-name="%PORTAL_TITLE%" home></portal-header>
 
-  <div id="authGate" class="auth-gate" hidden>
-    <p class="note">社内の Google アカウントでサインインしてください。</p>
-    <div class="clerk-mount"></div>
-  </div>
+  <portal-auth-gate id="authGate" class="auth-gate" hidden></portal-auth-gate>
 
   <div id="app" class="container" hidden>
     <!-- 雛形は滅多に変えないので、タイトル横に小さく置く（画面の幅が足りない
@@ -37,8 +29,12 @@
     </div>
 
     <form id="reportForm" onsubmit="return false;">
-      <label>住宅(物件)名</label>
+      <label for="property_name">住宅(物件)名</label>
       <input type="text" id="property_name" name="property_name">
+
+      <!-- 部屋は 1 つずつ折り畳める。入力済みの部屋を閉じておくと、
+           入力中の部屋を探しやすい。 -->
+      <portal-section-controls class="section-controls" for="rooms"></portal-section-controls>
 
       <div id="rooms"></div>
       <button type="button" class="add-room" id="addRoomBtn">＋ 部屋を追加</button>

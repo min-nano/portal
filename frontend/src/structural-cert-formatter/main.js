@@ -15,6 +15,7 @@
 // ../save-dialogs.js にある。
 
 import '../styles.css';
+import '../components/index.js';
 import { requireSignIn } from '../auth.js';
 import { redirectToCanonicalHost } from '../canonical-host.js';
 import { apiGet, apiPostFile, apiSendJson } from '../api.js';
@@ -24,6 +25,7 @@ import {
   applyFormData,
   buildForm as buildFormInto,
   collectFormData as collectFormDataFrom,
+  revealMissingFields,
   syncFieldsFromPicker,
 } from './form-dom.js';
 import {
@@ -329,6 +331,8 @@ async function save(mode) {
 
   const missing = validateFormData(config, data);
   if (missing.length > 0) {
+    // 折り畳んだ節の中に入力漏れが隠れないよう、その節を開いてから知らせる。
+    revealMissingFields(sectionsRoot());
     showMessage('次の項目を入力してください: ' + missing.join('、'), 'red');
     return false;
   }

@@ -5,6 +5,19 @@
    スタイルの display 指定に負けるため、明示的に上書きしておく。 */
 [hidden] { display: none !important; }
 
+/* 画面の部品（src/components/）。カスタム要素の既定は display: inline なので、
+   箱として使うものはここで block にしておく（部品が読み込まれる前の描画でも
+   崩れないよう、shadow DOM の :host だけに頼らない）。 */
+portal-section, portal-auth-gate, portal-edit-bar, portal-save-bar { display: block; }
+
+/* セクションの一括開閉。フォームの右上に小さく置く。 */
+portal-section-controls { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+portal-section-controls button { margin-top: 0; width: auto; padding: 4px 10px; font-size: 0.78em; }
+
+/* 折り畳めるセクションの見出し。見出し自身は light DOM に置くので、
+   セクションごとの見た目（.cert-section h3 など）はそのまま効く。 */
+portal-section > [slot="title"] { margin: 0; min-width: 0; }
+
 body { font-family: sans-serif; padding: 16px; background-color: #f4f4f9; margin: 0; }
 .container { background: white; padding: 16px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); max-width: 720px; margin: 0 auto; }
 h2 { font-size: 1.2em; color: #333; margin-top: 0; }
@@ -77,17 +90,22 @@ button:disabled { background-color: #aaa; }
   max-height: calc(100vh - 16px);
 }
 
-/* 部屋ブロック */
+/* 部屋ブロック（折り畳めるセクション）。見出しの行には部屋名と階数・部屋名の
+   欄を残すので、閉じたままでも見分けと修正ができる。 */
 .room { border: 1px solid #d6d6e0; border-radius: 8px; padding: 10px; margin-top: 14px; background: #fafbff; }
-.room-head { display: flex; flex-direction: column; gap: 8px; position: sticky; top: 0; z-index: 10; background: #fafbff; border-radius: 8px 8px 0 0; padding-bottom: 8px; border-bottom: 1px solid #d6d6e0; margin-bottom: 2px; }
+/* 計測値の表を追いながらでも部屋の見出しが見えるよう、開閉の行ごと貼り付ける。 */
+.room::part(head) { position: sticky; top: 0; z-index: 10; background: #fafbff; border-radius: 8px 8px 0 0; padding-bottom: 8px; border-bottom: 1px solid #d6d6e0; margin-bottom: 2px; }
+.room-head { display: flex; flex-direction: column; gap: 8px; }
 .room-title-row { display: flex; align-items: center; justify-content: space-between; }
-.room-title-row h3 { white-space: nowrap; }
-.room-head .remove { width: auto; margin-top: 0; padding: 4px 10px; font-size: 0.8em; background-color: #c0392b; }
-.room-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.room-meta label { display: inline; margin-top: 0; font-size: 0.8em; }
+.room-title-row h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room .remove { width: auto; margin-top: 0; padding: 4px 10px; font-size: 0.8em; background-color: #c0392b; }
+/* 階数・部屋名は 1 行に収める。狭い画面では折り返さずに部屋名の欄を縮める
+   （見出しの行なので、2 行に増えると表の前置きが厚くなってしまう）。 */
+.room-meta { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+.room-meta label { display: inline; margin-top: 0; font-size: 0.8em; white-space: nowrap; }
 .room-meta input { width: auto; margin-top: 0; padding: 5px 6px; }
-.room-meta input[data-room-field="floor"] { width: 56px; }
-.room-meta input[data-room-field="room_name"] { width: 110px; }
+.room-meta input[data-room-field="floor"] { width: 56px; flex: none; }
+.room-meta input[data-room-field="room_name"] { width: 110px; flex: 0 1 110px; min-width: 3em; }
 
 /* 計測値は選択と数値しか入れないので、表形式で縦に詰めてラベルはヘッダー列で代表する。 */
 .measure-table { width: 100%; border-collapse: collapse; margin-top: 10px; table-layout: fixed; }
@@ -114,7 +132,6 @@ button:disabled { background-color: #aaa; }
 
 /* 証明書の記載順どおりに項目を並べたセクション。 */
 .cert-section { border: 1px solid #d6d6e0; border-radius: 8px; padding: 10px 12px 14px; margin-top: 14px; background: #fafbff; }
-.cert-section h3 { margin-bottom: 4px; }
 .cert-field .field-row { display: flex; align-items: center; gap: 6px; }
 .cert-field .field-row input { flex: 1; }
 .cert-field .unit { font-size: 0.85em; color: #555; white-space: nowrap; }
@@ -197,9 +214,9 @@ button.secondary:disabled { background-color: #aaa; }
    釘配列諸定数（グレー本 3.2）と釘配列図が出る。 */
 .wall-panels { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
 .wall-panel { border: 1px solid #d6d6e0; border-radius: 8px; padding: 8px 12px 12px; background: #fbfbfe; }
-.wall-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.wall-panel-head strong { font-size: 0.9em; color: #1a3a8f; }
-.wall-panel-head button { margin-top: 0; width: auto; padding: 4px 10px; font-size: 0.8em; }
+/* 見出しの行（面材名と削除ボタン）は、折り畳んでも残る。 */
+.wall-panel > [slot="title"] { font-size: 0.9em; color: #1a3a8f; }
+.wall-panel > [slot="actions"] { margin-top: 0; width: auto; padding: 4px 10px; font-size: 0.8em; }
 .panel-result { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #d6d6e0; }
 .wall-result { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e3e3ef; }
 .wall-result h4 { margin: 0; font-size: 0.95em; color: #333; }

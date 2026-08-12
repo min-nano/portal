@@ -4,6 +4,8 @@
 // 説明を参照）。ここは「定義どおりに DOM を作る」「DOM から値を読む」
 // 「今の入力に合わせて入力できる／できないを切り替える」の 3 つだけを行う。
 
+// 節は折り畳めるセクション（<portal-section>）で作る。
+import { revealSection } from '../components/collapsible-section.js';
 import {
   blockVisible,
   eachField,
@@ -112,11 +114,14 @@ function buildTableBlock(doc, block) {
   return wrap;
 }
 
-/** 節 1 つ（見出し・算定方法のチェックボックス・かたまり）。 */
+/** 節 1 つ（見出し・算定方法のチェックボックス・かたまり）。折り畳める。 */
 export function buildSection(doc, section) {
-  const wrap = el(doc, 'section', 'cert-section');
+  const wrap = el(doc, 'portal-section', 'cert-section');
   wrap.dataset.section = section.key;
-  wrap.appendChild(el(doc, 'h3', null, section.title));
+  // 見出しは折り畳んでも見えるところ（セクションの開閉の行）に置く。
+  const heading = el(doc, 'h3', null, section.title);
+  heading.slot = 'title';
+  wrap.appendChild(heading);
   if (section.note) wrap.appendChild(el(doc, 'p', 'hint', section.note));
 
   if (section.toggle) {
@@ -196,6 +201,21 @@ export function writeValues(root, values) {
   });
   root.querySelectorAll('[data-usage]').forEach((radio) => {
     radio.checked = radio.value === values.usage;
+  });
+}
+
+/**
+ * 未入力の必須欄がある節を開く。
+ *
+ * 節は折り畳めるので、閉じた中に入力漏れが隠れたままにならないよう、
+ * 出力できなかったときに呼ぶ（必須の印は refresh が付けている）。
+ */
+export function revealMissingFields(root) {
+  root.querySelectorAll('[data-field-wrap].required').forEach((wrap) => {
+    const control = wrap.querySelector('[data-field]');
+    if (control && !control.disabled && String(control.value).trim() === '') {
+      revealSection(wrap);
+    }
   });
 }
 

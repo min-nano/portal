@@ -4,10 +4,12 @@
 // 画面が正しく作られ、入力した内容がそのまま取り出せることを確認する。
 
 import { beforeEach, describe, expect, it } from 'vitest';
+import { setSectionsOpen } from '../src/components/collapsible-section.js';
 import {
   applyFormData,
   buildForm,
   collectFormData,
+  revealMissingFields,
   syncFieldsFromPicker,
 } from '../src/structural-cert-formatter/form-dom.js';
 
@@ -118,6 +120,34 @@ describe('buildForm', () => {
       '当該構造計算に用いたプログラム',
       '備考',
     ]);
+  });
+
+  it('セクションは折り畳めるようにし、見出しを開閉の行に出す', () => {
+    const sections = [...root.querySelectorAll('.cert-section')];
+
+    expect(sections.every((node) => node.tagName.toLowerCase() === 'portal-section')).toBe(
+      true
+    );
+    // 見出しは light DOM のまま（aria-labelledby が届く位置に置く）。
+    expect(sections[0].querySelector('h3').slot).toBe('title');
+    // 既定はすべて開いた状態。
+    expect(sections.every((node) => node.open)).toBe(true);
+  });
+
+  it('未入力の必須項目がある節は、折り畳んでいても開く', () => {
+    setSectionsOpen(root, false);
+    // 「建築面積」だけ入れて、証明日・構造計算の種類は空のままにする。
+    root.querySelector('#field-building_area').value = '120.5';
+
+    revealMissingFields(root);
+
+    const sectionOf = (selector) => root.querySelector(selector).closest('.cert-section');
+    expect(sectionOf('[data-date-picker]').open).toBe(true); // 証明日（必須）
+    expect(sectionOf('[data-choice="calc_type"]').open).toBe(true); // 選択が必須
+    expect(sectionOf('#field-building_area').open).toBe(false); // 入力済み
+    expect(sectionOf('#field-remarks').open).toBe(false); // 必須ではない
+    // 前提が外れている項目（プログラムの認定番号）は入力漏れに数えない。
+    expect(sectionOf('#field-program_cert_number').open).toBe(false);
   });
 
   it('見出しと同じ名前の記入欄は、名前を重ねない', () => {

@@ -6,18 +6,11 @@
   <title>%PORTAL_TITLE%</title>
 </head>
 <body>
-  <header class="portal-header">
-    <span class="title">%PORTAL_TITLE%</span>
-    <span class="account" id="accountArea" hidden>
-      <span id="accountEmail"></span>
-      <button type="button" id="signOutBtn">サインアウト</button>
-    </span>
-  </header>
+  <!-- ヘッダーとサインインゲートは全ページ共通の部品（src/components/）。
+       id・class・hidden は、部品が読み込まれる前の描画のために HTML に置く。 -->
+  <portal-header class="portal-header" portal-name="%PORTAL_TITLE%"></portal-header>
 
-  <div id="authGate" class="auth-gate" hidden>
-    <p class="note">社内の Google アカウントでサインインしてください。</p>
-    <div class="clerk-mount"></div>
-  </div>
+  <portal-auth-gate id="authGate" class="auth-gate" hidden></portal-auth-gate>
 
   <div id="app" class="container" hidden>
     <h2>ツール一覧</h2>

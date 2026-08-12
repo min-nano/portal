@@ -7,6 +7,8 @@
 // 数値の丸めや単位は計算実装（core/、wasm）が組み立てた文字列をそのまま出す。
 // 計算書 PDF も同じ文字列を刷るので、画面と計算書で桁がずれない。
 
+// 面材 1 枚ぶんの入力欄は、折り畳めるセクション（<portal-section>）で作る。
+import '../components/collapsible-section.js';
 import { buildDiagram } from './diagram.js';
 import { panelLabel, panelMode, wallLabel } from './form-logic.js';
 
@@ -246,24 +248,28 @@ function presetSelect(document_, index, presets) {
   return node;
 }
 
-/** 面材 1 枚分の入力欄と、その面材の計算結果の器を組み立てる。 */
+/**
+ * 面材 1 枚分の入力欄と、その面材の計算結果の器を組み立てる。
+ *
+ * 枚数が増えると縦に長くなるので、面材ごとに折り畳めるようにする
+ * （見出しの行には面材名と削除ボタンだけが残る）。
+ */
 function buildPanelEditor(document_, panel, index, options) {
-  const box = document_.createElement('div');
+  const box = document_.createElement('portal-section');
   box.className = 'wall-panel';
   box.setAttribute('data-panel-index', String(index));
   box.setAttribute('data-panel-id', panel.panelId || '');
 
-  const head = document_.createElement('div');
-  head.className = 'wall-panel-head';
   const title = document_.createElement('strong');
+  title.slot = 'title';
   title.textContent = panelLabel(panel, index);
   const remove = document_.createElement('button');
   remove.type = 'button';
+  remove.slot = 'actions';
   remove.className = 'secondary';
   remove.textContent = 'この面材を削除';
   remove.setAttribute('data-remove-wall-panel', String(index));
-  head.append(title, remove);
-  box.appendChild(head);
+  box.append(title, remove);
 
   box.appendChild(
     labelled(document_, '面材名', input(document_, 'panelName', panel.panelName, {
@@ -412,19 +418,36 @@ function buildPanelEditor(document_, panel, index, options) {
   return box;
 }
 
+/** 今、画面に出ている面材のうち、折り畳んであるものの面材 ID。 */
+function collapsedPanelIds(container) {
+  const ids = new Set();
+  container.querySelectorAll('[data-panel-index]').forEach((node) => {
+    const id = node.getAttribute('data-panel-id');
+    if (id && node.hasAttribute('collapsed')) ids.add(id);
+  });
+  return ids;
+}
+
 /**
  * 壁を構成する面材の入力欄を描き直す。
  *
  * 入力のたびには呼ばない（打鍵のたびに value を入れ直すとカーソルが飛ぶ）。
  * 面材の枚数が変わったとき・別の壁へ移ったとき・一覧から読み込んだときだけ
  * 組み立て直し、ふだんは結果の欄（renderPanelResults）だけを描き替える。
+ *
+ * 折り畳んである面材は、描き直しても畳んだままにする（面材を 1 枚足した
+ * だけで、畳んでおいた面材まで開いてしまわないように）。今までに無かった
+ * 面材＝これから入力する面材なので、開いた状態で出す。
  */
 export function renderWallPanels(root, panels, options) {
   const container = element(root, 'wallPanels');
   const document_ = container.ownerDocument;
+  const collapsed = collapsedPanelIds(container);
   container.innerHTML = '';
   (panels || []).forEach((panel, index) => {
-    container.appendChild(buildPanelEditor(document_, panel, index, options));
+    const node = buildPanelEditor(document_, panel, index, options);
+    if (collapsed.has(panel.panelId)) node.setAttribute('collapsed', '');
+    container.appendChild(node);
   });
   syncNailModeVisibility(root);
   showPanelArea(root);
