@@ -9,22 +9,26 @@
 //! 呼び出し口は 1 つだけで、JSON の要求を渡すと JSON の応答が返る:
 //!
 //! ```text
-//! {"op": "computeAll", "data": {...}}  → {"ok": true,  "patterns": [...], "walls": [...]}
-//! {"op": "validate",   "data": {...}}  → {"ok": true,  "patterns": [...], "walls": [...]}
+//! {"op": "computeAll", "data": {...}}  → {"ok": true,  "walls": [...]}
+//! {"op": "validate",   "data": {...}}  → {"ok": true,  "walls": [...]}
 //! {"op": "normalize",  "data": {...}}  → {"ok": true,  "data": {...}}
 //! {"op": "presets"}                    → {"ok": true,  "presets": [...]}
-//! {"op": "preset",     "data": {...}}  → {"ok": true,  "preset": {...}, "pattern": {...}}
+//! {"op": "preset",     "data": {...}}  → {"ok": true,  "preset": {...}, "panel": {...}}
 //! {"op": "materials"}                  → {"ok": true,  "materials": [...]}
 //! {"op": "grades"}                     → {"ok": true,  "grades": [...]}
 //! {"op": "config"}                     → {"ok": true,  "version": "1.0.0", ...}
 //! 失敗                                  → {"ok": false, "error": "利用者に見せる日本語"}
 //! ```
 //!
+//! 釘配列諸定数（3.2）は壁の計算（3.3）の一部なので、壁ごとの応答の中に
+//! 面材 1 枚ずつの結果（`panelReports`）として入る。
+//!
 //! wasm としての受け渡し（線形メモリの確保・解放）は abi.rs にある。
 
 pub mod abi;
 pub mod format;
 pub mod json;
+pub mod layout;
 pub mod nail_array;
 pub mod presets;
 pub mod report;
@@ -62,17 +66,14 @@ fn dispatch(request: &str) -> Result<Value, String> {
     match operation {
         "computeAll" => {
             let form = report::normalize_data(data())?;
-            Ok(Value::obj([
-                ("patterns", report::compute_all(&form)),
-                ("walls", report::compute_all_walls(&form)),
-            ]))
+            Ok(Value::obj([("walls", report::compute_all_walls(&form))]))
         }
         "validate" => {
             let form = report::normalize_data(data())?;
-            Ok(Value::obj([
-                ("patterns", Value::Arr(report::validate(&form)?)),
-                ("walls", Value::Arr(report::validate_walls(&form)?)),
-            ]))
+            Ok(Value::obj([(
+                "walls",
+                Value::Arr(report::validate_walls(&form)?),
+            )]))
         }
         "normalize" => {
             let form = report::normalize_data(data())?;
@@ -97,7 +98,7 @@ fn dispatch(request: &str) -> Result<Value, String> {
             let preset = presets::find(id).ok_or_else(|| format!("知らない釘配列です: {id}"))?;
             Ok(Value::obj([
                 ("preset", preset.to_value()),
-                ("pattern", preset.to_pattern_value()),
+                ("panel", preset.to_panel_value()),
             ]))
         }
         // グレー本 表 3.3.1「面材釘 1 本あたりの一面せん断の数値」。壁の計算の
@@ -116,6 +117,9 @@ fn dispatch(request: &str) -> Result<Value, String> {
                             ("label", material.label().into()),
                             ("panel", material.panel.into()),
                             ("nailLabel", material.nail_label.into()),
+                            // 釘の呼び径（JIS A 5508）。計算には使わないが、
+                            // 面材ごとのへりあきを決めるときの手がかりになる。
+                            ("nailDiameter", material.nail_diameter.into()),
                             ("thickness", material.thickness.into()),
                             ("shearModulus", material.shear_modulus.into()),
                             ("k", material.nail.k.into()),
@@ -152,12 +156,14 @@ fn dispatch(request: &str) -> Result<Value, String> {
                     .collect(),
             ),
         )])),
+        // 割り付けの型（川型・山型・ロ型・日型）。画面の選択肢になる。
+        "arrangements" => Ok(Value::obj([("arrangements", report::arrangements())])),
         "config" => Ok(Value::obj([
             ("version", VERSION.into()),
-            ("maxPatterns", report::MAX_PATTERNS.into()),
             ("maxNails", report::MAX_NAILS.into()),
             ("maxWalls", report::MAX_WALLS.into()),
             ("maxWallPanels", report::MAX_WALL_PANELS.into()),
+            ("defaultEdgeDistance", layout::DEFAULT_EDGE_DISTANCE.into()),
             ("allowableShearLimit", wall::ALLOWABLE_SHEAR_LIMIT.into()),
             ("significantDigits", format::SIGNIFICANT_DIGITS.into()),
         ])),
@@ -173,36 +179,18 @@ mod tests {
         json::parse(&call(request)).unwrap()
     }
 
+    /// 壁 1 枚につき 1 つの結果が返り、その中に面材ごとの釘配列諸定数が入る。
     #[test]
-    fn compute_all_returns_one_entry_per_pattern() {
+    fn compute_all_returns_one_entry_per_wall() {
         let response = call_json(
-            r#"{"op": "computeAll", "data": {"patterns": [
-                 {"patternId": "p1", "width": 910, "height": 610,
-                  "gridX": "10, 455, 900", "gridY": "10, 155, 305, 455, 600"},
-                 {"patternId": "p2", "width": 910, "height": 610}
-               ]}}"#,
-        );
-
-        assert_eq!(response.get("ok"), Some(&Value::Bool(true)));
-        let patterns = response.get("patterns").unwrap().as_array().unwrap();
-        assert_eq!(patterns.len(), 2);
-        assert_eq!(patterns[0].get("ok"), Some(&Value::Bool(true)));
-        assert_eq!(patterns[1].get("ok"), Some(&Value::Bool(false)));
-    }
-
-    /// 壁は釘配列パターンを patternId で指す。計算結果はパターンと同じ 1 回の
-    /// 呼び出しで返る（画面が 2 度呼ばなくて済むように）。
-    #[test]
-    fn compute_all_also_returns_the_walls() {
-        let response = call_json(
-            r#"{"op": "computeAll", "data": {
-                 "patterns": [{"patternId": "p1", "width": 910, "height": 610,
-                               "gridX": "10, 455, 900", "gridY": "10, 155, 305, 455, 600"}],
-                 "walls": [
+            r#"{"op": "computeAll", "data": {"walls": [
                    {"wallId": "w1", "height": 3000, "width": 910, "thickness": 12,
                     "shearModulus": 0.4, "k": 0.483, "deltaV": 2.3, "deltaU": 17,
                     "deltaPv": 1.13, "tauMax": 3.6, "e1": 3500, "e2": 5500,
-                    "hasIntermediateStud": true, "panels": [{"patternId": "p1"}]},
+                    "hasIntermediateStud": true,
+                    "panels": [{"width": 910, "height": 610, "mode": "grid",
+                                "gridX": "10, 455, 900",
+                                "gridY": "10, 155, 305, 455, 600"}]},
                    {"wallId": "w2", "height": 3000, "width": 910, "thickness": 12,
                     "shearModulus": 0.4, "k": 0.483, "deltaV": 2.3, "deltaU": 17,
                     "deltaPv": 1.13, "tauMax": 3.6, "e1": 3500, "e2": 5500,
@@ -215,15 +203,20 @@ mod tests {
         assert_eq!(walls.len(), 2);
         assert_eq!(walls[0].get("ok"), Some(&Value::Bool(true)));
         assert!(walls[0].get("result").unwrap().get("Pa").is_some());
-        // 面材を選んでいない壁だけが ok: false（他の壁の結果は失わない）。
+        let panels = walls[0].get("panelReports").unwrap().as_array().unwrap();
+        assert_eq!(panels.len(), 1);
+        assert!(panels[0].get("result").unwrap().get("Ixy").is_some());
+        // 面材を置いていない壁だけが ok: false（他の壁の結果は失わない）。
         assert_eq!(walls[1].get("ok"), Some(&Value::Bool(false)));
     }
 
-    /// 壁を置いていない物件でも walls は空の配列で返る（画面が場合分けしない）。
+    /// 空のフォームでも壁が 1 枚ある状態から編集を始められる。
     #[test]
-    fn compute_all_returns_an_empty_wall_list_when_there_are_none() {
-        let response = call_json(r#"{"op": "computeAll", "data": {"patterns": []}}"#);
-        assert!(response.get("walls").unwrap().as_array().unwrap().is_empty());
+    fn compute_all_gives_an_empty_form_one_wall() {
+        let response = call_json(r#"{"op": "computeAll", "data": {}}"#);
+        let walls = response.get("walls").unwrap().as_array().unwrap();
+        assert_eq!(walls.len(), 1);
+        assert_eq!(walls[0].get("ok"), Some(&Value::Bool(false)));
     }
 
     #[test]
@@ -235,14 +228,14 @@ mod tests {
         assert_eq!(materials[0].get("id").unwrap().as_str(), Some("plywood12-n50"));
         assert_eq!(materials[0].get("shearModulus").unwrap().as_f64(), Some(0.40));
         assert_eq!(materials[0].get("deltaPv").unwrap().as_f64(), Some(0.91));
+        // へりあきを決めるための釘の呼び径も一緒に配る。
+        assert_eq!(materials[0].get("nailDiameter").unwrap().as_f64(), Some(2.75));
     }
 
     #[test]
     fn validate_refuses_a_wall_that_cannot_be_calculated() {
         let response = call_json(
             r#"{"op": "validate", "data": {
-                 "patterns": [{"patternId": "p1", "width": 910, "height": 610,
-                               "gridX": "10, 455, 900", "gridY": "10, 155, 305, 455, 600"}],
                  "walls": [{"wallName": "南面", "height": 3000, "width": 910,
                             "thickness": 12, "shearModulus": 0.4, "k": 0.483,
                             "deltaV": 2.3, "deltaU": 17, "deltaPv": 1.13,
@@ -260,19 +253,19 @@ mod tests {
     }
 
     #[test]
-    fn validate_refuses_a_pattern_that_cannot_be_calculated() {
+    fn validate_refuses_a_panel_that_cannot_be_calculated() {
         let response = call_json(
-            r#"{"op": "validate", "data": {"patterns": [
-                 {"patternName": "南面", "width": 910, "height": 610}]}}"#,
+            r#"{"op": "validate", "data": {"walls": [
+                 {"wallName": "南面", "height": 3000, "width": 910, "thickness": 12,
+                  "shearModulus": 0.4, "k": 0.483, "deltaV": 2.3, "deltaU": 17,
+                  "deltaPv": 1.13, "tauMax": 3.6, "e1": 3500, "e2": 5500,
+                  "panels": [{"panelName": "下段", "width": 910, "height": 610}]}]}}"#,
         );
 
         assert_eq!(response.get("ok"), Some(&Value::Bool(false)));
-        assert!(response
-            .get("error")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .contains("「南面」を計算できません"));
+        let error = response.get("error").unwrap().as_str().unwrap();
+        assert!(error.contains("「南面」を計算できません"), "{error}");
+        assert!(error.contains("面材「下段」"), "{error}");
     }
 
     #[test]
@@ -282,7 +275,7 @@ mod tests {
         let data = response.get("data").unwrap();
         assert_eq!(data.get("projectName").unwrap().as_str(), Some(""));
         assert_eq!(data.get("junk"), None);
-        assert_eq!(data.get("patterns").unwrap().as_array().unwrap().len(), 1);
+        assert_eq!(data.get("walls").unwrap().as_array().unwrap().len(), 1);
     }
 
     #[test]
@@ -299,14 +292,19 @@ mod tests {
         assert_eq!(presets[0].get("coords"), None);
     }
 
+    /// 呼び出した配列は、面材 1 枚の割り付けの欄（寸法・型・ピッチ・
+    /// へりあき）へそのまま入る。
     #[test]
-    fn preset_builds_a_pattern_that_can_be_calculated() {
+    fn preset_builds_a_panel_that_can_be_calculated() {
         let response = call_json(r#"{"op": "preset", "data": {"id": "910x610-s455-n150-kawa"}}"#);
 
-        let pattern = response.get("pattern").unwrap();
-        assert_eq!(pattern.get("width").unwrap().as_f64(), Some(910.0));
-        assert_eq!(pattern.get("height").unwrap().as_f64(), Some(610.0));
-        assert_eq!(pattern.get("gridX").unwrap().as_str(), Some("10, 455, 900"));
+        let panel = response.get("panel").unwrap();
+        assert_eq!(panel.get("width").unwrap().as_f64(), Some(910.0));
+        assert_eq!(panel.get("height").unwrap().as_f64(), Some(610.0));
+        assert_eq!(panel.get("mode").unwrap().as_str(), Some("layout"));
+        assert_eq!(panel.get("arrangement").unwrap().as_str(), Some("kawa"));
+        assert_eq!(panel.get("nailPitch").unwrap().as_f64(), Some(150.0));
+        assert_eq!(panel.get("edgeDistance").unwrap().as_f64(), Some(10.0));
         assert_eq!(
             response
                 .get("preset")
@@ -316,6 +314,15 @@ mod tests {
                 .as_f64(),
             Some(15.0)
         );
+    }
+
+    /// 割り付けの型は、画面が選択肢として並べられる形で配る。
+    #[test]
+    fn arrangements_are_listed_for_the_form() {
+        let response = call_json(r#"{"op": "arrangements"}"#);
+        let arrangements = response.get("arrangements").unwrap().as_array().unwrap();
+        assert_eq!(arrangements.len(), 4);
+        assert_eq!(arrangements[0].get("id").unwrap().as_str(), Some("kawa"));
     }
 
     #[test]
@@ -334,7 +341,11 @@ mod tests {
         let response = call_json(r#"{"op": "config"}"#);
 
         assert_eq!(response.get("version").unwrap().as_str(), Some(VERSION));
-        assert_eq!(response.get("maxPatterns").unwrap().as_f64(), Some(50.0));
+        assert_eq!(response.get("maxWalls").unwrap().as_f64(), Some(50.0));
+        assert_eq!(
+            response.get("defaultEdgeDistance").unwrap().as_f64(),
+            Some(10.0)
+        );
     }
 
     #[test]

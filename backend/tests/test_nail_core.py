@@ -17,8 +17,10 @@ from app import nail_core
 
 # グレー本 3.2【解説】の計算例（図 3.2.2）。W 910 × H 610 の横置きで、
 # へりあき 10 mm を見込んだ座標（本は左下の釘を (0, 0) として書いている）。
+#
+# 釘配列諸定数は壁を構成する面材ごとの計算なので、壁 1 枚の中に置いて呼ぶ。
 EXAMPLE = {
-    "patternId": "p1",
+    "panelId": "w1-p1",
     "width": 910,
     "height": 610,
     "mode": "grid",
@@ -28,9 +30,12 @@ EXAMPLE = {
 
 
 def compute(**overrides) -> dict:
-    pattern = {**EXAMPLE, **overrides}
-    response = nail_core.call({"op": "computeAll", "data": {"patterns": [pattern]}})
-    return response["patterns"][0]
+    """面材 1 枚分の釘配列諸定数（壁の計算の一部として返るもの）。"""
+    panel = {**EXAMPLE, **overrides}
+    response = nail_core.call(
+        {"op": "computeAll", "data": {"walls": [{"wallId": "w1", "panels": [panel]}]}}
+    )
+    return response["walls"][0]["panelReports"][0]
 
 
 def test_the_committed_wasm_loads():
@@ -43,8 +48,10 @@ def test_the_committed_wasm_loads():
 def test_config_reports_the_limits_the_screen_also_uses():
     config = nail_core.config()
 
-    assert config["maxPatterns"] == 50
+    assert config["maxWalls"] == 50
+    assert config["maxWallPanels"] == 20
     assert config["maxNails"] == 2000
+    assert config["defaultEdgeDistance"] == 10
     assert config["significantDigits"] == 6
 
 
@@ -77,18 +84,21 @@ def test_the_book_table_arrangements_can_be_called_by_id():
     assert response["preset"]["label"] == (
         "1820×910 横置・日型（間柱・根太 @455 / 釘 @150）"
     )
-    # 横線を含む型は格子で表せないので、座標をそのまま並べる。
-    pattern = response["pattern"]
-    assert pattern["mode"] == "coords"
-    assert len(pattern["coords"].splitlines()) == response["preset"]["nailCount"]
+    # 呼び出した配列は、面材 1 枚の割り付けの欄（寸法・型・ピッチ・へりあき）
+    # へそのまま入る。読み込んだあとに配置や釘の間隔を動かせるようにするため。
+    panel = response["panel"]
+    assert panel["mode"] == "layout"
+    assert panel["arrangement"] == "hi"
+    assert panel["edgeDistance"] == 10
 
     report = nail_core.call(
-        {"op": "computeAll", "data": {"patterns": [{"patternId": "p1", **pattern}]}}
-    )["patterns"][0]
+        {"op": "computeAll", "data": {"walls": [{"panels": [panel]}]}}
+    )["walls"][0]["panelReports"][0]
     assert report["ok"] is True
+    assert len(report["nails"]) == response["preset"]["nailCount"]
 
 
-def test_a_pattern_that_cannot_be_calculated_comes_back_as_a_reason():
+def test_a_panel_that_cannot_be_calculated_comes_back_as_a_reason():
     report = compute(gridX="", gridY="")
 
     assert report["ok"] is False
@@ -97,7 +107,9 @@ def test_a_pattern_that_cannot_be_calculated_comes_back_as_a_reason():
 
 def test_a_broken_request_raises():
     with pytest.raises(nail_core.CoreError, match="面材の幅 W"):
-        nail_core.call({"op": "normalize", "data": {"patterns": [{"width": "ろく"}]}})
+        nail_core.call(
+            {"op": "normalize", "data": {"walls": [{"panels": [{"width": "ろく"}]}]}}
+        )
 
     with pytest.raises(nail_core.CoreError):
         nail_core.call({"op": "そんな操作は無い"})

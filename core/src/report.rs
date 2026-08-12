@@ -5,19 +5,24 @@
 //! サーバ（同じ .wasm）は同じ関数を呼ぶので、編集中に見ている数値と計算書
 //! PDF に刷られる数値が食い違うことがない。
 //!
+//! 入力の単位は **壁 1 枚**（グレー本 3.3 の面材張り大壁）で、釘配列諸定数
+//! （同 3.2）はその壁を構成する面材ごとの計算として中に入る。実際の設計では
+//! 面材の種類と釘が先に決まっていて、面材の配置・釘の間隔・へりあきで耐力を
+//! 調整するので、釘配列だけを先に決めて使い回す形にはしていない。
+//!
 //! 移植元は GAS 版 gas-timber-panel-shear-calculator と、その Python 移植
 //! （backend/app/panel_shear.py の計算部分）。
 
-use crate::format::{format_int, significant, SIGNIFICANT_DIGITS};
+use crate::format::{format_dimension, format_int, significant, SIGNIFICANT_DIGITS};
 use crate::json::Value;
+use crate::layout::{self, Arrangement, Layout, DEFAULT_EDGE_DISTANCE};
 use crate::nail_array::{self, Nail};
 use crate::wall;
 
-/// 1 パターンあたりの釘の上限。実務の面材 1 枚では 100 本程度なので十分に
-/// 余裕がある。桁を間違えた入力（格子に 0〜1000 を 1mm 刻みで書くなど）で
-/// 計算とページ描画が止まらないようにするための歯止め。
+/// 面材 1 枚あたりの釘の上限。実務の面材 1 枚では 100 本程度なので十分に
+/// 余裕がある。桁を間違えた入力（釘ピッチに 1 mm と書くなど）で計算と
+/// ページ描画が止まらないようにするための歯止め。
 pub const MAX_NAILS: usize = 2000;
-pub const MAX_PATTERNS: usize = 50;
 /// 1 物件あたりの壁の上限と、壁 1 枚を構成する面材の上限。
 pub const MAX_WALLS: usize = 50;
 pub const MAX_WALL_PANELS: usize = 20;
@@ -25,23 +30,40 @@ pub const MAX_WALL_PANELS: usize = 20;
 /// 釘配列図に添える座標値の有効桁数（図は小さいので本文より粗くする）。
 const DIAGRAM_AXIS_DIGITS: usize = 4;
 
-/// 1 パターン分の入力。
+/// 壁を構成する面材 1 枚分の入力（釘配列とその寸法）。
+///
+/// 釘配列の入れ方は 3 通り:
+///   - `layout`: 割り付け（型・間柱ピッチ・釘ピッチ・へりあき）から座標を作る
+///   - `grid`  : X と Y の座標リストの全組合せ
+///   - `coords`: 「x, y」を 1 行に 1 本ずつ
 #[derive(Debug, Clone, PartialEq)]
-pub struct Pattern {
-    pub pattern_id: String,
-    pub pattern_name: String,
+pub struct PanelInput {
+    pub panel_id: String,
+    pub panel_name: String,
+    /// 面材の幅 W [mm]。
     pub width: f64,
+    /// 面材の高さ H [mm]。
     pub height: f64,
     pub mode: String,
+    /// 配列の型（川型・山型・ロ型・日型）。
+    pub arrangement: String,
+    /// 間柱・根太ピッチ [mm]。
+    pub stud_pitch: f64,
+    /// 釘ピッチ [mm]。
+    pub nail_pitch: f64,
+    /// へりあき（面材の縁から釘の中心までの距離）[mm]。
+    ///
+    /// 面材の種類・釘の呼び径に合わせて面材ごとに決められるよう、割り付けの
+    /// 入力欄にしてある（未入力なら既定の 10 mm）。
+    pub edge_distance: f64,
     pub grid_x: String,
     pub grid_y: String,
     pub coords: String,
+    /// 面材の繊維方向（"" は長辺方向）。せん断座屈の a・b の取り方を決める。
+    pub grain: String,
 }
 
 /// 壁 1 枚分の入力（グレー本 3.3 の面材張り大壁）。
-///
-/// 面材の釘配列は「登録した釘配列パターンを選ぶ」形にしてある（patternId で
-/// 指す）。同じ配列の面材を 2 枚使う壁なら、同じパターンを 2 回選べばよい。
 #[derive(Debug, Clone, PartialEq)]
 pub struct WallInput {
     pub wall_id: String,
@@ -76,16 +98,7 @@ pub struct WallInput {
     /// 中間材（間柱等）を設けるか。せん断座屈の ξ になる。
     pub has_intermediate_stud: bool,
     /// 壁を構成する面材。
-    pub panels: Vec<WallPanelInput>,
-}
-
-/// 壁を構成する面材 1 枚分の入力。
-#[derive(Debug, Clone, PartialEq)]
-pub struct WallPanelInput {
-    /// 面材として使う釘配列パターンの patternId。
-    pub pattern_id: String,
-    /// 面材の繊維方向（"" は長辺方向）。せん断座屈の a・b の取り方を決める。
-    pub grain: String,
+    pub panels: Vec<PanelInput>,
 }
 
 /// フォーム全体の入力（1 ファイル = 1 物件）。
@@ -93,25 +106,41 @@ pub struct WallPanelInput {
 pub struct FormData {
     pub project_name: String,
     pub issued_on: String,
-    pub patterns: Vec<Pattern>,
     pub walls: Vec<WallInput>,
 }
 
-impl Pattern {
+impl PanelInput {
     pub fn panel_area(&self) -> f64 {
         self.width * self.height
     }
 
+    /// 割り付け（mode = "layout"）としての読み方。
+    pub fn layout(&self) -> Layout {
+        Layout {
+            width: self.width,
+            height: self.height,
+            stud_pitch: self.stud_pitch,
+            nail_pitch: self.nail_pitch,
+            edge_distance: self.edge_distance,
+            arrangement: Arrangement::from_id(&self.arrangement),
+        }
+    }
+
     pub fn to_value(&self) -> Value {
         Value::obj([
-            ("patternId", self.pattern_id.clone().into()),
-            ("patternName", self.pattern_name.clone().into()),
+            ("panelId", self.panel_id.clone().into()),
+            ("panelName", self.panel_name.clone().into()),
             ("width", self.width.into()),
             ("height", self.height.into()),
             ("mode", self.mode.clone().into()),
+            ("arrangement", self.arrangement.clone().into()),
+            ("studPitch", self.stud_pitch.into()),
+            ("nailPitch", self.nail_pitch.into()),
+            ("edgeDistance", self.edge_distance.into()),
             ("gridX", self.grid_x.clone().into()),
             ("gridY", self.grid_y.clone().into()),
             ("coords", self.coords.clone().into()),
+            ("grain", self.grain.clone().into()),
         ])
     }
 }
@@ -137,17 +166,7 @@ impl WallInput {
             ("hasIntermediateStud", self.has_intermediate_stud.into()),
             (
                 "panels",
-                Value::Arr(
-                    self.panels
-                        .iter()
-                        .map(|panel| {
-                            Value::obj([
-                                ("patternId", panel.pattern_id.clone().into()),
-                                ("grain", panel.grain.clone().into()),
-                            ])
-                        })
-                        .collect(),
-                ),
+                Value::Arr(self.panels.iter().map(PanelInput::to_value).collect()),
             ),
         ])
     }
@@ -178,10 +197,6 @@ impl FormData {
             ("projectName", self.project_name.clone().into()),
             ("issuedOn", self.issued_on.clone().into()),
             (
-                "patterns",
-                Value::Arr(self.patterns.iter().map(Pattern::to_value).collect()),
-            ),
-            (
                 "walls",
                 Value::Arr(self.walls.iter().map(WallInput::to_value).collect()),
             ),
@@ -193,47 +208,35 @@ impl FormData {
 
 /// 受け取った本文を、このツールが扱う形へ整える。
 ///
-/// 未知のキーは捨て、パターンは 1 つ以上に整える（空のフォームでも
-/// 「パターンが 1 つある」状態から始められるようにする）。
+/// 未知のキーは捨て、壁は 1 枚以上に整える（空のフォームでも「壁が 1 枚
+/// ある」状態から編集を始められるようにする）。釘配列だけを先に登録して
+/// 使い回していた古い形の入力（`patterns`）も、ここで今の形へ移し替える。
 pub fn normalize_data(data: &Value) -> Result<FormData, String> {
     if !matches!(data, Value::Obj(_)) {
         return Err("入力データがありません。".to_string());
     }
 
-    let raw_patterns = match data.get("patterns") {
-        Some(Value::Arr(items)) => items.as_slice(),
-        _ => &[],
-    };
-    if raw_patterns.len() > MAX_PATTERNS {
-        return Err(format!("パターンは {MAX_PATTERNS} 個までです。"));
-    }
-
-    let mut patterns = Vec::with_capacity(raw_patterns.len().max(1));
-    for (index, pattern) in raw_patterns.iter().enumerate() {
-        patterns.push(normalize_pattern(pattern, index)?);
-    }
-    if patterns.is_empty() {
-        patterns.push(normalize_pattern(&Value::Null, 0)?);
-    }
-
-    // 壁は「あってもなくてもよい」節。釘配列諸定数だけを求めたい物件では
-    // 0 枚のままにできる（パターンと違って 1 枚を補わない）。
-    let raw_walls = match data.get("walls") {
-        Some(Value::Arr(items)) => items.as_slice(),
+    let migrated = walls_of_legacy_patterns(data);
+    let raw_walls: &[Value] = match (&migrated, data.get("walls")) {
+        (Some(walls), _) => walls.as_slice(),
+        (None, Some(Value::Arr(items))) => items.as_slice(),
         _ => &[],
     };
     if raw_walls.len() > MAX_WALLS {
         return Err(format!("壁は {MAX_WALLS} 枚までです。"));
     }
-    let mut walls = Vec::with_capacity(raw_walls.len());
+
+    let mut walls = Vec::with_capacity(raw_walls.len().max(1));
     for (index, item) in raw_walls.iter().enumerate() {
         walls.push(normalize_wall(item, index)?);
+    }
+    if walls.is_empty() {
+        walls.push(normalize_wall(&Value::Null, 0)?);
     }
 
     Ok(FormData {
         project_name: text_of(data.get("projectName")),
         issued_on: text_of(data.get("issuedOn")),
-        patterns,
         walls,
     })
 }
@@ -250,20 +253,13 @@ pub fn normalize_wall(item: &Value, index: usize) -> Result<WallInput, String> {
     };
     if raw_panels.len() > MAX_WALL_PANELS {
         return Err(format!(
-            "1 枚の壁に選べる面材は {MAX_WALL_PANELS} 枚までです。"
+            "1 枚の壁に置ける面材は {MAX_WALL_PANELS} 枚までです。"
         ));
     }
-    let panels = raw_panels
-        .iter()
-        .map(|panel| WallPanelInput {
-            pattern_id: text_of(panel.get("patternId")),
-            grain: wall::Grain::from_id(&text_of(panel.get("grain")))
-                .id()
-                .to_string(),
-        })
-        // まだパターンを選んでいない行は、面材として数えない。
-        .filter(|panel| !panel.pattern_id.is_empty())
-        .collect();
+    let mut panels = Vec::with_capacity(raw_panels.len());
+    for (position, panel) in raw_panels.iter().enumerate() {
+        panels.push(normalize_panel(panel, &wall_id, position)?);
+    }
 
     Ok(WallInput {
         wall_id,
@@ -286,25 +282,142 @@ pub fn normalize_wall(item: &Value, index: usize) -> Result<WallInput, String> {
     })
 }
 
-pub fn normalize_pattern(pattern: &Value, index: usize) -> Result<Pattern, String> {
-    let pattern_id = match text_of(pattern.get("patternId")) {
-        id if id.is_empty() => format!("p{}", index + 1),
+pub fn normalize_panel(panel: &Value, wall_id: &str, index: usize) -> Result<PanelInput, String> {
+    let panel_id = match text_of(panel.get("panelId")) {
+        id if id.is_empty() => format!("{wall_id}-p{}", index + 1),
         id => id,
     };
-    let mode = match text_of(pattern.get("mode")) {
-        mode if mode == "coords" => "coords".to_string(),
-        _ => "grid".to_string(),
+    let mode = match text_of(panel.get("mode")).as_str() {
+        "coords" => "coords".to_string(),
+        "grid" => "grid".to_string(),
+        _ => "layout".to_string(),
     };
-    Ok(Pattern {
-        pattern_id,
-        pattern_name: text_of(pattern.get("patternName")),
-        width: float_of(pattern.get("width"), "面材の幅 W")?,
-        height: float_of(pattern.get("height"), "面材の高さ H")?,
+    Ok(PanelInput {
+        panel_id,
+        panel_name: text_of(panel.get("panelName")),
+        width: float_of(panel.get("width"), "面材の幅 W")?,
+        height: float_of(panel.get("height"), "面材の高さ H")?,
         mode,
-        grid_x: text_of(pattern.get("gridX")),
-        grid_y: text_of(pattern.get("gridY")),
-        coords: text_of(pattern.get("coords")),
+        arrangement: Arrangement::from_id(&text_of(panel.get("arrangement")))
+            .id()
+            .to_string(),
+        stud_pitch: float_of(panel.get("studPitch"), "間柱・根太ピッチ")?,
+        nail_pitch: float_of(panel.get("nailPitch"), "釘ピッチ")?,
+        // 未入力のへりあきは、表 3.2.1 の配列が前提とする 10 mm とみなす。
+        edge_distance: float_or(panel.get("edgeDistance"), "へりあき", DEFAULT_EDGE_DISTANCE)?,
+        grid_x: text_of(panel.get("gridX")),
+        grid_y: text_of(panel.get("gridY")),
+        coords: text_of(panel.get("coords")),
+        grain: wall::Grain::from_id(&text_of(panel.get("grain")))
+            .id()
+            .to_string(),
     })
+}
+
+/// 古い形（釘配列パターンを別に登録し、壁から patternId で指す）の入力を、
+/// 今の形（壁が面材そのものを持つ）の壁の並びへ移し替える。
+///
+/// 計算書 PDF が保存形式なので、前の版で保存したファイルも開けるようにする。
+/// どの壁からも参照されていないパターンは、面材 1 枚だけの壁として残す
+/// （入力を黙って捨てない。面材と釘の数値は空なので、開いた人が埋める）。
+fn walls_of_legacy_patterns(data: &Value) -> Option<Vec<Value>> {
+    let patterns = match data.get("patterns") {
+        Some(Value::Arr(items)) if !items.is_empty() => items,
+        _ => return None,
+    };
+    // 古い正規化は、patternId が空なら "p1", "p2", … を割り当てていた。
+    let identified: Vec<(String, &Value)> = patterns
+        .iter()
+        .enumerate()
+        .map(|(index, pattern)| {
+            let id = match text_of(pattern.get("patternId")) {
+                id if id.is_empty() => format!("p{}", index + 1),
+                id => id,
+            };
+            (id, pattern)
+        })
+        .collect();
+
+    let mut used: Vec<String> = Vec::new();
+    let mut walls: Vec<Value> = Vec::new();
+    if let Some(Value::Arr(items)) = data.get("walls") {
+        for item in items {
+            let panels = match item.get("panels") {
+                Some(Value::Arr(panels)) => panels
+                    .iter()
+                    .filter_map(|panel| {
+                        let pattern_id = text_of(panel.get("patternId"));
+                        if pattern_id.is_empty() {
+                            return None;
+                        }
+                        let (_, pattern) = identified
+                            .iter()
+                            .find(|(id, _)| *id == pattern_id)?;
+                        used.push(pattern_id);
+                        Some(panel_of_legacy_pattern(
+                            pattern,
+                            text_of(panel.get("grain")),
+                        ))
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            walls.push(with_panels(item, panels));
+        }
+    }
+
+    for (id, pattern) in &identified {
+        if used.contains(id) {
+            continue;
+        }
+        walls.push(Value::obj([
+            ("wallName", text_of(pattern.get("patternName")).into()),
+            (
+                "panels",
+                Value::Arr(vec![panel_of_legacy_pattern(pattern, String::new())]),
+            ),
+        ]));
+    }
+    Some(walls)
+}
+
+/// 古い形の釘配列パターン 1 つを、面材 1 枚分の入力にする。
+fn panel_of_legacy_pattern(pattern: &Value, grain: String) -> Value {
+    let mode = if text_of(pattern.get("mode")) == "coords" {
+        "coords"
+    } else {
+        "grid"
+    };
+    Value::obj([
+        ("panelName", text_of(pattern.get("patternName")).into()),
+        (
+            "width",
+            pattern.get("width").cloned().unwrap_or(Value::Null),
+        ),
+        (
+            "height",
+            pattern.get("height").cloned().unwrap_or(Value::Null),
+        ),
+        ("mode", mode.into()),
+        ("gridX", text_of(pattern.get("gridX")).into()),
+        ("gridY", text_of(pattern.get("gridY")).into()),
+        ("coords", text_of(pattern.get("coords")).into()),
+        ("grain", grain.into()),
+    ])
+}
+
+/// 壁の入力から panels だけを差し替えた値を作る（他のキーはそのまま）。
+fn with_panels(wall: &Value, panels: Vec<Value>) -> Value {
+    let mut entries: Vec<(String, Value)> = match wall {
+        Value::Obj(entries) => entries
+            .iter()
+            .filter(|(key, _)| key != "panels")
+            .cloned()
+            .collect(),
+        _ => Vec::new(),
+    };
+    entries.push(("panels".to_string(), Value::Arr(panels)));
+    Value::Obj(entries)
 }
 
 /// 文字列として読む（前後の空白は落とす）。数値で送られてきても受け取る。
@@ -318,13 +431,18 @@ fn text_of(value: Option<&Value>) -> String {
 
 /// 数値として読む。未入力（欠落・null・空文字）は 0 とみなす。
 fn float_of(value: Option<&Value>, label: &str) -> Result<f64, String> {
+    float_or(value, label, 0.0)
+}
+
+/// 数値として読む。未入力（欠落・null・空文字）は default とみなす。
+fn float_or(value: Option<&Value>, label: &str, default: f64) -> Result<f64, String> {
     let number = match value {
-        None | Some(Value::Null) => return Ok(0.0),
+        None | Some(Value::Null) => return Ok(default),
         Some(Value::Num(number)) => *number,
         Some(Value::Str(text)) => {
             let text = text.trim();
             if text.is_empty() {
-                return Ok(0.0);
+                return Ok(default);
             }
             text.parse::<f64>()
                 .map_err(|_| format!("{label}には数値を入力してください。"))?
@@ -379,21 +497,21 @@ pub fn parse_coord_lines(text: &str) -> Vec<Nail> {
         .collect()
 }
 
-/// このパターンを計算できない理由を返す（計算できるなら None）。
+/// この面材を計算できない理由を返す（計算できるなら None）。
 ///
 /// nail_array 側にも同じ状況を弾く guard があるが、あちらは計算式が壊れた
 /// 入力を受け取らないための最終防衛線で、文言も式の言葉（「Ix + Iy が 0」）で
 /// 書かれている。画面に出すのは、入力欄の言葉で書いたこちらの理由。
 ///
-/// ここで挙げる 3 つが、入力から到達しうる計算不能のすべて:
+/// ここで挙げるものが、入力から到達しうる計算不能のすべて:
 ///   - 釘が無い / 面積が 0     … nail_array::validate_input
 ///   - 釘が 1 点に集中している … Ix + Iy = 0
 ///   - 釘が 1 直線上に並ぶ     … Zx もしくは Zy が 0 → Zxy = 0
-fn unusable_reason(pattern: &Pattern, nails: &[Nail]) -> Option<String> {
+fn unusable_reason(panel: &PanelInput, nails: &[Nail]) -> Option<String> {
     if nails.is_empty() {
         return Some("釘座標が入力されていません。少なくとも 1 本の釘が必要です。".to_string());
     }
-    if !(pattern.panel_area() > 0.0) {
+    if !(panel.panel_area() > 0.0) {
         return Some("面材の幅 W と高さ H に正の数値を入力してください。".to_string());
     }
 
@@ -412,48 +530,90 @@ fn unusable_reason(pattern: &Pattern, nails: &[Nail]) -> Option<String> {
     None
 }
 
+/// 割り付け（mode = "layout"）が釘を置けない理由を返す。
+fn unusable_layout_reason(panel: &PanelInput) -> Option<String> {
+    if !(panel.panel_area() > 0.0) {
+        return Some("面材の幅 W と高さ H に正の数値を入力してください。".to_string());
+    }
+    if !(panel.nail_pitch > 0.0) {
+        return Some("釘ピッチには正の数値を入力してください。".to_string());
+    }
+    if panel.edge_distance < 0.0 {
+        return Some("へりあきには 0 以上の数値を入力してください。".to_string());
+    }
+    let span_x = panel.width - panel.edge_distance * 2.0;
+    let span_y = panel.height - panel.edge_distance * 2.0;
+    if !(span_x > 0.0) || !(span_y > 0.0) {
+        return Some(
+            "へりあきが面材の寸法に対して大きすぎます。面材の内側に釘を置けません。".to_string(),
+        );
+    }
+    // 間柱の位置は数え上げで作るので、桁違いに小さいピッチは先に止める。
+    if panel.stud_pitch > 0.0 && panel.width / panel.stud_pitch > MAX_NAILS as f64 {
+        return Some(format!(
+            "間柱・根太ピッチが小さすぎます（面材の幅 {} mm に対して釘の列が {} 本を超えます）。",
+            format_int(panel.width),
+            MAX_NAILS
+        ));
+    }
+    None
+}
+
 /// 釘リストと、計算できない理由（計算できるなら None）を返す。
 ///
-/// 理由をエラーではなく戻り値にしているのは、入力途中のパターンを画面へ
+/// 理由をエラーではなく戻り値にしているのは、入力途中の面材を画面へ
 /// そのまま出すため。
-fn nails_and_reason(pattern: &Pattern) -> (Vec<Nail>, Option<String>) {
-    let nails = if pattern.mode == "grid" {
-        let xs = parse_number_list(&pattern.grid_x);
-        let ys = parse_number_list(&pattern.grid_y);
-        // 格子は組み合わせの数で増えるので、作る前に本数を確かめる。
-        if xs.len() * ys.len() > MAX_NAILS {
-            return (
-                Vec::new(),
-                Some(format!(
-                    "釘の本数が多すぎます（{} × {} 本）。1 パターンあたり {} 本までにしてください。",
-                    xs.len(),
-                    ys.len(),
-                    MAX_NAILS
-                )),
-            );
-        }
-        nail_array::build_rectangular_grid(&xs, &ys)
-    } else {
-        let nails = parse_coord_lines(&pattern.coords);
-        if nails.len() > MAX_NAILS {
-            return (
-                Vec::new(),
-                Some(format!(
-                    "釘の本数が多すぎます（{} 本）。1 パターンあたり {} 本までにしてください。",
-                    nails.len(),
-                    MAX_NAILS
-                )),
-            );
-        }
-        nails
+fn nails_and_reason(panel: &PanelInput) -> (Vec<Nail>, Option<String>) {
+    let too_many = |count: usize| {
+        format!(
+            "釘の本数が多すぎます（{count} 本）。面材 1 枚あたり {MAX_NAILS} 本までにしてください。"
+        )
     };
-    let reason = unusable_reason(pattern, &nails);
+    let nails = match panel.mode.as_str() {
+        "layout" => {
+            if let Some(reason) = unusable_layout_reason(panel) {
+                return (Vec::new(), Some(reason));
+            }
+            let layout = panel.layout();
+            // 割り付けは本数が寸法とピッチで決まるので、作る前に数える。
+            let count = layout.nail_count();
+            if count > MAX_NAILS {
+                return (Vec::new(), Some(too_many(count)));
+            }
+            layout.nails()
+        }
+        "grid" => {
+            let xs = parse_number_list(&panel.grid_x);
+            let ys = parse_number_list(&panel.grid_y);
+            // 格子は組み合わせの数で増えるので、作る前に本数を確かめる。
+            if xs.len() * ys.len() > MAX_NAILS {
+                return (
+                    Vec::new(),
+                    Some(format!(
+                        "釘の本数が多すぎます（{} × {} 本）。面材 1 枚あたり {} 本までにしてください。",
+                        xs.len(),
+                        ys.len(),
+                        MAX_NAILS
+                    )),
+                );
+            }
+            nail_array::build_rectangular_grid(&xs, &ys)
+        }
+        _ => {
+            let nails = parse_coord_lines(&panel.coords);
+            if nails.len() > MAX_NAILS {
+                return (Vec::new(), Some(too_many(nails.len())));
+            }
+            nails
+        }
+    };
+    let reason = unusable_reason(panel, &nails);
     (nails, reason)
 }
 
-/// パターンの入力方式に応じて釘リストを組み立てる（計算できない入力はエラー）。
-pub fn nails_of(pattern: &Pattern) -> Result<Vec<Nail>, String> {
-    let (nails, reason) = nails_and_reason(pattern);
+/// 面材の入力方式に応じて釘リストを組み立てる（計算できない入力はエラー）。
+pub fn nails_of(panel: &PanelInput) -> Result<Vec<Nail>, String> {
+    let (nails, reason) = nails_and_reason(panel);
     match reason {
         Some(reason) => Err(reason),
         None => Ok(nails),
@@ -462,59 +622,62 @@ pub fn nails_of(pattern: &Pattern) -> Result<Vec<Nail>, String> {
 
 // --- 計算（画面と PDF が共有する表示用データ） ------------------------------
 
-/// 全パターンを計算する。計算できないパターンは ok: false で返す。
+/// 全ての壁を計算する。計算できない壁は ok: false で返す。
 ///
-/// 入力途中でも画面に出せるよう、1 つのパターンの不備で他のパターンの
-/// 結果まで失わせない（保存時は validate() で改めて全件を確かめる）。
-pub fn compute_all(data: &FormData) -> Value {
+/// 入力途中でも画面に出せるよう、1 枚の壁の不備で他の壁の結果まで
+/// 失わせない（保存時は validate_walls() で改めて全件を確かめる）。
+pub fn compute_all_walls(data: &FormData) -> Value {
     Value::Arr(
-        data.patterns
+        data.walls
             .iter()
-            .map(|pattern| {
-                let (nails, reason) = nails_and_reason(pattern);
-                // 理由が無ければ build_report は必ず成功する（失敗するのは
-                // unusable_reason の判定漏れ＝不具合）。画面を落とさずに
-                // 理由として見せるため、こちらも ok: false へ寄せる。
-                let report = match reason {
-                    Some(reason) => Err(reason),
-                    None => build_report(pattern, &nails),
-                };
-                match report {
-                    Ok(Value::Obj(mut entries)) => {
-                        entries.insert(0, ("ok".to_string(), true.into()));
-                        Value::Obj(entries)
-                    }
-                    Ok(_) => unreachable!("build_report はオブジェクトを返す"),
-                    Err(error) => Value::obj([
-                        ("ok", false.into()),
-                        ("patternId", pattern.pattern_id.clone().into()),
-                        ("patternName", pattern.pattern_name.clone().into()),
-                        ("error", error.into()),
-                    ]),
-                }
+            .enumerate()
+            .map(|(index, input)| match build_wall_report(input, index) {
+                Ok(report) => with_ok(report),
+                Err(error) => Value::obj([
+                    ("ok", false.into()),
+                    ("wallId", input.wall_id.clone().into()),
+                    ("wallName", wall_label(input, index).into()),
+                    ("error", error.into()),
+                    // 壁として計算できなくても、面材ごとの釘配列は出せるところ
+                    // まで出す（入力の途中でも図と諸定数を見ながら直せる）。
+                    ("panelReports", compute_all_panels(input)),
+                ]),
             })
             .collect(),
     )
 }
 
-/// 全ての壁を計算する。計算できない壁は ok: false で返す。
-pub fn compute_all_walls(data: &FormData) -> Value {
-    let library = PanelLibrary::of(data);
+/// 計算できた結果に ok: true を先頭へ付ける（画面が成否で分岐できるように）。
+fn with_ok(report: Value) -> Value {
+    match report {
+        Value::Obj(mut entries) => {
+            entries.insert(0, ("ok".to_string(), true.into()));
+            Value::Obj(entries)
+        }
+        other => other,
+    }
+}
+
+/// 壁を構成する面材の釘配列諸定数（グレー本 3.2）を、1 枚ずつ計算する。
+/// 計算できない面材は ok: false で返す。
+fn compute_all_panels(input: &WallInput) -> Value {
     Value::Arr(
-        data.walls
+        input
+            .panels
             .iter()
             .enumerate()
-            .map(|(index, input)| {
-                match build_wall_report(input, &library, index) {
-                    Ok(Value::Obj(mut entries)) => {
-                        entries.insert(0, ("ok".to_string(), true.into()));
-                        Value::Obj(entries)
-                    }
-                    Ok(_) => unreachable!("build_wall_report はオブジェクトを返す"),
+            .map(|(index, panel)| {
+                let (nails, reason) = nails_and_reason(panel);
+                let report = match reason {
+                    Some(reason) => Err(reason),
+                    None => build_panel_report(panel, &nails, index),
+                };
+                match report {
+                    Ok(report) => with_ok(report),
                     Err(error) => Value::obj([
                         ("ok", false.into()),
-                        ("wallId", input.wall_id.clone().into()),
-                        ("wallName", input.wall_name.clone().into()),
+                        ("panelId", panel.panel_id.clone().into()),
+                        ("panelName", panel_label(panel, index).into()),
                         ("error", error.into()),
                     ]),
                 }
@@ -525,56 +688,59 @@ pub fn compute_all_walls(data: &FormData) -> Value {
 
 /// 保存できる状態か確かめ、全ての壁の計算結果を返す。
 pub fn validate_walls(data: &FormData) -> Result<Vec<Value>, String> {
-    let library = PanelLibrary::of(data);
     let mut reports = Vec::with_capacity(data.walls.len());
     for (index, input) in data.walls.iter().enumerate() {
-        reports.push(
-            build_wall_report(input, &library, index)
-                .map_err(|error| format!("「{}」を計算できません: {error}", wall_label(input, index)))?,
-        );
+        reports.push(build_wall_report(input, index).map_err(|error| {
+            format!("「{}」を計算できません: {error}", wall_label(input, index))
+        })?);
     }
     Ok(reports)
 }
 
-/// 保存できる状態か確かめ、全パターンの計算結果を返す。
-pub fn validate(data: &FormData) -> Result<Vec<Value>, String> {
-    let mut reports = Vec::with_capacity(data.patterns.len());
-    for (index, pattern) in data.patterns.iter().enumerate() {
-        let (nails, reason) = nails_and_reason(pattern);
-        if let Some(reason) = reason {
-            return Err(format!(
-                "「{}」を計算できません: {reason}",
-                pattern_label(pattern, index)
-            ));
-        }
-        reports.push(build_report(pattern, &nails)?);
-    }
-    Ok(reports)
-}
-
-/// 1 パターンを計算し、画面表示にも PDF にも使える形で返す。
+/// 面材 1 枚を計算し、画面表示にも PDF にも使える形で返す。
 ///
 /// 表示用の文字列（有効桁・単位）まで組み立てて返すことで、画面と計算書で
 /// 桁の丸め方が食い違わないようにしている。
-pub fn compute_pattern(pattern: &Pattern) -> Result<Value, String> {
-    let nails = nails_of(pattern)?;
-    build_report(pattern, &nails)
+pub fn compute_panel(panel: &PanelInput, index: usize) -> Result<Value, String> {
+    let nails = nails_of(panel)?;
+    build_panel_report(panel, &nails, index)
 }
 
-fn nail_arrangement_text(pattern: &Pattern, nails: &[Nail]) -> String {
-    if pattern.mode == "grid" {
-        format!(
-            "格子　X: {}　／　Y: {}",
-            pattern.grid_x, pattern.grid_y
-        )
+/// 面材の見出しに使う名前（未入力なら通し番号で代替する）。
+pub fn panel_label(panel: &PanelInput, index: usize) -> String {
+    if panel.panel_name.is_empty() {
+        format!("面材{}", index + 1)
     } else {
-        format!("座標を直接入力（{} 点）", nails.len())
+        panel.panel_name.clone()
     }
 }
 
-/// 計算できると分かっているパターンの結果を組み立てる。
-fn build_report(pattern: &Pattern, nails: &[Nail]) -> Result<Value, String> {
-    let area = pattern.panel_area();
+/// 壁の見出しに使う名前（未入力なら通し番号で代替する）。
+pub fn wall_label(input: &WallInput, index: usize) -> String {
+    if input.wall_name.is_empty() {
+        format!("壁{}", index + 1)
+    } else {
+        input.wall_name.clone()
+    }
+}
+
+fn nail_arrangement_text(panel: &PanelInput, nails: &[Nail]) -> String {
+    match panel.mode.as_str() {
+        "layout" => format!(
+            "割り付け　{}　／　間柱・根太 @{}　／　釘 @{}　／　へりあき {} mm",
+            Arrangement::from_id(&panel.arrangement).label(),
+            format_dimension(panel.stud_pitch),
+            format_dimension(panel.nail_pitch),
+            format_dimension(panel.edge_distance),
+        ),
+        "grid" => format!("格子　X: {}　／　Y: {}", panel.grid_x, panel.grid_y),
+        _ => format!("座標を直接入力（{} 点）", nails.len()),
+    }
+}
+
+/// 計算できると分かっている面材の結果を組み立てる。
+fn build_panel_report(panel: &PanelInput, nails: &[Nail], index: usize) -> Result<Value, String> {
+    let area = panel.panel_area();
     let result = nail_array::compute(nails, area).map_err(|error| error.0)?;
     let six = |value: f64| significant(value, SIGNIFICANT_DIGITS);
 
@@ -587,8 +753,10 @@ fn build_report(pattern: &Pattern, nails: &[Nail]) -> Result<Value, String> {
     };
 
     Ok(Value::obj([
-        ("patternId", pattern.pattern_id.clone().into()),
-        ("patternName", pattern.pattern_name.clone().into()),
+        ("panelId", panel.panel_id.clone().into()),
+        ("panelName", panel_label(panel, index).into()),
+        ("width", panel.width.into()),
+        ("height", panel.height.into()),
         (
             "nails",
             Value::Arr(
@@ -628,8 +796,8 @@ fn build_report(pattern: &Pattern, nails: &[Nail]) -> Result<Value, String> {
                         "value",
                         format!(
                             "{} × {} mm",
-                            format_int(pattern.width),
-                            format_int(pattern.height)
+                            format_int(panel.width),
+                            format_int(panel.height)
                         )
                         .into(),
                     ),
@@ -640,7 +808,7 @@ fn build_report(pattern: &Pattern, nails: &[Nail]) -> Result<Value, String> {
                 ]),
                 Value::obj([
                     ("label", "釘配列".into()),
-                    ("value", nail_arrangement_text(pattern, nails).into()),
+                    ("value", nail_arrangement_text(panel, nails).into()),
                 ]),
                 Value::obj([
                     ("label", "釘本数 n".into()),
@@ -690,99 +858,44 @@ fn build_report(pattern: &Pattern, nails: &[Nail]) -> Result<Value, String> {
                 step("Cxy", "(3.2.5)", six(result.cxy)),
             ]),
         ),
-        ("diagram", build_diagram(pattern, nails, &result)),
+        ("diagram", build_diagram(panel, nails, &result)),
     ]))
 }
 
 // --- 壁の計算（グレー本 3.3） -----------------------------------------------
 
-/// 壁の見出しに使う名前（未入力なら通し番号で代替する）。
-fn wall_label(input: &WallInput, index: usize) -> String {
-    if input.wall_name.is_empty() {
-        format!("壁{}", index + 1)
-    } else {
-        input.wall_name.clone()
-    }
-}
-
-/// 登録済みの釘配列パターンを、壁から patternId で引けるようにしたもの。
-///
-/// 壁は「登録した配列パターンを選ぶ」形で面材を指すので、1 つの壁が同じ
-/// パターンを 2 回選ぶこともある。パターンごとの計算は 1 度だけにしたいので、
-/// ここでまとめて済ませておく。
-struct PanelLibrary<'a> {
-    entries: Vec<(&'a Pattern, String, Result<nail_array::Constants, String>)>,
-}
-
-impl<'a> PanelLibrary<'a> {
-    fn of(data: &'a FormData) -> PanelLibrary<'a> {
-        PanelLibrary {
-            entries: data
-                .patterns
-                .iter()
-                .enumerate()
-                .map(|(index, pattern)| {
-                    let constants = nails_of(pattern).and_then(|nails| {
-                        nail_array::compute(&nails, pattern.panel_area())
-                            .map_err(|error| error.0)
-                    });
-                    (pattern, pattern_label(pattern, index), constants)
-                })
-                .collect(),
-        }
-    }
-
-    /// 壁が選んだ 1 枚分を、面材の入力として組み立てる。
-    fn get(&self, panel: &WallPanelInput) -> Result<wall::PanelSpec, String> {
-        let (pattern, name, constants) = self
-            .entries
-            .iter()
-            .find(|(pattern, _, _)| pattern.pattern_id == panel.pattern_id)
-            .ok_or_else(|| {
-                "選ばれた釘配列パターンが見つかりません。面材を選び直してください。".to_string()
-            })?;
-        let constants = constants.as_ref().map_err(|reason| {
-            format!(
-                "釘配列パターン「{}」を計算できません: {reason}",
-                pattern.pattern_name
-            )
-        })?;
-        Ok(wall::PanelSpec::new(
-            name,
-            constants,
-            pattern.width,
-            pattern.height,
-            wall::Grain::from_id(&panel.grain),
-        ))
-    }
-}
-
-/// パターンの見出しに使う名前（未入力なら通し番号で代替する）。
-fn pattern_label(pattern: &Pattern, index: usize) -> String {
-    if pattern.pattern_name.is_empty() {
-        format!("パターン{}", index + 1)
-    } else {
-        pattern.pattern_name.clone()
-    }
-}
-
 /// 壁 1 枚の結果を、画面表示にも PDF にも使える形で組み立てる。
-fn build_wall_report(
-    input: &WallInput,
-    library: &PanelLibrary,
-    index: usize,
-) -> Result<Value, String> {
+///
+/// 面材ごとの釘配列諸定数（グレー本 3.2）も、この壁の計算の一部として
+/// `panelReports` に入れて返す。壁の計算の根拠がその場でそろう。
+fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
     if input.panels.is_empty() {
         return Err(
-            "壁を構成する面材がありません。登録した釘配列パターンから 1 枚以上選んでください。"
-                .to_string(),
+            "壁を構成する面材がありません。面材を 1 枚以上追加してください。".to_string(),
         );
     }
-    let panels = input
-        .panels
-        .iter()
-        .map(|panel| library.get(panel))
-        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut panel_reports = Vec::with_capacity(input.panels.len());
+    let mut specs = Vec::with_capacity(input.panels.len());
+    for (position, panel) in input.panels.iter().enumerate() {
+        let named = |error: String| {
+            format!(
+                "面材「{}」を計算できません: {error}",
+                panel_label(panel, position)
+            )
+        };
+        let nails = nails_of(panel).map_err(named)?;
+        let constants =
+            nail_array::compute(&nails, panel.panel_area()).map_err(|error| named(error.0))?;
+        panel_reports.push(with_ok(build_panel_report(panel, &nails, position)?));
+        specs.push(wall::PanelSpec::new(
+            &panel_label(panel, position),
+            &constants,
+            panel.width,
+            panel.height,
+            wall::Grain::from_id(&panel.grain),
+        ));
+    }
 
     let result = wall::compute(&wall::Wall {
         height: input.height,
@@ -790,7 +903,7 @@ fn build_wall_report(
         sheathing: input.sheathing(),
         nail: input.nail(),
         has_intermediate_stud: input.has_intermediate_stud,
-        panels,
+        panels: specs,
     })
     .map_err(|error| error.0)?;
 
@@ -811,7 +924,14 @@ fn build_wall_report(
         row("壁の幅 W", format!("{} mm", format_int(input.width))),
     ];
     if let Some(material) = wall::find_material(&input.material_id) {
-        inputs.push(row("面材と釘の組合せ", material.label()));
+        inputs.push(row(
+            "面材と釘の組合せ",
+            format!(
+                "{}（釘の呼び径 φ{} mm）",
+                material.label(),
+                format_dimension(material.nail_diameter)
+            ),
+        ));
     }
     inputs.push(row(
         "面材の厚さ t",
@@ -880,12 +1000,13 @@ fn build_wall_report(
     Ok(Value::obj([
         ("wallId", input.wall_id.clone().into()),
         ("wallName", wall_label(input, index).into()),
+        ("panelReports", Value::Arr(panel_reports)),
         ("inputs", Value::Arr(inputs)),
         (
             "panelColumns",
             Value::Arr(
                 [
-                    "面材（釘配列パターン）",
+                    "面材",
                     "Aw [mm²]",
                     "Ixy",
                     "Zxy",
@@ -1003,7 +1124,7 @@ fn build_wall_report(
             "bucklingColumns",
             Value::Arr(
                 [
-                    "面材（釘配列パターン）",
+                    "面材",
                     "繊維方向",
                     "a [mm]",
                     "b [mm]",
@@ -1132,11 +1253,11 @@ fn build_wall_report(
 /// 依らない部分をここで決める。範囲は「面材枠 (0,0)-(W,H) と全釘」の外接
 /// 矩形。釘が面材からはみ出す配列でも切り取らず、はみ出していることが
 /// 見えるようにするため。
-fn build_diagram(pattern: &Pattern, nails: &[Nail], result: &nail_array::Constants) -> Value {
+fn build_diagram(panel: &PanelInput, nails: &[Nail], result: &nail_array::Constants) -> Value {
     let mut min_x = 0.0_f64;
-    let mut max_x = pattern.width;
+    let mut max_x = panel.width;
     let mut min_y = 0.0_f64;
-    let mut max_y = pattern.height;
+    let mut max_y = panel.height;
     for nail in nails {
         min_x = min_x.min(nail.x);
         max_x = max_x.max(nail.x);
@@ -1162,6 +1283,8 @@ fn build_diagram(pattern: &Pattern, nails: &[Nail], result: &nail_array::Constan
     let ys: Vec<f64> = nails.iter().map(|nail| nail.y).collect();
 
     Value::obj([
+        ("panelWidth", panel.width.into()),
+        ("panelHeight", panel.height.into()),
         ("minX", min_x.into()),
         ("maxX", max_x.into()),
         ("minY", min_y.into()),
@@ -1186,23 +1309,44 @@ fn build_diagram(pattern: &Pattern, nails: &[Nail], result: &nail_array::Constan
     ])
 }
 
+/// 割り付けの型（画面の選択肢）。
+pub fn arrangements() -> Value {
+    Value::Arr(
+        layout::ARRANGEMENTS
+            .iter()
+            .map(|arrangement| {
+                Value::obj([
+                    ("id", arrangement.id().into()),
+                    ("label", arrangement.label().into()),
+                    ("note", arrangement.description().into()),
+                ])
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::json;
 
     /// グレー本 解説の計算例（図 3.2.2）。W 910 × H 610 の横置きで、
-    /// へりあき 10 mm を見込んだ座標（本は左下の釘を (0, 0) として書いている）。
-    fn example_pattern() -> Pattern {
-        Pattern {
-            pattern_id: "p1".to_string(),
-            pattern_name: "グレー本の計算例".to_string(),
+    /// へりあき 10 mm を見込んだ配列（本は左下の釘を (0, 0) として書いている）。
+    fn example_panel() -> PanelInput {
+        PanelInput {
+            panel_id: "w1-p1".to_string(),
+            panel_name: "グレー本の計算例".to_string(),
             width: 910.0,
             height: 610.0,
-            mode: "grid".to_string(),
-            grid_x: "10, 455, 900".to_string(),
-            grid_y: "10, 155, 305, 455, 600".to_string(),
+            mode: "layout".to_string(),
+            arrangement: "kawa".to_string(),
+            stud_pitch: 455.0,
+            nail_pitch: 150.0,
+            edge_distance: 10.0,
+            grid_x: String::new(),
+            grid_y: String::new(),
             coords: String::new(),
+            grain: String::new(),
         }
     }
 
@@ -1230,34 +1374,64 @@ mod tests {
 
     #[test]
     fn keeps_only_known_keys() {
-        let data =
-            normalize(r#"{"projectName": " 邸 ", "unknown": 1, "patterns": [{"width": "610", "junk": 2}]}"#)
-                .unwrap();
+        let data = normalize(
+            r#"{"projectName": " 邸 ", "unknown": 1,
+                "walls": [{"height": "2900", "junk": 2, "panels": [{"width": "610"}]}]}"#,
+        )
+        .unwrap();
         assert_eq!(data.project_name, "邸");
-        assert_eq!(data.patterns[0].width, 610.0);
+        assert_eq!(data.walls[0].height, 2900.0);
+        assert_eq!(data.walls[0].panels[0].width, 610.0);
         assert_eq!(data.to_value().get("unknown"), None);
+        assert_eq!(data.to_value().get("patterns"), None);
     }
 
-    /// パターンが 1 つも無い入力でも、画面が編集を始められる形にする。
+    /// 壁が 1 枚も無い入力でも、画面が編集を始められる形にする。
     #[test]
-    fn gives_an_empty_form_one_pattern() {
+    fn gives_an_empty_form_one_wall() {
         let data = normalize("{}").unwrap();
-        assert_eq!(data.patterns.len(), 1);
-        assert_eq!(data.patterns[0].pattern_id, "p1");
-        assert_eq!(data.patterns[0].mode, "grid");
+        assert_eq!(data.walls.len(), 1);
+        assert_eq!(data.walls[0].wall_id, "w1");
+        assert!(data.walls[0].panels.is_empty());
+    }
+
+    /// 面材の既定は「割り付け・日型（四周打ち）・へりあき 10 mm」。
+    #[test]
+    fn a_panel_defaults_to_a_four_sided_layout() {
+        let data = normalize(r#"{"walls": [{"panels": [{"width": 910}]}]}"#).unwrap();
+        let panel = &data.walls[0].panels[0];
+        assert_eq!(panel.panel_id, "w1-p1");
+        assert_eq!(panel.mode, "layout");
+        assert_eq!(panel.arrangement, "hi");
+        assert_eq!(panel.edge_distance, DEFAULT_EDGE_DISTANCE);
+    }
+
+    /// へりあきは面材ごとに変えられる（釘・面材の種類に合わせるため）。
+    #[test]
+    fn the_edge_distance_is_per_panel() {
+        let data = normalize(
+            r#"{"walls": [{"panels": [{"edgeDistance": 15}, {"edgeDistance": "0"}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(data.walls[0].panels[0].edge_distance, 15.0);
+        assert_eq!(data.walls[0].panels[1].edge_distance, 0.0);
     }
 
     #[test]
     fn rejects_a_non_numeric_dimension() {
-        let error = normalize(r#"{"patterns": [{"width": "ろく"}]}"#).unwrap_err();
+        let error = normalize(r#"{"walls": [{"panels": [{"width": "ろく"}]}]}"#).unwrap_err();
         assert!(error.contains("面材の幅 W"), "{error}");
     }
 
     #[test]
-    fn rejects_too_many_patterns() {
-        let patterns = vec![r#"{"width": 1}"#; MAX_PATTERNS + 1].join(",");
-        let error = normalize(&format!(r#"{{"patterns": [{patterns}]}}"#)).unwrap_err();
-        assert!(error.contains("パターンは"), "{error}");
+    fn rejects_too_many_walls_and_panels() {
+        let walls = vec![r#"{"height": 1}"#; MAX_WALLS + 1].join(",");
+        let error = normalize(&format!(r#"{{"walls": [{walls}]}}"#)).unwrap_err();
+        assert!(error.contains("壁は"), "{error}");
+
+        let panels = vec![r#"{"width": 910}"#; MAX_WALL_PANELS + 1].join(",");
+        let error = normalize(&format!(r#"{{"walls": [{{"panels": [{panels}]}}]}}"#)).unwrap_err();
+        assert!(error.contains("面材は"), "{error}");
     }
 
     #[test]
@@ -1289,29 +1463,56 @@ mod tests {
         );
     }
 
+    // --- 古い形（釘配列パターン）の読み込み ----------------------------------
+
+    /// 前の版で保存した PDF（パターンを別に登録し、壁が patternId で指す形）は、
+    /// 壁が面材そのものを持つ今の形へ移して読む。
     #[test]
-    fn a_grid_is_every_combination() {
-        assert_eq!(nails_of(&example_pattern()).unwrap().len(), 15);
+    fn reads_the_legacy_pattern_form() {
+        let data = normalize(
+            r#"{"patterns": [
+                 {"patternId": "p1", "patternName": "南面 下", "width": 910, "height": 610,
+                  "mode": "grid", "gridX": "10, 455, 900", "gridY": "10, 155, 305, 455, 600"}],
+               "walls": [{"wallName": "南面", "height": 2900, "width": 910,
+                          "panels": [{"patternId": "p1", "grain": "width"}]}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(data.walls.len(), 1);
+        let panel = &data.walls[0].panels[0];
+        assert_eq!(panel.panel_name, "南面 下");
+        assert_eq!(panel.width, 910.0);
+        assert_eq!(panel.mode, "grid");
+        assert_eq!(panel.grid_x, "10, 455, 900");
+        assert_eq!(panel.grain, "width");
+        assert_eq!(data.walls[0].wall_name, "南面");
+        assert_eq!(data.walls[0].height, 2900.0);
     }
 
-    /// 桁を間違えた入力で計算とページ描画が止まらないようにする。
+    /// どの壁からも使われていない古いパターンも捨てない（壁 1 枚として残す）。
     #[test]
-    fn rejects_an_absurd_grid() {
-        let axis = (0..100).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
-        let pattern = Pattern {
-            grid_x: axis.clone(),
-            grid_y: axis,
-            ..example_pattern()
-        };
-        let error = nails_of(&pattern).unwrap_err();
-        assert!(error.contains("釘の本数が多すぎます"), "{error}");
+    fn keeps_legacy_patterns_that_no_wall_used() {
+        let data = normalize(
+            r#"{"patterns": [
+                 {"patternId": "p1", "patternName": "使う", "width": 910, "height": 610,
+                  "mode": "coords", "coords": "10, 10"},
+                 {"patternId": "p2", "patternName": "余り", "width": 910, "height": 910}],
+               "walls": [{"wallName": "南面", "panels": [{"patternId": "p1"}]}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(data.walls.len(), 2);
+        assert_eq!(data.walls[0].panels[0].panel_name, "使う");
+        assert_eq!(data.walls[0].panels[0].mode, "coords");
+        assert_eq!(data.walls[1].wall_name, "余り");
+        assert_eq!(data.walls[1].panels[0].width, 910.0);
     }
 
-    // --- 計算 ----------------------------------------------------------------
+    // --- 面材 1 枚の計算（グレー本 3.2） -------------------------------------
 
     #[test]
     fn the_reference_example_matches_the_book() {
-        let report = compute_pattern(&example_pattern()).unwrap();
+        let report = compute_panel(&example_panel(), 0).unwrap();
 
         assert_eq!(
             labelled(&report, "summary", "key"),
@@ -1341,139 +1542,142 @@ mod tests {
 
     #[test]
     fn the_inputs_section_repeats_what_was_typed() {
-        let report = compute_pattern(&example_pattern()).unwrap();
+        let report = compute_panel(&example_panel(), 0).unwrap();
         let inputs = labelled(&report, "inputs", "label");
         assert!(inputs.contains(&("面材寸法 W × H".to_string(), "910 × 610 mm".to_string())));
         assert!(inputs.contains(&("面材面積 Aw".to_string(), "555,100 mm²".to_string())));
         assert!(inputs.contains(&("釘本数 n".to_string(), "15 本".to_string())));
+        // 割り付けの入力は、型・ピッチ・へりあきがそのまま読める形で残す。
+        let arrangement = inputs
+            .iter()
+            .find(|(label, _)| label == "釘配列")
+            .map(|(_, value)| value.clone())
+            .unwrap();
+        assert!(arrangement.contains("川型"), "{arrangement}");
+        assert!(arrangement.contains("釘 @150"), "{arrangement}");
+        assert!(arrangement.contains("へりあき 10 mm"), "{arrangement}");
+    }
+
+    /// へりあきを広げると釘が内側に寄り、諸定数が小さくなる。
+    #[test]
+    fn a_wider_edge_distance_lowers_the_constants() {
+        let narrow = compute_panel(&example_panel(), 0).unwrap();
+        let wide = compute_panel(
+            &PanelInput {
+                edge_distance: 30.0,
+                ..example_panel()
+            },
+            0,
+        )
+        .unwrap();
+        let ixy = |report: &Value| report.get("result").unwrap().get("Ixy").unwrap().as_f64();
+        assert!(ixy(&wide) < ixy(&narrow));
     }
 
     #[test]
-    fn the_diagram_covers_the_panel_and_every_nail() {
-        // へりあきを見込んだ配列なので、範囲は面材枠そのもの。
-        let report = compute_pattern(&example_pattern()).unwrap();
-        let diagram = report.get("diagram").unwrap();
-        assert_eq!(diagram.get("minX").unwrap().as_f64(), Some(0.0));
-        assert_eq!(diagram.get("maxX").unwrap().as_f64(), Some(910.0));
-        assert_eq!(diagram.get("maxY").unwrap().as_f64(), Some(610.0));
-        assert_eq!(diagram.get("xTicks").unwrap().as_array().unwrap().len(), 3);
-        assert_eq!(diagram.get("yTicks").unwrap().as_array().unwrap().len(), 5);
-        assert_eq!(
-            diagram.get("axis").unwrap().get("xLabel").unwrap().as_str(),
-            Some("x0 = 455.0")
-        );
-    }
-
-    /// 釘が面材からはみ出す配列（入力の打ち間違い）は、切り取らずに
-    /// 「はみ出していること」が見える範囲を返す。
-    #[test]
-    fn the_diagram_does_not_clip_nails_outside_the_panel() {
-        let pattern = Pattern {
-            width: 610.0,
-            grid_x: "0, 445, 890".to_string(),
-            ..example_pattern()
+    fn a_grid_is_every_combination() {
+        let panel = PanelInput {
+            mode: "grid".to_string(),
+            grid_x: "10, 455, 900".to_string(),
+            grid_y: "10, 155, 305, 455, 600".to_string(),
+            ..example_panel()
         };
-        let report = compute_pattern(&pattern).unwrap();
-        let diagram = report.get("diagram").unwrap();
-        assert_eq!(diagram.get("maxX").unwrap().as_f64(), Some(890.0));
+        assert_eq!(nails_of(&panel).unwrap().len(), 15);
+    }
+
+    #[test]
+    fn coordinate_mode_reads_the_text_area() {
+        let panel = PanelInput {
+            mode: "coords".to_string(),
+            coords: "0, 0\n0, 455\n455, 910".to_string(),
+            ..example_panel()
+        };
+        let report = compute_panel(&panel, 0).unwrap();
+        assert_eq!(report.get("nails").unwrap().as_array().unwrap().len(), 3);
+        let inputs = labelled(&report, "inputs", "label");
+        assert!(inputs.contains(&("釘配列".to_string(), "座標を直接入力（3 点）".to_string())));
+    }
+
+    /// 桁を間違えた入力で計算とページ描画が止まらないようにする。
+    #[test]
+    fn rejects_an_absurd_number_of_nails() {
+        // 割り付け: 釘ピッチ 1 mm。
+        let dense = PanelInput {
+            nail_pitch: 0.5,
+            ..example_panel()
+        };
+        assert!(nails_of(&dense).unwrap_err().contains("釘の本数が多すぎます"));
+
+        // 格子: 100 × 100 の組合せ。
+        let axis = (0..100).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let grid = PanelInput {
+            mode: "grid".to_string(),
+            grid_x: axis.clone(),
+            grid_y: axis,
+            ..example_panel()
+        };
+        assert!(nails_of(&grid).unwrap_err().contains("釘の本数が多すぎます"));
     }
 
     /// 計算できない理由は、式の言葉ではなく入力欄の言葉で伝える。
     #[test]
-    fn unusable_patterns_are_explained_in_the_words_of_the_form() {
+    fn unusable_panels_are_explained_in_the_words_of_the_form() {
+        let coords = |text: &str| PanelInput {
+            mode: "coords".to_string(),
+            coords: text.to_string(),
+            ..example_panel()
+        };
         let cases = [
             // 釘が無い / 面材の寸法が入っていない。
-            (("610", "910", "", ""), "釘座標が入力されていません"),
-            (("0", "910", "0, 445", "0, 295"), "面材の幅 W と高さ H に正の数値"),
+            (coords(""), "釘座標が入力されていません"),
+            (
+                PanelInput {
+                    width: 0.0,
+                    ..coords("0, 0\n445, 295")
+                },
+                "面材の幅 W と高さ H に正の数値",
+            ),
             // 釘が 1 点に集中している（Ix + Iy = 0）。
-            (("610", "910", "100", "200"), "1 点に集中している"),
+            (coords("100, 200"), "1 点に集中している"),
             // 釘が 1 直線上に並ぶ（Zx もしくは Zy が 0 → Zxy = 0）。
-            (("610", "910", "0, 445", "295"), "1 直線上に並んでいる"),
+            (coords("0, 295\n445, 295"), "1 直線上に並んでいる"),
+            // 割り付けの入力が足りない。
+            (
+                PanelInput {
+                    nail_pitch: 0.0,
+                    ..example_panel()
+                },
+                "釘ピッチには正の数値",
+            ),
+            (
+                PanelInput {
+                    edge_distance: 400.0,
+                    ..example_panel()
+                },
+                "へりあきが面材の寸法に対して大きすぎます",
+            ),
         ];
-        for ((width, height, grid_x, grid_y), expected) in cases {
-            let pattern = Pattern {
-                width: width.parse().unwrap(),
-                height: height.parse().unwrap(),
-                grid_x: grid_x.to_string(),
-                grid_y: grid_y.to_string(),
-                ..example_pattern()
-            };
-            let error = compute_pattern(&pattern).unwrap_err();
+        for (panel, expected) in cases {
+            let error = compute_panel(&panel, 0).unwrap_err();
             assert!(error.contains(expected), "{error} should mention {expected}");
         }
-    }
-
-    #[test]
-    fn compute_all_reports_a_broken_pattern_without_losing_the_others() {
-        let data = FormData {
-            project_name: String::new(),
-            issued_on: String::new(),
-            patterns: vec![
-                example_pattern(),
-                Pattern {
-                    pattern_id: "p2".to_string(),
-                    grid_x: String::new(),
-                    grid_y: String::new(),
-                    ..example_pattern()
-                },
-            ],
-            walls: Vec::new(),
-        };
-
-        let reports = compute_all(&data);
-        let reports = reports.as_array().unwrap();
-
-        assert_eq!(reports[0].get("ok"), Some(&Value::Bool(true)));
-        assert_eq!(reports[1].get("ok"), Some(&Value::Bool(false)));
-        assert!(reports[1]
-            .get("error")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .contains("釘座標"));
-    }
-
-    #[test]
-    fn validate_names_the_pattern_that_cannot_be_calculated() {
-        let data = FormData {
-            project_name: String::new(),
-            issued_on: String::new(),
-            patterns: vec![Pattern {
-                pattern_name: "南面".to_string(),
-                grid_x: String::new(),
-                grid_y: String::new(),
-                ..example_pattern()
-            }],
-            walls: Vec::new(),
-        };
-        let error = validate(&data).unwrap_err();
-        assert!(error.contains("「南面」を計算できません"), "{error}");
     }
 
     // --- 壁の計算（グレー本 3.3） -------------------------------------------
 
     /// グレー本 3.3(3) の計算例（図 3.3.10）を、フォームの入力の形で組み立てる。
     ///
-    /// 面材は表 3.2.1 の配列をそのまま登録し、壁はその 2 枚を選ぶ。釘 1 本
-    /// あたりの数値は、本文が計算に使っているものをそのまま置く
-    /// （表 3.3.1 の N-65 / CN65 の入れ替わりについては wall.rs のコメント）。
+    /// 面材は表 3.2.1 の配列をそのまま割り付けの欄へ入れる。釘 1 本あたりの
+    /// 数値は、本文が計算に使っているものをそのまま置く（表 3.3.1 の
+    /// N-65 / CN65 の入れ替わりについては wall.rs のコメント）。
     fn wall_example_form() -> FormData {
-        let pattern = |index: usize, id: &str| {
+        let panel = |index: usize, id: &str| {
             let preset = crate::presets::find(id).expect("表 3.2.1 にある配列");
-            normalize_pattern(&preset.to_pattern_value(), index).unwrap()
-        };
-        // 繊維方向は指定しない（長辺方向とみなす）。
-        let panel = |pattern_id: &str| WallPanelInput {
-            pattern_id: pattern_id.to_string(),
-            grain: String::new(),
+            normalize_panel(&preset.to_panel_value(), "w1", index).unwrap()
         };
         FormData {
             project_name: "グレー本 3.3 の計算例".to_string(),
             issued_on: String::new(),
-            patterns: vec![
-                pattern(0, "910x1820-s455-n75-hi"),
-                pattern(1, "910x910-s455-n75-ro"),
-            ],
             walls: vec![WallInput {
                 wall_id: "w1".to_string(),
                 wall_name: "計算例の大壁".to_string(),
@@ -1491,14 +1695,16 @@ mod tests {
                 e1: 3500.0,
                 e2: 5500.0,
                 has_intermediate_stud: true,
-                panels: vec![panel("p1"), panel("p2")],
+                panels: vec![
+                    panel(0, "910x1820-s455-n75-hi"),
+                    panel(1, "910x910-s455-n75-ro"),
+                ],
             }],
         }
     }
 
     fn only_wall(data: &FormData) -> Value {
-        let walls = compute_all_walls(data);
-        walls.as_array().unwrap()[0].clone()
+        compute_all_walls(data).as_array().unwrap()[0].clone()
     }
 
     /// 本: Pa = 8.37 kN、ΔPa = 9.20 kN/m（決めているのは K0/150）。
@@ -1520,7 +1726,35 @@ mod tests {
         assert!((value("mu") - 5.25).abs() <= 0.01, "{}", value("mu"));
     }
 
-    /// 面材ごとの表には、選んだ釘配列パターンの名前と諸定数が並ぶ。
+    /// 壁の計算には、その根拠である面材ごとの釘配列諸定数が必ず付いてくる。
+    #[test]
+    fn the_wall_report_carries_the_nail_array_of_every_panel() {
+        let report = only_wall(&wall_example_form());
+        let panels = report.get("panelReports").unwrap().as_array().unwrap();
+
+        assert_eq!(panels.len(), 2);
+        assert_eq!(panels[0].get("ok"), Some(&Value::Bool(true)));
+        assert_eq!(
+            panels[0].get("panelName").unwrap().as_str(),
+            Some("1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）")
+        );
+        // 3.2 の途中経過と釘配列図が、そのまま壁の計算の中にある。
+        assert_eq!(panels[0].get("steps").unwrap().as_array().unwrap().len(), 14);
+        assert_eq!(
+            panels[0]
+                .get("diagram")
+                .unwrap()
+                .get("panelWidth")
+                .unwrap()
+                .as_f64(),
+            Some(910.0)
+        );
+        // 壁の表の面材名は、面材ごとの計算と同じ名前で並ぶ。
+        let rows = report.get("panels").unwrap().as_array().unwrap();
+        assert_eq!(rows[0].get("label"), panels[0].get("panelName"));
+    }
+
+    /// 面材ごとの表には、面材の名前と諸定数が並ぶ。
     #[test]
     fn the_wall_report_lists_every_panel_it_is_made_of() {
         let report = only_wall(&wall_example_form());
@@ -1528,10 +1762,6 @@ mod tests {
         assert_eq!(report.get("panelColumns").unwrap().as_array().unwrap().len(), 9);
         let panels = report.get("panels").unwrap().as_array().unwrap();
         assert_eq!(panels.len(), 2);
-        assert_eq!(
-            panels[0].get("label").unwrap().as_str(),
-            Some("1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）")
-        );
         // 面材ごとの列は Aw から μ までの 8 つ（見出しの 9 列 − 面材名）。
         let cells = panels[0].get("cells").unwrap().as_array().unwrap();
         assert_eq!(cells.len(), 8);
@@ -1551,9 +1781,10 @@ mod tests {
 
         assert!(inputs.contains(&("階高 H".to_string(), "3,000 mm".to_string())));
         assert!(inputs.contains(&("壁の幅 W".to_string(), "910 mm".to_string())));
+        // 釘の呼び径は、へりあきを決めるときの手がかりとして添える。
         assert!(inputs.contains(&(
             "面材と釘の組合せ".to_string(),
-            "構造用合板 12mm + 鉄丸釘 N-65".to_string()
+            "構造用合板 12mm + 鉄丸釘 N-65（釘の呼び径 φ3.05 mm）".to_string()
         )));
         assert!(inputs.contains(&(
             "面材の規格".to_string(),
@@ -1581,41 +1812,37 @@ mod tests {
         assert!(limit.get("value").unwrap().as_str().unwrap().contains(">"));
     }
 
-    /// 面材を選んでいない壁・見つからないパターンを指す壁は、理由を返す。
+    /// 面材が 1 枚も無い壁は、その理由を返す。
     #[test]
-    fn walls_that_cannot_be_calculated_are_explained() {
-        let cases = [
-            (Vec::new(), "面材がありません"),
-            (
-                vec![WallPanelInput {
-                    pattern_id: "p9".to_string(),
-                    grain: String::new(),
-                }],
-                "見つかりません",
-            ),
-        ];
-        for (panels, expected) in cases {
-            let mut data = wall_example_form();
-            data.walls[0].panels = panels;
-            let report = only_wall(&data);
-            assert_eq!(report.get("ok"), Some(&Value::Bool(false)));
-            let error = report.get("error").unwrap().as_str().unwrap();
-            assert!(error.contains(expected), "{error} should mention {expected}");
-        }
+    fn a_wall_without_panels_is_explained() {
+        let mut data = wall_example_form();
+        data.walls[0].panels = Vec::new();
+        let report = only_wall(&data);
+        assert_eq!(report.get("ok"), Some(&Value::Bool(false)));
+        assert!(report
+            .get("error")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("面材がありません"));
     }
 
-    /// 選んだ釘配列パターンが計算できないときは、そのパターン名で伝える。
+    /// 計算できない面材があるときは、その面材の名前で伝える。
+    /// 壁として計算できなくても、他の面材の釘配列は出せるところまで出す。
     #[test]
-    fn a_wall_reports_the_pattern_that_cannot_be_calculated() {
+    fn a_wall_reports_the_panel_that_cannot_be_calculated() {
         let mut data = wall_example_form();
-        data.patterns[0].pattern_name = "南面 下".to_string();
-        data.patterns[0].grid_x = String::new();
-        data.patterns[0].grid_y = String::new();
-        data.patterns[0].mode = "grid".to_string();
+        data.walls[0].panels[0].panel_name = "南面 下".to_string();
+        data.walls[0].panels[0].nail_pitch = 0.0;
 
-        let error = only_wall(&data);
-        let error = error.get("error").unwrap().as_str().unwrap();
-        assert!(error.contains("「南面 下」"), "{error}");
+        let report = only_wall(&data);
+        assert_eq!(report.get("ok"), Some(&Value::Bool(false)));
+        let error = report.get("error").unwrap().as_str().unwrap();
+        assert!(error.contains("面材「南面 下」"), "{error}");
+
+        let panels = report.get("panelReports").unwrap().as_array().unwrap();
+        assert_eq!(panels[0].get("ok"), Some(&Value::Bool(false)));
+        assert_eq!(panels[1].get("ok"), Some(&Value::Bool(true)));
     }
 
     /// 壁が 1 枚も計算できないと保存させない。名前で どの壁か を伝える。
@@ -1630,61 +1857,12 @@ mod tests {
         assert!(error.contains("階高 H"), "{error}");
     }
 
-    /// 壁を 1 枚も置いていない物件（釘配列諸定数だけを求める使い方）も通る。
     #[test]
-    fn a_form_without_walls_is_valid() {
-        let data = normalize(r#"{"patterns": [{"width": 910, "height": 610}]}"#).unwrap();
-        assert!(data.walls.is_empty());
-        assert!(validate_walls(&data).unwrap().is_empty());
-        assert!(compute_all_walls(&data).as_array().unwrap().is_empty());
-    }
-
-    /// 壁の入力も、未知のキーを捨てて足りないキーを既定値で埋める。
-    #[test]
-    fn normalizes_walls_like_patterns() {
-        let data = normalize(
-            r#"{"walls": [{"wallName": " 南面 ", "height": "3000", "junk": 1,
-                 "panels": [{"patternId": "p1"}, {"patternId": ""}, {}]}]}"#,
-        )
-        .unwrap();
-
-        let wall = &data.walls[0];
-        assert_eq!(wall.wall_id, "w1");
-        assert_eq!(wall.wall_name, "南面");
-        assert_eq!(wall.height, 3000.0);
-        assert_eq!(wall.width, 0.0);
-        // 空の patternId（未選択の行）は落とす。
-        assert_eq!(
-            wall.panels,
-            vec![WallPanelInput {
-                pattern_id: "p1".to_string(),
-                grain: String::new()
-            }]
-        );
-        assert_eq!(data.to_value().get("walls").unwrap().as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn rejects_too_many_walls_and_panels() {
-        let walls = vec![r#"{"height": 1}"#; MAX_WALLS + 1].join(",");
-        let error = normalize(&format!(r#"{{"walls": [{walls}]}}"#)).unwrap_err();
-        assert!(error.contains("壁は"), "{error}");
-
-        let panels = vec![r#"{"patternId": "p1"}"#; MAX_WALL_PANELS + 1].join(",");
-        let error = normalize(&format!(r#"{{"walls": [{{"panels": [{panels}]}}]}}"#)).unwrap_err();
-        assert!(error.contains("面材は"), "{error}");
-    }
-
-    #[test]
-    fn coordinate_mode_reads_the_text_area() {
-        let pattern = Pattern {
-            mode: "coords".to_string(),
-            coords: "0, 0\n0, 455\n455, 910".to_string(),
-            ..example_pattern()
-        };
-        let report = compute_pattern(&pattern).unwrap();
-        assert_eq!(report.get("nails").unwrap().as_array().unwrap().len(), 3);
-        let inputs = labelled(&report, "inputs", "label");
-        assert!(inputs.contains(&("釘配列".to_string(), "座標を直接入力（3 点）".to_string())));
+    fn arrangements_are_offered_as_choices() {
+        let choices = arrangements();
+        let choices = choices.as_array().unwrap();
+        assert_eq!(choices.len(), 4);
+        assert_eq!(choices[0].get("id").unwrap().as_str(), Some("kawa"));
+        assert_eq!(choices[3].get("label").unwrap().as_str(), Some("日型"));
     }
 }

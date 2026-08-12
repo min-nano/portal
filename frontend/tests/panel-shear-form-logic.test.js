@@ -1,16 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
-  canRemovePattern,
   canRemoveWall,
   defaultSaveName,
   emptyFormData,
   formSignature,
   indexAfterRemoval,
-  makePattern,
+  makePanel,
   makeWall,
   mergeFormData,
-  panelChoices,
-  patternLabel,
+  nailNote,
+  panelLabel,
   suggestedFileName,
   toRequestBody,
   verificationOf,
@@ -26,21 +25,43 @@ const config = {
   file_name_template: '釘配列諸定数計算書_{projectName}.pdf',
 };
 
-describe('emptyFormData / makePattern', () => {
-  it('新規作成はパターン 1 つから始まる', () => {
+describe('emptyFormData / makeWall / makePanel', () => {
+  it('新規作成は壁 1 枚・面材 1 枚から始まる', () => {
     const data = emptyFormData();
 
     expect(data.projectName).toBe('');
-    expect(data.patterns).toHaveLength(1);
-    expect(data.patterns[0].mode).toBe('grid');
+    expect(data.walls).toHaveLength(1);
+    expect(data.walls[0].panels).toHaveLength(1);
     // 作成日は当日を入れておく（PDF に刷られる）。
     expect(data.issuedOn).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
-  it('パターン ID は重複しない（PDF に埋め込まれ、読み込み後も使う）', () => {
-    const ids = new Set([makePattern().patternId, makePattern().patternId]);
+  it('面材の既定は割り付け・日型（適用範囲 3.3(1)⑤ の四周打ち）', () => {
+    const panel = makePanel();
 
-    expect(ids.size).toBe(2);
+    expect(panel.mode).toBe('layout');
+    expect(panel.arrangement).toBe('hi');
+    // へりあきは面材ごとに調整できる（既定は表 3.2.1 が前提とする 10 mm）。
+    expect(panel.edgeDistance).toBe(10);
+    expect(panel.nailPitch).toBeGreaterThan(0);
+    expect(panel.studPitch).toBeGreaterThan(0);
+  });
+
+  it('面材と釘の数値は空から始める（確かめないまま計算させない）', () => {
+    const wall = makeWall();
+
+    expect([wall.k, wall.deltaV, wall.deltaU, wall.deltaPv]).toEqual(['', '', '', '']);
+    expect([wall.tauMax, wall.e1, wall.e2]).toEqual(['', '', '']);
+    // 適用範囲 3.3(1)⑦ は中間材（間柱等）を求めているので、既定は「あり」。
+    expect(wall.hasIntermediateStud).toBe(true);
+    // 階高と壁の幅だけは、よくある寸法を入れておく。
+    expect(wall.height).toBeGreaterThan(0);
+    expect(wall.width).toBeGreaterThan(0);
+  });
+
+  it('壁 ID・面材 ID は重複しない（PDF に埋め込まれ、読み込み後も使う）', () => {
+    expect(new Set([makeWall().wallId, makeWall().wallId]).size).toBe(2);
+    expect(new Set([makePanel().panelId, makePanel().panelId]).size).toBe(2);
   });
 });
 
@@ -49,51 +70,85 @@ describe('mergeFormData', () => {
     const data = mergeFormData({
       projectName: '○○邸',
       issuedOn: '2026-08-11',
-      patterns: [
+      walls: [
         {
-          patternId: 'p1',
-          patternName: '南面',
-          width: 610,
-          height: 910,
-          mode: 'coords',
-          coords: '0, 0',
+          wallId: 'w1',
+          wallName: '南面',
+          height: '3000',
+          width: 910,
+          materialId: 'plywood12-n50',
+          thickness: 12,
+          shearModulus: 0.4,
+          k: 0.483,
+          deltaV: 2.3,
+          deltaU: 17,
+          deltaPv: 1.13,
+          gradeId: 'plywood-jas1',
+          tauMax: 3.6,
+          e1: 3500,
+          e2: 5500,
+          hasIntermediateStud: false,
+          junk: 1,
+          panels: [
+            {
+              panelId: 'pn1',
+              panelName: '下段',
+              width: 910,
+              height: 1820,
+              mode: 'layout',
+              arrangement: 'hi',
+              studPitch: 455,
+              nailPitch: 75,
+              edgeDistance: 15,
+              grain: 'width',
+              junk: 2,
+            },
+          ],
         },
       ],
     });
 
     expect(data.projectName).toBe('○○邸');
     expect(data.issuedOn).toBe('2026-08-11');
-    expect(data.patterns[0]).toMatchObject({
-      patternId: 'p1',
-      patternName: '南面',
-      width: 610,
-      height: 910,
-      mode: 'coords',
-      coords: '0, 0',
-      gridX: '',
+    expect(data.walls[0].junk).toBeUndefined();
+    expect(data.walls[0].height).toBe(3000);
+    expect(data.walls[0].hasIntermediateStud).toBe(false);
+    expect(data.walls[0].panels[0]).toMatchObject({
+      panelId: 'pn1',
+      panelName: '下段',
+      width: 910,
+      height: 1820,
+      mode: 'layout',
+      arrangement: 'hi',
+      nailPitch: 75,
+      edgeDistance: 15,
+      grain: 'width',
     });
+    expect(data.walls[0].panels[0].junk).toBeUndefined();
   });
 
-  it('パターンが無い内容でも、編集を始められる形にする', () => {
+  it('壁が無い内容でも、編集を始められる形にする', () => {
     const data = mergeFormData({ projectName: '邸' });
 
-    expect(data.patterns).toHaveLength(1);
+    expect(data.walls).toHaveLength(1);
     expect(data.issuedOn).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
-  it('知らない入力方式は格子として扱う', () => {
-    const data = mergeFormData({ patterns: [{ mode: 'なにか' }] });
+  it('知らない入力方式は割り付けとして扱う', () => {
+    const data = mergeFormData({ walls: [{ panels: [{ mode: 'なにか' }] }] });
 
-    expect(data.patterns[0].mode).toBe('grid');
+    expect(data.walls[0].panels[0].mode).toBe('layout');
   });
 
-  it('パターン名が空なら通し番号で補う', () => {
-    const data = mergeFormData({ patterns: [{}, {}] });
+  it('名前が空なら通し番号で補う', () => {
+    const data = mergeFormData({ walls: [{ panels: [{}, {}] }, {}] });
 
-    expect(data.patterns.map((p) => p.patternName)).toEqual([
-      'パターン1',
-      'パターン2',
-    ]);
+    expect(data.walls.map((w) => w.wallName)).toEqual(['壁1', '壁2']);
+    expect(data.walls[0].panels.map((p) => p.panelName)).toEqual(['面材1', '面材2']);
+  });
+
+  it('面材を 1 枚も持たない壁は、そのまま 0 枚で読む', () => {
+    expect(mergeFormData({ walls: [{ panels: [] }] }).walls[0].panels).toEqual([]);
   });
 });
 
@@ -102,7 +157,7 @@ describe('formSignature', () => {
     const data = emptyFormData();
     const before = formSignature(data);
 
-    data.patterns[0].gridX = '0, 445';
+    data.walls[0].panels[0].nailPitch = 75;
 
     expect(formSignature(data)).not.toBe(before);
   });
@@ -118,12 +173,11 @@ describe('formSignature', () => {
 });
 
 describe('toRequestBody', () => {
-  it('サーバへ渡すのは物件情報とパターン・壁だけ', () => {
+  it('サーバへ渡すのは物件情報と壁だけ', () => {
     const data = { ...emptyFormData(), extra: 'x' };
 
     expect(Object.keys(toRequestBody(data)).sort()).toEqual([
       'issuedOn',
-      'patterns',
       'projectName',
       'walls',
     ]);
@@ -161,41 +215,111 @@ describe('ファイル名', () => {
   });
 });
 
-describe('パターンの増減', () => {
-  it('最後の 1 つは削除できない（0 個の物件を作らせない）', () => {
-    expect(canRemovePattern({ patterns: [{}] })).toBe(false);
-    expect(canRemovePattern({ patterns: [{}, {}] })).toBe(true);
+describe('壁と面材の増減', () => {
+  it('最後の 1 枚は削除できない（0 枚の物件を作らせない）', () => {
+    expect(canRemoveWall({ walls: [{}] })).toBe(false);
+    expect(canRemoveWall({ walls: [{}, {}] })).toBe(true);
   });
 
-  it('末尾を消したら 1 つ前のパターンへ寄せる', () => {
+  it('末尾を消したら 1 つ前の壁へ寄せる', () => {
     expect(indexAfterRemoval(2, 2)).toBe(1);
     expect(indexAfterRemoval(0, 2)).toBe(0);
     expect(indexAfterRemoval(0, 1)).toBe(0);
   });
 
-  it('タブの名前は未入力なら通し番号で代替する', () => {
-    expect(patternLabel({ patternName: '南面' }, 0)).toBe('南面');
-    expect(patternLabel({ patternName: '  ' }, 2)).toBe('パターン3');
+  it('見出しの名前は未入力なら通し番号で代替する', () => {
+    expect(wallLabel({ wallName: '南面' }, 0)).toBe('南面');
+    expect(wallLabel({ wallName: '  ' }, 2)).toBe('壁3');
+    expect(panelLabel({ panelName: '下段' }, 0)).toBe('下段');
+    expect(panelLabel({ panelName: '' }, 1)).toBe('面材2');
+  });
+});
+
+describe('面材と釘の一覧（グレー本 表 3.3.1 / 表 3.3.2）', () => {
+  const material = {
+    id: 'plywood12-n50',
+    label: '構造用合板 12mm + 鉄丸釘 N-50',
+    panel: '構造用合板',
+    nailLabel: '鉄丸釘 N-50',
+    nailDiameter: 2.75,
+    thickness: 12,
+    shearModulus: 0.4,
+    k: 0.43,
+    deltaV: 2.1,
+    deltaU: 17.1,
+    deltaPv: 0.91,
+    gradeId: 'plywood-jas1',
+    tauMax: 3.6,
+    e1: 3500,
+    e2: 5500,
+  };
+
+  it('表 3.3.1 の 1 行は、規格（表 3.3.2）ごと入力欄の値になる', () => {
+    // 1 回の選択で、せん断破壊・せん断座屈の検定に要る数値までそろう。
+    expect(wallFieldsFromMaterial(material)).toEqual({
+      materialId: 'plywood12-n50',
+      thickness: 12,
+      shearModulus: 0.4,
+      k: 0.43,
+      deltaV: 2.1,
+      deltaU: 17.1,
+      deltaPv: 0.91,
+      gradeId: 'plywood-jas1',
+      tauMax: 3.6,
+      e1: 3500,
+      e2: 5500,
+    });
+  });
+
+  it('表 3.3.2 の 1 行（面材の規格）だけを差し替えられる', () => {
+    const grade = {
+      id: 'plywood-jas2',
+      label: '構造用合板 JAS 2 級',
+      tauMax: 2.4,
+      e1: 3500,
+      e2: 5500,
+    };
+
+    expect(wallFieldsFromGrade(grade)).toEqual({
+      gradeId: 'plywood-jas2',
+      tauMax: 2.4,
+      e1: 3500,
+      e2: 5500,
+    });
+  });
+
+  it('へりあきを決める手がかりとして、選んだ釘の呼び径を案内する', () => {
+    const note = nailNote([material], 'plywood12-n50');
+
+    expect(note).toContain('鉄丸釘 N-50');
+    expect(note).toContain('φ2.75 mm');
+    expect(note).toContain('へりあき');
+    // まだ選んでいないときは案内を出さない。
+    expect(nailNote([material], '')).toBe('');
   });
 });
 
 describe('保存時の突き合わせ', () => {
   const reports = {
-    patterns: [
-      { ok: true, patternId: 'p1', result: { Cxy: 1.26155 } },
-      { ok: false, patternId: 'p2', error: '釘座標が入力されていません。' },
-    ],
     walls: [
-      { ok: true, wallId: 'w1', result: { Pa: 8.38761 } },
-      { ok: false, wallId: 'w2', error: '面材がありません。' },
+      {
+        ok: true,
+        wallId: 'w1',
+        result: { Pa: 8.38761 },
+        panelReports: [
+          { ok: true, panelId: 'pn1', result: { Cxy: 1.26155 } },
+          { ok: false, panelId: 'pn2', error: '釘座標が入力されていません。' },
+        ],
+      },
+      { ok: false, wallId: 'w2', error: '面材がありません。', panelReports: [] },
     ],
   };
 
-  it('計算できたパターン・壁の結果だけを添える', () => {
+  it('計算できた壁・面材の結果だけを添える', () => {
     expect(verificationOf('1.0.0', reports)).toEqual({
       coreVersion: '1.0.0',
-      patterns: [{ patternId: 'p1', result: { Cxy: 1.26155 } }],
       walls: [{ wallId: 'w1', result: { Pa: 8.38761 } }],
+      panels: [{ panelId: 'pn1', result: { Cxy: 1.26155 } }],
     });
   });
 
@@ -217,18 +341,16 @@ describe('保存時の突き合わせ', () => {
     expect(warning).toContain('南面 の Pa');
   });
 
-  it('違った値を、どのパターンのどの項目か分かる形で並べる', () => {
+  it('違った値を、どの面材のどの項目か分かる形で並べる', () => {
     const warning = verificationWarning({
       checked: true,
       ok: false,
       coreVersion: { client: '1.0.0', server: '1.0.0' },
-      differences: [
-        { patternName: '南面', key: 'Cxy', client: 1.25, server: 1.26155 },
-      ],
+      differences: [{ panelName: '下段', key: 'Cxy', client: 1.25, server: 1.26155 }],
       omittedDifferences: 3,
     });
 
-    expect(warning).toContain('南面 の Cxy（画面 1.25 / 計算書 1.26155）');
+    expect(warning).toContain('下段 の Cxy（画面 1.25 / 計算書 1.26155）');
     expect(warning).toContain('ほか 3 件');
     expect(warning).toContain('サーバーで計算し直した値');
   });
@@ -243,144 +365,5 @@ describe('保存時の突き合わせ', () => {
 
     expect(warning).toContain('0.9.0');
     expect(warning).toContain('再読み込み');
-  });
-});
-
-describe('壁（グレー本 3.3）', () => {
-  it('新規作成は壁 0 枚から始まる（釘配列諸定数だけの使い方を残す）', () => {
-    expect(emptyFormData().walls).toEqual([]);
-  });
-
-  it('面材と釘の数値は空から始める（確かめないまま計算させない）', () => {
-    const wall = makeWall();
-
-    expect(wall.panels).toEqual([]);
-    expect([wall.k, wall.deltaV, wall.deltaU, wall.deltaPv]).toEqual(['', '', '', '']);
-    expect([wall.tauMax, wall.e1, wall.e2]).toEqual(['', '', '']);
-    // 適用範囲 3.3(1)⑦ は中間材（間柱等）を求めているので、既定は「あり」。
-    expect(wall.hasIntermediateStud).toBe(true);
-    // 階高と壁の幅だけは、よくある寸法を入れておく。
-    expect(wall.height).toBeGreaterThan(0);
-    expect(wall.width).toBeGreaterThan(0);
-  });
-
-  it('壁 ID は重複しない（PDF に埋め込まれ、読み込み後も使う）', () => {
-    expect(new Set([makeWall().wallId, makeWall().wallId]).size).toBe(2);
-  });
-
-  it('表 3.3.1 の 1 行は、規格（表 3.3.2）ごと入力欄の値になる', () => {
-    const material = {
-      id: 'plywood12-n50',
-      label: '構造用合板 12mm + 鉄丸釘 N-50',
-      panel: '構造用合板',
-      thickness: 12,
-      shearModulus: 0.4,
-      k: 0.43,
-      deltaV: 2.1,
-      deltaU: 17.1,
-      deltaPv: 0.91,
-      gradeId: 'plywood-jas1',
-      tauMax: 3.6,
-      e1: 3500,
-      e2: 5500,
-    };
-
-    // 1 回の選択で、せん断破壊・せん断座屈の検定に要る数値までそろう。
-    expect(wallFieldsFromMaterial(material)).toEqual({
-      materialId: 'plywood12-n50',
-      thickness: 12,
-      shearModulus: 0.4,
-      k: 0.43,
-      deltaV: 2.1,
-      deltaU: 17.1,
-      deltaPv: 0.91,
-      gradeId: 'plywood-jas1',
-      tauMax: 3.6,
-      e1: 3500,
-      e2: 5500,
-    });
-  });
-
-  it('表 3.3.2 の 1 行（面材の規格）だけを差し替えられる', () => {
-    const grade = { id: 'plywood-jas2', label: '構造用合板 JAS 2 級', tauMax: 2.4, e1: 3500, e2: 5500 };
-
-    expect(wallFieldsFromGrade(grade)).toEqual({
-      gradeId: 'plywood-jas2',
-      tauMax: 2.4,
-      e1: 3500,
-      e2: 5500,
-    });
-  });
-
-  it('面材の選択肢は、そのときの釘配列パターンの並びそのもの', () => {
-    const data = {
-      patterns: [
-        { patternId: 'p1', patternName: '南面' },
-        { patternId: 'p2', patternName: '  ' },
-      ],
-    };
-
-    expect(panelChoices(data)).toEqual([
-      { patternId: 'p1', label: '南面' },
-      { patternId: 'p2', label: 'パターン2' },
-    ]);
-  });
-
-  it('壁は 0 枚でもよいので、1 枚だけでも削除できる', () => {
-    expect(canRemoveWall({ walls: [] })).toBe(false);
-    expect(canRemoveWall({ walls: [{}] })).toBe(true);
-  });
-
-  it('タブの名前は未入力なら通し番号で代替する', () => {
-    expect(wallLabel({ wallName: '南面' }, 0)).toBe('南面');
-    expect(wallLabel({ wallName: '  ' }, 2)).toBe('壁3');
-  });
-});
-
-describe('mergeFormData（壁）', () => {
-  it('保存した壁を、定義に無いキーを捨てて読み戻す', () => {
-    const data = mergeFormData({
-      walls: [
-        {
-          wallId: 'w1',
-          wallName: '南面',
-          height: '3000',
-          width: 910,
-          materialId: 'plywood12-n50',
-          thickness: 12,
-          shearModulus: 0.4,
-          k: 0.483,
-          deltaV: 2.3,
-          deltaU: 17,
-          deltaPv: 1.13,
-          gradeId: 'plywood-jas1',
-          tauMax: 3.6,
-          e1: 3500,
-          e2: 5500,
-          hasIntermediateStud: false,
-          panels: [{ patternId: 'p1', grain: 'width' }, { patternId: '' }, {}],
-          junk: 1,
-        },
-      ],
-    });
-
-    expect(data.walls).toHaveLength(1);
-    expect(data.walls[0].junk).toBeUndefined();
-    expect(data.walls[0].height).toBe(3000);
-    // 未選択の面材の行は落とす。
-    expect(data.walls[0].panels).toEqual([{ patternId: 'p1', grain: 'width' }]);
-    expect(data.walls[0].hasIntermediateStud).toBe(false);
-    expect(data.walls[0].tauMax).toBe(3.6);
-  });
-
-  it('壁を持たない（この節より前に保存した）PDF も読める', () => {
-    expect(mergeFormData({ patterns: [] }).walls).toEqual([]);
-  });
-
-  it('壁の名前が空なら通し番号で埋める', () => {
-    expect(mergeFormData({ walls: [{}, {}] }).walls.map((w) => w.wallName)).toEqual([
-      '壁1',
-      '壁2',
-    ]);
   });
 });

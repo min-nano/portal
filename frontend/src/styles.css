@@ -159,9 +159,9 @@ button.secondary:disabled { background-color: #aaa; }
 .warnings { margin: 12px 0 0; padding: 10px 12px 10px 28px; background: #fff6e5; border: 1px solid #f0d9a8; border-radius: 6px; font-size: 0.8em; color: #7a5b12; }
 .warnings li + li { margin-top: 6px; }
 
-/* --- 面材張り耐力要素 釘配列諸定数 計算ツール --- */
+/* --- 面材張り大壁 計算ツール --- */
 
-/* 1 物件の中の複数パターン（面材の配置ちがい）をページ送りで切り替える。 */
+/* 1 物件の中の複数の壁を、ページ送りで切り替える。 */
 .pattern-bar { border: 1px solid #d6d6e0; border-radius: 8px; padding: 8px 10px 10px; margin-top: 14px; background: #f7f7fb; }
 .pattern-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 0.85em; }
 .pattern-nav button { margin-top: 0; width: auto; padding: 6px 10px; font-size: 0.85em; }
@@ -193,16 +193,18 @@ button.secondary:disabled { background-color: #aaa; }
 .steps-table th.step-value { text-align: right; }
 .steps-table .step-value.ng { color: #a3281f; }
 
-/* 面材張り大壁（グレー本 3.3）。壁を構成する面材は、登録した釘配列パターン
-   から選ぶので、行ごとにその一覧を出す。 */
-.wall-panels { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
-.wall-panel-row { display: flex; align-items: center; gap: 8px; }
-.wall-panel-row select { flex: 1; margin-top: 0; }
-.wall-panel-row button { margin-top: 0; width: auto; padding: 4px 10px; font-size: 0.8em; }
+/* 壁を構成する面材。1 枚ごとに寸法・割り付け・へりあきを決め、その場で
+   釘配列諸定数（グレー本 3.2）と釘配列図が出る。 */
+.wall-panels { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
+.wall-panel { border: 1px solid #d6d6e0; border-radius: 8px; padding: 8px 12px 12px; background: #fbfbfe; }
+.wall-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.wall-panel-head strong { font-size: 0.9em; color: #1a3a8f; }
+.wall-panel-head button { margin-top: 0; width: auto; padding: 4px 10px; font-size: 0.8em; }
+.panel-result { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #d6d6e0; }
 .wall-result { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e3e3ef; }
 .wall-result h4 { margin: 0; font-size: 0.95em; color: #333; }
 .wall-result .steps-table { overflow-x: auto; display: block; }
 
 /* 釘配列図。狭い画面でも縮めて収める。 */
-.diagram-box { margin-top: 12px; overflow-x: auto; }
-.diagram-box svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.diagram-box, .panel-result svg { margin-top: 12px; overflow-x: auto; }
+.diagram-box svg, .panel-result svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }

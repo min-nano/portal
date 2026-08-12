@@ -1,9 +1,14 @@
-// 面材張り耐力要素 釘配列諸定数 計算ツール。
+// 面材張り大壁 計算ツール。
 //
-// グレー本『木造軸組工法住宅の許容応力度設計』3.2 節に沿って、釘配列諸定数
-// Ixy・Zxy・Cxy を求める。編集中の計算は画面の中で完結する（./core.js が
-// 読み込む wasm を呼ぶだけで、入力のたびの往復が無い）。その wasm は
-// サーバが計算に使っているものと同じバイト列なので、計算の実装は 1 つしかない。
+// グレー本『木造軸組工法住宅の許容応力度設計』3.3 節に沿って、面材張り大壁の
+// 面内せん断剛性 K と許容せん断耐力 Pa を求める。壁を構成する面材の釘配列
+// 諸定数 Ixy・Zxy・Cxy（3.2 節）は、その壁の計算の一部として面材ごとに求める。
+// 実際の設計では面材の種類と釘が先に決まっていて、面材の配置・釘の間隔・
+// へりあきで調整するので、入力もその順番に並べてある。
+//
+// 編集中の計算は画面の中で完結する（./core.js が読み込む wasm を呼ぶだけで、
+// 入力のたびの往復が無い）。その wasm はサーバが計算に使っているものと同じ
+// バイト列なので、計算の実装は 1 つしかない。
 //
 // 保存のときはサーバも同じ計算をして、画面が出していた値と突き合わせる。
 // 食い違えば警告を出す（計算書に載るのはサーバの値）。
@@ -14,12 +19,9 @@
 // 続きを編集できる。ファイル操作の考え方も証明書と同じ「新規作成 / 開く /
 // 保存 / 別名で保存」で、共通部分は ../pdf-file-ops.js・../save-dialogs.js。
 //
-// 釘配列諸定数（3.2）に続けて、その配列を面材として選ぶ **面材張り大壁**
-// （3.3）の面内せん断剛性 K と許容せん断耐力 Pa も求める。
-//
-// 1 ファイル = 1 物件。計算書 PDF は「1 ページ = 1 パターン」に続けて
-// 「1 ページ = 1 壁」を並べる。物件の中の複数パターン・複数の壁は、それぞれ
-// ページ送りで切り替えて編集する。
+// 1 ファイル = 1 物件。計算書 PDF は壁ごとに「面材 1 枚 = 1 ページ」を並べ、
+// そのあとに「壁 = 1 ページ」を置く。物件の中の複数の壁は、ページ送りで
+// 切り替えて編集する。
 
 import '../styles.css';
 import { requireSignIn } from '../auth.js';
@@ -36,33 +38,27 @@ import {
   unsavedPromptMessage,
 } from '../pdf-file-ops.js';
 import {
-  applyPattern,
   applyWall,
-  readPattern,
   readWall,
   renderGradeOptions,
   renderMaterialOptions,
-  renderPatternBar,
-  renderPresetOptions,
-  renderResult,
   renderWallBar,
   renderWallPanels,
   renderWallResult,
+  showNailNote,
   showPanelArea,
   syncNailModeVisibility,
 } from './form-dom.js';
 import {
-  canRemovePattern,
   canRemoveWall,
   defaultSaveName,
   emptyFormData,
   formSignature,
   indexAfterRemoval,
-  makePattern,
+  makePanel,
   makeWall,
   mergeFormData,
-  panelChoices,
-  patternLabel,
+  nailNote,
   toRequestBody,
   verificationOf,
   verificationWarning,
@@ -82,13 +78,12 @@ const CALCULATE_DEBOUNCE_MS = 60;
 
 let config = null; // /config の応答（既定ファイル名・計算実装の在り処）
 let core = null; // 計算実装（wasm）。サーバと同じバイト列。
-let data = null; // 画面が編集中の内容 { projectName, issuedOn, patterns, walls }
-let currentIndex = 0;
+let data = null; // 画面が編集中の内容 { projectName, issuedOn, walls }
 let currentWallIndex = 0;
-let reports = { patterns: [], walls: [] }; // パターン・壁ごとの計算結果
+let reports = { walls: [] }; // 壁ごとの計算結果（面材ごとの結果もこの中）
 let materials = []; // グレー本 表 3.3.1 の面材と釘の組合せ
 let grades = []; // グレー本 表 3.3.2 の面材の規格
-let panelChoiceSignature = ''; // 壁の面材として選べるパターンの一覧（前回の内容）
+let panelOptions = { presets: [], arrangements: [] }; // 面材の入力欄が使う一覧
 let calculateTimer = null;
 
 let sourceFile = null; // 開いているファイル（Drive 上の PDF）。{ id, name }
@@ -114,41 +109,29 @@ function showResult(link, fileName) {
 
 // --- 画面 ↔ データ ----------------------------------------------------------
 
-function currentPattern() {
-  return data.patterns[currentIndex];
-}
-
 function currentWall() {
   return data.walls[currentWallIndex] || null;
 }
 
-/** 入力欄の内容を、編集中のパターン・壁へ書き戻す。 */
-function captureCurrentPattern() {
-  Object.assign(currentPattern(), readPattern(document));
+/** 入力欄の内容を、編集中の壁へ書き戻す。 */
+function captureCurrentWall() {
   const wall = currentWall();
   if (wall) Object.assign(wall, readWall(document));
   data.projectName = document.getElementById('projectName').value.trim();
   data.issuedOn = document.getElementById('issuedOn').value;
 }
 
-/** 編集中のパターン・壁を入力欄へ写し、タブと計算結果を描き直す。 */
+/** 編集中の壁を入力欄へ写し、タブと計算結果を描き直す。 */
 function renderCurrent() {
   document.getElementById('projectName').value = data.projectName;
   document.getElementById('issuedOn').value = data.issuedOn;
-  applyPattern(document, currentPattern());
-  renderPatternBar(document, data.patterns, currentIndex, goToPattern);
-  applyWall(document, currentWall(), panelChoices(data));
-  panelChoiceSignature = JSON.stringify(panelChoices(data));
+  applyWall(document, currentWall(), panelOptions);
   renderWallBar(document, data.walls, currentWallIndex, goToWall);
+  showNailNote(document, nailNote(materials, (currentWall() || {}).materialId));
   renderCurrentResult();
 }
 
 function renderCurrentResult() {
-  const pattern = currentPattern();
-  const report =
-    reports.patterns.find((r) => r && r.patternId === pattern.patternId) || null;
-  renderResult(document, report, pattern);
-
   const wall = currentWall();
   renderWallResult(
     document,
@@ -156,42 +139,15 @@ function renderCurrentResult() {
   );
 }
 
-function goToPattern(index) {
-  if (index < 0 || index >= data.patterns.length || index === currentIndex) return;
-  captureCurrentPattern();
-  currentIndex = index;
-  renderCurrent();
-}
-
-function addPattern() {
-  captureCurrentPattern();
-  data.patterns.push(makePattern());
-  currentIndex = data.patterns.length - 1;
-  renderCurrent();
-  scheduleCalculate();
-}
-
-function removePattern() {
-  if (!canRemovePattern(data)) return;
-  const name = patternLabel(currentPattern(), currentIndex);
-  if (!window.confirm(`「${name}」を削除します。よろしいですか？`)) return;
-  data.patterns.splice(currentIndex, 1);
-  currentIndex = indexAfterRemoval(currentIndex, data.patterns.length);
-  renderCurrent();
-  scheduleCalculate();
-}
-
-// --- 壁（グレー本 3.3） -----------------------------------------------------
-
 function goToWall(index) {
   if (index < 0 || index >= data.walls.length || index === currentWallIndex) return;
-  captureCurrentPattern();
+  captureCurrentWall();
   currentWallIndex = index;
   renderCurrent();
 }
 
 function addWall() {
-  captureCurrentPattern();
+  captureCurrentWall();
   data.walls.push(makeWall());
   currentWallIndex = data.walls.length - 1;
   renderCurrent();
@@ -208,21 +164,40 @@ function removeWall() {
   scheduleCalculate();
 }
 
-/** 面材の行を 1 つ増やす（どのパターンを使うかは、そのあと選んでもらう）。 */
+// --- 壁を構成する面材 -------------------------------------------------------
+
+/** 面材を 1 枚増やす（寸法・釘の間隔は、そのあと調整してもらう）。 */
 function addWallPanel() {
   const wall = currentWall();
   if (!wall) return;
-  captureCurrentPattern();
-  wall.panels.push({ patternId: '' });
-  renderCurrent();
+  captureCurrentWall();
+  wall.panels.push(makePanel());
+  renderWallPanels(document, wall.panels, panelOptions);
+  scheduleCalculate();
 }
 
 function removeWallPanel(index) {
   const wall = currentWall();
   if (!wall) return;
-  captureCurrentPattern();
+  captureCurrentWall();
   wall.panels.splice(index, 1);
-  renderCurrent();
+  renderWallPanels(document, wall.panels, panelOptions);
+  scheduleCalculate();
+}
+
+/**
+ * グレー本 表 3.2.1 の標準的な釘配列を、その面材の割り付けへ読み込む。
+ *
+ * 面材寸法・配列の型・間柱ピッチ・釘ピッチ・へりあきが入るので、読み込んだ
+ * あとに実際の設計へ合わせて動かせる。釘座標そのものは計算実装（wasm）が
+ * この割り付けから組み立てる。
+ */
+function loadPreset(index, id) {
+  const wall = currentWall();
+  if (!id || !core || !wall || !wall.panels[index]) return;
+  captureCurrentWall();
+  Object.assign(wall.panels[index], core.preset(id));
+  renderWallPanels(document, wall.panels, panelOptions);
   scheduleCalculate();
 }
 
@@ -231,12 +206,13 @@ function removeWallPanel(index) {
  *
  * 表 3.3.2 の既定の規格（構造用合板なら JAS 1 級）も一緒に入るので、この
  * 1 回でせん断破壊・せん断座屈の検定に要る τmax・E1・E2 までそろう。
+ * へりあきは面材ごとの入力欄で調整する（選んだ釘の呼び径を案内に出す）。
  */
 function loadMaterial(id) {
   const wall = currentWall();
   const material = materials.find((entry) => entry.id === id);
   if (!wall || !material) return;
-  captureCurrentPattern();
+  captureCurrentWall();
   Object.assign(wall, wallFieldsFromMaterial(material));
   renderCurrent();
   scheduleCalculate();
@@ -247,24 +223,8 @@ function loadGrade(id) {
   const wall = currentWall();
   const grade = grades.find((entry) => entry.id === id);
   if (!wall || !grade) return;
-  captureCurrentPattern();
+  captureCurrentWall();
   Object.assign(wall, wallFieldsFromGrade(grade));
-  renderCurrent();
-  scheduleCalculate();
-}
-
-/**
- * グレー本 表 3.2.1 の標準的な釘配列を、今のパターンへ読み込む。
- *
- * 釘座標は計算実装（wasm）が組み立てる。表に載っているのは Ixy・Zxy・Cxy
- * だけなので、そこから配列を起こす規則も計算と同じ場所に置いてある。
- *
- * 解説（図 3.2.2）の計算例もこの一覧の中にある（910×610 横置・川型）ので、
- * 計算例だけを読み込む専用の操作は置いていない。
- */
-function loadPreset(id) {
-  if (!id || !core) return;
-  Object.assign(currentPattern(), core.preset(id));
   renderCurrent();
   scheduleCalculate();
 }
@@ -281,25 +241,16 @@ function calculate() {
   clearTimeout(calculateTimer);
   // 計算実装を受け取る前に打ち込まれた分。読み込めたところで描き直される。
   if (!core) return;
-  captureCurrentPattern();
-  renderPatternBar(document, data.patterns, currentIndex, goToPattern);
+  captureCurrentWall();
+  renderWallBar(document, data.walls, currentWallIndex, goToWall);
   try {
     reports = core.computeAll(toRequestBody(data));
   } catch (error) {
-    // パターン・壁ごとの不備は ok: false として返るので、ここへ来るのは
-    // 入力全体が壊れている場合（数値でない寸法など）。
-    reports = { patterns: [], walls: [] };
+    // 壁ごとの不備は ok: false として返るので、ここへ来るのは入力全体が
+    // 壊れている場合（数値でない寸法など）。
+    reports = { walls: [] };
     showMessage(error.message, 'red');
   }
-  // パターン名を変えると、壁の面材の選択肢の表示も変わる。入力欄そのものは
-  // 書き戻さない（打鍵のたびに value を入れ直すとカーソルが飛ぶ）ので、
-  // 選択肢が変わったときだけ面材の行を描き直す。
-  const signature = JSON.stringify(panelChoices(data));
-  const wall = currentWall();
-  if (wall && signature !== panelChoiceSignature) {
-    renderWallPanels(document, wall.panels, panelChoices(data));
-  }
-  panelChoiceSignature = signature;
   renderCurrentResult();
 }
 
@@ -307,12 +258,27 @@ function calculate() {
 function watchInputs() {
   const form = document.getElementById('calcForm');
   form.addEventListener('input', (event) => {
-    if (event.target.name === 'nailMode') syncNailModeVisibility(document);
+    if (event.target.hasAttribute && event.target.hasAttribute('data-panel-mode')) {
+      syncNailModeVisibility(document);
+    }
     showPanelArea(document);
     scheduleCalculate();
   });
   form.addEventListener('change', (event) => {
-    if (event.target.name === 'nailMode') syncNailModeVisibility(document);
+    const target = event.target;
+    if (target.hasAttribute && target.hasAttribute('data-panel-mode')) {
+      syncNailModeVisibility(document);
+    }
+    const presetIndex = target.getAttribute
+      ? target.getAttribute('data-panel-preset')
+      : null;
+    if (presetIndex !== null) {
+      loadPreset(Number(presetIndex), target.value);
+      // 読み込んだあとは、続けて同じものを選び直せるように戻しておく
+      //（入力欄を手で直したあと、もう一度読み込みたいことがある）。
+      target.value = '';
+      return;
+    }
     scheduleCalculate();
   });
   // 面材の行は数が変わるので、行ごとではなく容器で受ける。
@@ -363,13 +329,13 @@ function setSourceFile(file) {
 
 /** 今の内容を「保存済み」として覚える（以降の変更が未保存の変更になる）。 */
 function markSaved() {
-  captureCurrentPattern();
+  captureCurrentWall();
   savedSignature = formSignature(data);
 }
 
 function hasUnsavedChanges() {
   if (!data) return false;
-  captureCurrentPattern();
+  captureCurrentWall();
   return formSignature(data) !== savedSignature;
 }
 
@@ -388,9 +354,8 @@ async function confirmDiscardChanges(action) {
 async function newDocument() {
   if (!(await confirmDiscardChanges('新規作成'))) return;
   data = emptyFormData();
-  currentIndex = 0;
   currentWallIndex = 0;
-  reports = { patterns: [], walls: [] };
+  reports = { walls: [] };
   documentName = '';
   setSourceFile(null);
   renderCurrent();
@@ -402,9 +367,8 @@ async function newDocument() {
 
 function applyParsed(parsed) {
   data = mergeFormData(parsed);
-  currentIndex = 0;
   currentWallIndex = 0;
-  reports = { patterns: [], walls: [] };
+  reports = { walls: [] };
   documentName = parsed.suggestedFileName || '';
   setSourceFile(parsed.file && parsed.file.id ? parsed.file : null);
   renderCurrent();
@@ -549,20 +513,6 @@ async function start() {
   document.getElementById('uploadInput').addEventListener('change', uploadFile);
   document.getElementById('submitBtn').addEventListener('click', saveCurrent);
   document.getElementById('saveAsBtn').addEventListener('click', () => save('new'));
-  document.getElementById('presetSelect').addEventListener('change', (event) => {
-    loadPreset(event.target.value);
-    // 読み込んだあとは、続けて同じものを選び直せるように戻しておく
-    //（入力欄を手で直したあと、もう一度読み込みたいことがある）。
-    event.target.value = '';
-  });
-  document.getElementById('addPatternBtn').addEventListener('click', addPattern);
-  document.getElementById('removePatternBtn').addEventListener('click', removePattern);
-  document
-    .getElementById('prevBtn')
-    .addEventListener('click', () => goToPattern(currentIndex - 1));
-  document
-    .getElementById('nextBtn')
-    .addEventListener('click', () => goToPattern(currentIndex + 1));
   document.getElementById('addWallBtn').addEventListener('click', addWall);
   document.getElementById('removeWallBtn').addEventListener('click', removeWall);
   document.getElementById('addWallPanelBtn').addEventListener('click', addWallPanel);
@@ -598,9 +548,9 @@ async function start() {
     return;
   }
 
-  // 呼び出せる釘配列（グレー本 表 3.2.1）と、面材と釘の組合せ（同 表 3.3.1）は
-  // どちらも計算実装が持っている。
-  renderPresetOptions(document, core.presets());
+  // 呼び出せる釘配列（グレー本 表 3.2.1）・割り付けの型・面材と釘の組合せ
+  //（同 表 3.3.1）・面材の規格（同 表 3.3.2）は、どれも計算実装が持っている。
+  panelOptions = { presets: core.presets(), arrangements: core.arrangements() };
   materials = core.materials();
   renderMaterialOptions(document, materials);
   grades = core.grades();
@@ -611,6 +561,7 @@ async function start() {
   renderCurrent();
   // 組み立て直後の状態を基準にする（これ以降の入力が「未保存の変更」）。
   markSaved();
+  scheduleCalculate();
 }
 
 start().catch(function (error) {

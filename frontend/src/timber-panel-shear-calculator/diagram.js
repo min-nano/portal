@@ -16,17 +16,13 @@ const MAX_DIMENSION = 460; // 描画領域の長辺の目標サイズ [px]
  * 釘配列図の幾何情報を作る。描けない入力（釘が無い・寸法が 0）なら null。
  *
  * @param {{x:number,y:number}[]} nails 釘座標 [mm]
- * @param {number} width  面材の幅 W [mm]
- * @param {number} height 面材の高さ H [mm]
- * @param {object|null} diagram 計算結果の diagram（範囲・目盛・中立軸）
+ * @param {object|null} diagram 計算結果の diagram（面材寸法・範囲・目盛・中立軸）
  */
-export function buildDiagram(nails, width, height, diagram) {
-  const panelWidth = Number(width) || 0;
-  const panelHeight = Number(height) || 0;
-  if (!(panelWidth > 0) || !(panelHeight > 0) || !nails || nails.length === 0) {
-    return null;
-  }
-  if (!diagram) return null;
+export function buildDiagram(nails, diagram) {
+  if (!diagram || !nails || nails.length === 0) return null;
+  const panelWidth = Number(diagram.panelWidth) || 0;
+  const panelHeight = Number(diagram.panelHeight) || 0;
+  if (!(panelWidth > 0) || !(panelHeight > 0)) return null;
 
   const { minX, maxX, minY, maxY } = diagram;
   const domainWidth = maxX - minX;
