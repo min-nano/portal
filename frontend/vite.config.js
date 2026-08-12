@@ -59,5 +59,18 @@ export default defineConfig(({ mode }) => ({
   },
   test: {
     environment: 'node',
+    coverage: {
+      // 既定では無効。`npm run test:coverage`（= vitest run --coverage）と
+      // CI の Frontend ジョブのときだけ測る。
+      provider: 'v8',
+      // テスト中に読み込まれたファイルだけでなく src/ 全体を対象にする。
+      // 画面の入口（main.js・auth.js など）は単体テストが読み込まないので、
+      // 指定しないと「測っていないファイル」が表から消えて率が高く見える。
+      include: ['src/**/*.js'],
+      // text は CI のログ用、cobertura は PR のカバレッジコメント用
+      // （.github/scripts/coverage.py がこれを読む）。
+      reporter: ['text', 'cobertura'],
+      reportsDirectory: 'coverage',
+    },
   },
 }));
