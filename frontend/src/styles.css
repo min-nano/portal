@@ -118,6 +118,9 @@ button:disabled { background-color: #aaa; }
 .cert-field .field-row { display: flex; align-items: center; gap: 6px; }
 .cert-field .field-row input { flex: 1; }
 .cert-field .unit { font-size: 0.85em; color: #555; white-space: nowrap; }
+/* その選択肢を選んだときだけ入力できる欄（「６ その他」の内容など）。 */
+.cert-field.disabled label, .cert-field.disabled .unit { color: #999; }
+.cert-field.disabled input { background-color: #f0f0f0; color: #999; }
 
 /* 選択肢（証明書上では該当する番号に ○、□ にはレ点が付く）。 */
 .cert-choices { border: 1px solid #e3e3ef; border-radius: 6px; padding: 6px 10px 10px; margin-top: 12px; }
@@ -125,6 +128,8 @@ button:disabled { background-color: #aaa; }
 /* セクションの見出しがそのまま名前になっている選択肢は、囲みを重ねない。 */
 .cert-choices.bare { border: none; padding: 0; margin-top: 2px; }
 .choice-option { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; font-weight: normal; font-size: 0.85em; line-height: 1.4; }
+/* その欄を入力したときだけ選べる選択肢（プログラムの大臣認定など）。 */
+.cert-choices.disabled legend, .cert-choices.disabled .choice-option { color: #999; }
 .choice-option input[type="radio"] { width: auto; margin: 2px 0 0; flex: none; }
 
 /* 保存欄。保存先は「編集中のファイル」か、保存時に Picker で選ぶフォルダ。 */
