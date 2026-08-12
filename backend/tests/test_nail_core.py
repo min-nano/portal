@@ -15,14 +15,15 @@ import pytest
 
 from app import nail_core
 
-# グレー本 3.2【解説】の計算例（図 3.2.2）。
+# グレー本 3.2【解説】の計算例（図 3.2.2）。W 910 × H 610 の横置きで、
+# へりあき 10 mm を見込んだ座標（本は左下の釘を (0, 0) として書いている）。
 EXAMPLE = {
     "patternId": "p1",
-    "width": 610,
-    "height": 910,
+    "width": 910,
+    "height": 610,
     "mode": "grid",
-    "gridX": "0, 445, 890",
-    "gridY": "0, 145, 295, 445, 590",
+    "gridX": "10, 455, 900",
+    "gridY": "10, 155, 305, 455, 600",
 }
 
 
@@ -58,8 +59,33 @@ def test_the_reference_example_matches_the_book():
         "Cxy": "1.26155",
     }
     assert len(report["nails"]) == 15
-    assert report["result"]["x0"] == 445
+    assert report["result"]["x0"] == 455
+    assert report["result"]["y0"] == 305
     assert report["result"]["Ix"] == 657150
+
+
+def test_the_book_table_arrangements_can_be_called_by_id():
+    """グレー本 表 3.2.1 の配列を、画面と同じ手順で呼び出せること。
+
+    表 3.2.1 の全 106 通りと本の値との突き合わせは core/src/presets.rs の
+    `cargo test` にある（計算そのものと同じ場所で検証する）。
+    """
+    presets = nail_core.call({"op": "presets"})["presets"]
+    assert len(presets) == 106
+
+    response = nail_core.call({"op": "preset", "data": {"id": "1820x910-s455-n150-hi"}})
+    assert response["preset"]["label"] == (
+        "1820×910 横置・日型（間柱・根太 @455 / 釘 @150）"
+    )
+    # 横線を含む型は格子で表せないので、座標をそのまま並べる。
+    pattern = response["pattern"]
+    assert pattern["mode"] == "coords"
+    assert len(pattern["coords"].splitlines()) == response["preset"]["nailCount"]
+
+    report = nail_core.call(
+        {"op": "computeAll", "data": {"patterns": [{"patternId": "p1", **pattern}]}}
+    )["patterns"][0]
+    assert report["ok"] is True
 
 
 def test_a_pattern_that_cannot_be_calculated_comes_back_as_a_reason():

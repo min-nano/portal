@@ -75,6 +75,17 @@
           <button type="button" id="exampleBtn" class="secondary">グレー本の計算例を読み込む</button>
         </div>
 
+        <label for="presetSelect">
+          標準的な面材の釘配列（グレー本 表 3.2.1）から読み込む
+        </label>
+        <select id="presetSelect">
+          <option value="">選択すると、このパターンへ読み込みます</option>
+        </select>
+        <p class="hint" id="presetNote">
+          面材寸法・釘座標・パターン名を、選んだ配列で置き換えます。読み込んだあとに
+          編集できます。
+        </p>
+
         <label for="patternName">パターン名（この物件内での識別名）</label>
         <input type="text" id="patternName" placeholder="南面 耐力壁 など">
 

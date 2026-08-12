@@ -545,16 +545,17 @@ mod tests {
     use super::*;
     use crate::json;
 
-    /// グレー本 解説の計算例（図 3.2.2）。
+    /// グレー本 解説の計算例（図 3.2.2）。W 910 × H 610 の横置きで、
+    /// へりあき 10 mm を見込んだ座標（本は左下の釘を (0, 0) として書いている）。
     fn example_pattern() -> Pattern {
         Pattern {
             pattern_id: "p1".to_string(),
             pattern_name: "グレー本の計算例".to_string(),
-            width: 610.0,
-            height: 910.0,
+            width: 910.0,
+            height: 610.0,
             mode: "grid".to_string(),
-            grid_x: "0, 445, 890".to_string(),
-            grid_y: "0, 145, 295, 445, 590".to_string(),
+            grid_x: "10, 455, 900".to_string(),
+            grid_y: "10, 155, 305, 455, 600".to_string(),
             coords: String::new(),
         }
     }
@@ -685,7 +686,9 @@ mod tests {
                 .map(|(_, value)| value.clone())
                 .unwrap()
         };
-        assert_eq!(step("X方向 中立軸 x0"), "445.000 mm");
+        // 本は左下の釘を原点にしているので x0 = 445.0。ここはへりあき
+        // 10 mm を見込んで面材の左下を原点にするため、その分だけ動く。
+        assert_eq!(step("X方向 中立軸 x0"), "455.000 mm");
         assert_eq!(step("二次モーメント Iy"), "1,980,250 mm²");
         assert_eq!(step("変形割合 αx"), "0.750834");
     }
@@ -694,26 +697,39 @@ mod tests {
     fn the_inputs_section_repeats_what_was_typed() {
         let report = compute_pattern(&example_pattern()).unwrap();
         let inputs = labelled(&report, "inputs", "label");
-        assert!(inputs.contains(&("面材寸法 W × H".to_string(), "610 × 910 mm".to_string())));
+        assert!(inputs.contains(&("面材寸法 W × H".to_string(), "910 × 610 mm".to_string())));
         assert!(inputs.contains(&("面材面積 Aw".to_string(), "555,100 mm²".to_string())));
         assert!(inputs.contains(&("釘本数 n".to_string(), "15 本".to_string())));
     }
 
     #[test]
     fn the_diagram_covers_the_panel_and_every_nail() {
-        // 釘（X は 0〜890）が面材の幅 610 からはみ出す例。切り取らずに
-        // 「はみ出していること」が見える範囲を返す。
+        // へりあきを見込んだ配列なので、範囲は面材枠そのもの。
         let report = compute_pattern(&example_pattern()).unwrap();
         let diagram = report.get("diagram").unwrap();
         assert_eq!(diagram.get("minX").unwrap().as_f64(), Some(0.0));
-        assert_eq!(diagram.get("maxX").unwrap().as_f64(), Some(890.0));
-        assert_eq!(diagram.get("maxY").unwrap().as_f64(), Some(910.0));
+        assert_eq!(diagram.get("maxX").unwrap().as_f64(), Some(910.0));
+        assert_eq!(diagram.get("maxY").unwrap().as_f64(), Some(610.0));
         assert_eq!(diagram.get("xTicks").unwrap().as_array().unwrap().len(), 3);
         assert_eq!(diagram.get("yTicks").unwrap().as_array().unwrap().len(), 5);
         assert_eq!(
             diagram.get("axis").unwrap().get("xLabel").unwrap().as_str(),
-            Some("x0 = 445.0")
+            Some("x0 = 455.0")
         );
+    }
+
+    /// 釘が面材からはみ出す配列（入力の打ち間違い）は、切り取らずに
+    /// 「はみ出していること」が見える範囲を返す。
+    #[test]
+    fn the_diagram_does_not_clip_nails_outside_the_panel() {
+        let pattern = Pattern {
+            width: 610.0,
+            grid_x: "0, 445, 890".to_string(),
+            ..example_pattern()
+        };
+        let report = compute_pattern(&pattern).unwrap();
+        let diagram = report.get("diagram").unwrap();
+        assert_eq!(diagram.get("maxX").unwrap().as_f64(), Some(890.0));
     }
 
     /// 計算できない理由は、式の言葉ではなく入力欄の言葉で伝える。

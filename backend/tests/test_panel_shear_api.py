@@ -57,7 +57,7 @@ def test_config_carries_the_reference_example(client):
     body = resp.json()
     assert body["default_file_name"] == "釘配列諸定数計算書.pdf"
     # 画面の「グレー本の計算例を読み込む」はサーバ側の定義を使う。
-    assert body["example"]["gridX"] == "0, 445, 890"
+    assert body["example"]["gridX"] == "10, 455, 900"
 
 
 def test_config_points_at_the_calculation_core(client):
@@ -187,7 +187,7 @@ def test_created_report_can_be_read_back(client, folder):
 
     parsed = panel_shear.parse_pdf(folder.created[0][2])
     assert parsed["projectName"] == "○○邸 新築工事"
-    assert parsed["patterns"][0]["gridY"] == "0, 145, 295, 445, 590"
+    assert parsed["patterns"][0]["gridY"] == "10, 155, 305, 455, 600"
 
 
 def test_create_report_overwrites_with_version_history(client, drive):
@@ -248,7 +248,7 @@ def test_save_rejects_a_destination_that_is_not_a_folder(client, drive):
 
 def test_save_rejects_a_pattern_that_cannot_be_calculated(client, folder):
     """計算できないパターンを含んだまま保存させない（名前で場所を伝える）。"""
-    broken = {"patternId": "p2", "patternName": "南面", "width": 610, "height": 910}
+    broken = {"patternId": "p2", "patternName": "南面", "width": 910, "height": 610}
 
     resp = client.post(REPORTS_URL, json=valid_body(patterns=[dict(EXAMPLE), broken]))
 
@@ -311,7 +311,7 @@ def test_parse_drive_report_returns_the_overwrite_target(client, drive):
     assert resp.status_code == 200
     body = resp.json()
     assert body["file"] == {"id": "pdf-1", "name": "釘配列諸定数計算書.pdf"}
-    assert body["patterns"][0]["gridX"] == "0, 445, 890"
+    assert body["patterns"][0]["gridX"] == "10, 455, 900"
     # 読み込みは読み取り専用の代理で足りる。
     assert drive.delegated_emails == [TEST_EMAIL]
     assert drive.write_emails == []

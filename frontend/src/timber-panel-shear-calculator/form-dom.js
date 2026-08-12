@@ -44,6 +44,38 @@ export function applyPattern(root, pattern) {
   showPanelArea(root);
 }
 
+/**
+ * グレー本 表 3.2.1 の釘配列を、選べる一覧にする。
+ *
+ * 一覧は計算実装（wasm）が配るものをそのまま並べる。面材寸法とピッチが同じ
+ * ものを 1 つのまとまりにして、その中を型（川型・山型・ロ型・日型）で選ぶ。
+ */
+export function renderPresetOptions(root, presets) {
+  const select = element(root, 'presetSelect');
+  const document_ = select.ownerDocument;
+  // 先頭の「選択すると…」だけ残して組み立て直す。
+  while (select.options.length > 1) select.remove(1);
+
+  let group = null;
+  let groupLabel = '';
+  presets.forEach((preset) => {
+    const label =
+      `${preset.sizeLabel} ${preset.orientation}` +
+      `（間柱・根太 @${preset.studPitch} / 釘 @${preset.nailPitch}）`;
+    if (label !== groupLabel) {
+      groupLabel = label;
+      group = document_.createElement('optgroup');
+      group.label = label;
+      select.appendChild(group);
+    }
+    const option = document_.createElement('option');
+    option.value = preset.id;
+    option.textContent = `${preset.arrangementLabel}（釘 ${preset.nailCount} 本）`;
+    option.title = preset.arrangementNote;
+    group.appendChild(option);
+  });
+}
+
 /** 選ばれている入力方式に応じて、格子／座標の入力欄を出し分ける。 */
 export function syncNailModeVisibility(root) {
   const checked = root.querySelector('input[name="nailMode"]:checked');

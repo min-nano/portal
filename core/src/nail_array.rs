@@ -263,11 +263,16 @@ mod tests {
     use super::*;
 
     // グレー本 3.2【解説】の計算例（図 3.2.2）。
-    //   釘: X ∈ {0, 445, 890}, Y ∈ {0, 145, 295, 445, 590} の格子（15 本）
-    //   面材: 610 × 910 = 555100 mm²
-    const EXAMPLE_XS: [f64; 3] = [0.0, 445.0, 890.0];
-    const EXAMPLE_YS: [f64; 5] = [0.0, 145.0, 295.0, 445.0, 590.0];
-    const EXAMPLE_AREA: f64 = 610.0 * 910.0;
+    //   面材: W 910 × H 610 = 555100 mm²（横置き。長辺が横）
+    //   釘: X ∈ {10, 455, 900}, Y ∈ {10, 155, 305, 455, 600} の格子（15 本）
+    //
+    // 本は左下の釘を (0, 0) として 890 × 590 の広がりで書いているが、ここでは
+    // へりあき 10 mm を見込んで面材の左下を原点にする（釘が面材の内側に収まり、
+    // 釘配列図がそのまま描ける）。平行移動なので Ix・Iy・Zxy・Cxy は変わらず、
+    // 弾性中立軸だけが x0 = 455、y0 = 305 へ動く。
+    const EXAMPLE_XS: [f64; 3] = [10.0, 455.0, 900.0];
+    const EXAMPLE_YS: [f64; 5] = [10.0, 155.0, 305.0, 455.0, 600.0];
+    const EXAMPLE_AREA: f64 = 910.0 * 610.0;
 
     fn example() -> Constants {
         let nails = build_rectangular_grid(&EXAMPLE_XS, &EXAMPLE_YS);
@@ -293,8 +298,8 @@ mod tests {
     #[test]
     fn example_neutral_axis() {
         let example = example();
-        assert_eq!(example.x0, 445.0);
-        assert_eq!(example.y0, 295.0);
+        assert_eq!(example.x0, 455.0);
+        assert_eq!(example.y0, 305.0);
     }
 
     #[test]
@@ -358,8 +363,8 @@ mod tests {
 
     #[test]
     fn neutral_axis_position_is_the_arithmetic_mean() {
-        assert_eq!(neutral_axis_position(&EXAMPLE_XS).unwrap(), 445.0);
-        assert_eq!(neutral_axis_position(&EXAMPLE_YS).unwrap(), 295.0);
+        assert_eq!(neutral_axis_position(&EXAMPLE_XS).unwrap(), 455.0);
+        assert_eq!(neutral_axis_position(&EXAMPLE_YS).unwrap(), 305.0);
     }
 
     /// 重複座標（本数の重み）を正しく反映する: (0+0+300)/3 = 100。
@@ -382,13 +387,13 @@ mod tests {
     #[test]
     fn second_moment_reproduces_the_example_ix() {
         let ys: Vec<f64> = EXAMPLE_YS.iter().chain(&EXAMPLE_YS).chain(&EXAMPLE_YS).copied().collect();
-        assert_eq!(second_moment_of_nail_array(&ys, 295.0), 657150.0);
+        assert_eq!(second_moment_of_nail_array(&ys, 305.0), 657150.0);
     }
 
     #[test]
     fn max_distance_from_the_axis() {
-        assert_eq!(max_distance_from_axis(&EXAMPLE_YS, 295.0), 295.0);
-        assert_eq!(max_distance_from_axis(&EXAMPLE_XS, 445.0), 445.0);
+        assert_eq!(max_distance_from_axis(&EXAMPLE_YS, 305.0), 295.0);
+        assert_eq!(max_distance_from_axis(&EXAMPLE_XS, 455.0), 445.0);
         assert_eq!(max_distance_from_axis(&[], 0.0), 0.0);
     }
 
@@ -444,7 +449,7 @@ mod tests {
         let nails = build_rectangular_grid(&EXAMPLE_XS, &EXAMPLE_YS);
         let alpha_x = deformation_ratio_x(657150.0, 1980250.0).unwrap();
         close(
-            plastic_unit_arrangement_coefficient(&nails, 445.0, 295.0, alpha_x, 555100.0),
+            plastic_unit_arrangement_coefficient(&nails, 455.0, 305.0, alpha_x, 555100.0),
             0.0045,
             1e-4,
         );
@@ -469,8 +474,8 @@ mod tests {
     fn rectangular_grid_is_every_combination() {
         let nails = build_rectangular_grid(&EXAMPLE_XS, &EXAMPLE_YS);
         assert_eq!(nails.len(), 15);
-        assert_eq!(nails[0], Nail { x: 0.0, y: 0.0 });
-        assert_eq!(nails[14], Nail { x: 890.0, y: 590.0 });
+        assert_eq!(nails[0], Nail { x: 10.0, y: 10.0 });
+        assert_eq!(nails[14], Nail { x: 900.0, y: 600.0 });
     }
 
     // --- 3. 入力検証・エッジケース --------------------------------------------

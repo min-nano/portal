@@ -9,6 +9,7 @@ import {
   applyPattern,
   readPattern,
   renderPatternBar,
+  renderPresetOptions,
   renderResult,
   showPanelArea,
 } from '../src/timber-panel-shear-calculator/form-dom.js';
@@ -16,6 +17,7 @@ import {
 // tools/timber-panel-shear-calculator/index.html の、この関数群が触る部分。
 const MARKUP = `
   <form id="calcForm">
+    <select id="presetSelect"><option value="">選択すると…</option></select>
     <input type="text" id="patternName">
     <input type="number" id="patternWidth">
     <input type="number" id="patternHeight">
@@ -43,11 +45,11 @@ const MARKUP = `
 const PATTERN = {
   patternId: 'p1',
   patternName: 'グレー本の計算例',
-  width: 610,
-  height: 910,
+  width: 910,
+  height: 610,
   mode: 'grid',
-  gridX: '0, 445, 890',
-  gridY: '0, 145, 295, 445, 590',
+  gridX: '10, 455, 900',
+  gridY: '10, 155, 305, 455, 600',
   coords: '',
 };
 
@@ -56,27 +58,27 @@ const REPORT = {
   ok: true,
   patternId: 'p1',
   nails: [
-    { x: 0, y: 0 },
-    { x: 445, y: 295 },
-    { x: 890, y: 590 },
+    { x: 10, y: 10 },
+    { x: 455, y: 305 },
+    { x: 900, y: 600 },
   ],
-  result: { x0: 445, y0: 295 },
+  result: { x0: 455, y0: 305 },
   diagram: {
     minX: 0,
-    maxX: 890,
+    maxX: 910,
     minY: 0,
-    maxY: 910,
+    maxY: 610,
     xTicks: [
-      { value: 0, label: '0' },
-      { value: 445, label: '445' },
-      { value: 890, label: '890' },
+      { value: 10, label: '10' },
+      { value: 455, label: '455' },
+      { value: 900, label: '900' },
     ],
     yTicks: [
-      { value: 0, label: '0' },
-      { value: 295, label: '295' },
-      { value: 590, label: '590' },
+      { value: 10, label: '10' },
+      { value: 305, label: '305' },
+      { value: 600, label: '600' },
     ],
-    axis: { x0: 445, y0: 295, xLabel: 'x0 = 445.0', yLabel: 'y0 = 295.0' },
+    axis: { x0: 455, y0: 305, xLabel: 'x0 = 455.0', yLabel: 'y0 = 305.0' },
   },
   summary: [
     { key: 'Ixy', unit: 'mm²/mm²', value: '0.888868' },
@@ -107,7 +109,7 @@ describe('applyPattern / readPattern', () => {
     expect(document.getElementById('gridInputs').hidden).toBe(false);
     expect(document.getElementById('coordsInputs').hidden).toBe(true);
 
-    applyPattern(document, { ...PATTERN, mode: 'coords', coords: '0, 0' });
+    applyPattern(document, { ...PATTERN, mode: 'coords', coords: '10, 10' });
     expect(document.getElementById('gridInputs').hidden).toBe(true);
     expect(document.getElementById('coordsInputs').hidden).toBe(false);
     expect(readPattern(document).mode).toBe('coords');
@@ -120,6 +122,66 @@ describe('applyPattern / readPattern', () => {
     document.getElementById('patternWidth').value = '';
     showPanelArea(document);
     expect(document.getElementById('panelArea').textContent).toBe('-');
+  });
+});
+
+// 計算実装（wasm）が配る一覧の形（グレー本 表 3.2.1）。
+const PRESETS = [
+  {
+    id: '910x610-s455-n150-kawa',
+    sizeLabel: '910×610',
+    orientation: '横置',
+    arrangementLabel: '川型',
+    arrangementNote: '面材の左右の端と間柱に釘を打つ',
+    studPitch: 455,
+    nailPitch: 150,
+    nailCount: 15,
+  },
+  {
+    id: '910x610-s455-n150-hi',
+    sizeLabel: '910×610',
+    orientation: '横置',
+    arrangementLabel: '日型',
+    arrangementNote: '川型に加えて、上下端の横架材にも釘を打つ',
+    studPitch: 455,
+    nailPitch: 150,
+    nailCount: 23,
+  },
+  {
+    id: '910x610-s455-n100-kawa',
+    sizeLabel: '910×610',
+    orientation: '横置',
+    arrangementLabel: '川型',
+    arrangementNote: '面材の左右の端と間柱に釘を打つ',
+    studPitch: 455,
+    nailPitch: 100,
+    nailCount: 21,
+  },
+];
+
+describe('renderPresetOptions', () => {
+  it('面材寸法とピッチごとにまとめ、型を選べるようにする', () => {
+    renderPresetOptions(document, PRESETS);
+
+    const groups = [...document.querySelectorAll('#presetSelect optgroup')];
+    expect(groups.map((g) => g.label)).toEqual([
+      '910×610 横置（間柱・根太 @455 / 釘 @150）',
+      '910×610 横置（間柱・根太 @455 / 釘 @100）',
+    ]);
+    expect([...groups[0].children].map((o) => o.textContent)).toEqual([
+      '川型（釘 15 本）',
+      '日型（釘 23 本）',
+    ]);
+    expect(groups[0].children[0].value).toBe('910x610-s455-n150-kawa');
+  });
+
+  it('「選択すると…」の 1 行は残し、描き直しても増やさない', () => {
+    renderPresetOptions(document, PRESETS);
+    renderPresetOptions(document, PRESETS);
+
+    const select = document.getElementById('presetSelect');
+    expect(select.options[0].value).toBe('');
+    expect(select.options).toHaveLength(1 + PRESETS.length);
   });
 });
 

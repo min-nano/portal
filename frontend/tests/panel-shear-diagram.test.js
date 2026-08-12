@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { buildDiagram } from '../src/timber-panel-shear-calculator/diagram.js';
 
-// グレー本 解説の計算例（図 3.2.2）。X の 890 は面材の幅 610 をはみ出す。
+// 釘が面材からはみ出した配列（幅 610 に対して X が 890 まである）。
+// 入力の打ち間違いでも図が壊れないことを確かめるための、意図的な例。
 const NAILS = [
   { x: 0, y: 0 },
   { x: 0, y: 590 },
