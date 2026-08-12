@@ -171,13 +171,20 @@ jobs:
         # ここを省くと、Hosting のリライト先が届かない（403 など）状態でも
         # ジョブは成功し、URL を貼られた人が初めて気付くことになる。
         # /api/healthz は認証不要なので、200 ならリライトが機能している。
+        #
+        # チャンネルへデプロイした直後は、リライトが CDN へ行き渡るまで
+        # /api/** が 404 を返すことがある。この待ちは秒単位から数分までばらつく
+        # ので、待ち time を 3 分ほど取る（以前は 50 秒で、反映が遅い回だけ
+        # 落ちて再実行で通る、という当たり外れになっていた）。届かないまま
+        # 3 分が過ぎるのは設定が違っているときなので、そこで初めて落とす。
         run: |
           url='${{ steps.deploy.outputs.url }}/api/healthz'
-          for attempt in 1 2 3 4 5; do
+          attempts=18
+          for attempt in $(seq 1 "$attempts"); do
             code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$url" || echo 000)"
-            [ "$code" = "200" ] && { echo "疎通確認 OK: $url"; exit 0; }
-            echo "試行 $attempt: HTTP $code（チャンネルの反映待ちの可能性あり）"
-            sleep 10
+            [ "$code" = "200" ] && { echo "疎通確認 OK: $url（試行 $attempt）"; exit 0; }
+            echo "試行 $attempt/$attempts: HTTP $code（チャンネルの反映待ちの可能性あり）"
+            [ "$attempt" -lt "$attempts" ] && sleep 10
           done
           echo "::error::プレビューの /api/** がバックエンドに届いていません（最後の応答: HTTP $code）。$url"
           exit 1
