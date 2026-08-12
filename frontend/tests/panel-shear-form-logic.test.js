@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canRemoveWall,
+  capturePanel,
   defaultSaveName,
   emptyFormData,
   formSignature,
@@ -86,6 +87,37 @@ describe('emptyFormData / makeWall / makePanel', () => {
   it('壁 ID・面材 ID は重複しない（PDF に埋め込まれ、読み込み後も使う）', () => {
     expect(new Set([makeWall().wallId, makeWall().wallId]).size).toBe(2);
     expect(new Set([makePanel().panelId, makePanel().panelId]).size).toBe(2);
+  });
+});
+
+describe('capturePanel', () => {
+  it('書き戻したあとの面材を返す（先に取り出した面材は捨てられる）', () => {
+    const wall = makeWall({ panels: [makePanel({ panelName: '下段' })] });
+    // 入力欄から読み直した内容。面材はオブジェクトごと作り直される。
+    const captured = {
+      wallName: '南面',
+      panels: [{ ...wall.panels[0], panelName: '下段（入力中）' }],
+    };
+    const stale = wall.panels[0];
+
+    const panel = capturePanel(wall, captured, 0);
+
+    expect(wall.wallName).toBe('南面');
+    // 書き換えてよいのは、書き戻したあとの面材のほう。
+    expect(panel).toBe(wall.panels[0]);
+    expect(panel).not.toBe(stale);
+    expect(panel.panelName).toBe('下段（入力中）');
+    panel.gradeId = 'plywood-jas2';
+    expect(wall.panels[0].gradeId).toBe('plywood-jas2');
+  });
+
+  it('面材を指していなければ null（書き戻しだけを行う）', () => {
+    const wall = makeWall();
+    const captured = { wallName: '南面', panels: [] };
+
+    expect(capturePanel(wall, captured, undefined)).toBe(null);
+    expect(capturePanel(wall, captured, 3)).toBe(null);
+    expect(wall.wallName).toBe('南面');
   });
 });
 

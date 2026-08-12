@@ -52,6 +52,7 @@ import {
 } from './form-dom.js';
 import {
   canRemoveWall,
+  capturePanel,
   defaultSaveName,
   emptyFormData,
   formSignature,
@@ -118,12 +119,19 @@ function currentWall() {
   return data.walls[currentWallIndex] || null;
 }
 
-/** 入力欄の内容を、編集中の壁へ書き戻す。 */
-function captureCurrentWall() {
+/**
+ * 入力欄の内容を、編集中の壁へ書き戻す。
+ *
+ * 書き戻すと面材はオブジェクトごと作り直されるので、1 枚を書き換えたい
+ * ときは panelIndex を渡して **その面材を戻り値で受け取る**（先に取り出して
+ * おいた面材へ書き換えても、この書き戻しで捨てられる）。
+ */
+function captureCurrentWall(panelIndex) {
   const wall = currentWall();
-  if (wall) Object.assign(wall, readWall(document));
+  const panel = wall ? capturePanel(wall, readWall(document), panelIndex) : null;
   data.projectName = document.getElementById('projectName').value.trim();
   data.issuedOn = document.getElementById('issuedOn').value;
+  return panel;
 }
 
 /** 編集中の壁を入力欄へ写し、タブと計算結果を描き直す。 */
@@ -195,9 +203,7 @@ function addWallPanel() {
       edgeDistance: minimumEdgeDistance(materials, spec.materialId),
     })
   );
-  renderWallPanels(document, wall.panels, panelOptions);
-  showPanelNotes();
-  scheduleCalculate();
+  redrawPanels();
 }
 
 function removeWallPanel(index) {
@@ -205,9 +211,7 @@ function removeWallPanel(index) {
   if (!wall) return;
   captureCurrentWall();
   wall.panels.splice(index, 1);
-  renderWallPanels(document, wall.panels, panelOptions);
-  showPanelNotes();
-  scheduleCalculate();
+  redrawPanels();
 }
 
 /**
@@ -218,17 +222,14 @@ function removeWallPanel(index) {
  * この割り付けから組み立てる。
  */
 function loadPreset(index, id) {
-  const wall = currentWall();
-  const panel = wall && wall.panels[index];
-  if (!id || !core || !panel) return;
-  captureCurrentWall();
+  if (!id || !core) return;
+  const panel = captureCurrentWall(index);
+  if (!panel) return;
   Object.assign(panel, core.preset(id));
   // 表 3.2.1 の配列はへりあき 10 mm が前提なので、この面材の釘で必要な値に
   // 足りなければ引き上げる（適用範囲 3.3(1)④）。
   raiseEdgeDistance([panel], minimumEdgeDistance(materials, panel.materialId));
-  renderWallPanels(document, wall.panels, panelOptions);
-  showPanelNotes();
-  scheduleCalculate();
+  redrawPanels();
 }
 
 /**
@@ -239,11 +240,9 @@ function loadPreset(index, id) {
  * 読み込むのは選んだ面材 1 枚だけ（面材ごとに違う組合せを使えるため）。
  */
 function loadMaterial(index, id) {
-  const wall = currentWall();
-  const panel = wall && wall.panels[index];
-  if (!panel) return;
-  captureCurrentWall();
+  const panel = captureCurrentWall(index);
   const material = materials.find((entry) => entry.id === id);
+  if (!panel) return;
   if (material) {
     Object.assign(panel, panelFieldsFromMaterial(material));
     // 釘が変われば必要なへりあきも変わる（3.3(1)④）。足りなければ最小値まで
@@ -252,19 +251,22 @@ function loadMaterial(index, id) {
   }
   // 一覧の先頭（案内の行）へ戻したときは、読み込んだ跡だけが消えて数値は
   // 残る（4.5 の試験値として、そのまま手で直して使えるように）。
-  renderWallPanels(document, wall.panels, panelOptions);
-  showPanelNotes();
-  scheduleCalculate();
+  redrawPanels();
 }
 
 /** グレー本 表 3.3.2 の面材の規格を、その面材の入力欄へ読み込む。 */
 function loadGrade(index, id) {
-  const wall = currentWall();
-  const panel = wall && wall.panels[index];
-  if (!panel) return;
-  captureCurrentWall();
+  const panel = captureCurrentWall(index);
   const grade = grades.find((entry) => entry.id === id);
+  if (!panel) return;
   if (grade) Object.assign(panel, panelFieldsFromGrade(grade));
+  redrawPanels();
+}
+
+/** 面材の入力欄を描き直して、計算し直す（面材を書き換えたあとの後始末）。 */
+function redrawPanels() {
+  const wall = currentWall();
+  if (!wall) return;
   renderWallPanels(document, wall.panels, panelOptions);
   showPanelNotes();
   scheduleCalculate();

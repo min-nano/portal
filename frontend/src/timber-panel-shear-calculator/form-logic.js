@@ -119,6 +119,18 @@ export function makeWall(overrides) {
 }
 
 /**
+ * 入力欄から読み直した内容を壁へ書き戻し、index の面材を返す。
+ *
+ * 書き戻すと面材はオブジェクトごと作り直される。書き換えたい面材を先に
+ * 取り出しておくと、書き戻しで作り直されたほうが残って書き換えが捨てられる
+ * ので、**書き換える面材はこの関数から受け取る**。index が無ければ null。
+ */
+export function capturePanel(wall, captured, index) {
+  Object.assign(wall, captured);
+  return (wall.panels || [])[index] || null;
+}
+
+/**
  * 面材と釘の仕様だけを取り出す（面材を足すときに前の面材から引き継ぐ）。
  *
  * 1 枚の壁で仕様を張り分けられるが、実際には同じ仕様で張ることのほうが
