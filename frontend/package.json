@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@clerk/clerk-js": "^6.27.0",
@@ -14,6 +15,7 @@
     "@clerk/ui": "^1.29.1"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.10",
     "jsdom": "^30.0.1",
     "vite": "^8.2.0",
     "vitest": "^4.1.10"

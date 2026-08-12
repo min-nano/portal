@@ -160,9 +160,10 @@ firestore/                    # Firestore セキュリティルールとその�
   tests/rules.test.js         # エミュレータでルールを検証
 firebase.json                 # Hosting 設定（/api/** → Cloud Run リライト）・Firestore ルールの参照
 .github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml・preview-cleanup.yml（PR プレビュー）
-.github/scripts/              # ワークフロー間で共有するシェルスクリプト
+.github/scripts/              # ワークフロー間で共有するスクリプト
   require-vars.sh             # 必須のリポジトリ変数が空でないことの確認
   clerk-issuer.sh             # Publishable Key から CLERK_ISSUER を導出
+  coverage.py                 # カバレッジ XML のパス正規化と集計（テストのカバレッジ）
 ```
 
 ## ⚙️ セットアップ
@@ -588,6 +589,32 @@ cd frontend && npm test
 # （エミュレータを自動起動する。要 Java ランタイム）
 cd firestore && npm ci && npm test
 ```
+
+### カバレッジ
+
+CI はテストを走らせるついでにカバレッジを測り、PR に貼り替え式のコメントとして 1 枚の表を出します（外部サービスは使わず GitHub Actions の中だけで完結します）。計測はテストの実行に相乗りするので、テストが 2 度走ることはありません。
+
+| スイート | 計測 | 出力 |
+| --- | --- | --- |
+| Core（Rust） | `cargo llvm-cov`（cargo-llvm-cov） | `core/coverage.xml` |
+| Backend（Python） | `pytest --cov`（pytest-cov） | `backend/coverage.xml` |
+| Frontend（JS） | `vitest --coverage`（@vitest/coverage-v8。設定は `frontend/vite.config.js`） | `frontend/coverage/cobertura-coverage.xml` |
+
+手元で測るときは、いつものテストのコマンドに次を足します。
+
+```bash
+cd core     && cargo llvm-cov --summary-only   # 要 cargo-llvm-cov（cargo install cargo-llvm-cov）
+cd backend  && python -m pytest --cov=app --cov-branch --cov-report=term-missing
+cd frontend && npm run test:coverage
+```
+
+3 つの道具はどれも Cobertura XML を出せますが、**書かれるファイルパスの基準がばらばら**（`src/report.rs` / `main.py` / `src/api.js`）なので、そのままでは 1 つの表にまとめられません。`.github/scripts/coverage.py` がそれをリポジトリのルート基準（`core/src/report.rs` 等）に直し（`normalize`）、まとめて数えます（`summary`）。パスが揃っているおかげで、**この PR が変えた行だけのカバレッジ**（diff-cover）も 3 スイートまたいで 1 回で出せます。
+
+`tests.yml` の `coverage` ジョブはこの集計を表にして貼るだけで、ビルドもテストもしません。したがって **`coverage` の赤はしきい値割れ（表の 🔴）** であって、テストの失敗ではありません（テストの赤は各スイートのジョブに出ます）。しきい値はジョブ内の `THRESHOLDS` 1 か所にまとまっていて、`yellow` が「割ったら落とす下限」、`green` が「目指す水準」です。
+
+- 画面（Frontend）の下限が低いのは、ブラウザの入口（各ツールの `main.js`・`auth.js`・`api.js` など）を単体テストが読み込まないためです。ロジックは `form-logic.js` / `form-dom.js` 側に寄せてあり、そちらはほぼ 100% 覆われています。**入口の配線だけを変える PR は差分カバレッジ（`Diff`）が落ちて赤くなり得ます**——その場合はテストを足すか、`THRESHOLDS.diff` を見直してください。
+- Firestore ルールのテストはエミュレータ上でのルール評価なので行カバレッジという概念がなく、表には含めていません。
+- 分岐（Branches）は参考値（常に ⚪）です。Rust の計測に分岐の情報が無く、スイートをまたぐと意味の違う数が混ざるためです。
 
 ## 🗺 セルマッピング (`backend/app/mapping.json`)
 

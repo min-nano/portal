@@ -14,6 +14,16 @@ __pycache__/
 .venv/
 .pytest_cache/
 
+# カバレッジ計測の出力。CI はテストを走らせたジョブで作り、成果物として
+# 持ち出す（リポジトリには残さない）。手元で測ったときも同じ場所に出る。
+.coverage
+core/coverage.xml
+backend/coverage.xml
+frontend/coverage/
+coverage-*.xml
+coverage-summary.json
+diff-cover.json
+
 # ローカル設定・秘密情報
 .env
 .env.local
