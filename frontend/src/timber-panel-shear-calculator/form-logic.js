@@ -9,6 +9,10 @@
 // 入力として中に入る。実際の設計では面材の種類と釘が先に決まっていて、面材の
 // 配置・釘の間隔・へりあきで調整するため。
 //
+// 面材と釘の仕様も面材ごとの入力で、1 枚の壁の中で混在してよい（上半分は
+// N50、下半分は CN50 のような張り分け）。壁が持つのは階高・幅と中間材の
+// 有無だけ。
+//
 // 「保存 / 別名で保存 / 未保存の確認」といったファイル操作の判断と文言は、
 // 構造計算安全証明書 作成ツールと共通なので ../pdf-file-ops.js にある。
 
@@ -48,17 +52,37 @@ export function newPanelId() {
   return `pn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** 面材と釘の仕様の欄（面材ごとの入力）。空＝まだ決めていない。 */
+export const EMPTY_SPEC = {
+  materialId: '',
+  thickness: '',
+  shearModulus: '',
+  k: '',
+  deltaV: '',
+  deltaU: '',
+  deltaPv: '',
+  gradeId: '',
+  tauMax: '',
+  e1: '',
+  e2: '',
+};
+
 /**
  * 新しい面材（壁を構成する 1 枚）を作る。
  *
- * 既定は「割り付け・日型（四周打ち）」。面材張り大壁は適用範囲 3.3(1)⑤ で
- * 面材の四周を釘打ちすると定められているため。
+ * 既定の釘配列は「割り付け・日型（四周打ち）」。面材張り大壁は適用範囲
+ * 3.3(1)⑤ で面材の四周を釘打ちすると定められているため。
+ *
+ * 面材と釘の数値は空のままにしておき、表 3.3.1 の一覧から読み込むか、
+ * 4.5 の試験で得た値を直接入力してもらう（既定値を入れておくと、確かめない
+ * まま計算してしまうため）。
  */
 export function makePanel(overrides) {
   panelSequence += 1;
   return {
     panelId: newPanelId(),
     panelName: `面材${panelSequence}`,
+    ...EMPTY_SPEC,
     width: DEFAULT_PANEL_WIDTH,
     height: DEFAULT_PANEL_HEIGHT,
     mode: 'layout',
@@ -77,9 +101,8 @@ export function makePanel(overrides) {
 /**
  * 新しい壁（面材張り大壁 1 枚分の入力）を作る。
  *
- * 面材と釘の数値は空のままにしておき、表 3.3.1 の一覧から読み込むか、
- * 4.5 の試験で得た値を直接入力してもらう（既定値を入れておくと、確かめない
- * まま計算してしまうため）。面材は 1 枚から始める。
+ * 面材と釘の仕様は面材ごとの入力なので、壁が持つのは階高・幅と中間材の
+ * 有無だけ。面材は 1 枚から始める。
  */
 export function makeWall(overrides) {
   wallSequence += 1;
@@ -88,17 +111,6 @@ export function makeWall(overrides) {
     wallName: `壁${wallSequence}`,
     height: DEFAULT_WALL_HEIGHT,
     width: DEFAULT_WALL_WIDTH,
-    materialId: '',
-    thickness: '',
-    shearModulus: '',
-    k: '',
-    deltaV: '',
-    deltaU: '',
-    deltaPv: '',
-    gradeId: '',
-    tauMax: '',
-    e1: '',
-    e2: '',
     // 適用範囲 3.3(1)⑦ は中間材（間柱等）を求めているので、既定は「あり」。
     hasIntermediateStud: true,
     panels: [makePanel()],
@@ -107,12 +119,26 @@ export function makeWall(overrides) {
 }
 
 /**
- * 表 3.3.1 の 1 行を、壁の入力欄へ入れる形にする。
+ * 面材と釘の仕様だけを取り出す（面材を足すときに前の面材から引き継ぐ）。
+ *
+ * 1 枚の壁で仕様を張り分けられるが、実際には同じ仕様で張ることのほうが
+ * 多いので、面材を足したときは直前の面材の仕様を初期値にする。
+ */
+export function specOf(panel) {
+  const spec = {};
+  Object.keys(EMPTY_SPEC).forEach((key) => {
+    spec[key] = (panel || {})[key] === undefined ? '' : panel[key];
+  });
+  return spec;
+}
+
+/**
+ * 表 3.3.1 の 1 行を、面材の入力欄へ入れる形にする。
  *
  * 表 3.3.2 の既定の規格（構造用合板なら JAS 1 級）も一緒に入るので、これ
  * 1 回の選択で面材のせん断破壊・せん断座屈の検定まで数値がそろう。
  */
-export function wallFieldsFromMaterial(material) {
+export function panelFieldsFromMaterial(material) {
   return {
     materialId: material.id,
     thickness: material.thickness,
@@ -121,7 +147,7 @@ export function wallFieldsFromMaterial(material) {
     deltaV: material.deltaV,
     deltaU: material.deltaU,
     deltaPv: material.deltaPv,
-    ...wallFieldsFromGrade({
+    ...panelFieldsFromGrade({
       id: material.gradeId,
       tauMax: material.tauMax,
       e1: material.e1,
@@ -130,8 +156,8 @@ export function wallFieldsFromMaterial(material) {
   };
 }
 
-/** 表 3.3.2 の 1 行（面材の規格）を、壁の入力欄へ入れる形にする。 */
-export function wallFieldsFromGrade(grade) {
+/** 表 3.3.2 の 1 行（面材の規格）を、面材の入力欄へ入れる形にする。 */
+export function panelFieldsFromGrade(grade) {
   return {
     gradeId: grade.id,
     tauMax: grade.tauMax,
@@ -225,22 +251,25 @@ export function mergeFormData(parsed) {
       wallName: String(wall.wallName || '') || `壁${index + 1}`,
       height: Number(wall.height) || 0,
       width: Number(wall.width) || 0,
-      materialId: String(wall.materialId || ''),
-      thickness: Number(wall.thickness) || 0,
-      shearModulus: Number(wall.shearModulus) || 0,
-      k: Number(wall.k) || 0,
-      deltaV: Number(wall.deltaV) || 0,
-      deltaU: Number(wall.deltaU) || 0,
-      deltaPv: Number(wall.deltaPv) || 0,
-      gradeId: String(wall.gradeId || ''),
-      tauMax: Number(wall.tauMax) || 0,
-      e1: Number(wall.e1) || 0,
-      e2: Number(wall.e2) || 0,
       hasIntermediateStud: wall.hasIntermediateStud !== false,
       panels: (Array.isArray(wall.panels) ? wall.panels : []).map((panel, position) =>
         makePanel({
           panelId: String(panel.panelId || '') || newPanelId(),
           panelName: String(panel.panelName || '') || `面材${position + 1}`,
+          // 面材と釘の仕様は面材ごと。壁が 1 組だけ持っていた版の入力は
+          // 計算実装（wasm）が読み込みの時点で面材へ配り終えているので、
+          // ここでは面材の側だけを読む。
+          materialId: String(panel.materialId || ''),
+          thickness: Number(panel.thickness) || 0,
+          shearModulus: Number(panel.shearModulus) || 0,
+          k: Number(panel.k) || 0,
+          deltaV: Number(panel.deltaV) || 0,
+          deltaU: Number(panel.deltaU) || 0,
+          deltaPv: Number(panel.deltaPv) || 0,
+          gradeId: String(panel.gradeId || ''),
+          tauMax: Number(panel.tauMax) || 0,
+          e1: Number(panel.e1) || 0,
+          e2: Number(panel.e2) || 0,
           width: Number(panel.width) || 0,
           height: Number(panel.height) || 0,
           mode: panelMode(panel.mode),

@@ -210,13 +210,20 @@ button.secondary:disabled { background-color: #aaa; }
 .steps-table th.step-value { text-align: right; }
 .steps-table .step-value.ng { color: #a3281f; }
 
-/* 壁を構成する面材。1 枚ごとに寸法・割り付け・へりあきを決め、その場で
-   釘配列諸定数（グレー本 3.2）と釘配列図が出る。 */
-.wall-panels { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
-.wall-panel { border: 1px solid #d6d6e0; border-radius: 8px; padding: 8px 12px 12px; background: #fbfbfe; }
+/* 壁を構成する面材。1 枚ごとに面材と釘の仕様・寸法・割り付け・へりあきを
+   決め、その場で釘配列諸定数（グレー本 3.2）と釘配列図が出る。壁の中の節と
+   同じ格なので、見た目も節（.cert-section）にそろえる。 */
+.wall-panels { display: flex; flex-direction: column; gap: 0; }
+.wall-panel { border: 1px solid #d6d6e0; border-radius: 8px; padding: 10px 12px 14px; margin-top: 14px; background: #fafbff; }
 /* 見出しの行（面材名と削除ボタン）は、折り畳んでも残る。 */
-.wall-panel > [slot="title"] { font-size: 0.9em; color: #1a3a8f; }
+.wall-panel > [slot="title"] { font-size: 0.95em; color: #1a3a8f; }
 .wall-panel > [slot="actions"] { margin-top: 0; width: auto; padding: 4px 10px; font-size: 0.8em; }
+/* 面材の中の小見出し（「面材と釘」「面材の配置と釘配列」）。 */
+.panel-group { margin-top: 14px; }
+.panel-group h4 { margin: 0 0 4px; font-size: 0.9em; color: #1a3a8f; }
+.panel-group .hint { margin-top: 0; margin-bottom: 4px; }
+/* 壁の計算結果の中の、表ごとの小見出し。 */
+.result-heading { margin: 14px 0 0; font-size: 0.9em; color: #333; }
 .panel-result { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #d6d6e0; }
 .wall-result { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e3e3ef; }
 .wall-result h4 { margin: 0; font-size: 0.95em; color: #333; }

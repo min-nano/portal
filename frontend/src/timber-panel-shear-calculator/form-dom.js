@@ -1,8 +1,10 @@
 // 画面（DOM）とデータの往復、および計算結果・釘配列図の描画。
 //
 // 壁の項目は固定なので、その入力欄は tools/…/index.html に直接置いてある。
-// 壁を構成する面材は枚数が変わるため、1 枚ぶんの入力欄（寸法・割り付け・
-// へりあき）と、その面材の釘配列諸定数の結果はここで組み立てる。
+// 壁を構成する面材は枚数が変わるため、1 枚ぶんの入力欄（面材と釘の仕様・
+// 寸法・割り付け・へりあき）と、その面材の釘配列諸定数の結果はここで
+// 組み立てる。面材と釘の仕様が面材ごとの入力なのは、1 枚の壁でも面材ごとに
+// 違う仕様を張り分けることがあるため（上半分は N50、下半分は CN50 など）。
 //
 // 数値の丸めや単位は計算実装（core/、wasm）が組み立てた文字列をそのまま出す。
 // 計算書 PDF も同じ文字列を刷るので、画面と計算書で桁がずれない。
@@ -20,6 +22,11 @@ const GRAIN_CHOICES = [
   { value: 'height', text: '高さ方向' },
   { value: 'width', text: '幅方向' },
 ];
+
+/** 面材と釘をまだ選んでいない面材に出す案内。 */
+const DEFAULT_NAIL_NOTE =
+  '表にない組合せは、グレー本 4.5 の試験で求めた k・ΔPv・δv・δu を' +
+  '直接入力してください。読み込んだあとに編集できます。';
 
 /** 釘配列の入力方式。 */
 const MODE_CHOICES = [
@@ -52,22 +59,10 @@ function optionalNumberOf(node) {
 
 /** 壁の入力欄を読み取る（wallId は画面が持たない）。 */
 export function readWall(root) {
-  const number = (id) => optionalNumberOf(element(root, id));
   return {
     wallName: element(root, 'wallName').value.trim(),
     height: Number(element(root, 'wallHeight').value) || 0,
     width: Number(element(root, 'wallWidth').value) || 0,
-    materialId: element(root, 'materialSelect').value,
-    thickness: number('wallThickness'),
-    shearModulus: number('wallShearModulus'),
-    k: number('wallK'),
-    deltaV: number('wallDeltaV'),
-    deltaU: number('wallDeltaU'),
-    deltaPv: number('wallDeltaPv'),
-    gradeId: element(root, 'gradeSelect').value,
-    tauMax: number('wallTauMax'),
-    e1: number('wallE1'),
-    e2: number('wallE2'),
     hasIntermediateStud: element(root, 'wallHasStud').checked,
     panels: readPanels(root),
   };
@@ -77,9 +72,23 @@ export function readWall(root) {
 export function readPanels(root) {
   return Array.from(root.querySelectorAll('[data-panel-index]')).map((node) => {
     const checked = node.querySelector('input[data-panel-mode]:checked');
+    // 面材と釘の数値は、未入力を空文字のまま持ち帰る（0 を入れてしまうと
+    // 「確かめないまま計算した」ように見えるため）。
+    const spec = (name) => optionalNumberOf(field(node, name));
     return {
       panelId: node.getAttribute('data-panel-id'),
       panelName: field(node, 'panelName').value.trim(),
+      materialId: field(node, 'materialId').value,
+      thickness: spec('thickness'),
+      shearModulus: spec('shearModulus'),
+      k: spec('k'),
+      deltaV: spec('deltaV'),
+      deltaU: spec('deltaU'),
+      deltaPv: spec('deltaPv'),
+      gradeId: field(node, 'gradeId').value,
+      tauMax: spec('tauMax'),
+      e1: spec('e1'),
+      e2: spec('e2'),
       width: numberOf(field(node, 'width')),
       height: numberOf(field(node, 'height')),
       mode: panelMode(checked && checked.value),
@@ -104,59 +113,20 @@ export function applyWall(root, wall, options) {
   element(root, 'wallName').value = wall.wallName || '';
   element(root, 'wallHeight').value = wall.height || '';
   element(root, 'wallWidth').value = wall.width || '';
-  element(root, 'materialSelect').value = wall.materialId || '';
-  element(root, 'gradeSelect').value = wall.gradeId || '';
   element(root, 'wallHasStud').checked = wall.hasIntermediateStud !== false;
-  [
-    ['wallThickness', 'thickness'],
-    ['wallShearModulus', 'shearModulus'],
-    ['wallK', 'k'],
-    ['wallDeltaV', 'deltaV'],
-    ['wallDeltaU', 'deltaU'],
-    ['wallDeltaPv', 'deltaPv'],
-    ['wallTauMax', 'tauMax'],
-    ['wallE1', 'e1'],
-    ['wallE2', 'e2'],
-  ].forEach(([id, key]) => {
-    element(root, id).value = wall[key] === '' || wall[key] === undefined ? '' : wall[key];
-  });
   renderWallPanels(root, wall.panels, options);
 }
 
 /**
- * グレー本 表 3.3.1 の面材と釘の組合せを、選べる一覧にする。
- * 一覧は計算実装（wasm）が配るものをそのまま並べる。
+ * 面材ごとの案内（選んだ釘の呼び径と、そこから決まるへりあき）を出し直す。
+ *
+ * へりあきは釘の呼び径で決まる（適用範囲 3.3(1)④）ので、面材と釘を選んだ
+ * 面材にはその値を、選んでいない面材には直接入力の案内を出す。
  */
-export function renderMaterialOptions(root, materials) {
-  fillSelect(element(root, 'materialSelect'), materials);
-}
-
-/**
- * グレー本 表 3.3.2 の面材の規格を、選べる一覧にする。
- * せん断破壊・せん断座屈の検定に使う τmax・E1・E2 がここで決まる。
- */
-export function renderGradeOptions(root, grades) {
-  fillSelect(element(root, 'gradeSelect'), grades);
-}
-
-/** 選んだ釘の呼び径を、へりあきを決める手がかりとして案内に出す。 */
-export function showNailNote(root, note) {
-  const box = element(root, 'materialNote');
-  box.textContent = note
-    ? note
-    : '表にない組合せは、グレー本 4.5 の試験で求めた k・ΔPv・δv・δu を' +
-      '直接入力してください。読み込んだあとに編集できます。';
-}
-
-/** { id, label } の一覧を select へ並べ直す（先頭の案内だけ残す）。 */
-function fillSelect(select, entries) {
-  const document_ = select.ownerDocument;
-  while (select.options.length > 1) select.remove(1);
-  entries.forEach((entry) => {
-    const option = document_.createElement('option');
-    option.value = entry.id;
-    option.textContent = entry.label;
-    select.appendChild(option);
+export function showNailNotes(root, noteOf) {
+  root.querySelectorAll('[data-panel-index]').forEach((node) => {
+    const note = noteOf(field(node, 'materialId').value);
+    node.querySelector('[data-panel-note]').textContent = note || DEFAULT_NAIL_NOTE;
   });
 }
 
@@ -248,8 +218,129 @@ function presetSelect(document_, index, presets) {
   return node;
 }
 
+/** 面材の中の小見出し（「面材と釘」「面材の配置と釘配列」）。 */
+function subheading(document_, text, note) {
+  const box = document_.createElement('div');
+  box.className = 'panel-group';
+  const title = document_.createElement('h4');
+  title.textContent = text;
+  box.appendChild(title);
+  if (note) {
+    const hint = document_.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = note;
+    box.appendChild(hint);
+  }
+  return box;
+}
+
+/** { id, label } の一覧を選べる select にする（先頭は読み込みの案内）。 */
+function tableSelect(document_, name, value, entries, placeholder) {
+  const choices = [{ value: '', text: placeholder }].concat(
+    (entries || []).map((entry) => ({ value: entry.id, text: entry.label }))
+  );
+  // 読み込んだ組合せが一覧に無くても、その id は捨てない（保存した PDF を
+  // 新しい版で開いたときに、選択の跡が消えないようにする）。
+  if (value && !choices.some((choice) => choice.value === value)) {
+    choices.push({ value, text: value });
+  }
+  return select(document_, name, value || '', choices);
+}
+
+/**
+ * 面材 1 枚分の「面材と釘」の入力欄を組み立てる。
+ *
+ * 面材の種類・厚さと釘は面材ごとに決められる（1 枚の壁でも、上半分は N50、
+ * 下半分は CN50 のように張り分けることがある）。表 3.3.1・表 3.3.2 の一覧
+ * から読み込むと数値が入り、そのあと手で直せる。
+ */
+function buildPanelSpec(document_, panel, index, options) {
+  const group = subheading(document_, '面材と釘（グレー本 表 3.3.1・表 3.3.2）');
+
+  group.appendChild(
+    labelled(
+      document_,
+      '面材と釘の組合せ（表 3.3.1）から読み込む',
+      tableSelect(
+        document_,
+        'materialId',
+        panel.materialId,
+        options && options.materials,
+        '選択すると、下の数値へ読み込みます'
+      )
+    )
+  );
+  const note = document_.createElement('p');
+  note.className = 'hint';
+  note.setAttribute('data-panel-note', String(index));
+  note.textContent = DEFAULT_NAIL_NOTE;
+  group.appendChild(note);
+
+  const number = (name, text, value) =>
+    labelled(document_, text, input(document_, name, value, {
+      type: 'number',
+      inputmode: 'decimal',
+      step: 'any',
+    }));
+  const row = (...fields) => {
+    const line = document_.createElement('div');
+    line.className = 'panel-size';
+    line.append(...fields);
+    return line;
+  };
+
+  group.append(
+    row(
+      number('thickness', '面材の厚さ t [mm]', panel.thickness),
+      number('shearModulus', 'せん断弾性係数 GB [kN/mm²]', panel.shearModulus)
+    ),
+    row(
+      number('k', '釘の剛性 k [kN/mm]', panel.k),
+      number('deltaPv', '降伏耐力 ΔPv [kN]', panel.deltaPv)
+    ),
+    row(
+      number('deltaV', '降伏点変位 δv [mm]', panel.deltaV),
+      number('deltaU', '終局変位 δu [mm]', panel.deltaU)
+    )
+  );
+
+  group.appendChild(
+    labelled(
+      document_,
+      '面材の規格（表 3.3.2）から読み込む',
+      tableSelect(
+        document_,
+        'gradeId',
+        panel.gradeId,
+        options && options.grades,
+        '選択すると、下の数値へ読み込みます'
+      )
+    )
+  );
+  const gradeNote = document_.createElement('p');
+  gradeNote.className = 'hint';
+  gradeNote.textContent =
+    '面材のせん断破壊・せん断座屈の検定（式 3.3.8〜3.3.11）に使います。' +
+    '上の組合せを選ぶと、既定の規格（構造用合板なら JAS 1 級）が入ります。' +
+    'E1 は面材の繊維直交方向、E2 は繊維平行方向です。';
+  group.appendChild(gradeNote);
+
+  group.appendChild(
+    row(
+      number('tauMax', 'せん断強度 τmax [N/mm²]', panel.tauMax),
+      number('e1', '曲げヤング係数 E1 [N/mm²]', panel.e1),
+      number('e2', '曲げヤング係数 E2 [N/mm²]', panel.e2)
+    )
+  );
+  return group;
+}
+
 /**
  * 面材 1 枚分の入力欄と、その面材の計算結果の器を組み立てる。
+ *
+ * 1 枚の面材は「面材と釘の仕様 → 面材の配置と釘配列 → その面材の釘配列
+ * 諸定数」の順に並べる（実際の設計でも、面材と釘を決めてから配置と釘の
+ * 間隔で耐力を調整するため）。
  *
  * 枚数が増えると縦に長くなるので、面材ごとに折り畳めるようにする
  * （見出しの行には面材名と削除ボタンだけが残る）。
@@ -277,6 +368,16 @@ function buildPanelEditor(document_, panel, index, options) {
       placeholder: '南面 下段 など',
     }))
   );
+  box.appendChild(buildPanelSpec(document_, panel, index, options));
+
+  const placing = subheading(
+    document_,
+    '面材の配置と釘配列（グレー本 3.2）',
+    'へりあきは、適用範囲 3.3(1)④ の「10 mm 以上かつ接合具径 d ×5 以上」を' +
+      '満たす値を入れてください（上で面材と釘を選ぶと、足りなければその値まで' +
+      '引き上げます）。'
+  );
+  box.appendChild(placing);
   box.appendChild(presetSelect(document_, index, options && options.presets));
 
   const size = document_.createElement('div');
@@ -364,9 +465,7 @@ function buildPanelEditor(document_, panel, index, options) {
   const layoutNote = document_.createElement('p');
   layoutNote.className = 'hint';
   layoutNote.textContent =
-    'へりあきは面材の縁から釘の中心までの距離です。適用範囲 3.3(1)④ により、' +
-    '10 mm 以上かつ選んだ釘の呼び径の 5 倍以上にしてください（面材と釘を選ぶと、' +
-    '足りない面材はその値まで引き上げます）。' +
+    'へりあきは面材の縁から釘の中心までの距離です。' +
     '面材の長辺方向に走る間柱の釘列は、釘配列諸定数に含めません（3.3(1)⑧）。';
   layout.appendChild(layoutNote);
   box.appendChild(layout);
@@ -551,6 +650,8 @@ export function renderPanelResults(root, reports) {
 export function renderWallResult(root, report) {
   const errorBox = element(root, 'wallError');
   const summary = element(root, 'wallSummary');
+  const specHead = element(root, 'wallSpecHead');
+  const specBody = element(root, 'wallSpecBody');
   const head = element(root, 'wallPanelHead');
   const body = element(root, 'wallPanelBody');
   const steps = element(root, 'wallStepsBody');
@@ -562,9 +663,10 @@ export function renderWallResult(root, report) {
   // 面材ごとの釘配列諸定数は、壁の計算の一部として一緒に返る。
   renderPanelResults(root, report && report.panelReports);
 
-  [summary, head, body, steps, bucklingHead, bucklingBody, checks].forEach((node) => {
-    node.innerHTML = '';
-  });
+  [summary, specHead, specBody, head, body, steps, bucklingHead, bucklingBody, checks]
+    .forEach((node) => {
+      node.innerHTML = '';
+    });
 
   if (!report || !report.ok) {
     errorBox.hidden = !report;
@@ -593,6 +695,9 @@ export function renderWallResult(root, report) {
     });
   };
 
+  // 面材と釘は面材ごとの入力なので、どの面材がどの数値で計算されたのかを
+  // 壁の結果にも並べる（張り分けた壁でも根拠がその場でそろう）。
+  appendTable(specHead, specBody, report.specColumns, report.specs);
   appendTable(head, body, report.panelColumns, report.panels);
   appendTable(bucklingHead, bucklingBody, report.bucklingColumns, report.buckling);
 

@@ -10,6 +10,10 @@
 //! 面材の種類と釘が先に決まっていて、面材の配置・釘の間隔・へりあきで耐力を
 //! 調整するので、釘配列だけを先に決めて使い回す形にはしていない。
 //!
+//! 面材と釘の仕様（厚さ・GB・k・δv・δu・ΔPv・τmax・E1・E2）は **面材
+//! 1 枚ごとの入力**で、1 枚の壁の中で混在してよい（上半分は N50、下半分は
+//! CN50 のような張り分け）。壁が持つのは階高・幅と中間材の有無だけ。
+//!
 //! 移植元は GAS 版 gas-timber-panel-shear-calculator と、その Python 移植
 //! （backend/app/panel_shear.py の計算部分）。
 
@@ -30,7 +34,10 @@ pub const MAX_WALL_PANELS: usize = 20;
 /// 釘配列図に添える座標値の有効桁数（図は小さいので本文より粗くする）。
 const DIAGRAM_AXIS_DIGITS: usize = 4;
 
-/// 壁を構成する面材 1 枚分の入力（釘配列とその寸法）。
+/// 壁を構成する面材 1 枚分の入力（面材と釘の仕様・寸法・釘配列）。
+///
+/// 面材と釘の仕様は面材ごとに持つ。1 枚の壁でも面材ごとに違う仕様を使う
+/// ことがあるため（上半分は N50、下半分は CN50 のような張り分け）。
 ///
 /// 釘配列の入れ方は 3 通り:
 ///   - `layout`: 割り付け（型・間柱ピッチ・釘ピッチ・へりあき）から座標を作る
@@ -44,34 +51,6 @@ pub struct PanelInput {
     pub width: f64,
     /// 面材の高さ H [mm]。
     pub height: f64,
-    pub mode: String,
-    /// 配列の型（川型・山型・ロ型・日型）。
-    pub arrangement: String,
-    /// 間柱・根太ピッチ [mm]。
-    pub stud_pitch: f64,
-    /// 釘ピッチ [mm]。
-    pub nail_pitch: f64,
-    /// へりあき（面材の縁から釘の中心までの距離）[mm]。
-    ///
-    /// 面材の種類・釘の呼び径に合わせて面材ごとに決められるよう、割り付けの
-    /// 入力欄にしてある（未入力なら既定の 10 mm）。
-    pub edge_distance: f64,
-    pub grid_x: String,
-    pub grid_y: String,
-    pub coords: String,
-    /// 面材の繊維方向（"" は長辺方向）。せん断座屈の a・b の取り方を決める。
-    pub grain: String,
-}
-
-/// 壁 1 枚分の入力（グレー本 3.3 の面材張り大壁）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct WallInput {
-    pub wall_id: String,
-    pub wall_name: String,
-    /// 階高 H [mm]。
-    pub height: f64,
-    /// 壁の幅 W [mm]。
-    pub width: f64,
     /// 表 3.3.1 から読み込んだ組合せの id（読み込んだ跡を残すだけで、計算には
     /// 使わない。読み込んだあと数値を手で直せるようにするため）。
     pub material_id: String,
@@ -95,6 +74,37 @@ pub struct WallInput {
     pub e1: f64,
     /// 繊維平行方向の曲げヤング係数 E2 [N/mm²]。
     pub e2: f64,
+    pub mode: String,
+    /// 配列の型（川型・山型・ロ型・日型）。
+    pub arrangement: String,
+    /// 間柱・根太ピッチ [mm]。
+    pub stud_pitch: f64,
+    /// 釘ピッチ [mm]。
+    pub nail_pitch: f64,
+    /// へりあき（面材の縁から釘の中心までの距離）[mm]。
+    ///
+    /// 面材の種類・釘の呼び径に合わせて面材ごとに決められるよう、割り付けの
+    /// 入力欄にしてある（未入力なら既定の 10 mm）。
+    pub edge_distance: f64,
+    pub grid_x: String,
+    pub grid_y: String,
+    pub coords: String,
+    /// 面材の繊維方向（"" は長辺方向）。せん断座屈の a・b の取り方を決める。
+    pub grain: String,
+}
+
+/// 壁 1 枚分の入力（グレー本 3.3 の面材張り大壁）。
+///
+/// 面材と釘の仕様は面材ごと（`PanelInput`）なので、壁が持つのは階高・幅と
+/// 中間材の有無だけ。
+#[derive(Debug, Clone, PartialEq)]
+pub struct WallInput {
+    pub wall_id: String,
+    pub wall_name: String,
+    /// 階高 H [mm]。
+    pub height: f64,
+    /// 壁の幅 W [mm]。
+    pub width: f64,
     /// 中間材（間柱等）を設けるか。せん断座屈の ξ になる。
     pub has_intermediate_stud: bool,
     /// 壁を構成する面材。
@@ -126,12 +136,44 @@ impl PanelInput {
         }
     }
 
+    /// この面材そのものの諸元（3.3 の計算に使う値）。
+    pub fn sheathing(&self) -> wall::Sheathing {
+        wall::Sheathing {
+            thickness: self.thickness,
+            shear_modulus: self.shear_modulus,
+            tau_max: self.tau_max,
+            e1: self.e1,
+            e2: self.e2,
+        }
+    }
+
+    /// この面材を留める釘 1 本あたりの一面せん断。
+    pub fn nail(&self) -> wall::NailShear {
+        wall::NailShear {
+            k: self.k,
+            delta_v: self.delta_v,
+            delta_u: self.delta_u,
+            delta_pv: self.delta_pv,
+        }
+    }
+
     pub fn to_value(&self) -> Value {
         Value::obj([
             ("panelId", self.panel_id.clone().into()),
             ("panelName", self.panel_name.clone().into()),
             ("width", self.width.into()),
             ("height", self.height.into()),
+            ("materialId", self.material_id.clone().into()),
+            ("thickness", self.thickness.into()),
+            ("shearModulus", self.shear_modulus.into()),
+            ("k", self.k.into()),
+            ("deltaV", self.delta_v.into()),
+            ("deltaU", self.delta_u.into()),
+            ("deltaPv", self.delta_pv.into()),
+            ("gradeId", self.grade_id.clone().into()),
+            ("tauMax", self.tau_max.into()),
+            ("e1", self.e1.into()),
+            ("e2", self.e2.into()),
             ("mode", self.mode.clone().into()),
             ("arrangement", self.arrangement.clone().into()),
             ("studPitch", self.stud_pitch.into()),
@@ -152,42 +194,12 @@ impl WallInput {
             ("wallName", self.wall_name.clone().into()),
             ("height", self.height.into()),
             ("width", self.width.into()),
-            ("materialId", self.material_id.clone().into()),
-            ("thickness", self.thickness.into()),
-            ("shearModulus", self.shear_modulus.into()),
-            ("k", self.k.into()),
-            ("deltaV", self.delta_v.into()),
-            ("deltaU", self.delta_u.into()),
-            ("deltaPv", self.delta_pv.into()),
-            ("gradeId", self.grade_id.clone().into()),
-            ("tauMax", self.tau_max.into()),
-            ("e1", self.e1.into()),
-            ("e2", self.e2.into()),
             ("hasIntermediateStud", self.has_intermediate_stud.into()),
             (
                 "panels",
                 Value::Arr(self.panels.iter().map(PanelInput::to_value).collect()),
             ),
         ])
-    }
-
-    fn sheathing(&self) -> wall::Sheathing {
-        wall::Sheathing {
-            thickness: self.thickness,
-            shear_modulus: self.shear_modulus,
-            tau_max: self.tau_max,
-            e1: self.e1,
-            e2: self.e2,
-        }
-    }
-
-    fn nail(&self) -> wall::NailShear {
-        wall::NailShear {
-            k: self.k,
-            delta_v: self.delta_v,
-            delta_u: self.delta_u,
-            delta_pv: self.delta_pv,
-        }
     }
 }
 
@@ -258,7 +270,8 @@ pub fn normalize_wall(item: &Value, index: usize) -> Result<WallInput, String> {
     }
     let mut panels = Vec::with_capacity(raw_panels.len());
     for (position, panel) in raw_panels.iter().enumerate() {
-        panels.push(normalize_panel(panel, &wall_id, position)?);
+        // 面材と釘の仕様を壁が持っていた版の入力は、ここで面材へ移し替える。
+        panels.push(normalize_panel(&with_wall_spec(panel, item), &wall_id, position)?);
     }
 
     Ok(WallInput {
@@ -266,20 +279,63 @@ pub fn normalize_wall(item: &Value, index: usize) -> Result<WallInput, String> {
         wall_name: text_of(item.get("wallName")),
         height: float_of(item.get("height"), "階高 H")?,
         width: float_of(item.get("width"), "壁の幅 W")?,
-        material_id: text_of(item.get("materialId")),
-        thickness: float_of(item.get("thickness"), "面材の厚さ t")?,
-        shear_modulus: float_of(item.get("shearModulus"), "面材のせん断弾性係数 GB")?,
-        k: float_of(item.get("k"), "釘のせん断剛性 k")?,
-        delta_v: float_of(item.get("deltaV"), "釘の降伏点変位 δv")?,
-        delta_u: float_of(item.get("deltaU"), "釘の終局変位 δu")?,
-        delta_pv: float_of(item.get("deltaPv"), "釘の降伏耐力 ΔPv")?,
-        grade_id: text_of(item.get("gradeId")),
-        tau_max: float_of(item.get("tauMax"), "面材のせん断強度 τmax")?,
-        e1: float_of(item.get("e1"), "曲げヤング係数 E1")?,
-        e2: float_of(item.get("e2"), "曲げヤング係数 E2")?,
         has_intermediate_stud: matches!(item.get("hasIntermediateStud"), Some(Value::Bool(true))),
         panels,
     })
+}
+
+/// 面材と釘の仕様のキー（面材 1 枚ごとの入力。前の版では壁が持っていた）。
+const SPEC_KEYS: [&str; 11] = [
+    "materialId",
+    "thickness",
+    "shearModulus",
+    "k",
+    "deltaV",
+    "deltaU",
+    "deltaPv",
+    "gradeId",
+    "tauMax",
+    "e1",
+    "e2",
+];
+
+/// 面材が仕様を持たないときに、その壁が持っている仕様を継がせる。
+///
+/// 面材と釘の仕様は面材ごとの入力だが、前の版は壁 1 枚に 1 組だけ持っていた。
+/// 計算書 PDF が保存形式なので、その版で保存したファイルを開いたときは、
+/// 壁の仕様をそのまま全ての面材へ配って今の形にする（壁の中で仕様が混在
+/// していなかった、という当時の入力の意味がそのまま保たれる）。
+fn with_wall_spec(panel: &Value, wall: &Value) -> Value {
+    let missing: Vec<(String, Value)> = SPEC_KEYS
+        .iter()
+        .filter(|key| is_blank(panel.get(**key)))
+        .filter_map(|key| {
+            let value = wall.get(*key)?;
+            if is_blank(Some(value)) {
+                return None;
+            }
+            Some((key.to_string(), value.clone()))
+        })
+        .collect();
+    if missing.is_empty() {
+        return panel.clone();
+    }
+
+    let mut entries: Vec<(String, Value)> = match panel {
+        Value::Obj(entries) => entries.clone(),
+        _ => Vec::new(),
+    };
+    entries.extend(missing);
+    Value::Obj(entries)
+}
+
+/// 未入力（欠落・null・空文字）か。
+fn is_blank(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null) => true,
+        Some(Value::Str(text)) => text.trim().is_empty(),
+        _ => false,
+    }
 }
 
 pub fn normalize_panel(panel: &Value, wall_id: &str, index: usize) -> Result<PanelInput, String> {
@@ -297,6 +353,17 @@ pub fn normalize_panel(panel: &Value, wall_id: &str, index: usize) -> Result<Pan
         panel_name: text_of(panel.get("panelName")),
         width: float_of(panel.get("width"), "面材の幅 W")?,
         height: float_of(panel.get("height"), "面材の高さ H")?,
+        material_id: text_of(panel.get("materialId")),
+        thickness: float_of(panel.get("thickness"), "面材の厚さ t")?,
+        shear_modulus: float_of(panel.get("shearModulus"), "面材のせん断弾性係数 GB")?,
+        k: float_of(panel.get("k"), "釘のせん断剛性 k")?,
+        delta_v: float_of(panel.get("deltaV"), "釘の降伏点変位 δv")?,
+        delta_u: float_of(panel.get("deltaU"), "釘の終局変位 δu")?,
+        delta_pv: float_of(panel.get("deltaPv"), "釘の降伏耐力 ΔPv")?,
+        grade_id: text_of(panel.get("gradeId")),
+        tau_max: float_of(panel.get("tauMax"), "面材のせん断強度 τmax")?,
+        e1: float_of(panel.get("e1"), "曲げヤング係数 E1")?,
+        e2: float_of(panel.get("e2"), "曲げヤング係数 E2")?,
         mode,
         arrangement: Arrangement::from_id(&text_of(panel.get("arrangement")))
             .id()
@@ -738,6 +805,87 @@ fn nail_arrangement_text(panel: &PanelInput, nails: &[Nail]) -> String {
     }
 }
 
+/// 壁を構成する面材が、どれも同じ面材と釘の仕様か。
+///
+/// 同じなら壁の控えに 1 行で書けるし、違えば「面材ごとに異なる」と書いて
+/// 面材ごとの表へ誘導する（1 枚の壁に違う仕様を張り分けることがあるため）。
+fn uniform_spec(panels: &[PanelInput]) -> bool {
+    match panels.split_first() {
+        Some((first, rest)) => rest.iter().all(|panel| {
+            panel.material_id == first.material_id
+                && panel.grade_id == first.grade_id
+                && panel.sheathing() == first.sheathing()
+                && panel.nail() == first.nail()
+        }),
+        None => true,
+    }
+}
+
+/// 面材と釘の組合せ（表 3.3.1）の名前。読み込んでいなければその旨を返す。
+fn material_text(panel: &PanelInput) -> String {
+    match wall::find_material(&panel.material_id) {
+        Some(material) => format!(
+            "{}（釘の呼び径 φ{} mm）",
+            material.label(),
+            format_dimension(material.nail_diameter)
+        ),
+        None => "表 3.3.1 から読み込まず、数値を直接入力".to_string(),
+    }
+}
+
+/// 面材 1 枚の「面材と釘」の入力を、そのまま読める行にする。
+///
+/// 面材ごとに違う仕様を使えるので、どの面材がどの仕様なのかは面材の側に
+/// 書いておく（壁の計算のページには、面材ごとの数値を表にして並べる）。
+fn spec_rows(panel: &PanelInput) -> Vec<Value> {
+    // 面材と釘の数値は打ち込まれた（表 3.3.1 から読み込んだ）ものなので、
+    // 有効桁で丸めずそのままの見た目で出す（12 を「12.0000」にしない）。
+    let typed = format_dimension;
+    let row = |label: &str, value: String| {
+        Value::obj([("label", label.into()), ("value", value.into())])
+    };
+
+    let mut rows = Vec::with_capacity(6);
+    if let Some(material) = wall::find_material(&panel.material_id) {
+        rows.push(row(
+            "面材と釘の組合せ",
+            format!(
+                "{}（釘の呼び径 φ{} mm）",
+                material.label(),
+                format_dimension(material.nail_diameter)
+            ),
+        ));
+    }
+    rows.push(row("面材の厚さ t", format!("{} mm", typed(panel.thickness))));
+    rows.push(row(
+        "面材のせん断弾性係数 GB",
+        format!("{} kN/mm²", typed(panel.shear_modulus)),
+    ));
+    rows.push(row(
+        "釘 1 本あたりの一面せん断",
+        format!(
+            "k = {} kN/mm　δv = {} mm　δu = {} mm　ΔPv = {} kN",
+            typed(panel.k),
+            typed(panel.delta_v),
+            typed(panel.delta_u),
+            typed(panel.delta_pv)
+        ),
+    ));
+    if let Some(grade) = wall::find_grade(&panel.grade_id) {
+        rows.push(row("面材の規格", grade.label()));
+    }
+    rows.push(row(
+        "面材のせん断強度・曲げヤング係数",
+        format!(
+            "τmax = {} N/mm²　E1 = {} N/mm²　E2 = {} N/mm²",
+            typed(panel.tau_max),
+            typed(panel.e1),
+            typed(panel.e2)
+        ),
+    ));
+    rows
+}
+
 /// 計算できると分かっている面材の結果を組み立てる。
 fn build_panel_report(panel: &PanelInput, nails: &[Nail], index: usize) -> Result<Value, String> {
     let area = panel.panel_area();
@@ -751,6 +899,48 @@ fn build_panel_report(panel: &PanelInput, nails: &[Nail], index: usize) -> Resul
             ("value", value.into()),
         ])
     };
+
+    // 釘配列諸定数（3.2）そのものには面材と釘の仕様は要らないが、この面材が
+    // 壁の計算（3.3）へ何を持ち込むのかが 1 ページで分かるように控えを添える。
+    let mut inputs = vec![
+        Value::obj([
+            ("label", "面材寸法 W × H".into()),
+            (
+                "value",
+                format!(
+                    "{} × {} mm",
+                    format_int(panel.width),
+                    format_int(panel.height)
+                )
+                .into(),
+            ),
+        ]),
+        Value::obj([
+            ("label", "面材面積 Aw".into()),
+            ("value", format!("{} mm²", format_int(area)).into()),
+        ]),
+        Value::obj([
+            ("label", "釘配列".into()),
+            ("value", nail_arrangement_text(panel, nails).into()),
+        ]),
+        Value::obj([
+            // 実際に置かれた釘の座標から測る（どの入力方式でも同じ）。
+            ("label", "へりあき（面材の縁から釘まで）".into()),
+            (
+                "value",
+                format!(
+                    "{} mm",
+                    format_dimension(layout::min_edge_clearance(nails, panel.width, panel.height))
+                )
+                .into(),
+            ),
+        ]),
+        Value::obj([
+            ("label", "釘本数 n".into()),
+            ("value", format!("{} 本", format_int(result.n as f64)).into()),
+        ]),
+    ];
+    inputs.extend(spec_rows(panel));
 
     Ok(Value::obj([
         ("panelId", panel.panel_id.clone().into()),
@@ -787,54 +977,7 @@ fn build_panel_report(panel: &PanelInput, nails: &[Nail], index: usize) -> Resul
                 ("Cxy", result.cxy.into()),
             ]),
         ),
-        (
-            "inputs",
-            Value::Arr(vec![
-                Value::obj([
-                    ("label", "面材寸法 W × H".into()),
-                    (
-                        "value",
-                        format!(
-                            "{} × {} mm",
-                            format_int(panel.width),
-                            format_int(panel.height)
-                        )
-                        .into(),
-                    ),
-                ]),
-                Value::obj([
-                    ("label", "面材面積 Aw".into()),
-                    ("value", format!("{} mm²", format_int(area)).into()),
-                ]),
-                Value::obj([
-                    ("label", "釘配列".into()),
-                    ("value", nail_arrangement_text(panel, nails).into()),
-                ]),
-                Value::obj([
-                    // 実際に置かれた釘の座標から測る（どの入力方式でも同じ）。
-                    ("label", "へりあき（面材の縁から釘まで）".into()),
-                    (
-                        "value",
-                        format!(
-                            "{} mm",
-                            format_dimension(layout::min_edge_clearance(
-                                nails,
-                                panel.width,
-                                panel.height
-                            ))
-                        )
-                        .into(),
-                    ),
-                ]),
-                Value::obj([
-                    ("label", "釘本数 n".into()),
-                    (
-                        "value",
-                        format!("{} 本", format_int(result.n as f64)).into(),
-                    ),
-                ]),
-            ]),
-        ),
+        ("inputs", Value::Arr(inputs)),
         (
             "summary",
             Value::Arr(vec![
@@ -913,14 +1056,14 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
             panel.width,
             panel.height,
             wall::Grain::from_id(&panel.grain),
+            panel.sheathing(),
+            panel.nail(),
         ));
     }
 
     let result = wall::compute(&wall::Wall {
         height: input.height,
         width: input.width,
-        sheathing: input.sheathing(),
-        nail: input.nail(),
         has_intermediate_stud: input.has_intermediate_stud,
         panels: specs,
     })
@@ -939,14 +1082,32 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
     };
 
     // 適用範囲 3.3(1)④「面材の釘列に対するへりあきは、10mm 以上かつ接合具径
-    // d ×5 以上」。d は選んだ釘で決まるので、表 3.3.1 から読み込んでいない
-    // （4.5 の試験値を直接入力した）ときは 10mm の側だけを確かめる。
-    let material = wall::find_material(&input.material_id);
-    let required_edge = match material {
-        Some(material) => material.min_edge_distance(),
-        None => wall::MIN_EDGE_DISTANCE,
-    };
-    let edge_basis = match material {
+    // d ×5 以上」。d は面材ごとに選んだ釘で決まるので、面材 1 枚ずつ確かめて、
+    // いちばん余裕の少ない面材で壁の判定にする。表 3.3.1 から読み込んでいない
+    // （4.5 の試験値を直接入力した）面材は、10mm の側だけを確かめる。
+    let edges: Vec<(usize, f64, f64)> = input
+        .panels
+        .iter()
+        .enumerate()
+        .map(|(position, panel)| {
+            let required = match wall::find_material(&panel.material_id) {
+                Some(material) => material.min_edge_distance(),
+                None => wall::MIN_EDGE_DISTANCE,
+            };
+            (position, clearances[position], required)
+        })
+        .collect();
+    let (worst_position, worst_edge, required_edge) = edges
+        .iter()
+        .copied()
+        .fold(edges[0], |worst, edge| {
+            if edge.1 - edge.2 < worst.1 - worst.2 {
+                edge
+            } else {
+                worst
+            }
+        });
+    let edge_basis = match wall::find_material(&input.panels[worst_position].material_id) {
         Some(material) => format!(
             "10 mm かつ 釘の呼び径 φ{} mm × {} 以上",
             format_dimension(material.nail_diameter),
@@ -954,55 +1115,34 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
         ),
         None => "釘の呼び径が分からないため 10 mm のみで確認".to_string(),
     };
-    let worst_edge = clearances.iter().copied().fold(f64::INFINITY, f64::min);
     // 表示の桁で切り上がって「足りているのに NG」に見えないよう、丸めの幅だけ
     // 許す（へりあきは mm 単位の入力なので、この幅で判定が変わることはない）。
-    let edge_ok = worst_edge >= required_edge - 1e-9;
+    let edge_ok = edges
+        .iter()
+        .all(|(_, clearance, required)| *clearance >= *required - 1e-9);
 
     let mut inputs = vec![
         row("階高 H", format!("{} mm", format_int(input.height))),
         row("壁の幅 W", format!("{} mm", format_int(input.width))),
     ];
-    if let Some(material) = material {
+    // 面材と釘は面材ごとの入力なので、壁の控えには「全面材で同じかどうか」を
+    // 書き、数値は下の面材ごとの表に並べる（混在した壁でも読み違えない）。
+    if uniform_spec(&input.panels) {
+        inputs.push(row("面材と釘", material_text(&input.panels[0])));
+    } else {
         inputs.push(row(
-            "面材と釘の組合せ",
-            format!(
-                "{}（釘の呼び径 φ{} mm）",
-                material.label(),
-                format_dimension(material.nail_diameter)
-            ),
+            "面材と釘",
+            "面材ごとに異なる（下の「面材ごとの面材と釘」を参照）".to_string(),
         ));
+        for (position, panel) in input.panels.iter().enumerate() {
+            if wall::find_material(&panel.material_id).is_some() {
+                inputs.push(row(
+                    &format!("　面材「{}」", panel_label(panel, position)),
+                    material_text(panel),
+                ));
+            }
+        }
     }
-    inputs.push(row(
-        "面材の厚さ t",
-        format!("{} mm", six(input.thickness)),
-    ));
-    inputs.push(row(
-        "面材のせん断弾性係数 GB",
-        format!("{} kN/mm²", six(input.shear_modulus)),
-    ));
-    inputs.push(row(
-        "釘 1 本あたりの一面せん断",
-        format!(
-            "k = {} kN/mm　δv = {} mm　δu = {} mm　ΔPv = {} kN",
-            six(input.k),
-            six(input.delta_v),
-            six(input.delta_u),
-            six(input.delta_pv)
-        ),
-    ));
-    if let Some(grade) = wall::find_grade(&input.grade_id) {
-        inputs.push(row("面材の規格", grade.label()));
-    }
-    inputs.push(row(
-        "面材のせん断強度・曲げヤング係数",
-        format!(
-            "τmax = {} N/mm²　E1 = {} N/mm²　E2 = {} N/mm²",
-            six(input.tau_max),
-            format_int(input.e1),
-            format_int(input.e2)
-        ),
-    ));
     inputs.push(row(
         "中間材（間柱等）",
         format!(
@@ -1032,9 +1172,8 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
             })
             .expect("面材は 1 枚以上")
     };
-    // τmax は壁の中で共通なので、せん断破壊は τN がいちばん大きい面材で決まる。
-    let worst_shear = worst(|panel| panel.tau_n);
-    // τcr は面材ごとに違うので、座屈は τN/τcr がいちばん大きい面材で決まる。
+    // τmax も τcr も面材ごとに違うので、どちらも比でいちばん厳しい面材を採る。
+    let worst_shear = worst(|panel| panel.tau_n / panel.spec.sheathing.tau_max);
     let worst_buckling = worst(|panel| panel.tau_n / panel.tau_cr);
 
     Ok(Value::obj([
@@ -1042,6 +1181,64 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
         ("wallName", wall_label(input, index).into()),
         ("panelReports", Value::Arr(panel_reports)),
         ("inputs", Value::Arr(inputs)),
+        // 面材ごとの面材と釘（面材ごとに違う仕様を張り分けられるので、どの
+        // 面材がどの数値で計算されたのかを壁のページにも残す）。
+        (
+            "specColumns",
+            Value::Arr(
+                [
+                    "面材",
+                    "t [mm]",
+                    "GB [kN/mm²]",
+                    "k [kN/mm]",
+                    "δv [mm]",
+                    "δu [mm]",
+                    "ΔPv [kN]",
+                    "τmax [N/mm²]",
+                    "E1 [N/mm²]",
+                    "E2 [N/mm²]",
+                ]
+                .into_iter()
+                .map(Value::from)
+                .collect(),
+            ),
+        ),
+        (
+            "specs",
+            Value::Arr(
+                result
+                    .panels
+                    .iter()
+                    .map(|panel| {
+                        let sheathing = panel.spec.sheathing;
+                        let nail = panel.spec.nail;
+                        Value::obj([
+                            ("label", panel.spec.label.clone().into()),
+                            (
+                                "cells",
+                                Value::Arr(
+                                    // 打ち込まれた数値をそのままの見た目で並べる。
+                                    [
+                                        format_dimension(sheathing.thickness),
+                                        format_dimension(sheathing.shear_modulus),
+                                        format_dimension(nail.k),
+                                        format_dimension(nail.delta_v),
+                                        format_dimension(nail.delta_u),
+                                        format_dimension(nail.delta_pv),
+                                        format_dimension(sheathing.tau_max),
+                                        format_dimension(sheathing.e1),
+                                        format_dimension(sheathing.e2),
+                                    ]
+                                    .into_iter()
+                                    .map(Value::from)
+                                    .collect(),
+                                ),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
         (
             "panelColumns",
             Value::Arr(
@@ -1198,7 +1395,7 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
                                         format_int(panel.spec.b),
                                         six(panel.beta),
                                         six(panel.tau_n),
-                                        six(input.tau_max),
+                                        six(panel.spec.sheathing.tau_max),
                                         six(panel.tau_cr),
                                         if panel.shear_ok && panel.buckling_ok {
                                             "OK".to_string()
@@ -1237,11 +1434,14 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
                     ("label", "適用範囲 3.3(1)④ 面材のへりあき".into()),
                     (
                         "value",
+                        // 必要なへりあきは面材ごとに選んだ釘で決まるので、
+                        // いちばん余裕の少ない面材を名前で示す。
                         format!(
-                            "最小 へりあき {} mm {} {} mm（{}）",
+                            "最小 へりあき {} mm {} {} mm（面材「{}」／ {}）",
                             format_dimension(worst_edge),
                             if edge_ok { "≧" } else { "<" },
                             format_dimension(required_edge),
+                            panel_label(&input.panels[worst_position], worst_position),
                             edge_basis
                         )
                         .into(),
@@ -1253,12 +1453,13 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
                     (
                         "value",
                         // どの面材の値かは、上の面材ごとの表で分かる。ここは
-                        // いちばん余裕の少ない面材の値だけを短く出す。
+                        // いちばん余裕の少ない面材の値だけを短く出す（τmax は
+                        // 面材ごとに違うので、比がいちばん大きい面材を採る）。
                         format!(
-                            "最大 τN = {} N/mm² {} τmax = {} N/mm²",
+                            "最大 τN/τmax の面材で τN = {} {} τmax = {} N/mm²",
                             six(worst_shear.tau_n),
                             if result.shear_ok { "<" } else { "≧" },
-                            six(input.tau_max)
+                            six(worst_shear.spec.sheathing.tau_max)
                         )
                         .into(),
                     ),
@@ -1388,6 +1589,10 @@ mod tests {
 
     /// グレー本 解説の計算例（図 3.2.2）。W 910 × H 610 の横置きで、
     /// へりあき 10 mm を見込んだ配列（本は左下の釘を (0, 0) として書いている）。
+    ///
+    /// 面材と釘は 3.3(3) の計算例と同じ（構造用合板 12mm ＋ 鉄丸釘 N-65）。
+    /// 釘配列諸定数（3.2）そのものには効かないが、面材ごとの入力なので
+    /// 面材 1 枚を作るたびに付いてくる。
     fn example_panel() -> PanelInput {
         PanelInput {
             panel_id: "w1-p1".to_string(),
@@ -1403,7 +1608,32 @@ mod tests {
             grid_y: String::new(),
             coords: String::new(),
             grain: String::new(),
+            ..example_spec()
         }
+    }
+
+    /// 3.3(3) の計算例の面材と釘（表 3.3.1 の構造用合板 12mm ＋ 鉄丸釘 N-65。
+    /// N-65 / CN65 の入れ替わりについては wall.rs の TABLE のコメント）。
+    fn example_spec() -> PanelInput {
+        PanelInput {
+            material_id: "plywood12-n65".to_string(),
+            thickness: 12.0,
+            shear_modulus: 0.40,
+            k: 0.483,
+            delta_v: 2.3,
+            delta_u: 17.0,
+            delta_pv: 1.13,
+            grade_id: "plywood-jas1".to_string(),
+            tau_max: 3.6,
+            e1: 3500.0,
+            e2: 5500.0,
+            ..empty_panel()
+        }
+    }
+
+    /// 何も入力していない面材（`..` で必要な欄だけを埋めるための土台）。
+    fn empty_panel() -> PanelInput {
+        normalize_panel(&Value::Null, "w1", 0).expect("空の面材は正規化できる")
     }
 
     fn normalize(text: &str) -> Result<FormData, String> {
@@ -1471,6 +1701,56 @@ mod tests {
         .unwrap();
         assert_eq!(data.walls[0].panels[0].edge_distance, 15.0);
         assert_eq!(data.walls[0].panels[1].edge_distance, 0.0);
+    }
+
+    /// 面材と釘の仕様も面材ごとに変えられる（1 枚の壁での張り分け）。
+    #[test]
+    fn the_specification_is_per_panel() {
+        let data = normalize(
+            r#"{"walls": [{"panels": [
+                 {"materialId": "plywood12-n50", "thickness": 12, "k": "0.43"},
+                 {"materialId": "plywood12-cn50", "thickness": "9", "k": 0.467}
+               ]}]}"#,
+        )
+        .unwrap();
+
+        let panels = &data.walls[0].panels;
+        assert_eq!(panels[0].material_id, "plywood12-n50");
+        assert_eq!(panels[0].k, 0.43);
+        assert_eq!(panels[1].material_id, "plywood12-cn50");
+        assert_eq!(panels[1].thickness, 9.0);
+        // 書き出した入力にも、面材ごとの仕様がそのまま残る。
+        let stored = panels[1].to_value();
+        assert_eq!(stored.get("materialId").unwrap().as_str(), Some("plywood12-cn50"));
+        assert_eq!(stored.get("k").unwrap().as_f64(), Some(0.467));
+    }
+
+    /// 面材と釘を壁が 1 組だけ持っていた版の入力は、全ての面材へ配る。
+    ///
+    /// 計算書 PDF が保存形式なので、前の版で保存したファイルを開いたときも
+    /// 同じ計算になる（当時は壁の中で仕様が混在しえなかった）。
+    #[test]
+    fn a_wall_level_specification_moves_onto_every_panel() {
+        let data = normalize(
+            r#"{"walls": [{"materialId": "plywood12-n65", "thickness": 12,
+                           "shearModulus": 0.4, "k": 0.483, "deltaV": 2.3,
+                           "deltaU": 17, "deltaPv": 1.13, "gradeId": "plywood-jas1",
+                           "tauMax": 3.6, "e1": 3500, "e2": 5500,
+                           "panels": [{"width": 910}, {"width": 910, "thickness": 24}]}]}"#,
+        )
+        .unwrap();
+
+        let panels = &data.walls[0].panels;
+        assert_eq!(panels[0].material_id, "plywood12-n65");
+        assert_eq!(panels[0].thickness, 12.0);
+        assert_eq!(panels[0].tau_max, 3.6);
+        assert_eq!(panels[1].k, 0.483);
+        // 面材が自分で持っている値は、壁の値で上書きしない。
+        assert_eq!(panels[1].thickness, 24.0);
+        // 壁の側にはもう仕様を残さない（今の形は面材ごとの入力だけ）。
+        let stored = data.walls[0].to_value();
+        assert_eq!(stored.get("thickness"), None);
+        assert_eq!(stored.get("materialId"), None);
     }
 
     #[test]
@@ -1614,6 +1894,49 @@ mod tests {
         assert!(arrangement.contains("へりあき 10 mm"), "{arrangement}");
     }
 
+    /// 面材と釘は面材ごとの入力なので、その控えも面材ごとの計算に付く
+    /// （どの面材がどの仕様で壁の計算に入ったのかが 1 ページで分かる）。
+    #[test]
+    fn the_inputs_section_carries_the_specification_of_this_panel() {
+        let report = compute_panel(&example_panel(), 0).unwrap();
+        let inputs = labelled(&report, "inputs", "label");
+
+        assert!(inputs.contains(&(
+            "面材と釘の組合せ".to_string(),
+            "構造用合板 12mm + 鉄丸釘 N-65（釘の呼び径 φ3.05 mm）".to_string()
+        )));
+        // 打ち込んだ数値は、有効桁で丸めずそのままの見た目で出す。
+        assert!(inputs.contains(&("面材の厚さ t".to_string(), "12 mm".to_string())));
+        assert!(inputs.contains(&(
+            "面材の規格".to_string(),
+            "構造用合板 JAS 1 級".to_string()
+        )));
+        let nail = inputs
+            .iter()
+            .find(|(label, _)| label == "釘 1 本あたりの一面せん断")
+            .map(|(_, value)| value.clone())
+            .unwrap();
+        assert!(nail.contains("k = 0.483 kN/mm"), "{nail}");
+        assert!(nail.contains("ΔPv = 1.13 kN"), "{nail}");
+
+        // 表 3.3.1 から読み込んでいない面材は、名前の行が出ない（数値だけ）。
+        let typed = compute_panel(
+            &PanelInput {
+                material_id: String::new(),
+                grade_id: String::new(),
+                ..example_panel()
+            },
+            0,
+        )
+        .unwrap();
+        let labels: Vec<String> = labelled(&typed, "inputs", "label")
+            .into_iter()
+            .map(|(label, _)| label)
+            .collect();
+        assert!(!labels.contains(&"面材と釘の組合せ".to_string()), "{labels:?}");
+        assert!(labels.contains(&"面材の厚さ t".to_string()), "{labels:?}");
+    }
+
     /// へりあきを広げると釘が内側に寄り、諸定数が小さくなる。
     #[test]
     fn a_wider_edge_distance_lowers_the_constants() {
@@ -1723,14 +2046,10 @@ mod tests {
 
     /// グレー本 3.3(3) の計算例（図 3.3.10）を、フォームの入力の形で組み立てる。
     ///
-    /// 面材は表 3.2.1 の配列をそのまま割り付けの欄へ入れる。釘 1 本あたりの
-    /// 数値は、本文が計算に使っているものをそのまま置く（表 3.3.1 の
+    /// 面材は表 3.2.1 の配列をそのまま割り付けの欄へ入れ、面材と釘は
+    /// 2 枚とも計算例の組合せにする（本文が計算に使っている数値。表 3.3.1 の
     /// N-65 / CN65 の入れ替わりについては wall.rs のコメント）。
     fn wall_example_form() -> FormData {
-        let panel = |index: usize, id: &str| {
-            let preset = crate::presets::find(id).expect("表 3.2.1 にある配列");
-            normalize_panel(&preset.to_panel_value(), "w1", index).unwrap()
-        };
         FormData {
             project_name: "グレー本 3.3 の計算例".to_string(),
             issued_on: String::new(),
@@ -1739,23 +2058,34 @@ mod tests {
                 wall_name: "計算例の大壁".to_string(),
                 height: 3000.0,
                 width: 910.0,
-                material_id: "plywood12-n65".to_string(),
-                thickness: 12.0,
-                shear_modulus: 0.40,
-                k: 0.483,
-                delta_v: 2.3,
-                delta_u: 17.0,
-                delta_pv: 1.13,
-                grade_id: "plywood-jas1".to_string(),
-                tau_max: 3.6,
-                e1: 3500.0,
-                e2: 5500.0,
                 has_intermediate_stud: true,
                 panels: vec![
-                    panel(0, "910x1820-s455-n75-hi"),
-                    panel(1, "910x910-s455-n75-ro"),
+                    example_preset_panel(0, "910x1820-s455-n75-hi"),
+                    example_preset_panel(1, "910x910-s455-n75-ro"),
                 ],
             }],
+        }
+    }
+
+    /// 表 3.2.1 の配列に、計算例の面材と釘を組み合わせた面材 1 枚。
+    fn example_preset_panel(index: usize, id: &str) -> PanelInput {
+        let preset = crate::presets::find(id).expect("表 3.2.1 にある配列");
+        let layout = normalize_panel(&preset.to_panel_value(), "w1", index).unwrap();
+        PanelInput {
+            panel_id: layout.panel_id,
+            panel_name: layout.panel_name,
+            width: layout.width,
+            height: layout.height,
+            mode: layout.mode,
+            arrangement: layout.arrangement,
+            stud_pitch: layout.stud_pitch,
+            nail_pitch: layout.nail_pitch,
+            edge_distance: layout.edge_distance,
+            grid_x: layout.grid_x,
+            grid_y: layout.grid_y,
+            coords: layout.coords,
+            grain: layout.grain,
+            ..example_spec()
         }
     }
 
@@ -1830,27 +2160,117 @@ mod tests {
         );
     }
 
-    /// 入力欄の控えには、階高・壁幅・面材と釘の数値がそのまま並ぶ。
+    /// 入力欄の控えには、階高・壁幅・中間材と、面材と釘が共通かどうかが並ぶ。
     #[test]
     fn the_wall_inputs_section_repeats_what_was_typed() {
         let inputs = labelled(&only_wall(&wall_example_form()), "inputs", "label");
 
         assert!(inputs.contains(&("階高 H".to_string(), "3,000 mm".to_string())));
         assert!(inputs.contains(&("壁の幅 W".to_string(), "910 mm".to_string())));
-        // 釘の呼び径は、へりあきを決めるときの手がかりとして添える。
+        // 面材と釘は面材ごとの入力。全ての面材で同じなら 1 行で書く
+        //（釘の呼び径は、へりあきを決めるときの手がかりとして添える）。
         assert!(inputs.contains(&(
-            "面材と釘の組合せ".to_string(),
+            "面材と釘".to_string(),
             "構造用合板 12mm + 鉄丸釘 N-65（釘の呼び径 φ3.05 mm）".to_string()
-        )));
-        assert!(inputs.contains(&(
-            "面材の規格".to_string(),
-            "構造用合板 JAS 1 級".to_string()
         )));
         assert!(inputs.contains(&(
             "中間材（間柱等）".to_string(),
             "あり（せん断座屈の ξ = 2）".to_string()
         )));
         assert!(inputs.contains(&("面材の枚数".to_string(), "2 枚".to_string())));
+    }
+
+    /// 面材と釘の仕様は面材ごとなので、数値は面材ごとの表に並ぶ。
+    #[test]
+    fn the_wall_report_lists_the_specification_of_every_panel() {
+        let report = only_wall(&wall_example_form());
+
+        let columns = report.get("specColumns").unwrap().as_array().unwrap();
+        assert_eq!(columns.len(), 10);
+        assert_eq!(columns[0].as_str(), Some("面材"));
+        assert_eq!(columns[1].as_str(), Some("t [mm]"));
+
+        let specs = report.get("specs").unwrap().as_array().unwrap();
+        assert_eq!(specs.len(), 2);
+        let cells = specs[0].get("cells").unwrap().as_array().unwrap();
+        // t・GB・k・δv・δu・ΔPv・τmax・E1・E2 の 9 つ（見出しの 10 列 − 面材名）。
+        assert_eq!(cells.len(), 9);
+        assert_eq!(cells[0].as_str(), Some("12"));
+        assert_eq!(cells[2].as_str(), Some("0.483"));
+        assert_eq!(cells[6].as_str(), Some("3.6"));
+        assert_eq!(cells[7].as_str(), Some("3,500"));
+        // 表の面材名は、面材ごとの計算と同じ名前で並ぶ。
+        assert_eq!(
+            specs[0].get("label"),
+            report.get("panels").unwrap().as_array().unwrap()[0].get("label")
+        );
+    }
+
+    /// 1 枚の壁でも、面材ごとに違う面材と釘を張り分けられる
+    /// （上半分は N-50、下半分は CN-50 のような使い方）。
+    ///
+    /// 面材ごとの計算は、その面材の仕様だけで決まる（隣の面材の仕様に
+    /// 引きずられない）ことを、仕様をそろえた壁と突き合わせて確かめる。
+    #[test]
+    fn a_wall_can_mix_the_specification_of_its_panels() {
+        let with_material = |id: &str| {
+            let material = wall::find_material(id).expect("表 3.3.1 にある組合せ");
+            let sheathing = material.sheathing();
+            move |panel: &PanelInput| PanelInput {
+                material_id: material.id.to_string(),
+                thickness: material.thickness,
+                shear_modulus: material.shear_modulus,
+                k: material.nail.k,
+                delta_v: material.nail.delta_v,
+                delta_u: material.nail.delta_u,
+                delta_pv: material.nail.delta_pv,
+                grade_id: material.grade_id.to_string(),
+                tau_max: sheathing.tau_max,
+                e1: sheathing.e1,
+                e2: sheathing.e2,
+                ..panel.clone()
+            }
+        };
+        let n50 = with_material("plywood12-n50");
+        let cn50 = with_material("plywood12-cn50");
+
+        let wall_of = |panels: Vec<PanelInput>| {
+            let mut data = wall_example_form();
+            data.walls[0].panels = panels;
+            only_wall(&data)
+        };
+        let panels = wall_example_form().walls[0].panels.clone();
+        let mixed = wall_of(vec![n50(&panels[0]), cn50(&panels[1])]);
+        let all_n50 = wall_of(vec![n50(&panels[0]), n50(&panels[1])]);
+        let all_cn50 = wall_of(vec![cn50(&panels[0]), cn50(&panels[1])]);
+
+        assert_eq!(mixed.get("ok"), Some(&Value::Bool(true)));
+        let k0 = |report: &Value, index: usize| {
+            report.get("panels").unwrap().as_array().unwrap()[index]
+                .get("cells")
+                .unwrap()
+                .as_array()
+                .unwrap()[4]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(k0(&mixed, 0), k0(&all_n50, 0));
+        assert_eq!(k0(&mixed, 1), k0(&all_cn50, 1));
+        assert_ne!(k0(&all_n50, 1), k0(&all_cn50, 1));
+
+        // 混在しているときは、壁の控えが面材ごとの表と面材の名前で案内する。
+        let inputs = labelled(&mixed, "inputs", "label");
+        let (_, summary) = inputs
+            .iter()
+            .find(|(label, _)| label == "面材と釘")
+            .expect("面材と釘の行");
+        assert!(summary.contains("面材ごとに異なる"), "{summary}");
+        assert!(
+            inputs.iter().any(|(label, value)| label.contains("面材「")
+                && value.contains("太め鉄丸釘(CN 釘)50")),
+            "{inputs:?}"
+        );
     }
 
     /// 3.3(1)④ のへりあき（10mm 以上かつ釘の呼び径 ×5 以上）を検定する。
@@ -1885,12 +2305,40 @@ mod tests {
         assert_eq!(report.get("edgeDistanceOk"), Some(&Value::Bool(true)));
     }
 
+    /// 必要なへりあきは面材ごとの釘で決まるので、いちばん余裕の少ない面材で
+    /// 壁の判定にし、その面材の名前を添える。
+    #[test]
+    fn the_edge_distance_check_names_the_panel_with_the_least_margin() {
+        let mut data = wall_example_form();
+        {
+            let panels = &mut data.walls[0].panels;
+            // 太い釘（CN75、呼び径 φ3.76 → 18.8 mm 必要）を上段だけに使う。
+            panels[0].edge_distance = 20.0;
+            panels[1].panel_name = "上段".to_string();
+            panels[1].edge_distance = 16.0;
+            panels[1].material_id = "plywood24-cn75".to_string();
+        }
+        let report = only_wall(&data);
+
+        assert_eq!(report.get("edgeDistanceOk"), Some(&Value::Bool(false)));
+        let value = labelled(&report, "checks", "label")
+            .into_iter()
+            .find(|(label, _)| label.contains("へりあき"))
+            .map(|(_, value)| value)
+            .unwrap();
+        assert!(value.contains("最小 へりあき 16 mm < 18.8 mm"), "{value}");
+        assert!(value.contains("面材「上段」"), "{value}");
+        assert!(value.contains("φ3.76 mm × 5 以上"), "{value}");
+    }
+
     /// 面材と釘を表 3.3.1 から読み込んでいない（4.5 の試験値を直接入力した）
     /// ときは、呼び径が分からないので 10mm の側だけを確かめる。
     #[test]
     fn the_edge_distance_falls_back_to_ten_millimetres_without_a_material() {
         let mut data = wall_example_form();
-        data.walls[0].material_id = String::new();
+        for panel in &mut data.walls[0].panels {
+            panel.material_id = String::new();
+        }
         let report = only_wall(&data);
 
         assert_eq!(report.get("edgeDistanceOk"), Some(&Value::Bool(true)));

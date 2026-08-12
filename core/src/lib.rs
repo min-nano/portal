@@ -186,16 +186,15 @@ mod tests {
     fn compute_all_returns_one_entry_per_wall() {
         let response = call_json(
             r#"{"op": "computeAll", "data": {"walls": [
-                   {"wallId": "w1", "height": 3000, "width": 910, "thickness": 12,
-                    "shearModulus": 0.4, "k": 0.483, "deltaV": 2.3, "deltaU": 17,
-                    "deltaPv": 1.13, "tauMax": 3.6, "e1": 3500, "e2": 5500,
+                   {"wallId": "w1", "height": 3000, "width": 910,
                     "hasIntermediateStud": true,
                     "panels": [{"width": 910, "height": 610, "mode": "grid",
                                 "gridX": "10, 455, 900",
-                                "gridY": "10, 155, 305, 455, 600"}]},
-                   {"wallId": "w2", "height": 3000, "width": 910, "thickness": 12,
-                    "shearModulus": 0.4, "k": 0.483, "deltaV": 2.3, "deltaU": 17,
-                    "deltaPv": 1.13, "tauMax": 3.6, "e1": 3500, "e2": 5500,
+                                "gridY": "10, 155, 305, 455, 600",
+                                "thickness": 12, "shearModulus": 0.4, "k": 0.483,
+                                "deltaV": 2.3, "deltaU": 17, "deltaPv": 1.13,
+                                "tauMax": 3.6, "e1": 3500, "e2": 5500}]},
+                   {"wallId": "w2", "height": 3000, "width": 910,
                     "hasIntermediateStud": true, "panels": []}
                  ]}}"#,
         );
@@ -240,9 +239,6 @@ mod tests {
         let response = call_json(
             r#"{"op": "validate", "data": {
                  "walls": [{"wallName": "南面", "height": 3000, "width": 910,
-                            "thickness": 12, "shearModulus": 0.4, "k": 0.483,
-                            "deltaV": 2.3, "deltaU": 17, "deltaPv": 1.13,
-                            "tauMax": 3.6, "e1": 3500, "e2": 5500,
                             "panels": []}]}}"#,
         );
 
@@ -259,10 +255,11 @@ mod tests {
     fn validate_refuses_a_panel_that_cannot_be_calculated() {
         let response = call_json(
             r#"{"op": "validate", "data": {"walls": [
-                 {"wallName": "南面", "height": 3000, "width": 910, "thickness": 12,
-                  "shearModulus": 0.4, "k": 0.483, "deltaV": 2.3, "deltaU": 17,
-                  "deltaPv": 1.13, "tauMax": 3.6, "e1": 3500, "e2": 5500,
-                  "panels": [{"panelName": "下段", "width": 910, "height": 610}]}]}}"#,
+                 {"wallName": "南面", "height": 3000, "width": 910,
+                  "panels": [{"panelName": "下段", "width": 910, "height": 610,
+                              "thickness": 12, "shearModulus": 0.4, "k": 0.483,
+                              "deltaV": 2.3, "deltaU": 17, "deltaPv": 1.13,
+                              "tauMax": 3.6, "e1": 3500, "e2": 5500}]}]}}"#,
         );
 
         assert_eq!(response.get("ok"), Some(&Value::Bool(false)));

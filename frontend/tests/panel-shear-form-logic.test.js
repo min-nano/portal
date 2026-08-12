@@ -16,8 +16,9 @@ import {
   toRequestBody,
   verificationOf,
   verificationWarning,
-  wallFieldsFromGrade,
-  wallFieldsFromMaterial,
+  panelFieldsFromGrade,
+  panelFieldsFromMaterial,
+  specOf,
   wallLabel,
 } from '../src/timber-panel-shear-calculator/form-logic.js';
 
@@ -49,16 +50,37 @@ describe('emptyFormData / makeWall / makePanel', () => {
     expect(panel.studPitch).toBeGreaterThan(0);
   });
 
-  it('面材と釘の数値は空から始める（確かめないまま計算させない）', () => {
+  it('面材と釘の数値は面材ごとに、空から始める（確かめないまま計算させない）', () => {
+    const panel = makePanel();
+
+    expect([panel.k, panel.deltaV, panel.deltaU, panel.deltaPv]).toEqual(['', '', '', '']);
+    expect([panel.tauMax, panel.e1, panel.e2]).toEqual(['', '', '']);
+    expect([panel.materialId, panel.gradeId]).toEqual(['', '']);
+  });
+
+  it('壁が持つのは階高・幅と中間材の有無だけ（面材と釘は面材ごと）', () => {
     const wall = makeWall();
 
-    expect([wall.k, wall.deltaV, wall.deltaU, wall.deltaPv]).toEqual(['', '', '', '']);
-    expect([wall.tauMax, wall.e1, wall.e2]).toEqual(['', '', '']);
     // 適用範囲 3.3(1)⑦ は中間材（間柱等）を求めているので、既定は「あり」。
     expect(wall.hasIntermediateStud).toBe(true);
     // 階高と壁の幅だけは、よくある寸法を入れておく。
     expect(wall.height).toBeGreaterThan(0);
     expect(wall.width).toBeGreaterThan(0);
+    expect(wall.materialId).toBeUndefined();
+    expect(wall.thickness).toBeUndefined();
+  });
+
+  it('面材の仕様だけを取り出して、次の面材へ引き継げる', () => {
+    const spec = specOf(makePanel({ materialId: 'plywood12-n50', thickness: 12, k: 0.43 }));
+
+    expect(spec.materialId).toBe('plywood12-n50');
+    expect(spec.thickness).toBe(12);
+    expect(spec.k).toBe(0.43);
+    // 仕様以外（寸法・釘配列）は持ち込まない。
+    expect(spec.width).toBeUndefined();
+    expect(spec.nailPitch).toBeUndefined();
+    // 何も無い面材からは空の仕様になる。
+    expect(specOf(undefined).materialId).toBe('');
   });
 
   it('壁 ID・面材 ID は重複しない（PDF に埋め込まれ、読み込み後も使う）', () => {
@@ -78,23 +100,24 @@ describe('mergeFormData', () => {
           wallName: '南面',
           height: '3000',
           width: 910,
-          materialId: 'plywood12-n50',
-          thickness: 12,
-          shearModulus: 0.4,
-          k: 0.483,
-          deltaV: 2.3,
-          deltaU: 17,
-          deltaPv: 1.13,
-          gradeId: 'plywood-jas1',
-          tauMax: 3.6,
-          e1: 3500,
-          e2: 5500,
           hasIntermediateStud: false,
           junk: 1,
           panels: [
             {
               panelId: 'pn1',
               panelName: '下段',
+              // 面材と釘は面材ごとの入力（1 枚の壁でも張り分けられる）。
+              materialId: 'plywood12-n50',
+              thickness: 12,
+              shearModulus: 0.4,
+              k: 0.483,
+              deltaV: 2.3,
+              deltaU: 17,
+              deltaPv: 1.13,
+              gradeId: 'plywood-jas1',
+              tauMax: 3.6,
+              e1: 3500,
+              e2: 5500,
               width: 910,
               height: 1820,
               mode: 'layout',
@@ -118,6 +141,11 @@ describe('mergeFormData', () => {
     expect(data.walls[0].panels[0]).toMatchObject({
       panelId: 'pn1',
       panelName: '下段',
+      materialId: 'plywood12-n50',
+      thickness: 12,
+      k: 0.483,
+      gradeId: 'plywood-jas1',
+      tauMax: 3.6,
       width: 910,
       height: 1820,
       mode: 'layout',
@@ -126,6 +154,7 @@ describe('mergeFormData', () => {
       edgeDistance: 15,
       grain: 'width',
     });
+    expect(data.walls[0].panels[0].junk).toBeUndefined();
     expect(data.walls[0].panels[0].junk).toBeUndefined();
   });
 
@@ -260,7 +289,7 @@ describe('面材と釘の一覧（グレー本 表 3.3.1 / 表 3.3.2）', () => 
 
   it('表 3.3.1 の 1 行は、規格（表 3.3.2）ごと入力欄の値になる', () => {
     // 1 回の選択で、せん断破壊・せん断座屈の検定に要る数値までそろう。
-    expect(wallFieldsFromMaterial(material)).toEqual({
+    expect(panelFieldsFromMaterial(material)).toEqual({
       materialId: 'plywood12-n50',
       thickness: 12,
       shearModulus: 0.4,
@@ -284,7 +313,7 @@ describe('面材と釘の一覧（グレー本 表 3.3.1 / 表 3.3.2）', () => 
       e2: 5500,
     };
 
-    expect(wallFieldsFromGrade(grade)).toEqual({
+    expect(panelFieldsFromGrade(grade)).toEqual({
       gradeId: 'plywood-jas2',
       tauMax: 2.4,
       e1: 3500,
