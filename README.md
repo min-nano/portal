@@ -2,7 +2,7 @@
 
 社内向けツールをまとめる Web ポータルです。GAS（Google Apps Script）で運用してきたツールを、デプロイ・URL 管理の制約が少ない構成へ移行していきます。
 
-最初のツールとして、[gas-addon-excel-report-formatter](https://github.com/h-ikeda/gas-addon-excel-report-formatter) と同等の **現況検査レポート作成ツール**（傾斜測定 報告フォーム → Excel 出力）を実装しています。続いて **構造計算安全証明書 作成ツール**（第四号書式の証明書 → PDF を Drive へ保存 / 既存 PDF の編集）を追加しました。
+最初のツールとして、[gas-addon-excel-report-formatter](https://github.com/h-ikeda/gas-addon-excel-report-formatter) と同等の **現況検査レポート作成ツール**（傾斜測定 報告フォーム → Excel 出力）を実装しています。続いて **構造計算安全証明書 作成ツール**（第四号書式の証明書 → PDF を Drive へ保存 / 既存 PDF の編集）、[gas-timber-panel-shear-calculator](https://github.com/min-nano/gas-timber-panel-shear-calculator) から移植した **面材張り耐力要素 釘配列諸定数 計算ツール**（グレー本 3.2 の計算 → 計算書 PDF）を追加しました。
 
 ## 🏗 システム構成
 
@@ -76,6 +76,24 @@ GAS 版の機能をそのまま移植しています。
 
 読み込みの精度について: このツールが作った PDF は、フォーム入力そのものを PDF の文書情報に埋め込んでいるため **完全に復元** できます。それ以外の PDF は本文のレイアウトから推定するため、画面に「推定して読み込んだ」旨の注意が出ます（○ はベクター図形なので、選択肢は位置から復元できます。一方、雛形上で同じ行に並ぶ「建築物の名称」と「用途」は分離できないため、まとめて名称欄へ読み込みます）。
 
+### 面材張り耐力要素 釘配列諸定数 計算ツール
+
+グレー本『木造軸組工法住宅の許容応力度設計』の **3.2 面材張り耐力要素の詳細計算法で用いる釘配列諸定数の計算**（式 3.2.1〜3.2.7）に沿って、釘配列諸定数 **Ixy・Zxy・Cxy** を求めます。GAS 版 [gas-timber-panel-shear-calculator](https://github.com/min-nano/gas-timber-panel-shear-calculator) の移植です。
+
+* 面材寸法（→ 面材面積 Aw）と釘配列（格子または座標の直接入力）から、`Ixy`（式 3.2.1）・`Zxy`（式 3.2.3）・`Cxy`（式 3.2.5）を算定
+* 途中経過（x0, y0, Ix, Iy, Zx, Zy, αx, Zpxy …）も式番号つきですべて表示し、計算のブラックボックス化を防ぐ（白箱化）
+* 「グレー本の計算例を読み込む」で、解説（図 3.2.2）の計算例をワンクリックで再現できる
+* **1 ファイル = 1 物件**。物件の中の複数パターン（面材の配置ちがい）をページ送りで切り替えて編集し、**計算書 PDF では 1 ページ = 1 パターン**になる
+* 計算書には入力・釘配列諸定数・途中経過に加えて、**釘配列図**（面材の枠・釘・弾性中立軸）を描く
+
+**GAS 版からの変更**: GAS 版はスプレッドシートへ「現在値（パターン）＋履歴」を書き出していましたが、本ポータルでは**スプレッドシートを使いません**。証明書ツールと同じく **成果物の PDF そのものが保存形式**で、フォーム入力を PDF の文書情報に埋め込むため、保存した PDF を開き直せば入力を完全に復元して続きを編集できます。ファイル操作の考え方も証明書ツールと同じ「新規作成 / 開く（Drive・手元の PDF）/ 保存（上書き）/ 別名で保存」で、上書き保存の前の版は Drive の版履歴に残ります。
+
+**雛形はありません**。計算書は帳票ではなく計算過程そのものなので、バックエンドが PDF を直接組み立てます（`backend/app/pdf_write.py`）。そのため、このツールには共有設定（雛形の場所）もありません。
+
+**計算は必ずサーバ側の唯一の実装を通ります**。画面は入力のたびにバックエンドへ計算を問い合わせ、返ってきた**表示用の文字列をそのまま並べる**だけです（有効桁の丸めもサーバ側で行う）。そのため画面の数値と計算書 PDF の数値が食い違うことがありません。計算の実装は `backend/app/nail_array.py` の 1 か所だけで、GAS 版と同じくグレー本の解説の計算例をユニットテストで再現しています。
+
+> **計算書 PDF のフォントについて**: 本文のフォントは **Noto Sans JP**（SIL Open Font License 1.1）を `backend/app/fonts/` に同梱し、**その PDF で実際に使った文字だけを取り出したサブセットを埋め込みます**。閲覧側の環境に日本語フォントがあるかどうかに関係なく、いつでも同じ字形で表示されます。同梱フォントは 5.8MB ありますが、埋め込まれるのは使った文字だけなので計算書 1 通は数十 KB です（切り出しは fontTools が行い、生成 1 回あたり 0.1 秒程度）。
+
 ## 📁 リポジトリ構成
 
 ```
@@ -83,11 +101,15 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   index.html                  # ポータルトップ（ツール一覧）
   tools/excel-report-formatter/index.html
   tools/structural-cert-formatter/index.html
+  tools/timber-panel-shear-calculator/index.html
   src/auth.js                 # Clerk（サインインゲート・トークン取得）
   src/api.js                  # Bearer 付き fetch ラッパー
   src/google-picker.js        # 公式 Google Picker（Drive のファイル選択）
+  src/pdf-file-ops.js         # PDF ツール共通のファイル操作（保存の判断・文言）
+  src/save-dialogs.js         # PDF ツール共通の保存 / 未保存確認ダイアログ
   src/excel-report-formatter/ # フォーム本体（GAS 版 index.html の移植）
   src/structural-cert-formatter/  # 構造計算安全証明書のフォーム・編集画面
+  src/timber-panel-shear-calculator/  # 釘配列諸定数の入力・結果表示・釘配列図
 backend/                      # Cloud Run サービス (FastAPI)
   app/main.py                 # API ルート
   app/clerk_auth.py           # Clerk JWT 検証
@@ -99,6 +121,10 @@ backend/                      # Cloud Run サービス (FastAPI)
   app/structural_cert.py      # 証明書の生成・PDF 解析
   app/structural_cert_mapping.json  # 証明書の雛形マッピング（単一の情報源）
   app/pdf_tools.py            # PDF の文字座標取得と ○ の描き込み
+  app/nail_array.py           # 釘配列諸定数の計算（唯一の計算実装）
+  app/panel_shear.py          # 計算書 PDF の組み立てと読み戻し
+  app/pdf_write.py            # 日本語まじりの PDF を組み立てる最小限のライター
+  app/fonts/                  # 計算書 PDF に埋め込む日本語フォント（Noto Sans JP, OFL 1.1）
 firestore/                    # Firestore セキュリティルールとそのテスト
   firestore.rules             # クライアント SDK からのアクセスを全面拒否（deny-all）
   tests/rules.test.js         # エミュレータでルールを検証
@@ -177,9 +203,10 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
    | スコープ | 使う場面 |
    | --- | --- |
    | `drive.readonly` | 選ばれたファイルの確認と雛形の取得、編集する PDF の読み込み、Google Picker へ渡すトークン（現況検査レポート作成ツールはこれだけで完結） |
-   | `drive` + `documents` | 構造計算安全証明書の生成。雛形の複製・プレースホルダー置換・PDF 書き出し・複製の削除・Drive への保存 |
+   | `drive` | PDF の Drive への保存（構造計算安全証明書・釘配列諸定数の計算書に共通） |
+   | `documents` | 構造計算安全証明書の雛形（Google ドキュメント）のプレースホルダー置換 |
 
-   ※ 書き込みスコープは代理するユーザー本人の権限の範囲でしか効きません（本人が書けない場所へは保存できません）。証明書ツールを使わない場合は `drive.readonly` だけの登録で構いません。
+   ※ 書き込みスコープは代理するユーザー本人の権限の範囲でしか効きません（本人が書けない場所へは保存できません）。PDF を保存するツールを使わない場合は `drive.readonly` だけの登録で構いません。`documents` が要るのは証明書ツールだけです（釘配列諸定数の計算書は雛形を使わず、バックエンドが PDF を直接組み立てます）。
 
    **スコープを登録したのに HTTP 403 になる場合**: スコープ不足ではなく、GCP プロジェクトで API 自体が有効になっていない（`SERVICE_DISABLED`）ことがあります。特に Google Docs API は有効化を忘れやすいので、「2. GCP プロジェクト」の `gcloud services enable` に `docs.googleapis.com` が含まれているか確認してください。画面に出るエラーには Google からの応答がそのまま添えられるので、そちらでどちらの原因かを判別できます。
 
@@ -244,6 +271,7 @@ preview-channels/pr-29/tool_settings/excel-report-formatter
 | --- | --- |
 | `excel-report-formatter` | `template_folder_id` / `template_file_name` |
 | `structural-cert-formatter` | `template_folder_id` / `template_file_name`（Google ドキュメントの雛形） |
+| `timber-panel-shear-calculator` | （なし。雛形を使わないので共有設定を持たない） |
 
 **未設定のときは development** を指し、本番を指すのは `SETTINGS_CHANNEL_PATH=static-channels/production` を明示的に設定した Cloud Run サービスだけです。環境変数の設定漏れ・ローカル開発・壊れたワークフローのいずれからも本番データに到達できないため、設定ミスの症状は必ず「設定が空に見える」であり、「本番を汚す」は起こりません。
 
@@ -502,12 +530,14 @@ npm run dev
 旧リポジトリのテスト（Cloud Function の pytest・GAS の jest）を新構成に移植しています。CI（`.github/workflows/tests.yml`）が push / PR ごとに実行します。
 
 ```bash
-# バックエンド: API 経由の Excel 生成・証明書 PDF の生成と解析・雛形設定・JWT 検証
+# バックエンド: API 経由の Excel 生成・証明書 PDF の生成と解析・釘配列諸定数の計算と
+# 計算書 PDF の往復・雛形設定・JWT 検証
 # （Drive/Docs/Firestore と認証はテスト内でフェイク）
 cd backend && python -m pytest
 
-# フロントエンド: フォームの純粋ロジック（バリデーション・数値正規化・ファイル名の組み立て）と
-# Google Picker の呼び出し（gapi / GIS / Picker はテスト内でフェイク）
+# フロントエンド: フォームの純粋ロジック（バリデーション・数値正規化・ファイル名の組み立て・
+# 釘配列図の幾何計算）、画面とデータの往復、Google Picker の呼び出し
+# （gapi / GIS / Picker はテスト内でフェイク）
 cd frontend && npm test
 
 # Firestore ルール: クライアント SDK からのアクセスが全面拒否されること
@@ -590,6 +620,27 @@ for line in pages[0].lines:
 
 テストでは雛形そのものを同梱せず（個人名・登録番号が入るため）、同じレイアウトの PDF を `backend/tests/pdf_util.py` がその場で組み立てています。
 
+## 🧮 計算書 PDF（釘配列諸定数）
+
+証明書と違い、こちらは**雛形もマッピングも持ちません**。計算書は決まった書式の帳票ではなく計算過程そのものなので、レイアウトは `backend/app/panel_shear.py` の `_draw_page` / `_draw_diagram` に直接書いてあります。
+
+* **書式は自由に変えてよい** ことにしています。読み戻しは本文の解析ではなく、PDF の文書情報に埋め込んだフォーム入力（`METADATA_KEY`）だけを見るためです。見出しの並べ替え・項目の追加・図の作り直しをしても、過去に保存した PDF は問題なく開けます。
+* 逆に、**文書情報のキーと入力の形（`normalize_data` が返す構造）を変えると、過去の PDF は読めなくなります**。ここだけは互換性を意識してください（現状は暫定の形なので、必要なら作り直して構いません）。
+* PDF の組み立ては `backend/app/pdf_write.py` の小さなライターで行います。使えるのは「文字を置く」「線・矩形・円を描く」だけです。座標は PDF の慣習どおり左下原点・単位はポイント（1/72 インチ）で、A4 縦を既定にしています。
+* **フォントは同梱してサブセットを埋め込みます**（`backend/app/fonts/NotoSansJP-Regular.ttf`、SIL Open Font License 1.1。ライセンス全文は同じフォルダの `LICENSE.txt`）。字幅もこのフォントの実測値を使うため、右寄せ・中央寄せの位置は実際の描画と一致します。フォントを差し替えるときは `FONT_PATH` を変えるだけですが、**TrueType（glyf）形式**である必要があります（CFF/OTF は埋め込み方が変わります）。可変フォントの場合は、あらかじめ 1 つのウェイトに固定した静的フォントにしてから置いてください。
+* 出来上がりを目で確かめたいときは、テストと同じ手順で PDF を書き出して開いてください。
+
+```python
+from app import panel_shear
+
+data = panel_shear.normalize_data({
+    "projectName": "○○邸 新築工事",
+    "issuedOn": "2026-08-11",
+    "patterns": [panel_shear.EXAMPLE_PATTERN],   # グレー本 解説の計算例
+})
+open("計算書.pdf", "wb").write(panel_shear.build_pdf(data, panel_shear.validate(data)))
+```
+
 ## 🚀 ロードマップ
 
 - [x] **Phase 1: ポータル基盤**
@@ -598,6 +649,9 @@ for line in pages[0].lines:
 - [ ] **Phase 2: 移行の完了と拡張**
   - 旧 GAS 版からの利用切り替え・GAS の廃止。
   - 「非破壊検査」フォーマットへのマッピング対応、画像アップロード機能。
+  - 面材張り耐力要素 釘配列諸定数 計算ツール（グレー本 3.2）の移植は完了。
+    続きは耐力壁・水平構面の剛性・耐力の詳細計算（グレー本 3.3〜3.6）と、
+    面材・釘・枠材のマスタからの選択（GAS 版 ROADMAP のフェーズ 1・3）。
 - [ ] **Phase 3: AI（Gemini API）連携による自動化**
   - 手書き図面の画像から計測値を抽出し、フォームに初期値を自動設定。
 - [ ] **Phase 4: 実運用向けチューニング**

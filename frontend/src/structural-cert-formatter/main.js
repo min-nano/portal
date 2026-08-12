@@ -11,15 +11,15 @@
 // 保存ダイアログでファイル名と保存先フォルダを指定する。未保存のまま別の
 // ファイルへ移ろうとしたときは、保存するかどうかを尋ねる。
 //
-// Google Picker は「ファイルを選ぶ」画面で、保存する名前を入力させることは
-// できない。そのため保存ダイアログは自前で持ち、場所（フォルダ）の選択だけを
-// Picker に任せている。
+// 保存・未保存確認のダイアログは、PDF を成果物とする他のツールと共通なので
+// ../save-dialogs.js にある。
 
 import '../styles.css';
 import { requireSignIn } from '../auth.js';
 import { redirectToCanonicalHost } from '../canonical-host.js';
 import { apiGet, apiPostFile, apiSendJson } from '../api.js';
 import { pickFile, preloadPicker } from '../google-picker.js';
+import { askSaveAs, askUnsaved } from '../save-dialogs.js';
 import {
   applyFormData,
   buildForm as buildFormInto,
@@ -29,14 +29,16 @@ import {
 import {
   canOverwrite,
   confirmSaveMessage,
-  defaultSaveName,
-  emptyFormData,
   ensurePdfExtension,
-  formSignature,
-  mergeFormData,
   saveHintMessage,
   saveModeFor,
   unsavedPromptMessage,
+} from '../pdf-file-ops.js';
+import {
+  defaultSaveName,
+  emptyFormData,
+  formSignature,
+  mergeFormData,
   validateFormData,
 } from './form-logic.js';
 
@@ -302,41 +304,6 @@ async function confirmDiscardChanges(action) {
   return true;
 }
 
-function askUnsaved(message) {
-  const dialog = document.getElementById('unsavedDialog');
-  document.getElementById('unsavedMessage').textContent = message;
-  // <dialog> を開けない環境では、保存の有無までは選べないので破棄の確認だけ行う。
-  if (typeof dialog.showModal !== 'function') {
-    return Promise.resolve(
-      window.confirm(`${message}\n\n（OK で保存せずに進みます）`) ? 'discard' : 'cancel'
-    );
-  }
-  return new Promise((resolve) => {
-    // 選ばれた時点で、この 1 回分の待ち受けをまとめて解除する。
-    const listening = new AbortController();
-    const finish = (choice) => {
-      listening.abort();
-      dialog.close();
-      resolve(choice);
-    };
-    dialog.querySelectorAll('[data-choice]').forEach((button) => {
-      button.addEventListener('click', () => finish(button.dataset.choice), {
-        signal: listening.signal,
-      });
-    });
-    // Esc キーで閉じたときは「キャンセル」と同じ扱いにする。
-    dialog.addEventListener(
-      'cancel',
-      (event) => {
-        event.preventDefault();
-        finish('cancel');
-      },
-      { signal: listening.signal }
-    );
-    dialog.showModal();
-  });
-}
-
 async function newDocument() {
   if (!(await confirmDiscardChanges('新規作成'))) return;
   applyToForm(emptyFormData(config));
@@ -376,79 +343,19 @@ async function save(mode) {
 
   // 新規保存・別名保存は、通常のアプリの「名前を付けて保存」と同じように
   // ファイル名と保存先フォルダを尋ねる。
-  const chosen = await askSaveAs(defaultSaveName(config, data, documentName));
+  const chosen = await askSaveAs({
+    title: canOverwrite(sourceFile) ? '別名で保存' : '保存',
+    defaultName: defaultSaveName(config, data, documentName),
+    initialFolder: lastFolder,
+    pickFolder: () => chooseFromDrive('destination'),
+    ensureName: (name) => ensurePdfExtension(name, config.default_file_name),
+  });
   if (!chosen) return false; // ダイアログをキャンセルした。
+  lastFolder = chosen.folder;
   return sendSaveRequest(data, {
     mode: 'new',
     fileName: chosen.fileName,
     folderId: chosen.folder.id,
-  });
-}
-
-/**
- * 保存ダイアログ。ファイル名と保存先フォルダが決まったら
- * { fileName, folder } を返す。キャンセルなら null。
- *
- * フォルダを選ぶ Picker は Google 側の重ね表示で、モーダルダイアログ
- * （最前面レイヤー）の下に隠れてしまう。そのため Picker を出す間だけ
- * ダイアログを閉じ、選び終えたら開き直す（入力中の名前はそのまま残る）。
- */
-function askSaveAs(defaultName) {
-  const dialog = document.getElementById('saveAsDialog');
-  const nameInput = document.getElementById('saveAsName');
-  const folderEl = document.getElementById('saveAsFolderName');
-  const confirmBtn = document.getElementById('saveAsConfirmBtn');
-
-  document.getElementById('saveAsTitle').textContent = canOverwrite(sourceFile)
-    ? '別名で保存'
-    : '保存';
-  nameInput.value = defaultName;
-  let folder = lastFolder;
-
-  const showFolder = () => {
-    folderEl.textContent = folder ? folder.name : '未選択';
-    folderEl.className = folder ? 'name' : 'unset';
-    // 名前と場所の両方が決まるまでは保存できない。
-    confirmBtn.disabled = !folder || !nameInput.value.trim();
-  };
-  showFolder();
-
-  return new Promise((resolve) => {
-    const listening = new AbortController();
-    const on = (el, type, handler) =>
-      el.addEventListener(type, handler, { signal: listening.signal });
-    const finish = (value) => {
-      listening.abort();
-      dialog.close();
-      resolve(value);
-    };
-
-    on(nameInput, 'input', showFolder);
-    on(nameInput, 'keydown', (event) => {
-      if (event.key === 'Enter' && !confirmBtn.disabled) confirmBtn.click();
-    });
-    on(document.getElementById('saveAsFolderBtn'), 'click', async () => {
-      dialog.close();
-      const picked = await chooseFromDrive('destination');
-      if (picked) folder = picked;
-      showFolder();
-      dialog.showModal();
-    });
-    on(confirmBtn, 'click', () => {
-      const fileName = ensurePdfExtension(nameInput.value, config.default_file_name);
-      lastFolder = folder;
-      finish({ fileName, folder });
-    });
-    on(document.getElementById('saveAsCancelBtn'), 'click', () => finish(null));
-    // Esc キーで閉じたときは「キャンセル」と同じ扱いにする。
-    on(dialog, 'cancel', (event) => {
-      event.preventDefault();
-      finish(null);
-    });
-
-    dialog.showModal();
-    nameInput.focus();
-    nameInput.select();
   });
 }
 

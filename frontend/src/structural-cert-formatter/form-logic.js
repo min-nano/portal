@@ -4,6 +4,11 @@
 // から導出して配信するため、ここには「配られた定義をどう扱うか」だけを置く。
 // バリデーションはバックエンドでも同じ内容を行っている（こちらは、送信して
 // から差し戻されるのを避けるための先回りの案内）。
+//
+// 「保存 / 別名で保存 / 未保存の確認」といったファイル操作の判断と文言は、
+// PDF を成果物とする他のツールと共通なので ../pdf-file-ops.js にある。
+
+import { sanitizeFileName } from '../pdf-file-ops.js';
 
 /** すべてのキーを空文字で持つフォームデータを作る。 */
 export function emptyFormData(config) {
@@ -191,15 +196,6 @@ export function formatCertificateDate(fields) {
   return `${eraYear}年${month}月${day}日`;
 }
 
-/** ファイル名に使えない文字を落とす。バックエンドの整形と同じ規則。 */
-export function sanitizeFileName(name) {
-  return String(name || '')
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\\/:*?"<>|\x00-\x1f]/g, '')
-    .trim()
-    .replace(/^\.+|\.+$/g, '');
-}
-
 /**
  * 入力内容から既定のファイル名を組み立てる。
  * template は /config が配る "構造計算安全証明書_{building_name}.pdf" のような文字列。
@@ -211,53 +207,6 @@ export function suggestedFileName(template, data, fallback) {
   });
   const name = sanitizeFileName(filled).replace('_.pdf', '.pdf');
   return name || fallback;
-}
-
-/** 拡張子 .pdf を必ず付ける。 */
-export function ensurePdfExtension(name, fallback) {
-  const cleaned = sanitizeFileName(name);
-  if (!cleaned) return fallback;
-  return /\.pdf$/i.test(cleaned) ? cleaned : `${cleaned}.pdf`;
-}
-
-/** 保存前の確認文。上書きは取り消しづらいので、対象を明示する。 */
-export function confirmSaveMessage(mode, fileName, sourceFile) {
-  if (mode === 'overwrite') {
-    const target = (sourceFile && sourceFile.name) || fileName;
-    return (
-      `Google Drive 上の「${target}」を上書きします。\n` +
-      '（上書き前の内容は、しばらくの間は Drive の版履歴から復元できます）\n\nよろしいですか？'
-    );
-  }
-  return `「${fileName}」という名前で新しく保存します。\n\nよろしいですか？`;
-}
-
-/** 上書き保存できるのは、Drive 上のファイルを開いているときだけ。 */
-export function canOverwrite(sourceFile) {
-  return Boolean(sourceFile && sourceFile.id);
-}
-
-/**
- * 「保存」を押したときの動き。
- *
- * 通常のアプリと同じで、保存先は基本的に編集中のファイル。まだ Drive 上に
- * 実体が無い（新規作成・手元の PDF を開いた）ときだけ、別名保存と同じく
- * 保存する場所をそのつど選ぶ。
- */
-export function saveModeFor(sourceFile) {
-  return canOverwrite(sourceFile) ? 'overwrite' : 'new';
-}
-
-/** 保存欄の案内文。「保存」を押すと何が起きるかを書く。 */
-export function saveHintMessage(sourceFile) {
-  if (canOverwrite(sourceFile)) {
-    return (
-      `「保存」で Drive 上の「${sourceFile.name}」を上書きします` +
-      '（直前の内容はしばらくの間 Drive の版履歴から復元できます）。' +
-      '別の名前・別の場所に保存するときは「別名で保存」を使ってください。'
-    );
-  }
-  return 'まだ保存していません。「保存」を押すと、ファイル名と保存先フォルダを指定する画面が開きます。';
 }
 
 /**
@@ -280,12 +229,4 @@ export function defaultSaveName(config, data, documentName) {
  */
 export function formSignature(data) {
   return JSON.stringify({ fields: data.fields, choices: data.choices });
-}
-
-/** 未保存のまま新規作成・読み込みへ移ろうとしたときの確認文。 */
-export function unsavedPromptMessage(sourceFile, action) {
-  const target = canOverwrite(sourceFile)
-    ? `「${sourceFile.name}」への変更`
-    : '入力した内容';
-  return `${target}は保存されていません。${action}の前に保存しますか？`;
 }
