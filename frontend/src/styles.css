@@ -175,10 +175,6 @@ button.secondary:disabled { background-color: #aaa; }
 .panel-size .area { font-size: 0.85em; color: #333; padding-bottom: 9px; }
 .panel-size .area .label { color: #555; margin-right: 6px; }
 
-/* セクション見出しの右に置く補助ボタン（計算例の読み込み）。 */
-.section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-.section-head button { margin-top: 0; width: auto; padding: 5px 10px; font-size: 0.78em; }
-
 /* 釘配列諸定数（Ixy・Zxy・Cxy）。計算書 PDF の並びに合わせる。 */
 .result-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .result-box { flex: 1; min-width: 8em; border: 1px solid #d3e0ff; border-radius: 6px; background: #eef3ff; padding: 8px; text-align: center; }

@@ -38,13 +38,14 @@ VERIFY_RELATIVE_TOLERANCE = 1e-9
 # 突き合わせの結果に並べる差の上限（全項目が違うときに応答が膨れないように）。
 MAX_REPORTED_DIFFERENCES = 20
 
-# グレー本 解説の計算例（図 3.2.2）。画面の「計算例を読み込む」で使う。
+# グレー本 解説の計算例（図 3.2.2）。テストと README の例で使う基準の配列。
 #
 # 面材は W 910 × H 610（横置き。長辺が横で、間柱は 455 ピッチ）。本は左下の
 # 釘を (0, 0) として 890 × 590 の広がりで書いているが、ここではへりあき
 # 10 mm を見込んで面材の左下を原点にする。平行移動なので Ixy・Zxy・Cxy は
 # 本と同じで、弾性中立軸だけが x0 = 455、y0 = 305 になる。この配列は
-# 表 3.2.1 の「910×610 横置・川型（@455 / 釘 @150）」そのもの。
+# 表 3.2.1 の「910×610 横置・川型（@455 / 釘 @150）」そのものなので、画面では
+# 標準的な釘配列の一覧から呼び出す（計算例だけを読み込む操作は置いていない）。
 EXAMPLE_PATTERN = {
     "patternName": "グレー本の計算例",
     "width": 910,
@@ -414,7 +415,7 @@ def parse_pdf(pdf_bytes: bytes) -> dict:
 
 
 def form_config(core_path: str) -> dict:
-    """画面が必要とする既定値を配信する（ファイル名の組み立てと計算例）。
+    """画面が必要とする既定値を配信する（ファイル名の組み立て）。
 
     編集中の計算は画面が行うため、計算実装（wasm）の在り処もここで知らせる。
     URL に中身のハッシュを付けるので、実装が変われば画面は必ず新しいものを
@@ -424,7 +425,6 @@ def form_config(core_path: str) -> dict:
     return {
         "default_file_name": DEFAULT_FILE_NAME,
         "file_name_template": FILE_NAME_TEMPLATE,
-        "example": EXAMPLE_PATTERN,
         "max_patterns": nail_core.config()["maxPatterns"],
         "core": {
             "url": f"{core_path}?v={digest[:16]}",

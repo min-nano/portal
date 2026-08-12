@@ -50,14 +50,14 @@ def valid_body(**overrides):
 # --- 設定 --------------------------------------------------------------------
 
 
-def test_config_carries_the_reference_example(client):
+def test_config_carries_the_file_name_defaults(client):
     resp = client.get(CONFIG_URL)
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["default_file_name"] == "釘配列諸定数計算書.pdf"
-    # 画面の「グレー本の計算例を読み込む」はサーバ側の定義を使う。
-    assert body["example"]["gridX"] == "10, 455, 900"
+    assert body["file_name_template"] == panel_shear.FILE_NAME_TEMPLATE
+    assert body["max_patterns"] == nail_core.config()["maxPatterns"]
 
 
 def test_config_points_at_the_calculation_core(client):
