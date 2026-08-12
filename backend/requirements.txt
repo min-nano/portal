@@ -7,6 +7,11 @@ openpyxl==3.1.5
 pypdf>=6.6.1,<7
 pdfminer.six>=20250506
 python-multipart>=0.0.20,<1
+# 釘配列諸定数の計算は Rust で書いた唯一の実装（core/）を wasm として動かす。
+# 画面（ブラウザ）が動かすのとまったく同じ .wasm をサーバも読み込むため、
+# 計算の実装が 2 つに分かれない（README「計算の一元管理（Rust → wasm）」参照）。
+# wasmtime の wheel はネイティブライブラリ同梱で、ビルドに Rust は要らない。
+wasmtime>=47.0.1,<48
 # 釘配列諸定数の計算書 PDF は雛形を使わずバックエンドが直接組み立てる。
 # fontTools は、同梱した日本語フォント（app/fonts、SIL OFL 1.1）から
 # 「その PDF で実際に使った文字だけ」を切り出して埋め込むために使う。

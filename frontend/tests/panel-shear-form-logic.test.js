@@ -10,6 +10,8 @@ import {
   patternLabel,
   suggestedFileName,
   toRequestBody,
+  verificationOf,
+  verificationWarning,
 } from '../src/timber-panel-shear-calculator/form-logic.js';
 
 // バックエンドの /config が配る内容の縮小版。
@@ -167,5 +169,54 @@ describe('パターンの増減', () => {
   it('タブの名前は未入力なら通し番号で代替する', () => {
     expect(patternLabel({ patternName: '南面' }, 0)).toBe('南面');
     expect(patternLabel({ patternName: '  ' }, 2)).toBe('パターン3');
+  });
+});
+
+describe('保存時の突き合わせ', () => {
+  const reports = [
+    { ok: true, patternId: 'p1', result: { Cxy: 1.26155 } },
+    { ok: false, patternId: 'p2', error: '釘座標が入力されていません。' },
+  ];
+
+  it('計算できたパターンの結果だけを添える', () => {
+    expect(verificationOf('1.0.0', reports)).toEqual({
+      coreVersion: '1.0.0',
+      patterns: [{ patternId: 'p1', result: { Cxy: 1.26155 } }],
+    });
+  });
+
+  it('食い違いが無ければ警告を出さない', () => {
+    expect(verificationWarning({ checked: true, ok: true })).toBe('');
+    // 突き合わせていない（材料を送っていない）ときも黙っている。
+    expect(verificationWarning({ checked: false, ok: true })).toBe('');
+    expect(verificationWarning(null)).toBe('');
+  });
+
+  it('違った値を、どのパターンのどの項目か分かる形で並べる', () => {
+    const warning = verificationWarning({
+      checked: true,
+      ok: false,
+      coreVersion: { client: '1.0.0', server: '1.0.0' },
+      differences: [
+        { patternName: '南面', key: 'Cxy', client: 1.25, server: 1.26155 },
+      ],
+      omittedDifferences: 3,
+    });
+
+    expect(warning).toContain('南面 の Cxy（画面 1.25 / 計算書 1.26155）');
+    expect(warning).toContain('ほか 3 件');
+    expect(warning).toContain('サーバーで計算し直した値');
+  });
+
+  it('計算エンジンの版が違うときは、再読み込みを促す', () => {
+    const warning = verificationWarning({
+      checked: true,
+      ok: false,
+      coreVersion: { client: '0.9.0', server: '1.0.0' },
+      differences: [],
+    });
+
+    expect(warning).toContain('0.9.0');
+    expect(warning).toContain('再読み込み');
   });
 });

@@ -1,18 +1,20 @@
 """面材張り耐力要素 釘配列諸定数 計算ツールの API テスト。
 
 Drive・認証は conftest のフェイクに差し替え、ルートハンドラのロジック
-（計算・保存方法の切り替え・PDF の読み戻し）を実際に通して検証する。
+（保存方法の切り替え・突き合わせ・PDF の読み戻し）を実際に通して検証する。
 このツールは雛形を使わないので、共有設定は関わらない。
+
+編集中の計算に API は使わない（画面が /core.wasm を受け取って手元で計算する）。
 """
 
 import pytest
 
-from app import panel_shear
+from app import nail_core, panel_shear
 from tests.conftest import FOLDER_MIME, PDF_MIME, TEST_EMAIL
 
 BASE = "/api/tools/timber-panel-shear-calculator"
 CONFIG_URL = f"{BASE}/config"
-CALCULATIONS_URL = f"{BASE}/calculations"
+CORE_URL = f"{BASE}/core.wasm"
 REPORTS_URL = f"{BASE}/reports"
 PARSE_URL = f"{BASE}/reports/parse"
 PARSE_DRIVE_URL = f"{BASE}/reports/parse-drive"
@@ -58,46 +60,36 @@ def test_config_carries_the_reference_example(client):
     assert body["example"]["gridX"] == "0, 445, 890"
 
 
+def test_config_points_at_the_calculation_core(client):
+    """画面はここで知らされた URL から計算実装を受け取る。"""
+    body = client.get(CONFIG_URL).json()
+
+    assert body["core"]["version"] == nail_core.version()
+    assert body["core"]["sha256"] == nail_core.sha256()
+    # 中身が変わると URL も変わる（古い実装がキャッシュに残らない）。
+    assert body["core"]["url"] == f"{CORE_URL}?v={nail_core.sha256()[:16]}"
+
+
 def test_config_requires_auth(anon_client):
     assert anon_client.get(CONFIG_URL).status_code == 401
 
 
-# --- 計算（画面の逐次表示） --------------------------------------------------
+# --- 計算実装の配布 ----------------------------------------------------------
 
 
-def test_calculations_return_the_reference_values(client):
-    resp = client.post(CALCULATIONS_URL, json=valid_body())
-
-    assert resp.status_code == 200
-    pattern = resp.json()["patterns"][0]
-    assert pattern["ok"] is True
-    assert {row["key"]: row["value"] for row in pattern["summary"]} == {
-        "Ixy": "0.888868",
-        "Zxy": "0.00358851",
-        "Cxy": "1.26155",
-    }
-    # 釘座標もサーバが組み立てて返す（画面の配列図はこれを描く）。
-    assert len(pattern["nails"]) == 15
-
-
-def test_calculations_report_a_broken_pattern_per_pattern(client):
-    """入力途中の不備で、他のパターンの結果まで消さない。"""
-    body = valid_body(patterns=[dict(EXAMPLE), {"patternId": "p2", "width": 610}])
-
-    resp = client.post(CALCULATIONS_URL, json=body)
+def test_core_wasm_is_the_same_bytes_the_server_calculates_with(client):
+    resp = client.get(CORE_URL)
 
     assert resp.status_code == 200
-    patterns = resp.json()["patterns"]
-    assert patterns[0]["ok"] is True
-    assert patterns[1]["ok"] is False
-    assert patterns[1]["error"]
+    assert resp.headers["content-type"] == "application/wasm"
+    assert resp.content == nail_core.wasm_bytes()
+    assert resp.content.startswith(b"\x00asm")
+    # URL にハッシュが付くので、中身が変わらないうちは取り直さなくてよい。
+    assert "immutable" in resp.headers["cache-control"]
 
 
-def test_calculations_reject_a_non_numeric_dimension(client):
-    resp = client.post(CALCULATIONS_URL, json={"patterns": [{"width": "ろく"}]})
-
-    assert resp.status_code == 400
-    assert "面材の幅 W" in resp.json()["error"]
+def test_core_wasm_requires_auth(anon_client):
+    assert anon_client.get(CORE_URL).status_code == 401
 
 
 # --- 保存 --------------------------------------------------------------------
@@ -129,6 +121,64 @@ def test_create_report_honours_an_explicit_file_name(client, folder):
 
     assert resp.status_code == 200
     assert folder.created[0][1] == "南面の計算書.pdf"
+
+
+def screen_verification(body: dict, **overrides) -> dict:
+    """画面が計算して送ってくる「私はこう計算した」を組み立てる。
+
+    画面と同じ .wasm を同じ入力で回すので、これはそのまま「食い違いのない
+    正常な保存」になる。
+    """
+    data = panel_shear.normalize_data(body)
+    verify = {
+        "coreVersion": nail_core.version(),
+        "patterns": [
+            {"patternId": report["patternId"], "result": report["result"]}
+            for report in panel_shear.compute_all(data)
+            if report["ok"]
+        ],
+    }
+    verify.update(overrides)
+    return verify
+
+
+def test_save_confirms_the_numbers_the_screen_showed(client, folder):
+    """編集中は画面が計算するので、保存時にサーバ側でも確かめる。"""
+    body = valid_body()
+
+    resp = client.post(REPORTS_URL, json={**body, "verify": screen_verification(body)})
+
+    assert resp.status_code == 200
+    assert resp.json()["verification"]["ok"] is True
+    assert resp.json()["verification"]["checked"] is True
+
+
+def test_save_warns_when_the_screen_and_the_server_disagree(client, folder):
+    """食い違っても保存は止めない（計算書はサーバの値で作られる）。"""
+    body = valid_body()
+    verify = screen_verification(body)
+    verify["patterns"][0]["result"]["Cxy"] = 9.99
+
+    resp = client.post(REPORTS_URL, json={**body, "verify": verify})
+
+    assert resp.status_code == 200
+    verification = resp.json()["verification"]
+    assert verification["ok"] is False
+    assert verification["differences"][0]["key"] == "Cxy"
+    # 保存そのものは済んでいて、PDF にはサーバの値が載る。
+    assert folder.created[0][2].startswith(b"%PDF-")
+
+
+def test_save_without_a_verification_still_works(client, folder):
+    """突き合わせの材料を送らない画面（古い版）でも保存できる。"""
+    resp = client.post(REPORTS_URL, json=valid_body())
+
+    assert resp.status_code == 200
+    assert resp.json()["verification"] == {
+        "checked": False,
+        "ok": True,
+        "differences": [],
+    }
 
 
 def test_created_report_can_be_read_back(client, folder):

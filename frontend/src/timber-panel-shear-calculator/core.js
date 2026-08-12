@@ -1,0 +1,85 @@
+// 釘配列諸定数の計算実装（wasm）を読み込み、画面から呼べるようにする。
+//
+// 計算そのもの・入力欄の文字列の解釈・表示する桁の丸めは、Rust で書いた
+// 唯一の実装（リポジトリの core/）が持つ。その .wasm は **サーバが自分の
+// 計算に使っているものと同じバイト列** で、/config が知らせる URL から
+// 受け取る。だから「画面用の実装」と「サーバ用の実装」に分かれることがない。
+//
+// 編集中はここで計算するので、入力のたびの往復が無い（釘が増えても速い）。
+// 保存のときはサーバも同じ計算をして、画面の値と突き合わせる。
+//
+// 受け渡しの手順（線形メモリの確保・解放）は core/src/abi.rs にある。
+
+// 応答の先頭に付く「本体の長さ」（u32 リトルエンディアン）のバイト数。
+const LENGTH_PREFIX = 4;
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+/** 読み込んだ計算実装。call() で JSON の要求を渡し、JSON の応答を受け取る。 */
+class Core {
+  constructor(exports) {
+    this.exports = exports;
+    this.version = this.call({ op: 'config' }).version;
+  }
+
+  /**
+   * 計算実装を呼ぶ。失敗（入力の不備など）は Error として投げる。
+   * 文面はそのまま画面に出せる日本語。
+   */
+  call(request) {
+    const { memory, nac_alloc: alloc, nac_call: run, nac_free: free } = this.exports;
+    const input = encoder.encode(JSON.stringify(request));
+
+    const inputPointer = alloc(input.length);
+    let responsePointer;
+    try {
+      new Uint8Array(memory.buffer, inputPointer, input.length).set(input);
+      responsePointer = run(inputPointer, input.length);
+    } finally {
+      free(inputPointer, input.length);
+    }
+
+    // メモリは呼び出しの中で広がることがあり、そのとき前の buffer は切り離
+    // される。必ず呼び出しの後に読み直す。
+    const length = new DataView(memory.buffer).getUint32(responsePointer, true);
+    const body = decoder.decode(
+      new Uint8Array(memory.buffer, responsePointer + LENGTH_PREFIX, length)
+    );
+    free(responsePointer, LENGTH_PREFIX + length);
+
+    const response = JSON.parse(body);
+    if (!response.ok) throw new Error(response.error);
+    return response;
+  }
+
+  /** 全パターンを計算する。計算できないパターンは ok: false で返る。 */
+  computeAll(data) {
+    return this.call({ op: 'computeAll', data }).patterns;
+  }
+}
+
+/**
+ * wasm のバイト列から計算実装を組み立てる。
+ *
+ * この .wasm は外部から何も import しない（wasm-bindgen のようなグルーを
+ * 挟んでいない）ので、ブラウザでもサーバでも同じ手順で動く。
+ */
+export async function instantiateCore(bytes) {
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  return new Core(instance.exports);
+}
+
+/**
+ * 計算実装を受け取って組み立てる。
+ *
+ * @param {string} url /config が知らせる URL（内容のハッシュ付き）
+ * @param {(url: string) => Promise<ArrayBuffer>} fetchBytes 取得のしかた
+ */
+export async function loadCore(url, fetchBytes) {
+  try {
+    return await instantiateCore(await fetchBytes(url));
+  } catch (error) {
+    throw new Error(`計算エンジンを読み込めませんでした: ${error.message}`);
+  }
+}

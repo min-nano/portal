@@ -1,9 +1,12 @@
 // 面材張り耐力要素 釘配列諸定数 計算ツール。
 //
 // グレー本『木造軸組工法住宅の許容応力度設計』3.2 節に沿って、釘配列諸定数
-// Ixy・Zxy・Cxy を求める。計算は入力のたびにバックエンドへ問い合わせ、
-// 返ってきた値をそのまま並べる（画面と計算書 PDF で数値が食い違わないよう、
-// 計算も桁の丸めもサーバ側の唯一の実装に任せる）。
+// Ixy・Zxy・Cxy を求める。編集中の計算は画面の中で完結する（./core.js が
+// 読み込む wasm を呼ぶだけで、入力のたびの往復が無い）。その wasm は
+// サーバが計算に使っているものと同じバイト列なので、計算の実装は 1 つしかない。
+//
+// 保存のときはサーバも同じ計算をして、画面が出していた値と突き合わせる。
+// 食い違えば警告を出す（計算書に載るのはサーバの値）。
 //
 // GAS 版はスプレッドシートへ現在値と履歴を書き出していたが、ここでは
 // 構造計算安全証明書と同じく **成果物の PDF そのものが保存形式**になる。
@@ -17,7 +20,7 @@
 import '../styles.css';
 import { requireSignIn } from '../auth.js';
 import { redirectToCanonicalHost } from '../canonical-host.js';
-import { apiGet, apiPostFile, apiSendJson } from '../api.js';
+import { apiGet, apiGetBytes, apiPostFile, apiSendJson } from '../api.js';
 import { pickFile, preloadPicker } from '../google-picker.js';
 import { askSaveAs, askUnsaved } from '../save-dialogs.js';
 import {
@@ -46,20 +49,25 @@ import {
   mergeFormData,
   patternLabel,
   toRequestBody,
+  verificationOf,
+  verificationWarning,
 } from './form-logic.js';
+import { loadCore } from './core.js';
 
 const TOOL_API = '/api/tools/timber-panel-shear-calculator';
 const PDF_MIME = 'application/pdf';
 
-// 入力のたびに計算を投げないよう、GAS 版と同じ間隔でまとめる。
-const CALCULATE_DEBOUNCE_MS = 300;
+// 打鍵のたびに描き直さないよう、ひと呼吸おいてからまとめて計算する。
+// 計算そのものは手元で一瞬（往復が無い）なので、GAS 版の 300ms より短くて
+// よい。ここで抑えているのは、釘が多いときの再描画の回数。
+const CALCULATE_DEBOUNCE_MS = 60;
 
-let config = null; // /config の応答（既定ファイル名・計算例）
+let config = null; // /config の応答（既定ファイル名・計算例・計算実装の在り処）
+let core = null; // 計算実装（wasm）。サーバと同じバイト列。
 let data = null; // 画面が編集中の内容 { projectName, issuedOn, patterns }
 let currentIndex = 0;
-let reports = []; // /calculations の応答（パターンごとの計算結果）
+let reports = []; // パターンごとの計算結果
 let calculateTimer = null;
-let calculateSequence = 0; // 応答の追い越しを捨てるための通し番号
 
 let sourceFile = null; // 開いているファイル（Drive 上の PDF）。{ id, name }
 let documentName = ''; // 今開いている文書の名前。保存ダイアログの初期値。
@@ -142,36 +150,32 @@ function loadExample() {
   scheduleCalculate();
 }
 
-// --- 計算（入力のたびにサーバへ問い合わせる） -------------------------------
+// --- 計算（画面の中で完結する） ---------------------------------------------
 
 function scheduleCalculate() {
   clearTimeout(calculateTimer);
   calculateTimer = setTimeout(calculate, CALCULATE_DEBOUNCE_MS);
 }
 
-async function calculate() {
+/** 今の入力を計算し直す（待ちが入っていれば、それを取り消して今すぐ行う）。 */
+function calculate() {
+  clearTimeout(calculateTimer);
+  // 計算実装を受け取る前に打ち込まれた分。読み込めたところで描き直される。
+  if (!core) return;
   captureCurrentPattern();
   renderPatternBar(document, data.patterns, currentIndex, goToPattern);
-  const sequence = ++calculateSequence;
   try {
-    const response = await apiSendJson(
-      `${TOOL_API}/calculations`,
-      'POST',
-      toRequestBody(data)
-    );
-    // 入力が続いていて新しい問い合わせが出ていれば、古い応答は捨てる。
-    if (sequence !== calculateSequence) return;
-    reports = response.patterns || [];
-    renderCurrentResult();
+    reports = core.computeAll(toRequestBody(data));
   } catch (error) {
-    if (sequence !== calculateSequence) return;
+    // パターンごとの不備は ok: false として返るので、ここへ来るのは
+    // 入力全体が壊れている場合（数値でない寸法など）。
     reports = [];
-    renderCurrentResult();
     showMessage(error.message, 'red');
   }
+  renderCurrentResult();
 }
 
-/** 入力欄の変更を拾う。値の解釈はサーバに任せ、ここでは再計算を促すだけ。 */
+/** 入力欄の変更を拾う。値の解釈は計算実装に任せ、ここでは再計算を促すだけ。 */
 function watchInputs() {
   const form = document.getElementById('calcForm');
   form.addEventListener('input', (event) => {
@@ -316,7 +320,9 @@ function saveCurrent() {
 
 /** 保存する。保存できたら true。 */
 async function save(mode) {
-  captureCurrentPattern();
+  // 待ちに入っている再計算を先に済ませ、画面に出ている値と、これから
+  // サーバへ「画面はこう計算した」と伝える値を揃える。
+  calculate();
 
   if (mode === 'overwrite') {
     // 上書きは同じファイルへの書き戻しなので、名前も場所も尋ねない。
@@ -356,12 +362,17 @@ async function sendSaveRequest(saveSpec) {
     const result = await apiSendJson(`${TOOL_API}/reports`, 'POST', {
       ...toRequestBody(data),
       save: saveSpec,
+      // サーバにも同じ計算をさせ、画面の値と突き合わせてもらう。
+      verify: verificationOf(core.version, reports),
     });
-    showMessage(
+    const warning = verificationWarning(result.verification);
+    const saved =
       saveSpec.mode === 'overwrite'
         ? `上書き保存しました: ${result.fileName}`
-        : `保存しました: ${result.fileName}`,
-      'green'
+        : `保存しました: ${result.fileName}`;
+    showMessage(
+      warning ? `${saved}\n${warning}` : saved,
+      warning ? '#b45309' : 'green'
     );
     showResult(result.webViewLink, result.fileName);
     // 保存したファイルを、そのまま「開いているファイル」として続けて編集できる
@@ -422,6 +433,9 @@ async function start() {
 
   try {
     config = await apiGet(`${TOOL_API}/config`);
+    // 計算実装（wasm）は、サーバが自分の計算に使っているものと同じバイト列。
+    // URL に中身のハッシュが付いているので、版が変われば必ず取り直される。
+    core = await loadCore(config.core.url, apiGetBytes);
   } catch (error) {
     showMessage(error.message, 'red');
     return;

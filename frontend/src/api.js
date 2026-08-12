@@ -34,6 +34,13 @@ export async function apiGet(path) {
   return resp.json();
 }
 
+/** バイナリ（wasm など）をそのまま受け取るエンドポイント用。 */
+export async function apiGetBytes(path) {
+  const resp = await authorizedFetch(path);
+  await raiseForError(resp);
+  return resp.arrayBuffer();
+}
+
 export async function apiSendJson(path, method, body) {
   const resp = await authorizedFetch(path, {
     method,

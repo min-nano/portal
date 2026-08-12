@@ -32,6 +32,12 @@ jobs:
           .github/scripts/require-vars.sh \
             PROJECT_ID WIF_PROVIDER SA_EMAIL SITE_ID RUNTIME_SA_EMAIL \
             CLERK_PUBLISHABLE_KEY ALLOWED_EMAIL_DOMAINS
+      - name: Build the calculation core
+        # 釘配列諸定数の唯一の計算実装（core/）を wasm にして
+        # backend/app/wasm/ へ置く。成果物はコミットしていないので、デプロイの
+        # たびにここで作る。これがイメージに入り、サーバ自身の計算にも、画面へ
+        # 配る /core.wasm にも使われる（README「計算の一元管理（Rust → wasm）」）。
+        run: core/build.sh
       - name: Assemble the backend runtime configuration
         # 本番バックエンドのランタイム環境変数をここで組み立て、次のステップで
         # まとめて渡す。値の出どころはリポジトリ変数だけなので、GCP 側に手で

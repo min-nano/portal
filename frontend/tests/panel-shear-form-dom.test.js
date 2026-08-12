@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 //
-// 画面 ↔ データの往復と、サーバが返した表示用の値の描画。
-// 数値の丸めや単位はサーバの文字列をそのまま出す（画面と計算書 PDF で
-// 桁がずれないこと）を、ここで固定する。
+// 画面 ↔ データの往復と、計算実装が返した表示用の値の描画。
+// 数値の丸めや単位は計算実装（core/、wasm）の文字列をそのまま出す
+// （画面と計算書 PDF で桁がずれないこと）を、ここで固定する。
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -51,7 +51,7 @@ const PATTERN = {
   coords: '',
 };
 
-// /calculations が返す形（数値は文字列として組み立て済み）。
+// 計算実装（wasm）が返す形（数値は文字列として組み立て済み）。
 const REPORT = {
   ok: true,
   patternId: 'p1',
@@ -61,6 +61,23 @@ const REPORT = {
     { x: 890, y: 590 },
   ],
   result: { x0: 445, y0: 295 },
+  diagram: {
+    minX: 0,
+    maxX: 890,
+    minY: 0,
+    maxY: 910,
+    xTicks: [
+      { value: 0, label: '0' },
+      { value: 445, label: '445' },
+      { value: 890, label: '890' },
+    ],
+    yTicks: [
+      { value: 0, label: '0' },
+      { value: 295, label: '295' },
+      { value: 590, label: '590' },
+    ],
+    axis: { x0: 445, y0: 295, xLabel: 'x0 = 445.0', yLabel: 'y0 = 295.0' },
+  },
   summary: [
     { key: 'Ixy', unit: 'mm²/mm²', value: '0.888868' },
     { key: 'Zxy', unit: 'mm/mm²', value: '0.00358851' },
@@ -141,7 +158,7 @@ describe('renderPatternBar', () => {
 });
 
 describe('renderResult', () => {
-  it('サーバが組み立てた文字列をそのまま並べる', () => {
+  it('計算実装が組み立てた文字列をそのまま並べる', () => {
     renderResult(document, REPORT, PATTERN);
 
     const boxes = [...document.querySelectorAll('.result-box')];
