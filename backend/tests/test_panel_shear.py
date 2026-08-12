@@ -69,7 +69,7 @@ def test_normalize_rejects_too_many_patterns():
 
 
 def test_compute_all_matches_the_reference_example():
-    report = panel_shear.compute_all(make_data())[0]
+    report = panel_shear.compute_all(make_data())["patterns"][0]
 
     values = {row["key"]: row["value"] for row in report["summary"]}
     assert values == {"Ixy": "0.888868", "Zxy": "0.00358851", "Cxy": "1.26155"}
@@ -89,11 +89,51 @@ def test_compute_all_reports_a_broken_pattern_without_losing_the_others():
         {"patterns": [dict(EXAMPLE), {"patternId": "p2", "width": 910, "height": 610}]}
     )
 
-    reports = panel_shear.compute_all(data)
+    reports = panel_shear.compute_all(data)["patterns"]
 
     assert reports[0]["ok"] is True
     assert reports[1]["ok"] is False
     assert "釘座標" in reports[1]["error"]
+
+
+def test_compute_all_calculates_the_walls_of_the_book_example():
+    """グレー本 3.3(3) の計算例（図 3.3.10）。本の答えは Pa = 8.37 kN。
+
+    式ごとの検証は core/src/wall.rs の `cargo test` にある。ここでは
+    「その結果がそのまま画面と PDF へ渡ること」を確かめる。
+    """
+    report = panel_shear.compute_all(panel_shear.example_wall_data())["walls"][0]
+
+    assert report["ok"] is True
+    assert report["governing"] == "drift"
+    assert report["withinLimit"] is True
+    assert abs(report["result"]["Pa"] - 8.37) <= 0.03
+    assert abs(report["result"]["dPa"] - 9.20) <= 0.03
+    # 壁を構成する 2 枚の面材が、選んだ釘配列パターンの名前で並ぶ。
+    assert [panel["label"] for panel in report["panels"]] == [
+        "1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）",
+        "910×910 縦置・ロ型（間柱・根太 @455 / 釘 @75）",
+    ]
+
+
+def test_compute_all_reports_a_broken_wall_without_losing_the_others():
+    data = panel_shear.example_wall_data()
+    data["walls"].append({**panel_shear.EXAMPLE_WALL, "wallId": "w2", "panels": []})
+
+    reports = panel_shear.compute_all(data)["walls"]
+
+    assert reports[0]["ok"] is True
+    assert reports[1]["ok"] is False
+    assert "面材がありません" in reports[1]["error"]
+
+
+def test_validate_names_the_wall_that_cannot_be_calculated():
+    data = panel_shear.example_wall_data()
+    data["walls"][0]["wallName"] = "南面"
+    data["walls"][0]["height"] = 0
+
+    with pytest.raises(panel_shear.PanelShearError, match="「南面」を計算できません"):
+        panel_shear.validate(data)
 
 
 def test_validate_names_the_pattern_that_cannot_be_calculated():
@@ -108,14 +148,18 @@ def test_validate_names_the_pattern_that_cannot_be_calculated():
 # --- 保存時の突き合わせ ------------------------------------------------------
 
 
-def claim_from(reports: list[dict], **overrides) -> dict:
+def claim_from(reports: dict, **overrides) -> dict:
     """画面が送ってくる「私はこう計算した」を、正しい値で組み立てる。"""
     claim = {
         "coreVersion": nail_core.version(),
+        # サーバ側の結果とは別の辞書にする（画面から届いた値のつもり）。
         "patterns": [
-            # サーバ側の結果とは別の辞書にする（画面から届いた値のつもり）。
             {"patternId": report["patternId"], "result": dict(report["result"])}
-            for report in reports
+            for report in reports["patterns"]
+        ],
+        "walls": [
+            {"wallId": report["wallId"], "result": dict(report["result"])}
+            for report in reports["walls"]
         ],
     }
     claim.update(overrides)
@@ -249,6 +293,81 @@ def test_pdf_prints_the_inputs_and_the_results():
     # 途中経過は式番号つきで白箱化する。
     assert "(3.2.7)" in text
     assert "0.750834" in text
+
+
+def test_pdf_puts_the_wall_pages_after_the_nail_arrangement_pages():
+    """壁の計算は、その根拠になる釘配列諸定数のページの後ろに続ける。"""
+    data = panel_shear.example_wall_data()
+    pdf_bytes = panel_shear.build_pdf(data, panel_shear.validate(data))
+
+    pages = extract_text(io.BytesIO(pdf_bytes)).split("\x0c")[:-1]
+
+    assert len(pages) == 3  # 面材 2 枚 ＋ 壁 1 枚
+    assert all(panel_shear._TITLE in page for page in pages[:2])
+    assert panel_shear._WALL_TITLE in pages[2]
+    # 通しのページ番号は、両方の節を続けて数える。
+    assert "3 / 3" in pages[2]
+
+
+def test_pdf_prints_the_wall_calculation():
+    data = panel_shear.example_wall_data()
+    reports = panel_shear.validate(data)
+    pdf_bytes = panel_shear.build_pdf(data, reports)
+
+    text = extract_text(io.BytesIO(pdf_bytes)).split("\x0c")[2]
+    wall = reports["walls"][0]
+
+    assert "グレー本 3.3 の計算例" in text
+    # 入力（階高・壁幅・釘 1 本あたりの数値）。
+    assert "3,000 mm" in text
+    assert "910 mm" in text
+    assert "ΔPv = 1.13000 kN" in text
+    # 画面に出るのと同じ桁の結果と、式番号つきの途中経過。
+    for item in wall["summary"]:
+        assert item["value"] in text
+    assert "(3.3.1)" in text
+    assert "(3.3.7)" in text
+    # 面材ごとの表（釘配列パターン名と、そのパターンの Ixy）。
+    assert "1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）" in text
+    assert wall["panels"][0]["cells"][1] in text
+    # 判定（適用範囲 3.3(1)① の上限）。
+    assert "13.7200" in text
+    assert "OK" in text
+
+
+def test_pdf_marks_a_wall_over_the_upper_limit_as_ng():
+    data = panel_shear.example_wall_data()
+    data["walls"][0]["width"] = 300
+    reports = panel_shear.validate(data)
+
+    text = extract_text(io.BytesIO(panel_shear.build_pdf(data, reports))).split("\x0c")[2]
+
+    assert reports["walls"][0]["withinLimit"] is False
+    assert "NG" in text
+
+
+def test_pdf_round_trips_a_form_with_walls():
+    """壁を含む入力も、保存した PDF から完全に復元できる。"""
+    data = panel_shear.example_wall_data()
+    pdf_bytes = panel_shear.build_pdf(data, panel_shear.validate(data))
+
+    parsed = panel_shear.parse_pdf(pdf_bytes)
+
+    assert parsed == data
+    assert parsed["walls"][0]["panels"] == [{"patternId": "p1"}, {"patternId": "p2"}]
+
+
+def test_verify_points_at_a_wall_value_that_differs():
+    data = panel_shear.example_wall_data()
+    reports = panel_shear.validate(data)
+    claim = claim_from(reports)
+    claim["walls"][0]["result"]["Pa"] = 9.99
+
+    result = panel_shear.verify(reports, claim)
+
+    assert result["ok"] is False
+    assert [(d["key"], d["client"]) for d in result["differences"]] == [("Pa", 9.99)]
+    assert result["differences"][0]["wallName"] == "グレー本 3.3 の計算例"
 
 
 def test_pdf_embeds_the_font_it_uses():

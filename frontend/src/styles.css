@@ -188,6 +188,20 @@ button.secondary:disabled { background-color: #aaa; }
 .steps-table .step-label { color: #333; }
 .steps-table .step-eq { color: #888; font-size: 0.9em; white-space: nowrap; }
 .steps-table .step-value { text-align: right; font-weight: bold; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.steps-table th { border-bottom: 1px solid #c9c9dd; padding: 4px 2px; color: #555; font-size: 0.9em; font-weight: normal; }
+.steps-table th.step-label { text-align: left; }
+.steps-table th.step-value { text-align: right; }
+.steps-table .step-value.ng { color: #a3281f; }
+
+/* 面材張り大壁（グレー本 3.3）。壁を構成する面材は、登録した釘配列パターン
+   から選ぶので、行ごとにその一覧を出す。 */
+.wall-panels { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.wall-panel-row { display: flex; align-items: center; gap: 8px; }
+.wall-panel-row select { flex: 1; margin-top: 0; }
+.wall-panel-row button { margin-top: 0; width: auto; padding: 4px 10px; font-size: 0.8em; }
+.wall-result { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e3e3ef; }
+.wall-result h4 { margin: 0; font-size: 0.95em; color: #333; }
+.wall-result .steps-table { overflow-x: auto; display: block; }
 
 /* 釘配列図。狭い画面でも縮めて収める。 */
 .diagram-box { margin-top: 12px; overflow-x: auto; }

@@ -10,7 +10,8 @@ GAS 版（gas-timber-panel-shear-calculator）はスプレッドシートへ「�
 画面もまったく同じ .wasm を動かすので、実装は 1 つしかない。このモジュールが
 受け持つのは、その結果を PDF に組む仕事と、保存時の突き合わせ（verify）。
 
-1 PDF = 1 物件、1 ページ = 1 パターン。
+1 PDF = 1 物件。ページは「釘配列パターン 1 つにつき 1 ページ」（グレー本 3.2）
+のあとに「壁 1 枚につき 1 ページ」（グレー本 3.3）を続ける。
 """
 
 import json
@@ -56,6 +57,31 @@ EXAMPLE_PATTERN = {
     "coords": "",
 }
 
+# グレー本 3.3(3)「面材張り大壁の許容せん断耐力の計算例」（図 3.3.10）。
+#
+# 階高 3000・幅 910 の準耐力壁形式の大壁で、下側に 1820 × 910、上側に
+# 910 × 910 の構造用合板 12mm を CN65 @75 で四周打ちしたもの。面材の釘配列は
+# 表 3.2.1 の配列（EXAMPLE_WALL_PRESETS）をそのまま使う。
+#
+# 釘 1 本あたりの数値は、本文が計算に使っているものをそのまま置く。表 3.3.1 は
+# 構造用合板 12mm の N-65 と CN65 が入れ替わっており（正誤表による訂正あり）、
+# 本文は「CN65」と書きながら訂正後の N-65 の値で計算している。詳しくは
+# core/src/wall.rs の TABLE のコメント。
+EXAMPLE_WALL_PRESETS = ("910x1820-s455-n75-hi", "910x910-s455-n75-ro")
+EXAMPLE_WALL = {
+    "wallName": "グレー本 3.3 の計算例",
+    "height": 3000,
+    "width": 910,
+    "materialId": "",
+    "thickness": 12,
+    "shearModulus": 0.40,
+    "k": 0.483,
+    "deltaV": 2.3,
+    "deltaU": 17.0,
+    "deltaPv": 1.13,
+    "panels": [{"patternId": "p1"}, {"patternId": "p2"}],
+}
+
 
 class PanelShearError(Exception):
     """入力・生成・解析の失敗。message は利用者に表示できる日本語文。"""
@@ -86,18 +112,42 @@ def normalize_data(data) -> dict:
     return _core("normalize", data)["data"]
 
 
-def compute_all(data: dict) -> list[dict]:
-    """全パターンを計算する。計算できないパターンは ok: False で返す。
+def compute_all(data: dict) -> dict:
+    """釘配列パターンと壁をまとめて計算し、{"patterns": [...], "walls": [...]} を返す。
 
-    1 つのパターンの不備で他のパターンの結果まで失わせない
+    計算できないものは ok: False で返る。1 つの不備で他の結果まで失わせない
     （保存時は validate() で改めて全件を確かめる）。
     """
-    return _core("computeAll", data)["patterns"]
+    response = _core("computeAll", data)
+    return {"patterns": response["patterns"], "walls": response["walls"]}
 
 
-def validate(data: dict) -> list[dict]:
-    """保存できる状態か確かめ、全パターンの計算結果を返す。"""
-    return _core("validate", data)["patterns"]
+def validate(data: dict) -> dict:
+    """保存できる状態か確かめ、釘配列パターンと壁の計算結果を返す。"""
+    response = _core("validate", data)
+    return {"patterns": response["patterns"], "walls": response["walls"]}
+
+
+def preset_pattern(preset_id: str) -> dict:
+    """グレー本 表 3.2.1 の配列を、フォームのパターン 1 つ分にして返す。"""
+    try:
+        return nail_core.call({"op": "preset", "data": {"id": preset_id}})["pattern"]
+    except CoreError as error:
+        raise PanelShearError(str(error)) from error
+
+
+def example_wall_data() -> dict:
+    """グレー本 3.3(3) の計算例を、そのまま計算・作図できるフォーム入力にする。"""
+    return normalize_data(
+        {
+            "projectName": "グレー本 3.3 の計算例",
+            "patterns": [
+                dict(preset_pattern(preset_id), patternId=f"p{index + 1}")
+                for index, preset_id in enumerate(EXAMPLE_WALL_PRESETS)
+            ],
+            "walls": [dict(EXAMPLE_WALL)],
+        }
+    )
 
 
 # --- 保存時の突き合わせ ------------------------------------------------------
@@ -112,7 +162,34 @@ def _is_close(client, server) -> bool:
     return difference <= VERIFY_RELATIVE_TOLERANCE * scale
 
 
-def verify(reports: list[dict], claim) -> dict:
+def _claimed_results(claim: dict, section: str, id_key: str) -> dict:
+    """画面が送ってきた「私はこう計算した」を id → 計算結果の辞書にする。"""
+    return {
+        str(entry.get(id_key)): entry.get("result")
+        for entry in claim.get(section) or []
+        if isinstance(entry, dict)
+    }
+
+
+def _differences(reports: list[dict], claimed: dict, id_key: str, name_key: str) -> list[dict]:
+    """1 つの節（パターン／壁）について、画面とサーバの食い違いを並べる。"""
+    differences = []
+    for report in reports:
+        found = {id_key: report[id_key], name_key: report[name_key]}
+        client_result = claimed.get(report[id_key])
+        if not isinstance(client_result, dict):
+            differences.append({**found, "key": "(計算結果なし)", "client": "-", "server": "計算済み"})
+            continue
+        for key, server_value in report["result"].items():
+            client_value = client_result.get(key)
+            if not _is_close(client_value, server_value):
+                differences.append(
+                    {**found, "key": key, "client": client_value, "server": server_value}
+                )
+    return differences
+
+
+def verify(reports: dict, claim) -> dict:
     """画面が出した計算結果と、サーバの計算結果を突き合わせる。
 
     編集中の計算は画面（wasm）が行うので、保存する計算書と画面で見ていた値が
@@ -131,38 +208,18 @@ def verify(reports: list[dict], claim) -> dict:
 
     client_version = str(claim.get("coreVersion") or "")
     server_version = nail_core.version()
-    claimed = {
-        str(entry.get("patternId")): entry.get("result")
-        for entry in claim.get("patterns") or []
-        if isinstance(entry, dict)
-    }
 
-    differences = []
-    for report in reports:
-        client_result = claimed.get(report["patternId"])
-        if not isinstance(client_result, dict):
-            differences.append(
-                {
-                    "patternId": report["patternId"],
-                    "patternName": report["patternName"],
-                    "key": "(計算結果なし)",
-                    "client": "-",
-                    "server": "計算済み",
-                }
-            )
-            continue
-        for key, server_value in report["result"].items():
-            client_value = client_result.get(key)
-            if not _is_close(client_value, server_value):
-                differences.append(
-                    {
-                        "patternId": report["patternId"],
-                        "patternName": report["patternName"],
-                        "key": key,
-                        "client": client_value,
-                        "server": server_value,
-                    }
-                )
+    differences = _differences(
+        reports["patterns"],
+        _claimed_results(claim, "patterns", "patternId"),
+        "patternId",
+        "patternName",
+    ) + _differences(
+        reports["walls"],
+        _claimed_results(claim, "walls", "wallId"),
+        "wallId",
+        "wallName",
+    )
 
     return {
         "checked": True,
@@ -202,6 +259,20 @@ _FOOTNOTE = (
     "面材・軸材は剛体、軸材どうしはピン接合、"
     "釘のせん断変形は中立軸に対して平面保持仮定が成立することを前提とする。"
 )
+
+_WALL_TITLE = "面材張り大壁 剛性・許容せん断耐力 計算書"
+_WALL_SUBTITLE = (
+    "グレー本『木造軸組工法住宅の許容応力度設計』"
+    "3.3 面材張り大壁の詳細計算法（式 3.3.1〜3.3.7）に準拠"
+)
+_WALL_FOOTNOTE = (
+    "適用範囲（3.3(1)）のうち、機械的に判定できる①許容せん断耐力の上限のみを検定している。"
+    "面材と釘の組合せ・釘のピッチとへりあき・面材四周の釘打ち・端部および継目の材の断面・"
+    "中間材（間柱等）の配置は、設計者が 3.3(1) の②〜⑧に照らして確認すること。"
+)
+
+# 面材ごとの値の表で、面材名の欄に取る幅 [pt]。残りを数値の列で等分する。
+_PANEL_NAME_WIDTH = 150.0
 
 
 def _format_issued_on(value: str) -> str:
@@ -283,7 +354,8 @@ def _draw_diagram(page: pdf_write.Page, box: tuple[float, float, float, float],
 
 
 def _draw_page(page: pdf_write.Page, data: dict, pattern: dict, report: dict,
-               index: int, total: int):
+               index: int, total: int, page_number: int, page_total: int):
+    """釘配列パターン 1 つ分のページ（グレー本 3.2 の計算）。"""
     left = _MARGIN
     right = page.width - _MARGIN
     cursor = page.height - _MARGIN
@@ -305,7 +377,7 @@ def _draw_page(page: pdf_write.Page, data: dict, pattern: dict, report: dict,
     cursor -= 14
     page.text(left, cursor, "パターン", 8, gray=0.45)
     page.text(left + 52, cursor, pattern["patternName"] or f"パターン{index}", 9.5)
-    page.text(right, cursor, f"{index} / {total}", 8.5, align="right", gray=0.3)
+    page.text(right, cursor, f"パターン {index} / {total}", 8.5, align="right", gray=0.3)
     cursor -= 20
 
     # --- 1. 入力 ---
@@ -348,9 +420,7 @@ def _draw_page(page: pdf_write.Page, data: dict, pattern: dict, report: dict,
     )
 
     # --- 脚注 ---
-    page.line(left, _MARGIN + 16, right, _MARGIN + 16, 0.3, 0.7)
-    page.text(left, _MARGIN + 6, _FOOTNOTE, 6.5, gray=0.45)
-    page.text(right, _MARGIN + 6, f"{index} / {total}", 6.5, align="right", gray=0.45)
+    _draw_footnote(page, left, right, _FOOTNOTE, page_number, page_total)
 
 
 def _draw_section(page: pdf_write.Page, left: float, right: float, cursor: float,
@@ -361,18 +431,169 @@ def _draw_section(page: pdf_write.Page, left: float, right: float, cursor: float
     return cursor - 20
 
 
-def build_pdf(data: dict, reports: list[dict]) -> bytes:
-    """計算書 PDF を組み立てる（1 ページ = 1 パターン）。
+def _shrink_to_fit(page: pdf_write.Page, text: str, size: float, width: float) -> float:
+    """width に収まる文字サイズを返す（収まらなければ 0.7 倍まで小さくする）。
+
+    面材の名前は「1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）」のように
+    長くなりうるので、欄からはみ出すより字を詰める。
+    """
+    smallest = size * 0.7
+    while size > smallest and page.font.text_width(text, size) > width:
+        size -= 0.25
+    return size
+
+
+def _draw_panel_table(page: pdf_write.Page, left: float, right: float, cursor: float,
+                      report: dict) -> float:
+    """壁を構成する面材ごとの値（Aw・釘配列諸定数・K0・My・Mu・μ）を表に組む。"""
+    columns = report["panelColumns"]
+    value_width = (right - left - _PANEL_NAME_WIDTH) / (len(columns) - 1)
+
+    def value_x(position: int) -> float:
+        """position 番目の数値列の右端（数値は右寄せ）。"""
+        return left + _PANEL_NAME_WIDTH + value_width * (position + 1) - 3
+
+    page.text(left + 3, cursor, columns[0], 6.5, gray=0.45)
+    for position, header in enumerate(columns[1:]):
+        # 見出しは単位まで入れると欄をはみ出すことがあるので、幅に合わせて詰める。
+        size = _shrink_to_fit(page, header, 6.5, value_width - 4)
+        page.text(value_x(position), cursor, header, size, align="right", gray=0.45)
+    cursor -= 4
+    page.line(left, cursor, right, cursor, 0.5, 0.55)
+    cursor -= 11
+
+    for panel in report["panels"]:
+        size = _shrink_to_fit(page, panel["label"], 7.5, _PANEL_NAME_WIDTH - 6)
+        page.text(left + 3, cursor, panel["label"], size)
+        for position, cell in enumerate(panel["cells"]):
+            size = _shrink_to_fit(page, cell, 7.5, value_width - 4)
+            page.text(value_x(position), cursor, cell, size, align="right")
+        page.line(left, cursor - 4, right, cursor - 4, 0.3, 0.85)
+        cursor -= 13
+    return cursor - 8
+
+
+def _draw_wall_page(page: pdf_write.Page, data: dict, report: dict,
+                    index: int, total: int, page_number: int, page_total: int):
+    """壁 1 枚分のページ（グレー本 3.3 の計算）。"""
+    left = _MARGIN
+    right = page.width - _MARGIN
+    cursor = page.height - _MARGIN
+
+    # --- 見出し ---
+    page.text(left, cursor - 14, _WALL_TITLE, 14)
+    cursor -= 20
+    page.text(left, cursor - 8, _WALL_SUBTITLE, 6.5, gray=0.4)
+    cursor -= 14
+    page.line(left, cursor, right, cursor, 0.8, 0.3)
+    cursor -= 16
+
+    # --- 物件・壁 ---
+    page.text(left, cursor, "物件名", 8, gray=0.45)
+    page.text(left + 52, cursor, data["projectName"] or "（未入力）", 9.5)
+    issued = _format_issued_on(data["issuedOn"])
+    if issued:
+        page.text(right, cursor, f"作成日: {issued}", 8.5, align="right", gray=0.3)
+    cursor -= 14
+    page.text(left, cursor, "壁", 8, gray=0.45)
+    page.text(left + 52, cursor, report["wallName"], 9.5)
+    page.text(right, cursor, f"壁 {index} / {total}", 8.5, align="right", gray=0.3)
+    cursor -= 20
+
+    # --- 1. 入力 ---
+    cursor = _draw_section(page, left, right, cursor, "1. 入力")
+    for row in report["inputs"]:
+        page.text(left + 8, cursor, row["label"], 8.5, gray=0.45)
+        page.text(left + 160, cursor, row["value"], 9)
+        cursor -= 13
+    cursor -= 8
+
+    # --- 2. 計算結果 ---
+    cursor = _draw_section(page, left, right, cursor, "2. 剛性とせん断耐力")
+    box_width = (right - left - 16) / 3
+    for position, item in enumerate(report["summary"]):
+        box_x = left + position * (box_width + 8)
+        page.rect(box_x, cursor - 34, box_width, 38, 0.5, 0.6, fill_gray=0.96)
+        unit = f" [{item['unit']}]" if item["unit"] else ""
+        page.text(box_x + box_width / 2, cursor - 8, item["key"] + unit, 7.5,
+                  align="center", gray=0.4)
+        page.text(box_x + box_width / 2, cursor - 26, item["value"], 13, align="center")
+    cursor -= 48
+
+    # --- 3. 面材ごとの値 ---
+    cursor = _draw_section(page, left, right, cursor, "3. 面材ごとの値")
+    cursor = _draw_panel_table(page, left, right, cursor, report)
+
+    # --- 4. 途中経過 ---
+    cursor = _draw_section(page, left, right, cursor, "4. 壁全体の計算")
+    for row in report["steps"]:
+        page.text(left + 8, cursor, row["label"], 8.5, gray=0.35)
+        page.text(right - 8, cursor, row["value"], 9, align="right")
+        if row["eq"]:
+            page.text(right - 118, cursor, row["eq"], 7.5, align="right", gray=0.55)
+        page.line(left + 4, cursor - 4, right - 4, cursor - 4, 0.3, 0.85)
+        cursor -= 13
+    cursor -= 8
+
+    # --- 5. 検定 ---
+    _draw_section(page, left, right, cursor, "5. 判定")
+    cursor -= 20
+    for check in report["checks"]:
+        page.text(left + 8, cursor, check["label"], 8.5, gray=0.45)
+        page.text(left + 250, cursor, check["value"], 9)
+        page.text(right - 8, cursor, "OK" if check["ok"] else "NG", 9, align="right")
+        cursor -= 13
+
+    # --- 脚注 ---
+    _draw_footnote(page, left, right, _WALL_FOOTNOTE, page_number, page_total)
+
+
+def _draw_footnote(page: pdf_write.Page, left: float, right: float, note: str,
+                   page_number: int, page_total: int):
+    """区切り線・脚注・ページ番号を、ページ下端に置く。
+
+    脚注は 1 行に入らないことがあるので幅で折り返し、区切り線はその行数に
+    合わせて上げる（本文と重ならないよう、行数は呼ぶ側が気にしなくてよい）。
+    """
+    lines: list[str] = []
+    line = ""
+    for character in note:
+        if page.font.text_width(line + character, 6.5) > right - left - 40:
+            lines.append(line)
+            line = ""
+        line += character
+    lines.append(line)
+
+    baseline = _MARGIN + 6 + 8 * (len(lines) - 1)
+    page.line(left, baseline + 10, right, baseline + 10, 0.3, 0.7)
+    for text in lines:
+        page.text(left, baseline, text, 6.5, gray=0.45)
+        baseline -= 8
+    page.text(right, _MARGIN + 6, f"{page_number} / {page_total}", 6.5,
+              align="right", gray=0.45)
+
+
+def build_pdf(data: dict, reports: dict) -> bytes:
+    """計算書 PDF を組み立てる。
+
+    ページは「釘配列パターン 1 つにつき 1 ページ」（グレー本 3.2）のあとに、
+    「壁 1 枚につき 1 ページ」（グレー本 3.3）を続ける。壁の計算は面材ごとの
+    釘配列諸定数を使うので、その根拠が前のページに並んでいる形になる。
 
     再編集のため、フォーム入力そのものを文書情報へ埋め込む
     （構造計算安全証明書と同じ仕組み）。ensure_ascii のままにして
     PDF の文字コードの差異を避ける。
     """
     document = pdf_write.Document()
-    total = len(reports)
-    for index, (pattern, report) in enumerate(zip(data["patterns"], reports), start=1):
-        page = document.add_page()
-        _draw_page(page, data, pattern, report, index, total)
+    patterns, walls = reports["patterns"], reports["walls"]
+    page_total = len(patterns) + len(walls)
+
+    for index, (pattern, report) in enumerate(zip(data["patterns"], patterns), start=1):
+        _draw_page(document.add_page(), data, pattern, report, index, len(patterns),
+                   index, page_total)
+    for index, report in enumerate(walls, start=1):
+        _draw_wall_page(document.add_page(), data, report, index, len(walls),
+                        len(patterns) + index, page_total)
 
     title = _TITLE + (f"（{data['projectName']}）" if data["projectName"] else "")
     return document.to_bytes(
