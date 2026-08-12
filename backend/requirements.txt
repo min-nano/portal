@@ -6,7 +6,7 @@ openpyxl==3.1.5
 # 読み書きに使う。python-multipart は PDF アップロードの受け取りに必要。
 pypdf>=6.6.1,<7
 pdfminer.six>=20250506
-python-multipart>=0.0.20,<1
+python-multipart>=0.0.32,<1
 # 釘配列諸定数の計算は Rust で書いた唯一の実装（core/）を wasm として動かす。
 # 画面（ブラウザ）が動かすのとまったく同じ .wasm をサーバも読み込むため、
 # 計算の実装が 2 つに分かれない（README「計算の一元管理（Rust → wasm）」参照）。
