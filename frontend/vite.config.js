@@ -21,6 +21,17 @@ function portalTitlePlugin(title) {
 
 // ポータルはツールごとにページを持つマルチページ構成。ツールを追加するときは
 // tools/<ツール名>/index.html を作り、ここの input に追記する。
+// デザインシステムの見本ページ（/design/）を、このビルドに含めるかどうか。
+//
+// 本番では配らない（社内向けの読み物であって、ツールではないため）。
+// PORTAL_DESIGN_PAGE=1 を渡したときだけ入口に加える（PR プレビューと CI の
+// ビルドで渡している）。既定を「含めない」にしてあるので、渡し忘れても本番に
+// 出てしまうことはない。
+//
+// 手元の npm run dev は入口の一覧を見ずにファイルをそのまま配るので、この
+// 指定に関わらず http://localhost:5173/design/ で開ける。
+const designPage = process.env.PORTAL_DESIGN_PAGE === '1';
+
 export default defineConfig(({ mode }) => ({
   appType: 'mpa',
   plugins: [
@@ -35,8 +46,10 @@ export default defineConfig(({ mode }) => ({
       input: {
         index: resolve(import.meta.dirname, 'index.html'),
         // 画面の決めごと（色・寸法・部品）の見本。実際のツールと同じ CSS を
-        // 読み込んで並べるので、ここが実物とずれない。
-        design: resolve(import.meta.dirname, 'design/index.html'),
+        // 読み込んで並べるので、ここが実物とずれない（本番では配らない）。
+        ...(designPage
+          ? { design: resolve(import.meta.dirname, 'design/index.html') }
+          : {}),
         'excel-report-formatter': resolve(
           import.meta.dirname,
           'tools/excel-report-formatter/index.html'

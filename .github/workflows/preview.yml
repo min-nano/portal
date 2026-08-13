@@ -92,6 +92,9 @@ jobs:
           VITE_CLERK_PUBLISHABLE_KEY: '${{ vars.CLERK_PUBLISHABLE_KEY_TEST }}'
           # 表示名は本番と揃える（未設定なら「社内ポータル」）。
           VITE_PORTAL_TITLE: '${{ vars.PORTAL_TITLE }}'
+          # デザインシステムの見本ページ（/design/）は、本番では配らず
+          # プレビューだけに載せる（画面の変更をここで見比べるため）。
+          PORTAL_DESIGN_PAGE: '1'
         run: |
           cd frontend
           npm ci

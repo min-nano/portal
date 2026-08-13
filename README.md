@@ -159,6 +159,8 @@ GAS 版の機能をそのまま移植しています。
 
 画面の見た目は `frontend/src/styles/` にまとめてあります。**見本ページが `/design/` にあります**（サインイン不要。実際のツールと同じ CSS を読み込んで部品を並べているので、見本と実物がずれません）。ローカルでは `npm run dev` のあと http://localhost:5173/design/ で見られます。
 
+この見本ページは**本番には配りません**（社内向けの読み物であって、ツールではないため）。ビルドに含めるのは `PORTAL_DESIGN_PAGE=1` を渡したときだけで、渡しているのは PR プレビューと CI のビルドです（`npm run dev` は入口の一覧を見ないので、手元では常に開けます）。PR ごとのプレビュー URL に `/design/` を付ければ、その PR の画面の決めごとをそのまま確かめられます。
+
 守る決めごとは 3 つだけです。
 
 1. **画面は「入力する面」「読む面」「操作するもの」の 3 つでできている。** 入力する場所は必ず枠のある升目（`--field-bg`）にして、周りの下地（`--surface-sunken`）と面の色で分けます。結果は白い枠の中に置き、数値は等幅・右そろえ（`--font-num` + `tabular-nums`）にして桁を見比べられるようにします。操作するものはボタンだけで、**主**（塗り／画面に 1 つ）・**副**（枠線）・**削除**（赤い枠線・塗らない）の 3 段階しかありません。
@@ -213,7 +215,7 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   tools/structural-cert-formatter/index.html
   tools/timber-panel-shear-calculator/index.html
   tools/wall-quantity-calculator/index.html
-  design/index.html           # デザインシステムの見本（/design/。サインイン不要）
+  design/index.html           # デザインシステムの見本（/design/。本番では配らない）
   src/styles.css              # 画面共通スタイルの入口（下の 5 つを読み込むだけ）
   src/styles/                 # デザインシステム
     tokens.css                # 色・余白・字送りの原器（明暗テーマもここだけ）
