@@ -34,6 +34,9 @@ export default defineConfig(({ mode }) => ({
     rollupOptions: {
       input: {
         index: resolve(import.meta.dirname, 'index.html'),
+        // 画面の決めごと（色・寸法・部品）の見本。実際のツールと同じ CSS を
+        // 読み込んで並べるので、ここが実物とずれない。
+        design: resolve(import.meta.dirname, 'design/index.html'),
         'excel-report-formatter': resolve(
           import.meta.dirname,
           'tools/excel-report-formatter/index.html'

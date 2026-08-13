@@ -1,0 +1,488 @@
+/* ツールごとの上乗せ。
+ *
+ * 骨組み（layout.css）と部品（components.css）で足りるものは、ここには
+ * 書かない。ここにあるのは「そのツールにしか出てこない形」だけ
+ * （計測値の表・釘配列図・配布物にそろえた出力欄など）。
+ */
+
+/* --- 現況検査レポート作成ツール ------------------------------------------ */
+
+/* 部屋ブロック。見出しの行には部屋名と階数・部屋名の欄を残すので、
+   閉じたままでも見分けと修正ができる。 */
+.room {
+  background: var(--surface-sunken);
+}
+
+/* 計測値の表を追いながらでも部屋の見出しが見えるよう、開閉の行ごと貼り付ける
+   （画面上部のヘッダーの下に付ける）。 */
+.room::part(head) {
+  position: sticky;
+  top: calc(var(--header-h) - 1px);
+  z-index: 10;
+  background: var(--surface-sunken);
+  padding: var(--s-2) 0;
+  margin-bottom: var(--s-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.room-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.room-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+
+.room-title-row h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room .remove {
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
+}
+
+/* 階数・部屋名は 1 行に収める。狭い画面では折り返さずに部屋名の欄を縮める
+   （見出しの行なので、2 行に増えると表の前置きが厚くなってしまう）。 */
+.room-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: nowrap;
+}
+
+.room-meta label {
+  display: inline;
+  margin: 0;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.room-meta input {
+  width: auto;
+  min-height: 36px;
+  padding: var(--s-1) var(--s-2);
+}
+
+.room-meta input[data-room-field='floor'] {
+  width: 4.5em;
+  flex: none;
+  text-align: center;
+}
+
+.room-meta input[data-room-field='room_name'] {
+  width: 8em;
+  flex: 0 1 8em;
+  min-width: 3em;
+}
+
+/* 計測値は選択と数値しか入れないので、表形式で縦に詰めてラベルはヘッダー列で
+   代表する。行が細いぶん、今どの行にいるかを下地の色で示す。 */
+.measure-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin-top: var(--s-3);
+  table-layout: fixed;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.measure-table th,
+.measure-table td {
+  border-bottom: 1px solid var(--divider);
+  padding: var(--s-1);
+  text-align: center;
+}
+
+.measure-table tr:last-child td {
+  border-bottom: none;
+}
+
+.measure-table thead th {
+  background: var(--surface-sunken);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  padding: var(--s-2) var(--s-1);
+  border-bottom: 1px solid var(--border);
+}
+
+/* 計測点の名前と選択肢に幅を回し、数値の 3 列は「1820」が入る幅で足りる。
+   選択肢が途中で切れると、狭い画面で選び間違えるため。 */
+.measure-table col.col-point {
+  width: 22%;
+}
+
+.measure-table colgroup col:nth-child(2) {
+  width: 25%;
+}
+
+.measure-table td.point-cell {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--text-2);
+  background: var(--surface-sunken);
+  text-align: left;
+  padding-left: var(--s-2);
+  white-space: nowrap;
+}
+
+.measure-table tr.group-row td {
+  background: var(--brand-50);
+  color: var(--text-brand);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-align: left;
+  padding: var(--s-1) var(--s-2);
+}
+
+/* 入力中の行を丸ごと色づける。狭い画面で 5 列を横目に追うとき、
+   「今どの計測点を入れているか」を取り違えないための目印。 */
+.measure-table tr:focus-within td {
+  background: var(--focus-row);
+}
+
+.measure-table tr:focus-within td.point-cell {
+  color: var(--text-brand);
+}
+
+.measure-table select,
+.measure-table input {
+  width: 100%;
+  min-height: 38px;
+  padding: var(--s-1) var(--s-1);
+  margin: 0;
+  border-radius: var(--r-sm);
+  text-align: center;
+  /* 画面内へ送るとき、貼り付いた部屋の見出しに隠れないようにする。 */
+  scroll-margin-top: calc(var(--header-h) + 72px);
+}
+
+.measure-table select {
+  padding-right: var(--s-4);
+  background-position: right 2px center;
+  background-size: 10px 10px;
+}
+
+/* --- 構造計算安全証明書 作成ツール --------------------------------------- */
+
+.cert-field {
+  min-width: 0;
+}
+
+.cert-section.disabled h3,
+.cert-section.disabled .hint {
+  color: var(--text-muted);
+}
+
+/* --- 面材張り大壁 計算ツール ---------------------------------------------- */
+
+/* 1 物件の中の複数の壁を、ページ送りで切り替える。切り替えの帯は
+   画面上部に貼り付けて、どの壁を編集しているかを見失わないようにする。 */
+.pattern-bar {
+  position: sticky;
+  top: calc(var(--header-h) - 1px);
+  z-index: var(--z-dock);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.pattern-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  font-size: var(--fs-sm);
+}
+
+.pattern-nav button {
+  min-height: 36px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
+}
+
+/* 前後の壁へ送るボタンは、記号だけなので正方形にそろえる。 */
+#wallPrevBtn,
+#wallNextBtn {
+  width: 36px;
+  padding: 0;
+  font-size: var(--fs-md);
+}
+
+#wallPosition {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+/* 送りの 3 つ（‹ 壁 n / N ›）はひとかたまりに、壁の追加・削除は右端に置く。 */
+#wallNextBtn {
+  margin-right: auto;
+}
+
+.pattern-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}
+
+.pattern-tabs .tab {
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+}
+
+.pattern-tabs .tab:hover {
+  background: var(--surface-hover);
+  color: var(--text-brand);
+  border-color: var(--brand-300);
+}
+
+.pattern-tabs .tab.current {
+  background: var(--brand-700);
+  color: var(--text-inverse);
+  border-color: transparent;
+}
+
+/* 面材寸法（幅・高さ）と、その場で掛けた面積の目安。数値の欄なので、
+   広い画面でも 1 つずつが伸びきらないように auto-fill で桝を作る。 */
+.panel-size {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 10rem), 1fr));
+  gap: var(--s-3);
+  align-items: end;
+  margin-top: var(--s-3);
+}
+
+.panel-size label {
+  margin: 0;
+}
+
+/* 掛け算しただけの目安。結果ではないので、結果の枠とは別の見た目にする。 */
+.panel-size .area {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding-bottom: var(--s-2);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+.panel-size .area .label {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* 壁を構成する面材。1 枚ごとに面材と釘の仕様・寸法・割り付け・へりあきを
+   決め、その場で釘配列諸定数（グレー本 3.2）と釘配列図が出る。 */
+.wall-panels {
+  display: flex;
+  flex-direction: column;
+}
+
+.wall-panel {
+  background: var(--surface);
+}
+
+/* 見出しの行（面材名と削除ボタン）は、折り畳んでも残る。 */
+.wall-panel > [slot='title'] {
+  font-size: var(--fs-md);
+  font-weight: 700;
+  color: var(--text-brand);
+}
+
+.wall-panel > [slot='actions'] {
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
+}
+
+/* 面材の中の小見出し（「面材と釘」「面材の配置と釘配列」）。 */
+.panel-group {
+  margin-top: var(--s-4);
+}
+
+.panel-group h4 {
+  margin: 0;
+  padding-bottom: var(--s-1);
+  font-size: var(--fs-sm);
+  color: var(--text-brand);
+  border-bottom: 1px solid var(--divider);
+}
+
+/* 面材 1 枚ごとの計算結果。入力の続きに見えないよう、白い箱に入れる。 */
+.panel-result {
+  margin-top: var(--s-4);
+  padding: var(--s-3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.panel-result:empty {
+  display: none;
+}
+
+/* 壁の計算結果の中の、表ごとの小見出し。 */
+.result-heading {
+  margin: var(--s-4) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+/* 面材名の欄が 1 文字ずつ縦に積まれないだけの幅を持たせる（表は横スクロール
+   するので、狭い画面でも読める幅を優先する）。 */
+.table-scroll .steps-table .step-label {
+  min-width: 9em;
+}
+
+/* 釘配列図。狭い画面でも縮めて収める。 */
+.diagram-box,
+.panel-result svg {
+  margin-top: var(--s-3);
+  overflow-x: auto;
+}
+
+.diagram-box svg,
+.panel-result svg {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+/* --- 小規模木造建築物 必要壁量 計算ツール --------------------------------- */
+
+.wq-field {
+  min-width: 0;
+}
+
+.wq-field .field-row select,
+.wq-field .field-row input {
+  margin: 0;
+}
+
+.wq-block {
+  margin-top: var(--s-4);
+}
+
+.wq-block h4 {
+  margin: 0;
+  padding-bottom: var(--s-1);
+  font-size: var(--fs-sm);
+  color: var(--text-brand);
+  border-bottom: 1px solid var(--divider);
+}
+
+/* 柱材（JAS 規格 → 樹種等 → 等級等）の表。狭い画面では横スクロールさせる。 */
+.wq-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin-top: var(--s-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.wq-table th,
+.wq-table td {
+  border-bottom: 1px solid var(--divider);
+  padding: var(--s-1) var(--s-2);
+  vertical-align: middle;
+}
+
+.wq-table tr:last-child th,
+.wq-table tr:last-child td {
+  border-bottom: none;
+}
+
+.wq-table thead th {
+  background: var(--surface-sunken);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+}
+
+.wq-table th.row-head {
+  background: var(--surface-sunken);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  width: 3em;
+  text-align: center;
+}
+
+.wq-table .wq-field {
+  margin-top: 0;
+}
+
+.wq-table select {
+  min-width: 7em;
+}
+
+.wq-table tr:focus-within td {
+  background: var(--focus-row);
+}
+
+/* 出力結果。配布物では入力欄が緑・結果がオレンジの枠なので、同じ配色にする
+   （画面と配布物を見比べるときに、同じ升目だと分かるようにするため）。 */
+.wq-result-section + .wq-result-section {
+  margin-top: var(--s-5);
+}
+
+.wq-result-section h4 {
+  margin: 0 0 var(--s-1);
+  font-size: var(--fs-sm);
+  color: var(--text-brand);
+}
+
+.wq-result-section h5 {
+  margin: var(--s-3) 0 var(--s-1);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.wq-result-table {
+  overflow-x: auto;
+}
+
+.wq-result-cell {
+  background: var(--out-50);
+  color: var(--out-700);
+  text-align: right;
+  font-family: var(--font-num);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wq-result-cell.empty {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  text-align: center;
+  font-weight: 400;
+}

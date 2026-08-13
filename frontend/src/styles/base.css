@@ -1,0 +1,173 @@
+/* 素の要素の見た目（土台）。
+ *
+ * ここでは「クラスを付けなくても最低限そろっている」状態までを作る。
+ * 部品ごとの見た目は components.css、置き場所は layout.css に分けてある。
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* display を指定した要素（.portal-header .account の flex など）でも hidden
+   属性を常に効かせる。UA スタイルの [hidden] { display: none } は author
+   スタイルの display 指定に負けるため、明示的に上書きしておく。 */
+[hidden] {
+  display: none !important;
+}
+
+/* iOS Safari は、ビューポートより広い塊（横スクロールする表など）の中の
+   文字を勝手に大きくする（自動テキスト拡大）。判定の行だけ文字が飛び抜けて
+   大きくなってしまうので、拡大は行わせない。指でのピンチ拡大は妨げない。 */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* 画面内リンク（結果へ飛ぶボタンなど）が、貼り付いたヘッダーの下に
+     潜り込まないようにする。 */
+  scroll-padding-top: calc(var(--header-h) + var(--s-4));
+}
+
+body {
+  margin: 0;
+  padding: 0 0 var(--s-12);
+  background: var(--canvas);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs-base);
+  line-height: var(--lh);
+  /* 和欧混在で文字が詰まりすぎないように、句読点まわりだけ整える。 */
+  font-feature-settings: 'palt' 1;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+  margin: 0;
+  line-height: var(--lh-tight);
+  color: var(--text);
+  font-weight: 700;
+}
+
+h2 {
+  font-size: var(--fs-xl);
+  letter-spacing: 0.01em;
+}
+
+h3 {
+  font-size: var(--fs-md);
+  color: var(--text-brand);
+}
+
+h4 {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--text-brand);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+/* 説明文は幅を広げても行が長くなりすぎないようにする（デスクトップで
+   ページ幅を広げた分は、入力欄を横に並べるために使う）。 */
+p,
+li {
+  max-width: var(--prose-max);
+}
+
+/* 焦点は必ず見えるようにする。マウス操作では出さない（:focus-visible）。 */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--focus) 30%, transparent);
+}
+
+/* 画面の部品（src/components/）。カスタム要素の既定は display: inline なので、
+   箱として使うものはここで block にしておく（部品が読み込まれる前の描画でも
+   崩れないよう、shadow DOM の :host だけに頼らない）。 */
+portal-section,
+portal-auth-gate,
+portal-edit-bar,
+portal-save-bar {
+  display: block;
+}
+
+/* 読み上げだけに出す文字（見た目には出さない）。 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Drive のファイル選択は公式の Google Picker（Google が提供する iframe）が
+   描画する。中身は Google 側の作りなので触らないが、置き場所だけは直す。
+   Picker は自分のダイアログを position: absolute（＝ページ座標）で置き、
+   その位置を開いた瞬間に一度決めるだけなので、ページ下部までスクロール
+   した状態で開くと画面の外（ページ上部）に置かれ、何も出ていないように
+   見える。画面座標（position: fixed）に固定して、常に表示領域の中央に
+   出す。left/top は Picker がインラインで書き込むため !important で覆す。 */
+.picker-dialog-bg {
+  position: fixed !important;
+  left: 0 !important;
+  top: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.picker-dialog {
+  position: fixed !important;
+  left: 50% !important;
+  top: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  margin: 0 !important;
+  /* 大きさは pickFile 側で表示領域に合わせるが、開いたあとに画面が狭く
+     なった場合の保険として、はみ出さない上限も入れておく。 */
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+}
+
+/* 印刷（計算結果を紙で確かめるとき）。折り畳んだ節も含めて全部出す。 */
+@media print {
+  body {
+    background: #fff;
+  }
+
+  .portal-header,
+  portal-section-controls,
+  .verdict-fab,
+  .save-bar,
+  .pattern-bar {
+    display: none !important;
+  }
+
+  portal-section[collapsed]::part(body) {
+    display: block !important;
+  }
+}

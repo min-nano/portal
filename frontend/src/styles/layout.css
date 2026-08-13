@@ -1,0 +1,279 @@
+/* 骨組み（どこに置くか）。
+ *
+ * 画面は次の 3 段でできている。
+ *
+ *   .portal-header   画面上部に貼り付くヘッダー（全幅・中身だけ中央寄せ）
+ *   .container       ページ本体。最大幅 --shell-max の「紙」
+ *   .has-dock        入力（左）と結果（右）の 2 列。デスクトップだけ
+ *
+ * デスクトップで余白が広すぎた問題は、
+ *   1. 紙の幅を 720px → --shell-max（1280px）へ広げる
+ *   2. 広がった幅を「説明文を長くする」ではなく「入力欄を横に並べる」に使う
+ *      （説明文は --prose-max で頭打ちにする）
+ *   3. 結果は右の列に貼り付けて、入力しながら常に見えるようにする
+ * の 3 つで解いている。
+ */
+
+/* --- ヘッダー ------------------------------------------------------------ */
+
+.portal-header {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-header);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  min-height: var(--header-h);
+  /* 帯は全幅、中身だけ紙と同じ幅に収める。 */
+  padding: var(--s-2) max(var(--s-4), calc((100% - var(--shell-max)) / 2));
+  margin: 0 0 var(--s-5);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.portal-header .title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-weight: 700;
+  font-size: var(--fs-md);
+  color: var(--text-brand);
+  letter-spacing: 0.01em;
+}
+
+/* ポータルの印。名前だけだとどのページも同じ見出しに見えるので、
+   小さな四角を添えて「ここが最上位」だと分かるようにする。 */
+.portal-header .title::before {
+  content: '';
+  width: 18px;
+  height: 18px;
+  border-radius: var(--r-sm);
+  background: linear-gradient(135deg, var(--brand-500), var(--brand-800));
+  flex: none;
+}
+
+.portal-header .title a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.portal-header .title a:hover {
+  text-decoration: underline;
+}
+
+.portal-header .account {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+/* --- ページ本体 ---------------------------------------------------------- */
+
+.container {
+  max-width: var(--shell-max);
+  margin: 0 auto;
+  padding: clamp(var(--s-4), 2vw, var(--s-8));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-1);
+}
+
+@media (max-width: 640px) {
+  /* 狭い画面では紙の縁を出さない（横幅を 1px も無駄にしない）。 */
+  .container {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    padding: var(--s-4) var(--s-3);
+  }
+}
+
+/* 見出しの行。雛形の設定は滅多に触らないので、タイトルの右端に小さく添える
+   （幅が足りなければ折り返して、次の行の右端に来る）。 */
+.page-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-2) var(--s-4);
+  flex-wrap: wrap;
+  padding-bottom: var(--s-3);
+  margin-bottom: var(--s-4);
+  border-bottom: 1px solid var(--divider);
+}
+
+.page-head h2 {
+  margin: 0;
+}
+
+/* ページ冒頭の説明。読み飛ばせるように、本文より一段落ち着かせる。 */
+.container > .hint {
+  margin-bottom: var(--s-4);
+}
+
+/* --- サインインゲート ---------------------------------------------------- */
+
+.auth-gate {
+  max-width: 420px;
+  margin: var(--s-12) auto 0;
+  padding: var(--s-8) var(--s-6);
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-2);
+}
+
+.auth-gate .note {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  margin: 0 auto var(--s-4);
+}
+
+.auth-gate .clerk-mount {
+  display: flex;
+  justify-content: center;
+}
+
+/* --- 入力欄の並べ方 ------------------------------------------------------
+ * 1 行 1 欄で縦に積むと、デスクトップでは横が余り、縦に長くなって
+ * 「どこに入れるのか」が分からなくなる。関係する欄は横に並べ、狭い画面では
+ * 自動で 1 列に戻す。 */
+
+.field-grid,
+.cert-section::part(body),
+.wq-block,
+.panel-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  gap: var(--s-3) var(--s-4);
+  align-items: start;
+}
+
+/* 欄ではないもの（見出し・説明・選択肢・表・結果）は 1 行を使い切る。 */
+.field-grid > .field-span,
+.cert-section > .hint,
+.cert-section > h4,
+.cert-section > .cert-choices,
+.cert-section > .choice-option,
+.cert-section > .wq-block,
+.cert-section > .wq-toggle,
+.cert-section > .wq-table,
+.cert-section > .table-scroll,
+.cert-section > .wq-result-section,
+.cert-section > .result-summary,
+.cert-section > .result-error,
+.cert-section > .result-heading,
+.cert-section > .panel-size,
+.cert-section > .wall-panels,
+.wq-block > h4,
+.wq-block > .hint,
+.wq-block > .wq-table,
+.panel-group > h4,
+.panel-group > .hint {
+  grid-column: 1 / -1;
+}
+
+/* 欄の幅は「入る値の長さ」に合わせる。数値ひと桁ぶんの欄が本文と同じ幅まで
+   伸びていると、どこまで入れる欄なのかが読めなくなる。 */
+.field-narrow {
+  max-width: 14rem;
+}
+
+.field-half {
+  max-width: 32rem;
+}
+
+/* --- 入力（左）と結果（右）の 2 列 --------------------------------------
+ * 結果の節に .result-dock を付けると、デスクトップでは右列に移り、
+ * 画面に貼り付いたまま残る。狭い画面ではそのまま下に流れる（1 列）。
+ * DOM の並びは変えていないので、読み上げ順・タブ順は入力 → 結果のまま。 */
+
+@media (min-width: 1080px) {
+  .has-dock {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--dock-w);
+    gap: var(--s-6);
+    align-items: start;
+  }
+
+  .has-dock > * {
+    grid-column: 1;
+    min-width: 0;
+  }
+
+  .has-dock > .result-dock {
+    grid-column: 2;
+    /* 左の列がどれだけ伸びても、右列は最初の行から貼り付いたままにする。 */
+    grid-row: 1 / -1;
+    align-self: start;
+    position: sticky;
+    top: calc(var(--header-h) + var(--s-3));
+    max-height: calc(100vh - var(--header-h) - var(--s-6));
+    overflow: auto;
+    margin-top: 0;
+  }
+}
+
+/* --- 主たる操作（出力） --------------------------------------------------
+ * 長いフォームでは、押したいボタンが画面の外にあることが多い。1 つだけの
+ * 主たる操作（Excel 出力）は画面の下に貼り付けて、いつでも押せる位置に置く。
+ * 保存欄（.save-bar）は、保存先の説明を伴う「節」なので貼り付けない
+ * （狭い画面で場所を取りすぎるうえ、押す前に読ませたい文言が入る）。 */
+
+form > button#submitBtn {
+  position: sticky;
+  bottom: calc(var(--s-2) + env(safe-area-inset-bottom, 0px));
+  z-index: var(--z-dock);
+}
+
+/* --- 結果へ飛ぶボタン（狭い画面だけ） ------------------------------------
+ * 入力しているあいだ、結果は画面の外にある。判定に NG があるかどうかだけは
+ * いつでも見えるようにして、その場から結果へ飛べるようにする。
+ * 色は判定そのものから決める（下の components.css の .verdict を参照）。 */
+
+.verdict-fab {
+  position: fixed;
+  right: var(--s-3);
+  bottom: calc(var(--s-3) + env(safe-area-inset-bottom, 0px));
+  z-index: var(--z-fab);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: var(--tap);
+  padding: 0 var(--s-4);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-2);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+/* 画面の下に貼り付いた出力ボタンがあるページでは、その上に重ねる。 */
+body:has(form > button#submitBtn) .verdict-fab {
+  bottom: calc(var(--s-3) + var(--tap) + var(--s-3) + env(safe-area-inset-bottom, 0px));
+}
+
+@media (min-width: 1080px) {
+  /* 結果が常に見えている（右列）ので、飛ぶボタンは要らない。 */
+  .verdict-fab {
+    display: none;
+  }
+}
+
+/* --- セクションの一括開閉 ------------------------------------------------ */
+
+portal-section-controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  margin: var(--s-3) 0 0;
+}

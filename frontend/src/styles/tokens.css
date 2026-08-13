@@ -1,0 +1,170 @@
+/* デザイントークン（この配色・寸法・字送りの「原器」）。
+ *
+ * 画面のどこにも生の色や余白は書かない。ここで決めた「役割の名前」
+ * （--surface, --text-2, --ng-600 …）だけを使うことで、
+ *
+ *   - 同じ意味のものが同じ見た目になる（判定の赤は 1 つだけ）
+ *   - 明暗テーマの切り替えが、この 1 ファイルの中で完結する
+ *   - 色を足したくなったときに、既にある役割で足りるかを先に考えられる
+ *
+ * という 3 つを守る。値そのもの（--brand-700 など）を画面側で直接使うのは、
+ * 役割の名前では言い表せないとき（図面の描画色など）だけにする。
+ *
+ * 明暗は light-dark() で 1 か所に書く。左が明るいテーマ、右が暗いテーマの値
+ * で、どちらを使うかは color-scheme が決める（既定は端末の設定に従い、
+ * <html data-theme="light|dark"> を付けるとそちらに固定される）。
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* --- 色見本 ------------------------------------------------------------
+   * 藍（brand）は既存の見出し色 #1a3a8f を 700 に据えて前後を作ったもの。
+   * 数字が大きいほど濃い……のは明るいテーマでの話で、暗いテーマでは
+   * 「下地に使う側（50〜100）は暗く、文字と塗りに使う側（300〜800）は明るく」
+   * 入れ替わる。役割の名前で使っているかぎり、この入れ替えは意識しなくてよい。 */
+  --brand-50: light-dark(#eff3fd, #1b2438);
+  --brand-100: light-dark(#dfe7fa, #222e47);
+  --brand-200: light-dark(#c2d0f3, #2c3b5c);
+  --brand-300: light-dark(#96aee8, #4a5f8c);
+  --brand-400: light-dark(#6685d6, #8aa8ee);
+  --brand-500: light-dark(#3f60bf, #7c9ceb);
+  --brand-600: light-dark(#2a47a3, #6f8fe0);
+  --brand-700: light-dark(#1a3a8f, #9db6f0);
+  --brand-800: light-dark(#152c6d, #b9caf6);
+
+  --n-0: light-dark(#ffffff, #1a202b);
+  --n-50: light-dark(#f5f7fa, #151a23);
+  --n-100: light-dark(#eceff5, #232b38);
+  --n-200: light-dark(#dee3ec, #2b3342);
+  --n-300: light-dark(#c8cfdc, #3a4356);
+  --n-400: light-dark(#a2abbd, #4d5870);
+  --n-500: light-dark(#78829a, #8b94a6);
+  --n-600: light-dark(#5a6478, #b3bccc);
+  --n-900: light-dark(#1a1f2b, #e8ecf3);
+
+  /* 判定の緑・赤と、注意の橙。判定は「合っている／外れている」だけに使い、
+     操作の色（ボタンなど）には使わない（結果の色を薄めないため）。 */
+  --ok-50: light-dark(#e8f6ed, #12241a);
+  --ok-100: light-dark(#c8e7d4, #1d3a2a);
+  --ok-500: light-dark(#1f8a4c, #4cc17f);
+  --ok-600: light-dark(#15723d, #63cf90);
+  --ok-700: light-dark(#0f5c31, #7edaa4);
+
+  --ng-50: light-dark(#fdecea, #2a1614);
+  --ng-100: light-dark(#f8d2cf, #43211d);
+  --ng-500: light-dark(#c8352b, #f08279);
+  --ng-600: light-dark(#a92a21, #f4948c);
+  --ng-700: light-dark(#8c231b, #f8a8a0);
+
+  --warn-50: light-dark(#fff5e2, #2a2113);
+  --warn-100: light-dark(#f6e2b8, #40311b);
+  --warn-500: light-dark(#b07d10, #e0b45f);
+  --warn-700: light-dark(#6f4700, #f2d296);
+
+  /* 出力欄の琥珀。必要壁量ツールの配布物が「入力＝緑・出力＝オレンジ」の
+     配色なので、計算結果の升目はその色に寄せる（配布物と見比べるため）。 */
+  --out-50: light-dark(#fff6e5, #2a2213);
+  --out-700: light-dark(#7a5b12, #f0d091);
+
+  /* --- 役割（面） --------------------------------------------------------
+   * 画面は 3 つの面でできている。
+   *   canvas  … 台紙。何も置かれていないところ
+   *   surface … 紙。ページの中身が乗る
+   *   sunken  … 節（入力のかたまり）。紙の上のくぼみ
+   * 入力欄だけは常に「他より明るい升目」にして、書き込む場所だと分かるようにする。 */
+  --canvas: light-dark(#eef1f7, #10141c);
+  --surface: light-dark(#ffffff, #1a202b);
+  --surface-sunken: light-dark(#f7f9fc, #151a23);
+  --surface-hover: light-dark(#eff3fd, #212a3a);
+  --field-bg: light-dark(#ffffff, #111721);
+  --field-bg-disabled: light-dark(#eceff5, #1c222d);
+
+  /* --- 役割（文字） ------------------------------------------------------
+   * --text-inverse は「塗りつぶしの上に乗る文字」。明るいテーマでは白、
+   * 暗いテーマでは黒に近い色になる（塗りの側が明暗で入れ替わるため）。 */
+  --text: var(--n-900);
+  --text-2: var(--n-600);
+  --text-muted: var(--n-500);
+  --text-brand: var(--brand-700);
+  --text-inverse: light-dark(#ffffff, #0d1119);
+
+  /* --- 役割（線） -------------------------------------------------------- */
+  --border: var(--n-200);
+  --border-strong: var(--n-300);
+  --field-border: var(--n-300);
+  --field-border-hover: var(--n-400);
+  --divider: var(--n-100);
+
+  /* 焦点。キーボードでもタッチでも「今どこにいるか」を必ず示す。 */
+  --focus: light-dark(#3f60bf, #7ea1ea);
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--focus) 30%, transparent);
+  --focus-row: color-mix(in srgb, var(--focus) 10%, transparent);
+
+  /* --- 余白（4px 刻み） -------------------------------------------------- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  --s-12: 48px;
+
+  /* --- 角丸・影 ---------------------------------------------------------- */
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-pill: 999px;
+
+  --shadow-1: 0 1px 2px light-dark(rgba(16, 24, 40, 0.06), rgba(0, 0, 0, 0.4)),
+    0 1px 3px light-dark(rgba(16, 24, 40, 0.08), rgba(0, 0, 0, 0.3));
+  --shadow-2: 0 4px 12px light-dark(rgba(16, 24, 40, 0.1), rgba(0, 0, 0, 0.45));
+  --shadow-3: 0 12px 32px light-dark(rgba(16, 24, 40, 0.18), rgba(0, 0, 0, 0.55));
+
+  /* --- 文字 --------------------------------------------------------------
+   * 和文は端末の標準書体に任せる（社内利用で、書体の読み込み待ちがない方が
+   * 速い）。数値だけは等幅の数字にして、桁がそろって見比べられるようにする。 */
+  --font: system-ui, -apple-system, 'Segoe UI', 'Hiragino Kaku Gothic ProN',
+    'Noto Sans JP', Meiryo, sans-serif;
+  --font-num: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+    'Noto Sans Mono', monospace;
+
+  --fs-2xs: 0.6875rem;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.8125rem;
+  --fs-base: 0.9375rem;
+  --fs-md: 1rem;
+  --fs-lg: 1.125rem;
+  --fs-xl: 1.375rem;
+  --fs-2xl: 1.75rem;
+
+  --lh-tight: 1.3;
+  --lh: 1.65;
+
+  /* --- 骨組みの寸法 ------------------------------------------------------ */
+  --shell-max: 1280px; /* ページの最大幅（デスクトップの余白を減らす） */
+  --prose-max: 68ch;   /* 説明文の最大幅（幅を広げても読みやすさは保つ） */
+  --dock-w: 380px;     /* 結果ドック（デスクトップの右列）の幅 */
+  --header-h: 56px;
+  --tap: 44px;         /* タッチの最小の的。押し間違いを減らす下限 */
+
+  /* --- 動き・重なり ------------------------------------------------------ */
+  --dur: 0.15s;
+  --ease: cubic-bezier(0.2, 0.6, 0.3, 1);
+
+  --z-dock: 20;
+  --z-fab: 60;
+  --z-header: 100;
+}
+
+/* 明暗の固定（見本ページの切り替え用。既定は端末の設定に従う）。 */
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
