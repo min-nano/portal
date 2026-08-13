@@ -420,6 +420,20 @@ portal-section[collapsed]::part(head) {
   border-bottom: none;
 }
 
+/* 折り畳んだ節の中身は隠す。
+ *
+ * 部品の中（shadow DOM）にも :host([collapsed]) .body { display: none } が
+ * あるが、中身の並べ方を外から ::part(body) で指定している（節の中を桝目に
+ * する・結果の節は 1 列にする）ので、そちらが勝ってしまう。外側のツリーの
+ * ::part 規則は、影のツリーの規則より優先されるため。
+ *
+ * したがって「折り畳んだら隠す」も、外側で言い直しておく必要がある。
+ * ::part(body) に display を足すときは、この規則より詳細度が低いことを
+ * 確かめること（この規則は要素 + 属性 = 0,1,1）。 */
+portal-section[collapsed]::part(body) {
+  display: none;
+}
+
 portal-section::part(toggle) {
   color: var(--text-brand);
 }
