@@ -198,6 +198,15 @@
   box-shadow: var(--shadow-1);
 }
 
+/* 2 列になる広さでは、この帯は入力（左）の列の幅までにする。全幅のまま
+   貼り付けると、右の列に貼り付いた結果の見出しを覆い隠してしまうため
+   （帯が受け持つのは左の列の中身＝どの壁を編集しているか、でもある）。 */
+@media (min-width: 1080px) {
+  .pattern-bar {
+    margin-right: calc(var(--dock-w) + var(--s-6));
+  }
+}
+
 .pattern-nav {
   display: flex;
   align-items: center;
