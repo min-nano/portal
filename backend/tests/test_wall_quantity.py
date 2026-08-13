@@ -317,8 +317,13 @@ def test_file_name_drops_characters_that_cannot_be_used():
 
 
 def test_form_config_carries_everything_the_screen_needs():
-    config = wq.form_config()
+    config = wq.form_config("/api/tools/wall-quantity-calculator/core.wasm")
     assert [b["key"] for b in config["buildings"]] == ["one_story", "two_story"]
+    # 編集中の計算に使う wasm の在り処（中身のハッシュ付き）。
+    assert config["core"]["url"].startswith(
+        "/api/tools/wall-quantity-calculator/core.wasm?v="
+    )
+    assert config["core"]["version"]
     assert config["worksheet"]["version"] == wq.template_version()
     assert config["worksheet"]["pageUrl"].startswith("https://www.howtec.or.jp/")
     assert config["options"]["roof"]

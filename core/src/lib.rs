@@ -1,4 +1,4 @@
-//! 面材張り耐力要素 釘配列諸定数の**唯一の計算実装**。
+//! ポータルの計算の**唯一の実装**（面材張り大壁と、小規模木造建築物の必要壁量）。
 //!
 //! この crate をビルドした 1 つの .wasm を、画面（ブラウザ）とサーバ
 //! （Cloud Run の FastAPI）の両方が読み込んで動かす。同じバイト列を同じ
@@ -9,6 +9,7 @@
 //! 呼び出し口は 1 つだけで、JSON の要求を渡すと JSON の応答が返る:
 //!
 //! ```text
+//! 面材張り大壁（グレー本 3.2・3.3）
 //! {"op": "computeAll", "data": {...}}  → {"ok": true,  "walls": [...]}
 //! {"op": "validate",   "data": {...}}  → {"ok": true,  "walls": [...]}
 //! {"op": "normalize",  "data": {...}}  → {"ok": true,  "data": {...}}
@@ -16,6 +17,11 @@
 //! {"op": "preset",     "data": {...}}  → {"ok": true,  "preset": {...}, "panel": {...}}
 //! {"op": "materials"}                  → {"ok": true,  "materials": [...]}
 //! {"op": "grades"}                     → {"ok": true,  "grades": [...]}
+//!
+//! 必要壁量（表計算ツールの数式）
+//! {"op": "wallQuantity",       "data": {...}} → {"ok": true, "result": {...}}
+//! {"op": "wallQuantityInputs", "data": {...}} → {"ok": true, "inputKeys": [...], ...}
+//!
 //! {"op": "config"}                     → {"ok": true,  "version": "1.0.0", ...}
 //! 失敗                                  → {"ok": false, "error": "利用者に見せる日本語"}
 //! ```
@@ -26,6 +32,7 @@
 //! wasm としての受け渡し（線形メモリの確保・解放）は abi.rs にある。
 
 pub mod abi;
+pub mod column_strength;
 pub mod format;
 pub mod json;
 pub mod layout;
@@ -33,6 +40,7 @@ pub mod nail_array;
 pub mod presets;
 pub mod report;
 pub mod wall;
+pub mod wall_quantity;
 
 use json::Value;
 
@@ -159,6 +167,52 @@ fn dispatch(request: &str) -> Result<Value, String> {
         )])),
         // 割り付けの型（川型・山型・ロ型・日型）。画面の選択肢になる。
         "arrangements" => Ok(Value::obj([("arrangements", report::arrangements())])),
+        // 小規模木造建築物の必要壁量（表計算ツールの数式）。入力が足りない
+        // ところは配布物と同じく空欄で返るので、編集中もそのまま呼べる。
+        "wallQuantity" => Ok(Value::obj([("result", wall_quantity::compute(data())?)])),
+        // 計算が読む入力欄の key。マッピング（書き込み先のセル）とずれて
+        // いないかを、backend のテストが突き合わせるのに使う。
+        "wallQuantityInputs" => {
+            let building = wall_quantity::Building::from_key(
+                data().get("building").and_then(Value::as_str).unwrap_or(""),
+            )?;
+            Ok(Value::obj([
+                (
+                    "inputKeys",
+                    Value::Arr(
+                        wall_quantity::input_keys(building)
+                            .into_iter()
+                            .map(Value::Str)
+                            .collect(),
+                    ),
+                ),
+                (
+                    "toggleKeys",
+                    Value::Arr(
+                        wall_quantity::toggle_keys()
+                            .iter()
+                            .map(|key| (*key).into())
+                            .collect(),
+                    ),
+                ),
+                (
+                    "columnStrengths",
+                    Value::Arr(
+                        column_strength::TABLE
+                            .iter()
+                            .map(|(jas, species, grade, strength)| {
+                                Value::obj([
+                                    ("jas", (*jas).into()),
+                                    ("species", (*species).into()),
+                                    ("grade", (*grade).into()),
+                                    ("strength", (*strength).into()),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ]))
+        }
         "config" => Ok(Value::obj([
             ("version", VERSION.into()),
             ("maxNails", report::MAX_NAILS.into()),
@@ -226,12 +280,24 @@ mod tests {
 
         let materials = response.get("materials").unwrap().as_array().unwrap();
         assert_eq!(materials.len(), 12);
-        assert_eq!(materials[0].get("id").unwrap().as_str(), Some("plywood12-n50"));
-        assert_eq!(materials[0].get("shearModulus").unwrap().as_f64(), Some(0.40));
+        assert_eq!(
+            materials[0].get("id").unwrap().as_str(),
+            Some("plywood12-n50")
+        );
+        assert_eq!(
+            materials[0].get("shearModulus").unwrap().as_f64(),
+            Some(0.40)
+        );
         assert_eq!(materials[0].get("deltaPv").unwrap().as_f64(), Some(0.91));
         // へりあきを決めるための釘の呼び径と、その 5 倍（3.3(1)④）も配る。
-        assert_eq!(materials[0].get("nailDiameter").unwrap().as_f64(), Some(2.75));
-        assert_eq!(materials[0].get("minEdgeDistance").unwrap().as_f64(), Some(13.75));
+        assert_eq!(
+            materials[0].get("nailDiameter").unwrap().as_f64(),
+            Some(2.75)
+        );
+        assert_eq!(
+            materials[0].get("minEdgeDistance").unwrap().as_f64(),
+            Some(13.75)
+        );
     }
 
     #[test]
@@ -336,6 +402,64 @@ mod tests {
         }
     }
 
+    /// 必要壁量は、入力が足りなくても「空欄の出力結果」を返す
+    /// （配布物と同じで、編集の途中でもそのまま画面に出せる）。
+    #[test]
+    fn wall_quantity_returns_the_output_of_the_worksheet() {
+        let response = call_json(
+            r#"{"op": "wallQuantity", "data": {
+                 "building": "one_story", "usage": "standard",
+                 "toggles": {},
+                 "values": {"height_1f": "3", "ridge_minus_eaves": "0.5",
+                            "base_shear": "0.2", "floor_area_1f": "60",
+                            "eaves": "0.5", "roof_pitch": "4",
+                            "roof_spec": "スレート屋根", "wall_spec": "サイディング",
+                            "solar": "なし(0)",
+                            "ceiling_insulation": "100\n（初期値・天井）",
+                            "wall_insulation": "70（初期値）"}}}"#,
+        );
+
+        assert_eq!(response.get("ok"), Some(&Value::Bool(true)));
+        let sections = response
+            .get("result")
+            .unwrap()
+            .get("sections")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        // 1. 必要壁量 と 2-1 / 2-2 / 2-3。
+        assert_eq!(sections.len(), 4);
+        let cell = &sections[0].get("tables").unwrap().as_array().unwrap()[0]
+            .get("rows")
+            .unwrap()
+            .as_array()
+            .unwrap()[0]
+            .get("cells")
+            .unwrap()
+            .as_array()
+            .unwrap()[0];
+        assert_eq!(cell.get("key").unwrap().as_str(), Some("lw.1f.grade1"));
+        assert_eq!(cell.get("value").unwrap().as_f64(), Some(17.0));
+    }
+
+    /// 入力欄の key と圧縮基準強度の表は、マッピング・配布物との
+    /// 突き合わせのために配る。
+    #[test]
+    fn wall_quantity_inputs_list_the_keys_and_the_strength_table() {
+        let response =
+            call_json(r#"{"op": "wallQuantityInputs", "data": {"building": "two_story"}}"#);
+
+        let keys = response.get("inputKeys").unwrap().as_array().unwrap();
+        assert!(keys.contains(&Value::Str("height_2f".to_string())));
+        assert_eq!(
+            response.get("toggleKeys").unwrap().as_array().unwrap().len(),
+            3
+        );
+        let table = response.get("columnStrengths").unwrap().as_array().unwrap();
+        assert_eq!(table.len(), column_strength::TABLE.len());
+        assert_eq!(table[0].get("strength").unwrap().as_f64(), Some(9.6));
+    }
+
     #[test]
     fn config_carries_the_version_and_the_limits() {
         let response = call_json(r#"{"op": "config"}"#);
@@ -350,7 +474,12 @@ mod tests {
 
     #[test]
     fn broken_requests_come_back_as_an_error_not_a_panic() {
-        for request in ["", "{}", r#"{"op": "なにか"}"#, r#"{"op": "computeAll", "data": 1}"#] {
+        for request in [
+            "",
+            "{}",
+            r#"{"op": "なにか"}"#,
+            r#"{"op": "computeAll", "data": 1}"#,
+        ] {
             let response = call_json(request);
             assert_eq!(
                 response.get("ok"),

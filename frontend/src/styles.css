@@ -266,3 +266,11 @@ button.secondary:disabled { background-color: #aaa; }
 .wq-table th.row-head { background: #fafbff; font-size: 0.8em; width: 2.5em; text-align: center; }
 .wq-table .wq-field { margin-top: 0; }
 .wq-table select { min-width: 7em; }
+
+/* 出力結果。配布物では入力欄が緑・結果がオレンジの枠なので、同じ配色にする。 */
+.wq-result-section + .wq-result-section { margin-top: 16px; }
+.wq-result-section h4 { margin: 0 0 4px; font-size: 0.9em; color: #1a3a8f; }
+.wq-result-section h5 { margin: 10px 0 2px; font-size: 0.8em; color: #555; font-weight: normal; }
+.wq-result-table { overflow-x: auto; }
+.wq-result-cell { background: #fff6e5; text-align: right; font-variant-numeric: tabular-nums; }
+.wq-result-cell.empty { background: #fafafa; color: #999; text-align: center; }

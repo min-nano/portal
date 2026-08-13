@@ -8,7 +8,7 @@
 // の仕様は面材ごとの入力で、1 枚の壁の中で混在してよい（上半分は N50、
 // 下半分は CN50 のような張り分け）。
 //
-// 編集中の計算は画面の中で完結する（./core.js が読み込む wasm を呼ぶだけで、
+// 編集中の計算は画面の中で完結する（../core.js が読み込む wasm を呼ぶだけで、
 // 入力のたびの往復が無い）。その wasm はサーバが計算に使っているものと同じ
 // バイト列なので、計算の実装は 1 つしかない。
 //
@@ -71,7 +71,7 @@ import {
   verificationWarning,
   wallLabel,
 } from './form-logic.js';
-import { loadCore } from './core.js';
+import { loadCore } from '../core.js';
 
 const TOOL_API = '/api/tools/timber-panel-shear-calculator';
 const PDF_MIME = 'application/pdf';

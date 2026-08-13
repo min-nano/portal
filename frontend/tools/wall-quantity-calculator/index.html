@@ -26,8 +26,8 @@
       入力した値を、公益財団法人日本住宅・木材技術センターが配布している
       「壁量等の基準(令和7年施行)に対応した表計算ツール（多機能版）」へ書き込んだ
       Excel ファイル (.xlsx) をダウンロードします。提出物は配布物そのものなので、
-      必要壁量・柱の小径の計算は、ダウンロードしたファイルを Excel で開いた時点で
-      配布物の数式が行います。
+      出力されるファイルの中の計算は、Excel で開いた時点で配布物の数式が行います。
+      下の「出力結果」は、その数式と同じ計算をこの画面で行ったものです。
     </p>
 
     <form id="worksheetForm" onsubmit="return false;">
@@ -38,6 +38,17 @@
       <portal-section-controls class="section-controls" for="formArea"></portal-section-controls>
 
       <div id="formArea"></div>
+
+      <!-- 出力結果（配布物のオレンジの枠に当たるところ）。入力のたびに
+           計算し直す。中身は src/wall-quantity-calculator/form-dom.js が作る。 -->
+      <portal-section class="cert-section" id="resultsSection">
+        <h3 slot="title">出力結果</h3>
+        <p class="hint">
+          入力に合わせてその場で計算しています。入力が足りないところは、
+          配布物と同じく空欄（—）のままになります。
+        </p>
+        <div id="results"></div>
+      </portal-section>
 
       <button type="button" id="submitBtn" disabled>Excel出力</button>
     </form>

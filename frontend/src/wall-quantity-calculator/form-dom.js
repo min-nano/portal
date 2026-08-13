@@ -177,6 +177,67 @@ export function buildForm(doc, config, buildingKey) {
   return root;
 }
 
+/**
+ * 出力結果（配布物のオレンジの枠に当たるところ）を組み立てる。
+ *
+ * 計算は Rust → wasm（core/src/wall_quantity.rs）が行い、ここは返ってきた
+ * 節・表・行・升目をそのまま並べるだけ。入力が足りないところは配布物と
+ * 同じく空欄になるので、「—」を置いて空欄だと分かるようにする。
+ */
+export function buildResults(doc, result) {
+  const root = el(doc, 'div', 'wq-results');
+  if (!result) return root;
+
+  (result.sections || []).forEach((section) => {
+    const wrap = el(doc, 'div', 'wq-result-section');
+    wrap.dataset.resultSection = section.key;
+    wrap.appendChild(el(doc, 'h4', null, section.title));
+    if (section.enabled === false) {
+      // 算定方法のチェックボックスが切りのとき。配布物でも空欄になる。
+      wrap.appendChild(el(doc, 'p', 'hint', '算定方法のチェックを入れると計算します。'));
+      root.appendChild(wrap);
+      return;
+    }
+    if (section.note) wrap.appendChild(el(doc, 'p', 'hint', section.note));
+    (section.tables || []).forEach((table) => {
+      wrap.appendChild(buildResultTable(doc, table));
+    });
+    root.appendChild(wrap);
+  });
+  return root;
+}
+
+function buildResultTable(doc, table) {
+  const wrap = el(doc, 'div', 'wq-result-table');
+  if (table.title) wrap.appendChild(el(doc, 'h5', null, table.title));
+
+  const node = el(doc, 'table', 'wq-table');
+  const thead = doc.createElement('thead');
+  const headRow = doc.createElement('tr');
+  headRow.appendChild(el(doc, 'th', null, ''));
+  (table.columns || []).forEach((column) => {
+    headRow.appendChild(el(doc, 'th', null, column.label));
+  });
+  thead.appendChild(headRow);
+  node.appendChild(thead);
+
+  const tbody = doc.createElement('tbody');
+  (table.rows || []).forEach((row) => {
+    const tr = doc.createElement('tr');
+    tr.appendChild(el(doc, 'th', 'row-head', row.label));
+    (row.cells || []).forEach((cell) => {
+      const td = el(doc, 'td', 'wq-result-cell', cell.text === '' ? '—' : cell.text);
+      td.dataset.resultKey = cell.key;
+      if (cell.text === '') td.classList.add('empty');
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  node.appendChild(tbody);
+  wrap.appendChild(node);
+  return wrap;
+}
+
 /** DOM から入力値を読む。 */
 export function readValues(root) {
   const values = {};

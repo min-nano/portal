@@ -6,13 +6,16 @@
 """
 
 import io
+import json
 import zipfile
 from urllib.parse import unquote
 
+from app import nail_core, wall_quantity as wq
 from tests.test_wall_quantity import one_story_body
 
 TOOL_API = "/api/tools/wall-quantity-calculator"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+VERIFICATION_HEADER = "x-wall-quantity-verification"
 
 
 def test_config_requires_authentication(anon_client):
@@ -82,3 +85,89 @@ def test_a_two_story_worksheet_can_be_created(client):
 def _file_name(resp) -> str:
     _, _, encoded = resp.headers["content-disposition"].partition("UTF-8''")
     return unquote(encoded)
+
+
+# --- 計算実装（wasm）と、保存時の突き合わせ ----------------------------------
+
+
+def test_the_core_wasm_requires_authentication(anon_client):
+    assert anon_client.get(f"{TOOL_API}/core.wasm").status_code == 401
+
+
+def test_the_core_wasm_is_the_same_bytes_the_server_calculates_with(client):
+    """画面が受け取る wasm と、サーバが自分の計算に使う wasm が同じであること。"""
+    resp = client.get(f"{TOOL_API}/core.wasm")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/wasm"
+    assert resp.content == nail_core.wasm_bytes()
+    # 中身が変わらないうちはブラウザのキャッシュから読ませる。
+    assert resp.headers["etag"] == f'"{nail_core.sha256()}"'
+
+
+def test_the_config_points_at_the_core_wasm(client):
+    core = client.get(f"{TOOL_API}/config").json()["core"]
+    assert core["url"].startswith(f"{TOOL_API}/core.wasm?v=")
+    assert core["sha256"] == nail_core.sha256()
+
+
+def test_a_worksheet_carries_the_verification_of_the_screen(client):
+    """画面が出していた値と同じなら、突き合わせは ok で返る。
+
+    画面は送るのと同じ本文をそのまま計算に掛けているので、ここでもそうする
+    （サーバは受け取ってから整えるが、結果は同じでなければならない）。
+    """
+    body = one_story_body()
+    body["toggles"] = {"use_column_1": True}
+    body["verify"] = {
+        "coreVersion": nail_core.version(),
+        "cells": wq.result_cells(wq.compute(body)),
+    }
+
+    resp = client.post(f"{TOOL_API}/worksheets", json=body)
+
+    assert resp.status_code == 200
+    verification = json.loads(resp.headers[VERIFICATION_HEADER])
+    assert verification["checked"] is True
+    assert verification["ok"] is True, verification["differences"]
+
+
+def test_a_worksheet_is_still_created_when_the_screen_disagreed(client):
+    """食い違っても生成は止めない（xlsx に入るのは入力値で、計算するのは
+    Excel の数式なので、成果物は壊れない）。画面には警告の材料を返す。"""
+    body = one_story_body()
+    body["verify"] = {"coreVersion": nail_core.version(), "cells": {"lw.1f.grade1": "1"}}
+
+    resp = client.post(f"{TOOL_API}/worksheets", json=body)
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == XLSX_MIME
+    verification = json.loads(resp.headers[VERIFICATION_HEADER])
+    assert verification["ok"] is False
+    assert {"key": "lw.1f.grade1", "client": "1", "server": "17"} in (
+        verification["differences"]
+    )
+
+
+def test_the_verification_header_is_ascii_only(client):
+    """ヘッダには非 ASCII を置けないので、日本語の文言は必ず退避されること。"""
+    body = one_story_body()
+    body["values"]["ceiling_insulation"] = "任意入力"
+    body["verify"] = {"coreVersion": nail_core.version(), "cells": {}}
+
+    resp = client.post(f"{TOOL_API}/worksheets", json=body)
+
+    raw = resp.headers[VERIFICATION_HEADER]
+    assert raw.isascii()
+    assert json.loads(raw)["checked"] is True
+
+
+def test_a_worksheet_without_a_verification_is_accepted(client):
+    """画面が突き合わせの材料を送ってこなくても生成できる。"""
+    resp = client.post(f"{TOOL_API}/worksheets", json=one_story_body())
+
+    assert resp.status_code == 200
+    assert json.loads(resp.headers[VERIFICATION_HEADER]) == {
+        "checked": False,
+        "ok": True,
+        "differences": [],
+    }

@@ -207,7 +207,9 @@ class XlsxTemplate:
         if kind == "inlineStr":
             texts = re.findall(r"<t[^>]*>(.*?)</t>", body, re.S)
             return "".join(_unescape(t) for t in texts) if texts else None
-        value = re.search(r"<v>(.*?)</v>", body, re.S)
+        # 末尾に空白がある値は <v xml:space="preserve"> になるので、属性つきの
+        # 開始タグも読む（配布物の等級「E150 」がこれに当たる）。
+        value = re.search(r"<v\b[^>]*>(.*?)</v>", body, re.S)
         if value is None:
             return None
         raw = _unescape(value.group(1))
@@ -216,6 +218,42 @@ class XlsxTemplate:
             index = int(raw)
             return strings[index] if 0 <= index < len(strings) else None
         return raw
+
+    def cell_formula(self, sheet_name: str, ref: str) -> str | None:
+        """セルに書かれている数式（先頭の = を除いた本文）を返す。
+
+        雛形の計算そのものが変わっていないかを確かめる番人テストのための
+        読み取り。Excel が「共有数式」としてまとめた 2 つめ以降のセルには
+        本文が書かれていない（先頭のセルを指す参照だけになる）ので、その
+        場合は None を返す。まとめられた数式が変われば先頭のセルの本文が
+        変わるので、先頭のセルを控えておけば変更は拾える。
+        """
+        xml = self._text(self._sheet_path(sheet_name))
+        cell = _find_cell(xml, ref)
+        if cell is None:
+            return None
+        formula = re.search(r"<f\b[^>]*>(.*?)</f>", cell[1], re.S)
+        if formula is None:
+            return None
+        return _unescape(formula.group(1)) or None
+
+    def formula_cells(self, sheet_name: str) -> dict[str, str]:
+        """シートに書かれている数式を {セル: 本文} で全部返す（共有数式の
+        2 つめ以降は本文を持たないので入らない）。"""
+        xml = self._text(self._sheet_path(sheet_name))
+        cells = {}
+        # 空のセルは <c r="A1"/> と閉じているので、開始タグだけの形も
+        # 数え入れる（そうしないと、その次のセルの中身を取り違える）。
+        for match in re.finditer(
+            r'<c\b[^>]*\br="([A-Z]+\d+)"[^>]*?(?:/>|>(.*?)</c>)', xml, re.S
+        ):
+            body = match.group(2)
+            if body is None:
+                continue
+            formula = re.search(r"<f\b[^>]*>(.*?)</f>", body, re.S)
+            if formula is not None and formula.group(1):
+                cells[match.group(1)] = _unescape(formula.group(1))
+        return cells
 
     # --- 書き込み -----------------------------------------------------------
 

@@ -171,6 +171,75 @@ export function buildPayload(config, buildingKey, values) {
 }
 
 /**
+ * 計算結果（節 → 表 → 行 → 升目）を「key → 表示文字列」の平らな辞書にする。
+ *
+ * バックエンドの wall_quantity.result_cells と同じ形。保存時の突き合わせは
+ * この辞書どうしで行う。
+ */
+export function resultCells(result) {
+  const cells = {};
+  ((result && result.sections) || []).forEach((section) => {
+    (section.tables || []).forEach((table) => {
+      (table.rows || []).forEach((row) => {
+        (row.cells || []).forEach((cell) => {
+          cells[cell.key] = String(cell.text === undefined ? '' : cell.text);
+        });
+      });
+    });
+  });
+  return cells;
+}
+
+/**
+ * 保存時にサーバーへ渡す「画面ではこう計算した」。
+ *
+ * サーバーは同じ .wasm で計算し直し、この値と突き合わせる。
+ */
+export function verificationOf(coreVersion, result) {
+  return { coreVersion, cells: resultCells(result) };
+}
+
+/**
+ * 突き合わせの結果を、画面に出す 1 つの文にする。
+ * 食い違いが無ければ空文字（＝警告を出さない）。
+ */
+export function verificationWarning(verification) {
+  if (!verification || !verification.checked || verification.ok) return '';
+
+  const versions = verification.coreVersion || {};
+  if (versions.client !== versions.server) {
+    return (
+      '警告: 画面の計算エンジン（' +
+      `${versions.client || '不明'}）がサーバー（${versions.server || '不明'}）と違います。` +
+      'ページを再読み込みしてから、出力結果を確かめてください。'
+    );
+  }
+
+  const differences = verification.differences || [];
+  const shown = differences
+    .map((d) => `${d.key}（画面 ${d.client || '空欄'} / サーバー ${d.server || '空欄'}）`)
+    .join('、');
+  const omitted = verification.omittedDifferences
+    ? ` ほか ${verification.omittedDifferences} 件`
+    : '';
+  return (
+    '警告: 画面に出ていた出力結果と、サーバーの計算が違います: ' +
+    `${shown}${omitted}。ダウンロードした Excel の値を確かめてください。`
+  );
+}
+
+/** 応答ヘッダに載っている突き合わせ結果を読む（無ければ null）。 */
+export function verificationFromHeaders(headers) {
+  const raw = headers && headers.get && headers.get('X-Wall-Quantity-Verification');
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 応答の Content-Disposition が読めなかったときのファイル名。
  * バックエンドの wall_quantity.file_name と同じ組み立て方にする。
  */
