@@ -618,7 +618,11 @@ portal-section::part(head):hover {
   border-radius: var(--r-pill);
 }
 
-/* 注意書き（出力はできるが、確かめてほしいこと）。 */
+/* 注意書き（出力はできるが、確かめてほしいこと）。
+ *
+ * 角を丸めた箱なので、太い罫は左右そろえて括弧のようにする（片側だけだと、
+ * 括弧が欠けたように見える）。左に寄せた罫を使うのは、角を丸めない箱
+ * （design/ の .ds-note のように、罫の側だけ角を落とすもの）に限る。 */
 .warnings {
   margin: var(--s-3) auto 0;
   max-width: var(--shell-max);
@@ -628,6 +632,7 @@ portal-section::part(head):hover {
   background: var(--warn-50);
   border: 1px solid var(--warn-100);
   border-left: 3px solid var(--warn-500);
+  border-right: 3px solid var(--warn-500);
   border-radius: var(--r-md);
 }
 
