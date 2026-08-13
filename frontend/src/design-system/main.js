@@ -34,16 +34,23 @@ function setUpThemeToggle() {
   });
 }
 
+// 判定の根拠は、判定と食い違っていると見本として読めないので、升目と一緒に
+// 入れ替える（適用範囲は「13.72 kN/m を超えたら適用外」という検定）。
+const VERDICT_VALUE = {
+  ok: 'Pa = 5.88 kN/m ≦ 13.72 kN/m',
+  ng: 'Pa = 21.4 kN/m > 13.72 kN/m',
+};
+
 /** 判定の升目を OK / NG に入れ替える（結果の帯の色が変わるのを見せる）。 */
 function setUpVerdictToggle() {
   const cell = document.getElementById('demoVerdict');
-  const row = document.getElementById('demoVerdictValue');
+  const value = document.getElementById('demoVerdictValue');
   document.getElementById('verdictBtn').addEventListener('click', () => {
-    const ng = cell.classList.contains('ng');
-    cell.classList.toggle('ng', !ng);
-    cell.classList.toggle('ok', ng);
-    cell.textContent = ng ? 'OK' : 'NG';
-    row.textContent = ng ? 'Pa = 5.88 kN/m ≦ 13.72 kN/m' : 'Pa = 21.4 kN/m > 13.72 kN/m';
+    const ng = !cell.classList.contains('ng');
+    cell.classList.toggle('ng', ng);
+    cell.classList.toggle('ok', !ng);
+    cell.textContent = ng ? 'NG' : 'OK';
+    value.textContent = ng ? VERDICT_VALUE.ng : VERDICT_VALUE.ok;
   });
 }
 
