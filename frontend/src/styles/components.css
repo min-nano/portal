@@ -275,27 +275,19 @@ select {
 
 /* 必須の欄。記号ではなく短い札にして、目で拾えるようにする。
  *
- * 札は「欄の枠の中の、値と反対の側」に置く。ラベルの隣に置くとラベルの
- * 一部に見え、ラベルの右端に置くと欄から離れてどの欄の話か分かりにくい。
- * 枠の中なら、その欄のことだと一目で分かる。
+ * 置き場所は、その欄で値がどちら寄せになるかで決める。
  *
- *   左寄せの欄（文字・選択） … 札は右side。選択の矢印の内側に置く
- *   右寄せの欄（数値）       … 札は左側（単位は右にあるので、どちらも
- *                              入力した値と重ならない）
+ *   数値の欄（右寄せ）   … 枠の中の左側。値と単位は右にあるので空いている。
+ *                          欄そのものに札が付いて、どの欄の話か迷わない
+ *   それ以外（左寄せ）   … ラベル行の右端。選んだ文字や矢印と近すぎると
+ *                          落ち着かないので、枠の中には入れない
  *
- * 重なりは「札のぶんの余白を欄に空ける」ことで防ぐ。札そのものは触っても
- * 下の欄に届く（pointer-events: none）。 */
-.wq-field.required .field-row {
-  position: relative;
-}
+ * どちらの場合も、札は入力した値と重ならない。 */
 
+/* 札の見た目（置き場所は下の 2 通り）。 */
+.wq-field.required > label::after,
 .wq-field.required .field-row::after {
   content: '必須';
-  position: absolute;
-  top: 50%;
-  right: var(--s-3);
-  transform: translateY(-50%);
-  pointer-events: none;
   padding: 1px var(--s-2);
   font-size: var(--fs-2xs);
   font-weight: 700;
@@ -306,26 +298,41 @@ select {
   border-radius: var(--r-pill);
 }
 
-.wq-field.required .field-row > input[type='text'],
-.wq-field.required .field-row > input[type='date'] {
-  padding-right: 4.5em;
+/* (1) 既定 … ラベル行の右端。 */
+.wq-field.required > label {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
 }
 
-/* 選択の欄は、右端の矢印の内側に置く。 */
-.wq-field.required .field-row:has(> select)::after {
-  right: var(--s-8);
+.wq-field.required > label::after {
+  flex: none;
+  margin-left: auto;
 }
 
-.wq-field.required .field-row > select {
-  padding-right: 6em;
+.wq-field.required .field-row::after {
+  display: none;
 }
 
-/* 数値の欄は右そろえなので、札は左側。 */
-.wq-field.required .field-row:has(> input[type='number'])::after {
-  right: auto;
+/* (2) 数値の欄 … 枠の中の左側。札の上を触っても下の欄に届く。 */
+.wq-field.required:has(> .field-row > input[type='number']) > label::after {
+  display: none;
+}
+
+.wq-field.required:has(> .field-row > input[type='number']) .field-row {
+  position: relative;
+}
+
+.wq-field.required:has(> .field-row > input[type='number']) .field-row::after {
+  display: block;
+  position: absolute;
+  top: 50%;
   left: var(--s-3);
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 
+/* 札のぶんだけ、値の入る場所を空けておく。 */
 .wq-field.required .field-row > input[type='number'] {
   padding-left: 4.5em;
 }
