@@ -68,6 +68,10 @@ const STYLE = `
     min-height: 1.5em;
   }
   .actions { flex: none; display: flex; align-items: center; gap: 6px; }
+  /* 中身の並べ方（節の中を桝目にする等）はページ側が ::part(body) で決める。
+     外側のツリーの ::part 規則はここより優先されるので、ページ側で display を
+     指定するときは「折り畳んだら隠す」も外側で言い直すこと
+     （styles/components.css の portal-section[collapsed]::part(body)）。 */
   .body { display: block; }
   :host([collapsed]) .body { display: none; }
 `;

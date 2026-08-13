@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>デザインシステム | %PORTAL_TITLE%</title>
+</head>
+<body>
+  <!-- 見本ページはサインイン不要（社内向けの読み物で、データを触らない）。 -->
+  <portal-header class="portal-header" portal-name="%PORTAL_TITLE%" home></portal-header>
+
+  <div class="container">
+    <div class="page-head">
+      <h2>デザインシステム</h2>
+      <div class="template-chip">
+        <span class="label">表示:</span>
+        <button type="button" id="themeBtn" class="secondary">テーマ: 端末の設定</button>
+      </div>
+    </div>
+
+    <p class="ds-lead">
+      このポータルの画面を組み立てるための、色・寸法・部品の決めごとです。
+      実際のツールと同じ CSS（<code>src/styles.css</code>）をそのまま読み込んで並べているので、
+      ここに出ているものが、そのまま画面に出るものです。
+    </p>
+
+    <portal-section class="cert-section ds-section">
+      <h3 slot="title">1. 考え方（この 3 つだけ守る）</h3>
+
+      <h4>① 画面は「入力する面」「読む面」「操作するもの」の 3 つでできている</h4>
+      <p class="hint">
+        入力する場所は必ず枠のある升目（<code>--field-bg</code>）にして、周りの下地
+        （<code>--surface-sunken</code>）と区別します。読むもの（計算結果）は白い枠の中に置き、
+        数値は等幅・右そろえにします。操作するものはボタンだけで、主・副・削除の 3 段階しかありません。
+        文字の濃さや余白で「何となく」分けるのではなく、面の色で分けます。
+      </p>
+
+      <h4>② 緑と赤は判定にしか使わない</h4>
+      <p class="hint">
+        OK / NG の色を、ボタンや飾りに使いません。画面の中で緑か赤が見えたら、それは必ず
+        「計算結果の判定」です。判定は升目（<code>.verdict</code>）・行・結果の節の見出しの帯の
+        3 段階で同じ色になるので、表を読まなくても NG の有無が分かります。
+      </p>
+
+      <h4>③ 広い画面で増えた幅は、説明文ではなく入力欄に使う</h4>
+      <p class="hint">
+        ページの幅は 1280px まで広げますが、説明文は 68 文字程度で頭打ち（<code>--prose-max</code>）にします。
+        増えた幅は「入力欄を横に並べる」「結果を右の列に貼り付ける」ために使います。
+      </p>
+
+      <div class="ds-do-dont">
+        <div class="ds-do">
+          <h4>こうする</h4>
+          <p class="hint">
+            関係する欄（幅・高さ・ピッチ）は横に並べる。単位は欄にくっつける。
+            結果は入力の右に置いて、直しながら数字の変化を見られるようにする。
+          </p>
+        </div>
+        <div class="ds-dont">
+          <h4>こうしない</h4>
+          <p class="hint">
+            1 行 1 欄で下へ延々と積む。ボタンを全部同じ幅・同じ色にする。
+            結果を画面のいちばん下に置いて、入力のたびにスクロールさせる。
+          </p>
+        </div>
+      </div>
+    </portal-section>
+
+    <portal-section class="cert-section ds-section">
+      <h3 slot="title">2. 色</h3>
+      <p class="hint">
+        画面側の CSS には生の色を書きません。使うのは「役割の名前」だけです
+        （<code>src/styles/tokens.css</code>）。明るい／暗いテーマの切り替えは
+        <code>light-dark()</code> で 1 か所にまとまっていて、部品側の CSS は 1 行も変わりません。
+        右上の「テーマ」で切り替えて確かめられます。
+      </p>
+
+      <h4>面と文字</h4>
+      <div class="ds-grid">
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--canvas)"></span>
+          <span class="meta">台紙<code>--canvas</code></span>
+        </div>
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--surface)"></span>
+          <span class="meta">紙<code>--surface</code></span>
+        </div>
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--surface-sunken)"></span>
+          <span class="meta">節のくぼみ<code>--surface-sunken</code></span>
+        </div>
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--field-bg); border-bottom: 1px solid var(--field-border)"></span>
+          <span class="meta">入力欄<code>--field-bg</code></span>
+        </div>
+      </div>
+
+      <h4>藍（操作・見出し）</h4>
+      <div class="ds-grid">
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--brand-50)"></span>
+          <span class="meta">下地<code>--brand-50</code></span>
+        </div>
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--brand-400)"></span>
+          <span class="meta">縁取り<code>--brand-400</code></span>
+        </div>
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--brand-600)"></span>
+          <span class="meta">ボタン<code>--brand-600</code></span>
+        </div>
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--brand-700)"></span>
+          <span class="meta">見出し・帯<code>--brand-700</code></span>
+        </div>
+      </div>
+
+      <h4>判定（ここでしか使わない）</h4>
+      <div class="ds-grid">
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--ok-50)"></span>
+          <span class="meta">OK の下地<code>--ok-50</code></span>
+        </div>
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--ok-600)"></span>
+          <span class="meta">OK の帯<code>--ok-600</code></span>
+        </div>
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--ng-50)"></span>
+          <span class="meta">NG の下地<code>--ng-50</code></span>
+        </div>
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--ng-600)"></span>
+          <span class="meta">NG の帯<code>--ng-600</code></span>
+        </div>
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--warn-50)"></span>
+          <span class="meta">注意書き<code>--warn-50</code></span>
+        </div>
+        <div class="ds-swatch">
+          <span class="chip" style="background: var(--out-50)"></span>
+          <span class="meta">出力の升目<code>--out-50</code></span>
+        </div>
+      </div>
+      <p class="ds-note">
+        出力の琥珀（<code>--out-50</code>）は、必要壁量ツールの配布物が「入力＝緑・出力＝オレンジ」の
+        配色をしているためのものです。画面と配布物を見比べたときに、同じ升目だと分かるようにしています。
+      </p>
+    </portal-section>
+
+    <portal-section class="cert-section ds-section">
+      <h3 slot="title">3. 文字と数値</h3>
+      <div class="ds-type">
+        <p style="font-size: var(--fs-xl); font-weight: 700">見出し 1.375rem <code>--fs-xl</code></p>
+        <p style="font-size: var(--fs-md); font-weight: 700; color: var(--text-brand)">節の見出し 1rem <code>--fs-md</code></p>
+        <p style="font-size: var(--fs-base)">本文 0.9375rem <code>--fs-base</code></p>
+        <p class="hint">補足 0.75rem <code>--fs-xs</code>（<code>--text-muted</code>）</p>
+        <p style="font-family: var(--font-num); font-variant-numeric: tabular-nums">
+          数値 1,234.56 / 34,647,000 mm² <code>--font-num</code>
+        </p>
+      </div>
+      <p class="ds-note">
+        数値は等幅の数字（<code>tabular-nums</code>）で右そろえにします。桁がそろうので、
+        表の中で「1 桁多い／少ない」に気付けます。入力欄の数値も同じ扱いです。
+      </p>
+    </portal-section>
+
+    <portal-section class="cert-section ds-section">
+      <h3 slot="title">4. 余白と角丸</h3>
+      <p class="hint">余白は 4px 刻み（<code>--s-1</code> … <code>--s-12</code>）だけを使います。</p>
+      <div class="ds-scale">
+        <span style="width: var(--s-1); height: 32px"></span>
+        <span style="width: var(--s-2); height: 32px"></span>
+        <span style="width: var(--s-3); height: 32px"></span>
+        <span style="width: var(--s-4); height: 32px"></span>
+        <span style="width: var(--s-6); height: 32px"></span>
+        <span style="width: var(--s-8); height: 32px"></span>
+        <span style="width: var(--s-12); height: 32px"></span>
+      </div>
+      <table class="ds-token-table">
+        <tr><th>角丸</th><td><code>--r-sm</code> 入力欄の中の小物 / <code>--r-md</code> 入力欄・ボタン / <code>--r-lg</code> 節 / <code>--r-xl</code> ページ / <code>--r-pill</code> 札</td></tr>
+        <tr><th>影</th><td><code>--shadow-1</code> ページ / <code>--shadow-2</code> 浮くもの / <code>--shadow-3</code> ダイアログ</td></tr>
+        <tr><th>太い罫</th><td>角を丸めた箱では<strong>左右そろえて括弧</strong>にする（注意書き・結果の値）。片側だけに引くなら、その側の角は落とす（このページの傍注）</td></tr>
+        <tr><th>的の大きさ</th><td><code>--tap</code>（44px）。指で押すものの高さの下限</td></tr>
+      </table>
+    </portal-section>
+
+    <portal-section class="cert-section ds-section">
+      <h3 slot="title">5. 入力欄</h3>
+      <p class="hint">
+        入力する場所は、どのツールでも同じ形にします。ラベルは太字の小さめ、欄は白い升目、
+        単位は欄の右に地続きで付けます（「どこまでが mm の欄か」が読めるように）。
+        高さは <code>--tap</code>（44px）以上、文字は 16px で、スマートフォンで触れたときに
+        画面が勝手に拡大しません。必須の札は、値が右そろえになる<strong>数値の欄では枠の中の左側</strong>
+        （右は値と単位で埋まるため）、それ以外の欄では<strong>ラベル行の右端</strong>に置きます。
+      </p>
+
+      <div class="field-grid">
+        <div class="cert-field">
+          <label for="demoText">物件名</label>
+          <input type="text" id="demoText" placeholder="○○邸 新築工事">
+        </div>
+        <div class="wq-field required">
+          <label for="demoNum">階高 H</label>
+          <div class="field-row">
+            <input type="number" id="demoNum" inputmode="numeric" value="2730">
+            <span class="unit">mm</span>
+          </div>
+          <p class="hint">数値は右そろえなので、札は左側に付きます。</p>
+        </div>
+        <div class="wq-field required">
+          <label for="demoSelect">面材の種類</label>
+          <div class="field-row">
+            <select id="demoSelect">
+              <option>構造用合板 24-10 t=9mm</option>
+              <option>石膏ボード t=12.5mm</option>
+            </select>
+          </div>
+          <p class="hint">左寄せの欄では、札はラベル行の右端に付きます。</p>
+        </div>
+        <div class="cert-field disabled">
+          <label for="demoDisabled">大臣認定番号</label>
+          <input type="text" id="demoDisabled" value="" disabled>
+          <p class="hint">前提を満たすまで入力できない欄は、灰色にして理由を添えます。</p>
+        </div>
+      </div>
+
+      <h4>選択肢</h4>
+      <p class="hint">
+        文字だけのラジオ・チェックは押す場所が狭く、選び間違えます。行ごと押せる札にして、
+        選んだものは下地と枠で残します。
+      </p>
+      <fieldset class="cert-choices">
+        <legend>釘配列の入力方法</legend>
+        <label class="choice-option">
+          <input type="radio" name="demoMode" checked>
+          割り付け（型・ピッチ・へりあきから作る）
+        </label>
+        <label class="choice-option">
+          <input type="radio" name="demoMode">
+          格子（X と Y の座標リストの全組合せ）
+        </label>
+        <label class="choice-option">
+          <input type="radio" name="demoMode">
+          座標を直接入力
+        </label>
+      </fieldset>
+    </portal-section>
+
+    <portal-section class="cert-section ds-section">
+      <h3 slot="title">6. ボタン</h3>
+      <p class="hint">
+        3 段階しかありません。<strong>主</strong>（塗り）はその画面で 1 つだけ、
+        <strong>副</strong>（枠線）はいくつでも、<strong>削除</strong>（赤い枠線）は塗りません
+        （押し間違いが取り返しにくいので、塗って目立たせるのではなく、他と違う形にします）。
+      </p>
+      <div class="ds-row">
+        <button type="button">保存</button>
+        <button type="button" class="secondary">別名で保存</button>
+        <button type="button" class="secondary" id="demoDelete"
+                style="color: var(--ng-600); border-color: color-mix(in srgb, var(--ng-500) 45%, var(--border))">
+          この面材を削除
+        </button>
+        <button type="button" disabled>押せない状態</button>
+      </div>
+      <div style="max-width: 22rem">
+        <button type="button" class="add-room">＋ 部屋を追加</button>
+      </div>
+      <p class="ds-note">
+        「＋ 追加」は破線の枠にして、「ここに増やせる」ことを形で示します。
+        Excel 出力・保存のような、そのページの目的そのものにあたるボタンだけを塗ります。
+      </p>
+    </portal-section>
+
+    <portal-section class="cert-section ds-section">
+      <h3 slot="title">7. 節（折り畳めるカード）</h3>
+      <p class="hint">
+        入力のかたまりは 1 枚のカードです。見出しの行はどこを押しても開閉でき、
+        閉じているあいだも見分けが付く情報（面材名・部屋名）は見出しに残します。
+        この見本ページ自身も同じ部品でできています。
+      </p>
+      <portal-section class="wall-panel">
+        <strong slot="title">面材 1（南面 下段）</strong>
+        <button type="button" slot="actions" class="secondary"
+                style="color: var(--ng-600); border-color: color-mix(in srgb, var(--ng-500) 45%, var(--border))">
+          この面材を削除
+        </button>
+        <div class="panel-group">
+          <h4>面材と釘</h4>
+          <label>厚さ t [mm]
+            <input type="number" value="9" inputmode="numeric">
+          </label>
+          <label>釘ピッチ [mm]
+            <input type="number" value="150" inputmode="numeric">
+          </label>
+        </div>
+      </portal-section>
+    </portal-section>
+
+    <portal-section class="cert-section ds-section">
+      <h3 slot="title">8. 結果と判定</h3>
+      <p class="hint">
+        結果の節に <code>.result-dock</code> を付けると、見出しが帯になり、その色が
+        <strong>判定のまとめ</strong>になります。NG が 1 つでもあれば赤、すべて OK なら緑、
+        判定を持たないツールでは藍のままです。表の中を読まなくても、帯の色だけで
+        「見に行くべきか」が決まります。
+      </p>
+      <div class="ds-row">
+        <button type="button" id="verdictBtn" class="secondary">判定を OK / NG で切り替える</button>
+      </div>
+
+      <portal-section class="cert-section result-dock">
+        <h3 slot="title">壁の計算結果（グレー本 3.3）</h3>
+        <div class="result-summary">
+          <div class="result-box">
+            <span class="key">K [kN/rad]</span>
+            <strong class="value">1,240</strong>
+          </div>
+          <div class="result-box">
+            <span class="key">Pa [kN]</span>
+            <strong class="value">21.4</strong>
+          </div>
+          <div class="result-box">
+            <span class="key">μ [-]</span>
+            <strong class="value">3.62</strong>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table class="steps-table">
+            <tbody>
+              <tr>
+                <td class="step-label">面内せん断剛性 K</td>
+                <td class="step-eq">(3.3.1)</td>
+                <td class="step-value">1,240 kN/rad</td>
+              </tr>
+              <tr>
+                <td class="step-label">許容せん断耐力 Pa</td>
+                <td class="step-eq">(3.3.9)</td>
+                <td class="step-value">21.4 kN</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="table-scroll">
+          <table class="steps-table">
+            <tbody>
+              <tr>
+                <td class="step-label">面材のせん断破壊</td>
+                <td class="check-value">τ = 0.82 N/mm² ≦ 2.45 N/mm²</td>
+                <td class="step-value verdict ok">OK</td>
+              </tr>
+              <tr>
+                <td class="step-label">適用範囲</td>
+                <td class="check-value" id="demoVerdictValue">Pa = 5.88 kN/m ≦ 13.72 kN/m</td>
+                <td class="step-value verdict ok" id="demoVerdict">OK</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </portal-section>
+
+      <h4>計算できないとき・確かめてほしいとき</h4>
+      <div class="result-error">壁を構成する面材がありません。</div>
+      <ul class="warnings">
+        <li>へりあきが接合具径の 5 倍を下回っています。適用範囲 3.3(1)④ を確かめてください。</li>
+      </ul>
+      <p class="ds-note">
+        赤（<code>.result-error</code>）は「結果が出せない」、橙（<code>.warnings</code>）は
+        「出せるが確かめてほしい」。この 2 つは意味が違うので、色も置き場所も分けます。
+      </p>
+    </portal-section>
+
+    <portal-section class="cert-section ds-section">
+      <h3 slot="title">9. 骨組み（広い画面と狭い画面）</h3>
+      <p class="hint">
+        ページの最大幅は <code>--shell-max</code>（1280px）。1080px 以上では、入力（左）と
+        結果（右）の 2 列になります。<code>.has-dock</code> を付けた要素の中で、
+        <code>.result-dock</code> だけが右の列に移り、スクロールしても貼り付いたまま残ります。
+        DOM の並びは変えていないので、読み上げ順とタブ順は「入力 → 結果」のままです。
+      </p>
+      <div class="ds-dock-demo">
+        <div>入力（.has-dock の中の、それ以外すべて）</div>
+        <div class="side">結果（.result-dock）</div>
+      </div>
+      <p class="ds-note">
+        狭い画面では 1 列に戻り、結果は入力の下に流れます。そのままだと判定が画面の外に
+        出てしまうので、右下に「結果へ飛ぶ」ボタンを出し、そのボタンの色でも
+        NG の有無が分かるようにしています（このページの右下にも出ています）。
+      </p>
+      <p class="ds-note">
+        画面に貼り付く帯（ヘッダー・壁の切り替えなど）を足すときは、2 列になる広さで
+        右の列に重ならないことを確かめてください。全幅のまま貼り付けると、結果の見出しを
+        覆い隠します（壁の切り替えの帯は、2 列のときは入力の列の幅までにしています）。
+      </p>
+      <table class="ds-token-table">
+        <tr><th>~639px</th><td>ページの縁を消して幅いっぱい。入力欄は 1 列</td></tr>
+        <tr><th>640px~</th><td>ページを紙として中央に置く。入力欄は幅に応じて 2 列以上</td></tr>
+        <tr><th>1080px~</th><td>入力と結果の 2 列。「結果へ飛ぶ」ボタンは消える</td></tr>
+      </table>
+    </portal-section>
+
+    <portal-section class="cert-section ds-section">
+      <h3 slot="title">10. 使い方（新しい画面を作るとき）</h3>
+      <table class="ds-token-table">
+        <tr><th><code>.container</code></th><td>ページ本体。この中に節を並べる</td></tr>
+        <tr><th><code>.page-head</code></th><td>見出しの行（右端に設定のチップを置ける）</td></tr>
+        <tr><th><code>portal-section.cert-section</code></th><td>入力の節。中身は自動で桝目に並ぶ</td></tr>
+        <tr><th><code>.cert-field</code> / <code>.wq-field</code></th><td>入力欄 1 つ（ラベル + 欄 + 単位 + 補足）</td></tr>
+        <tr><th><code>.field-row</code> + <code>.unit</code></th><td>欄に単位をくっつける</td></tr>
+        <tr><th><code>.field-narrow</code> / <code>.field-half</code></th><td>欄の幅を、入る値の長さに合わせる</td></tr>
+        <tr><th><code>.choice-option</code></th><td>行ごと押せる選択肢</td></tr>
+        <tr><th><code>.has-dock</code> / <code>.result-dock</code></th><td>入力と結果の 2 列</td></tr>
+        <tr><th><code>.verdict.ok</code> / <code>.verdict.ng</code></th><td>判定の升目。帯とボタンの色がここから決まる</td></tr>
+        <tr><th><code>.result-summary</code> / <code>.result-box</code></th><td>結果の要約（数値の枠）</td></tr>
+        <tr><th><code>.steps-table</code> + <code>.table-scroll</code></th><td>途中経過・検定の表（狭い画面では表の中だけ横送り）</td></tr>
+        <tr><th><code>.hint</code></th><td>補足の文</td></tr>
+      </table>
+      <p class="ds-note">
+        新しい色・新しい余白は足しません。足したくなったときは、まず既にある役割で
+        言い表せないかを考え、どうしても要るときだけ <code>src/styles/tokens.css</code> に
+        「役割の名前」として足します。
+      </p>
+    </portal-section>
+  </div>
+
+  <a class="verdict-fab" href="#">
+    <span class="state" data-state="none">結果へ</span>
+    <span class="state" data-state="ok">すべて OK</span>
+    <span class="state" data-state="ng">NG あり</span>
+    <span aria-hidden="true">↓</span>
+  </a>
+
+  <script type="module" src="/src/design-system/main.js"></script>
+</body>
+</html>

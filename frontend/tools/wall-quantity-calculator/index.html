@@ -30,9 +30,13 @@
       下の「出力結果」は、その数式と同じ計算をこの画面で行ったものです。
     </p>
 
-    <form id="worksheetForm" onsubmit="return false;">
-      <label for="buildingSelect">建物の種別</label>
-      <select id="buildingSelect"></select>
+    <!-- has-dock: 広い画面では入力（左）と出力結果（右）の 2 列になる。
+         狭い画面ではそのまま縦に流れる（並び順は変わらない）。 -->
+    <form id="worksheetForm" class="has-dock" onsubmit="return false;">
+      <div class="wq-field field-half">
+        <label for="buildingSelect">建物の種別</label>
+        <select id="buildingSelect"></select>
+      </div>
 
       <!-- 節は折り畳める。入力する箇所を探しやすいよう、まとめて開閉もできる。 -->
       <portal-section-controls class="section-controls" for="formArea"></portal-section-controls>
@@ -40,8 +44,10 @@
       <div id="formArea"></div>
 
       <!-- 出力結果（配布物のオレンジの枠に当たるところ）。入力のたびに
-           計算し直す。中身は src/wall-quantity-calculator/form-dom.js が作る。 -->
-      <portal-section class="cert-section" id="resultsSection">
+           計算し直す。中身は src/wall-quantity-calculator/form-dom.js が作る。
+           result-dock: 広い画面では右の列に貼り付いて、入力しながらでも
+           結果が見えるようにする。 -->
+      <portal-section class="cert-section result-dock" id="resultsSection">
         <h3 slot="title">出力結果</h3>
         <p class="hint">
           入力に合わせてその場で計算しています。入力が足りないところは、
@@ -55,6 +61,13 @@
 
     <ul id="errors" class="warnings" hidden></ul>
     <div id="message"></div>
+
+    <!-- 狭い画面では出力結果が画面の外にあるので、そこへ飛ぶボタンを出す
+         （広い画面では右の列に出ているので出さない）。 -->
+    <a class="verdict-fab" href="#resultsSection">
+      出力結果へ
+      <span aria-hidden="true">↓</span>
+    </a>
   </div>
 
   <script type="module" src="/src/wall-quantity-calculator/main.js"></script>

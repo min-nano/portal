@@ -1,0 +1,1047 @@
+/* 部品（何に見えるか）。
+ *
+ * 画面に出てくるものを「入力するもの」「読むもの」「操作するもの」の 3 種類に
+ * はっきり分ける。
+ *
+ *   入力するもの … 白い升目。必ず枠があり、触れる高さ（--tap）がある
+ *   読むもの     … 枠で囲った結果。数字は等幅・右そろえ
+ *   操作するもの … ボタン。主・副・破壊（削除）の 3 段階だけ
+ *
+ * 判定（OK / NG）の色は、この 3 種類のどれでもなく「結果の意味」なので、
+ * 緑と赤はここでしか使わない（ボタンや飾りには使わない）。
+ */
+
+/* --- ボタン --------------------------------------------------------------
+ * 既定は主たる操作（塗り）。副次的な操作は .secondary（枠線）、削除は枠線の赤。
+ * どれも高さは --tap 以上にして、指でも間違いなく押せるようにする。 */
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  width: auto;
+  min-height: var(--tap);
+  margin: 0;
+  padding: 0 var(--s-4);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-inverse);
+  background: var(--brand-600);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+
+button:hover {
+  background: var(--brand-700);
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  background: var(--n-200);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* 副次的な操作（枠線）。塗りのボタンと並んでも、主たる操作を見失わない。 */
+button.secondary {
+  background: var(--surface);
+  color: var(--text-brand);
+  border-color: var(--border-strong);
+}
+
+button.secondary:hover {
+  background: var(--surface-hover);
+  border-color: var(--brand-300);
+}
+
+button.secondary:disabled {
+  background: var(--field-bg-disabled);
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+/* 消す操作。押し間違いが取り返しにくいので、塗らずに赤い枠線にして
+   「他と違うもの」だと分かるようにする。 */
+.room .remove,
+#removeWallBtn,
+button[data-remove-wall-panel] {
+  background: var(--surface);
+  color: var(--ng-600);
+  border-color: color-mix(in srgb, var(--ng-500) 45%, var(--border));
+  font-weight: 700;
+}
+
+.room .remove:hover,
+#removeWallBtn:hover,
+button[data-remove-wall-panel]:hover {
+  background: var(--ng-50);
+  border-color: var(--ng-500);
+}
+
+/* 足す操作。破線の枠にして「ここに増やせる」ことを示す。 */
+.add-room,
+#addWallPanelBtn {
+  width: 100%;
+  margin-top: var(--s-4);
+  background: var(--surface);
+  color: var(--text-brand);
+  border: 1px dashed var(--brand-300);
+}
+
+.add-room:hover,
+#addWallPanelBtn:hover {
+  background: var(--surface-hover);
+  border-style: dashed;
+  border-color: var(--brand-500);
+}
+
+/* 主たる出力（Excel 出力）。ページに 1 つだけの、いちばん強いボタン。 */
+form > button#submitBtn {
+  width: 100%;
+  margin-top: var(--s-5);
+  min-height: 48px;
+  font-size: var(--fs-md);
+  box-shadow: var(--shadow-2);
+}
+
+/* 小さく添えるボタン（ヘッダー・雛形の設定・一括開閉）。 */
+.portal-header .account button,
+.template-chip button,
+portal-section-controls button,
+.folder-row button {
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
+}
+
+/* --- 入力欄 --------------------------------------------------------------
+ * 「入力する場所は白い升目」で統一する。枠・高さ・角丸をそろえ、
+ * 触れている欄が必ず分かるようにする（枠色 + 輪）。 */
+
+label {
+  display: block;
+  margin: 0 0 var(--s-1);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+/* ラベルが入力欄を包む書き方（面材の欄など）でも、同じ見た目にする。 */
+label > input,
+label > select,
+label > textarea {
+  display: block;
+  margin-top: var(--s-1);
+}
+
+input[type='text'],
+input[type='number'],
+input[type='date'],
+select,
+textarea {
+  width: 100%;
+  min-height: var(--tap);
+  padding: var(--s-2) var(--s-3);
+  box-sizing: border-box;
+  /* iOS Safari は 16px 未満の入力欄でフォーカス時にページを拡大する。
+     1rem（16px）を下限にして、勝手な拡大を防ぐ。 */
+  font-family: inherit;
+  font-size: 1rem;
+  color: var(--text);
+  background: var(--field-bg);
+  border: 1px solid var(--field-border);
+  border-radius: var(--r-md);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+textarea {
+  line-height: var(--lh);
+  resize: vertical;
+}
+
+input:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+  border-color: var(--field-border-hover);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: var(--focus-ring);
+}
+
+@media (forced-colors: active) {
+  input:focus,
+  select:focus,
+  textarea:focus {
+    outline: 2px solid Highlight;
+  }
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background: var(--field-bg-disabled);
+  color: var(--text-muted);
+  border-color: var(--border);
+  cursor: not-allowed;
+}
+
+/* 数値は右そろえ・等幅の数字にして、桁を見比べられるようにする
+   （単位は右隣にくっつくので、数字と単位が並んで読める）。 */
+input[type='number'] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* スピナー（数値の増減ボタン）は不要なので非表示にする。狭い欄でも数値が
+   隠れず、押し間違いも減る。 */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type='number'] {
+  -moz-appearance: textfield;
+}
+
+/* iOS Safari は日付欄の高さが他の入力欄とずれるので、行の高さを揃える。 */
+input[type='date'] {
+  min-height: var(--tap);
+}
+
+select {
+  appearance: none;
+  padding-right: var(--s-8);
+  /* 矢印は明暗どちらの下地でも読める中間色にする（色は 1 つで足りる）。 */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 4.5 6 8.5 10 4.5' fill='none' stroke='%2378829a' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--s-3) center;
+  background-size: 12px 12px;
+}
+
+/* 入力欄と単位。単位は欄の右にくっつけて 1 つの部品に見せる
+   （「mm の欄はどこまでか」が分かるようにする）。 */
+.field-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.field-row > input,
+.field-row > select {
+  flex: 1;
+  min-width: 0;
+}
+
+.field-row > .unit {
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--text-2);
+  white-space: nowrap;
+  background: var(--surface-sunken);
+  border: 1px solid var(--field-border);
+  border-left: none;
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+}
+
+.field-row:has(> .unit) > input,
+.field-row:has(> .unit) > select {
+  border-radius: var(--r-md) 0 0 var(--r-md);
+}
+
+/* 必須の欄。記号ではなく短い札にして、目で拾えるようにする。
+ *
+ * 置き場所は、その欄で値がどちら寄せになるかで決める。
+ *
+ *   数値の欄（右寄せ）   … 枠の中の左側。値と単位は右にあるので空いている。
+ *                          欄そのものに札が付いて、どの欄の話か迷わない
+ *   それ以外（左寄せ）   … ラベル行の右端。選んだ文字や矢印と近すぎると
+ *                          落ち着かないので、枠の中には入れない
+ *
+ * どちらの場合も、札は入力した値と重ならない。 */
+
+/* 札の見た目（置き場所は下の 2 通り）。 */
+.wq-field.required > label::after,
+.wq-field.required .field-row::after {
+  content: '必須';
+  padding: 1px var(--s-2);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  line-height: 1.5;
+  color: var(--ng-700);
+  background: var(--ng-50);
+  border: 1px solid var(--ng-100);
+  border-radius: var(--r-pill);
+}
+
+/* (1) 既定 … ラベル行の右端。 */
+.wq-field.required > label {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.wq-field.required > label::after {
+  flex: none;
+  margin-left: auto;
+}
+
+.wq-field.required .field-row::after {
+  display: none;
+}
+
+/* (2) 数値の欄 … 枠の中の左側。札の上を触っても下の欄に届く。 */
+.wq-field.required:has(> .field-row > input[type='number']) > label::after {
+  display: none;
+}
+
+.wq-field.required:has(> .field-row > input[type='number']) .field-row {
+  position: relative;
+}
+
+.wq-field.required:has(> .field-row > input[type='number']) .field-row::after {
+  display: block;
+  position: absolute;
+  top: 50%;
+  left: var(--s-3);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+/* 札のぶんだけ、値の入る場所を空けておく。 */
+.wq-field.required .field-row > input[type='number'] {
+  padding-left: 4.5em;
+}
+
+/* 前提を満たしていない欄（その選択肢を選んだときだけ入力できる欄など）。 */
+.cert-field.disabled label,
+.cert-field.disabled .unit,
+.cert-choices.disabled legend,
+.cert-choices.disabled .choice-option {
+  color: var(--text-muted);
+}
+
+.cert-field.disabled input {
+  background: var(--field-bg-disabled);
+  color: var(--text-muted);
+}
+
+/* 補足の文。読み飛ばせる濃さにしつつ、行の頭をそろえて拾いやすくする。 */
+.hint {
+  margin: var(--s-1) 0 0;
+  font-size: var(--fs-xs);
+  line-height: 1.65;
+  color: var(--text-muted);
+}
+
+/* --- 選択肢（ラジオ・チェック） ------------------------------------------
+ * 文字だけの選択肢は、押せる場所が狭くて選び間違えやすい。行全体を
+ * 押せる札にして、選んだものは色でも分かるようにする。 */
+
+.cert-choices {
+  margin-top: var(--s-3);
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.cert-choices legend {
+  padding: 0 var(--s-2);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--text-brand);
+}
+
+/* セクションの見出しがそのまま名前になっている選択肢は、囲みを重ねない。 */
+.cert-choices.bare {
+  border: none;
+  padding: 0;
+  background: none;
+  margin-top: var(--s-1);
+}
+
+.choice-option,
+.wq-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  margin: var(--s-2) 0 0;
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.choice-option:hover,
+.wq-toggle:hover {
+  background: var(--surface-hover);
+  border-color: var(--brand-300);
+}
+
+/* 選ばれているものは、色と枠で残す（読み上げの状態とは別に、目でも分かる）。 */
+.choice-option:has(input:checked),
+.wq-toggle:has(input:checked) {
+  background: var(--brand-50);
+  border-color: var(--brand-400);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.choice-option:has(input:focus-visible),
+.wq-toggle:has(input:focus-visible) {
+  box-shadow: var(--focus-ring);
+  border-color: var(--focus);
+}
+
+.choice-option input[type='radio'],
+.choice-option input[type='checkbox'],
+.wq-toggle input {
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 1px 0 0;
+  flex: none;
+  accent-color: var(--brand-600);
+}
+
+/* --- 節（折り畳めるカード） ----------------------------------------------
+ * 入力のかたまりは、台紙の上に乗った 1 枚のカードにする。見出しの行は
+ * 開閉のつまみを兼ねるので、押せることが分かるように下地を変える。 */
+
+.cert-section,
+.room,
+.wall-panel,
+.pattern-bar {
+  margin-top: var(--s-4);
+  padding: var(--s-4);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+
+/* 折り畳めるセクションの見出し。見出し自身は light DOM に置くので、
+   セクションごとの見た目（.cert-section h3 など）はそのまま効く。 */
+portal-section > [slot='title'] {
+  margin: 0;
+  min-width: 0;
+}
+
+portal-section::part(head) {
+  padding-bottom: var(--s-3);
+  margin-bottom: var(--s-3);
+  border-bottom: 1px solid var(--divider);
+}
+
+portal-section[collapsed]::part(head) {
+  padding-bottom: 0;
+  margin-bottom: 0;
+  border-bottom: none;
+}
+
+/* 折り畳んだ節の中身は隠す。
+ *
+ * 部品の中（shadow DOM）にも :host([collapsed]) .body { display: none } が
+ * あるが、中身の並べ方を外から ::part(body) で指定している（節の中を桝目に
+ * する・結果の節は 1 列にする）ので、そちらが勝ってしまう。外側のツリーの
+ * ::part 規則は、影のツリーの規則より優先されるため。
+ *
+ * したがって「折り畳んだら隠す」も、外側で言い直しておく必要がある。
+ * ::part(body) に display を足すときは、この規則より詳細度が低いことを
+ * 確かめること（この規則は要素 + 属性 = 0,1,1）。 */
+portal-section[collapsed]::part(body) {
+  display: none;
+}
+
+portal-section::part(toggle) {
+  color: var(--text-brand);
+}
+
+/* 開閉のつまみは指で押せる大きさにする（見出しの行はどこでも押せるが、
+   つまみそのものも的として成立させる）。 */
+portal-section::part(head):hover {
+  color: var(--text-brand);
+}
+
+/* --- 結果 ----------------------------------------------------------------
+ * 入力（白い升目）と結果（枠で囲った読み物）を、面の色ではっきり分ける。
+ * 数字は等幅・右そろえ。 */
+
+.result-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+/* 結果の値 1 つぶん。太い罫は注意書きと同じく左右そろえて括弧にする
+   （角を丸めた箱に片側だけの罫を引くと、括弧が欠けたように見える）。 */
+.result-box {
+  padding: var(--s-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand-400);
+  border-right: 3px solid var(--brand-400);
+  border-radius: var(--r-md);
+  text-align: left;
+}
+
+.result-box .key {
+  display: block;
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.result-box .value {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-num);
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  word-break: break-all;
+}
+
+/* 途中経過・検定の表。狭い画面では表の中だけを横に送る（ページごと
+   横に広がると、本文の幅まで縮んでしまうため）。 */
+.table-scroll {
+  overflow-x: auto;
+  margin-top: var(--s-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-scroll > .steps-table {
+  margin: 0;
+}
+
+.steps-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--s-3);
+  font-size: var(--fs-sm);
+}
+
+.steps-table th {
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--text-2);
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.steps-table th.step-label {
+  text-align: left;
+}
+
+.steps-table th.step-value {
+  text-align: right;
+}
+
+.steps-table td {
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--divider);
+}
+
+.steps-table tr:last-child td {
+  border-bottom: none;
+}
+
+.steps-table .step-label {
+  color: var(--text);
+}
+
+/* 式番号は根拠であって値ではないので、控えめな等幅で添える。 */
+.steps-table .step-eq {
+  font-family: var(--font-num);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.steps-table .step-value {
+  text-align: right;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+/* 判定の根拠は式番号ではなく文章（面材の名前まで入る）なので、折り返す。 */
+.steps-table .check-value {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+/* --- 判定（OK / NG） -----------------------------------------------------
+ * 緑と赤はここだけで使う。行ごと色を付け、NG は左端に太い帯を入れて、
+ * 表を斜めに見ても引っかかるようにする。 */
+
+.steps-table .verdict {
+  text-align: center;
+  font-family: var(--font);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.steps-table .verdict.ok {
+  color: var(--ok-700);
+  background: var(--ok-50);
+}
+
+.steps-table .verdict.ng {
+  color: var(--ng-700);
+  background: var(--ng-50);
+}
+
+.steps-table tr:has(.verdict.ng) td {
+  background: var(--ng-50);
+}
+
+.steps-table tr:has(.verdict.ng) td:first-child {
+  box-shadow: inset 3px 0 0 var(--ng-500);
+}
+
+/* 計算できないときの理由。結果の代わりに出るので、結果と同じ場所に置く。 */
+.result-error {
+  margin-top: var(--s-3);
+  padding: var(--s-3) var(--s-3) var(--s-3) var(--s-8);
+  font-size: var(--fs-sm);
+  color: var(--ng-700);
+  background: var(--ng-50);
+  border: 1px solid var(--ng-100);
+  border-radius: var(--r-md);
+  position: relative;
+}
+
+.result-error::before {
+  content: '!';
+  position: absolute;
+  left: var(--s-3);
+  top: var(--s-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: var(--fs-xs);
+  font-weight: 800;
+  color: var(--text-inverse);
+  background: var(--ng-600);
+  border-radius: var(--r-pill);
+}
+
+/* 注意書き（出力はできるが、確かめてほしいこと）。
+ *
+ * 角を丸めた箱なので、太い罫は左右そろえて括弧のようにする（片側だけだと、
+ * 括弧が欠けたように見える）。左に寄せた罫を使うのは、角を丸めない箱
+ * （design/ の .ds-note のように、罫の側だけ角を落とすもの）に限る。 */
+.warnings {
+  margin: var(--s-3) auto 0;
+  max-width: var(--shell-max);
+  padding: var(--s-3) var(--s-4) var(--s-3) var(--s-6);
+  font-size: var(--fs-sm);
+  color: var(--warn-700);
+  background: var(--warn-50);
+  border: 1px solid var(--warn-100);
+  border-left: 3px solid var(--warn-500);
+  border-right: 3px solid var(--warn-500);
+  border-radius: var(--r-md);
+}
+
+.warnings li {
+  max-width: none;
+}
+
+.warnings li + li {
+  margin-top: var(--s-2);
+}
+
+/* --- 結果ドック ----------------------------------------------------------
+ * 結果の節に .result-dock を付けると、見出しが帯になり、その色が判定の
+ * まとめになる（NG が 1 つでもあれば赤、すべて OK なら緑、判定のない
+ * ツールでは藍）。デスクトップでは layout.css が右列に貼り付ける。 */
+
+.result-dock {
+  --dock-accent: var(--brand-700);
+  padding: 0;
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--dock-accent) 40%, var(--border));
+}
+
+.result-dock:has(.verdict.ng) {
+  --dock-accent: var(--ng-600);
+}
+
+.result-dock:has(.verdict):not(:has(.verdict.ng)) {
+  --dock-accent: var(--ok-600);
+}
+
+.result-dock::part(head) {
+  padding: var(--s-3) var(--s-4);
+  margin: 0;
+  background: var(--dock-accent);
+  border-bottom: none;
+  border-radius: calc(var(--r-lg) - 1px) calc(var(--r-lg) - 1px) 0 0;
+}
+
+.result-dock[collapsed]::part(head) {
+  padding: var(--s-3) var(--s-4);
+  border-radius: calc(var(--r-lg) - 1px);
+}
+
+.result-dock::part(toggle) {
+  color: var(--text-inverse);
+}
+
+.result-dock > [slot='title'] {
+  color: var(--text-inverse);
+}
+
+/* 結果の中は 1 列（表と図が続くので、入力欄のような桝目にはしない）。 */
+.result-dock::part(body) {
+  display: block;
+  padding: var(--s-4);
+}
+
+/* --- 結果へ飛ぶボタンの状態 ----------------------------------------------
+ * 判定が画面の外にあっても、NG があるかどうかだけは常に見えるようにする。 */
+
+.verdict-fab .state {
+  display: none;
+}
+
+.verdict-fab .state[data-state='none'] {
+  display: inline;
+}
+
+body:has(.result-dock .verdict) .verdict-fab .state[data-state='none'] {
+  display: none;
+}
+
+body:has(.result-dock .verdict):not(:has(.result-dock .verdict.ng)) .verdict-fab {
+  background: var(--ok-600);
+  color: var(--text-inverse);
+  border-color: transparent;
+}
+
+body:has(.result-dock .verdict):not(:has(.result-dock .verdict.ng))
+  .verdict-fab
+  .state[data-state='ok'] {
+  display: inline;
+}
+
+body:has(.result-dock .verdict.ng) .verdict-fab {
+  background: var(--ng-600);
+  color: var(--text-inverse);
+  border-color: transparent;
+}
+
+body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
+  display: inline;
+}
+
+/* --- 帯・チップ ---------------------------------------------------------- */
+
+/* 編集中のファイル。新規作成か編集中かがひと目で分かるよう、名前を強く出す。 */
+.edit-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2) var(--s-4);
+  margin-bottom: var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  font-size: var(--fs-sm);
+}
+
+.edit-bar .label {
+  color: var(--text-muted);
+}
+
+.edit-bar .name {
+  font-weight: 700;
+  color: var(--text-brand);
+  word-break: break-all;
+}
+
+.edit-bar .hint {
+  flex-basis: 100%;
+}
+
+/* ファイル操作のボタン（新規作成 / 開く）を横に並べ、狭い画面では折り返す。 */
+.file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.file-actions button {
+  background: var(--surface);
+  color: var(--text-brand);
+  border-color: var(--border-strong);
+  min-height: 36px;
+  font-size: var(--fs-xs);
+}
+
+.file-actions button:hover {
+  background: var(--surface-hover);
+  border-color: var(--brand-300);
+}
+
+/* 保存欄。ページの締めくくりなので、藍の下地で「ここが最後」と示す。 */
+.save-bar {
+  margin-top: var(--s-6);
+  padding: var(--s-4);
+  background: var(--brand-50);
+  border: 1px solid var(--brand-100);
+  border-radius: var(--r-lg);
+}
+
+.save-bar h3 {
+  margin-bottom: var(--s-1);
+}
+
+.save-actions {
+  display: flex;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.save-actions button {
+  flex: 1;
+  min-height: 48px;
+}
+
+/* 雛形・表計算ツールの版など、滅多に触らない設定。見出しの右端に小さく。 */
+.template-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-left: auto;
+  min-width: 0;
+  padding: var(--s-1) var(--s-1) var(--s-1) var(--s-3);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+}
+
+.template-chip .label {
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+/* 長いファイル名で見出しの行を押し広げない。全体は title 属性で読める。 */
+.template-chip .name,
+.template-chip .unset {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 18em;
+}
+
+.template-chip .name {
+  color: var(--text-brand);
+}
+
+.template-chip .unset {
+  color: var(--ng-600);
+}
+
+/* --- ダイアログ ---------------------------------------------------------- */
+
+.app-dialog {
+  width: min(28rem, calc(100vw - 2rem));
+  padding: var(--s-5);
+  color: var(--text);
+  background: var(--surface);
+  border: none;
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  font-size: var(--fs-base);
+}
+
+.app-dialog::backdrop {
+  background: rgba(10, 14, 20, 0.45);
+}
+
+.app-dialog p {
+  margin: 0;
+  line-height: var(--lh);
+}
+
+.app-dialog h3 {
+  margin-bottom: var(--s-3);
+  font-size: var(--fs-lg);
+}
+
+.app-dialog label {
+  margin-top: var(--s-4);
+}
+
+.dialog-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin-top: var(--s-5);
+}
+
+/* 広い画面では横に並べ、いちばん右（＝親指から遠い側）を主たる操作にする。 */
+@media (min-width: 480px) {
+  .dialog-actions {
+    flex-direction: row-reverse;
+  }
+
+  .dialog-actions button {
+    flex: 1;
+  }
+}
+
+/* 保存ダイアログの「保存先フォルダ」行（選択中のフォルダ名 + 選択ボタン）。 */
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-1);
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.folder-row .name {
+  font-weight: 700;
+  color: var(--text-brand);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-row .unset {
+  color: var(--text-muted);
+}
+
+.folder-row button {
+  margin-left: auto;
+  flex: none;
+}
+
+/* --- ツール一覧（ポータルトップ） ---------------------------------------- */
+
+.tool-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+  gap: var(--s-4);
+  list-style: none;
+  padding: 0;
+  margin: var(--s-4) 0 0;
+}
+
+.tool-list li {
+  max-width: none;
+}
+
+.tool-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  height: 100%;
+  padding: var(--s-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  text-decoration: none;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
+}
+
+.tool-card:hover {
+  border-color: var(--brand-300);
+  box-shadow: var(--shadow-2);
+  transform: translateY(-1px);
+}
+
+.tool-card .name {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-2);
+  font-weight: 700;
+  font-size: var(--fs-md);
+  color: var(--text-brand);
+}
+
+.tool-card .name::after {
+  content: '→';
+  color: var(--brand-400);
+}
+
+.tool-card .desc {
+  margin: 0;
+  max-width: none;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+/* --- 画面下のメッセージ・生成結果 ---------------------------------------- */
+
+/* 文字色は各ツールの JS が状態に応じて直接入れる（成功は緑・失敗は赤）。
+   ここでは置き場所と大きさだけを決める。 */
+#message {
+  max-width: var(--shell-max);
+  margin: var(--s-4) auto 0;
+  text-align: center;
+  font-size: var(--fs-sm);
+}
+
+#result {
+  max-width: var(--shell-max);
+  margin: var(--s-3) auto 0;
+  text-align: center;
+  font-size: var(--fs-sm);
+}

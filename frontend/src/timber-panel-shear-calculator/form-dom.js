@@ -719,7 +719,13 @@ export function renderWallResult(root, report) {
       { text: check.label, className: 'step-label' },
       // 判定の根拠は文章なので、式番号（step-eq）とは別に折り返させる。
       { text: check.value, className: 'check-value' },
-      { text: check.ok ? 'OK' : 'NG', className: check.ok ? 'step-value' : 'step-value ng' },
+      // verdict は「これは判定の升目である」という印。画面の見た目
+      // （OK は緑・NG は赤・NG のある行は行ごと色を付ける）と、結果の節の
+      // 見出しの帯の色（NG が 1 つでもあれば赤）が、この印から決まる。
+      {
+        text: check.ok ? 'OK' : 'NG',
+        className: check.ok ? 'step-value verdict ok' : 'step-value verdict ng',
+      },
     ]);
   });
 }

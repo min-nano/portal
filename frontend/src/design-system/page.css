@@ -1,0 +1,184 @@
+/* 見本ページ（/design/）だけで使う見た目。
+ *
+ * ここは「デザインシステムそのものの説明」に必要な飾り（色見本の升目・
+ * 2 列の比較・注釈）だけを持つ。ツールの画面には読み込まれない。
+ */
+
+.ds-lead {
+  max-width: var(--prose-max);
+  font-size: var(--fs-md);
+  color: var(--text-2);
+  margin-bottom: var(--s-4);
+}
+
+.ds-note {
+  margin: var(--s-3) 0 0;
+  padding: var(--s-3) var(--s-4);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  background: var(--surface-sunken);
+  border-left: 3px solid var(--brand-400);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  max-width: var(--prose-max);
+}
+
+.ds-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr));
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+}
+
+.ds-swatch {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.ds-swatch .chip {
+  display: block;
+  height: 56px;
+}
+
+.ds-swatch .meta {
+  display: block;
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.ds-swatch .meta code {
+  display: block;
+  font-family: var(--font-num);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+
+.ds-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: center;
+  margin-top: var(--s-3);
+}
+
+.ds-scale {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  margin-top: var(--s-3);
+}
+
+.ds-scale span {
+  display: block;
+  background: var(--brand-300);
+  border-radius: var(--r-sm);
+}
+
+.ds-type p {
+  margin: var(--s-2) 0 0;
+}
+
+.ds-do-dont {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--s-4);
+  margin-top: var(--s-3);
+}
+
+.ds-do,
+.ds-dont {
+  padding: var(--s-3);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--fs-sm);
+}
+
+/* 見本の中の傍注は、罫を片側だけに引く代わりに、その側の角を落とす
+   （.ds-note と同じ形。太い罫を片側だけ引いた角丸の箱は作らない）。 */
+.ds-do {
+  border-left: 3px solid var(--ok-500);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+}
+
+.ds-dont {
+  border-left: 3px solid var(--ng-500);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+}
+
+.ds-do h4,
+.ds-dont h4 {
+  margin-bottom: var(--s-2);
+}
+
+/* 見本の中でだけ、2 列の骨組みを縮めて見せる（実物の 1080px を待たずに
+   「どう並ぶか」が分かるように）。 */
+.ds-dock-demo {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+}
+
+.ds-dock-demo > div {
+  padding: var(--s-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  text-align: center;
+}
+
+.ds-dock-demo > .side {
+  border-style: solid;
+  border-color: var(--brand-400);
+  color: var(--text-brand);
+  font-weight: 700;
+}
+
+@media (max-width: 640px) {
+  .ds-dock-demo {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ds-token-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--s-3);
+  font-size: var(--fs-sm);
+}
+
+.ds-token-table th,
+.ds-token-table td {
+  text-align: left;
+  padding: var(--s-2);
+  border-bottom: 1px solid var(--divider);
+  vertical-align: top;
+}
+
+.ds-token-table th {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.ds-token-table code {
+  font-family: var(--font-num);
+  font-size: var(--fs-xs);
+  color: var(--text-brand);
+}
+
+/* 見本ページの節は説明文が主なので、中身は 1 列にする（入力欄を並べる
+   桝目は、見せたいところだけ .field-grid で作る）。 */
+.ds-section::part(body) {
+  display: block;
+}
+
+/* 見本の中の小見出しは、直前の説明や部品から離す。 */
+.ds-section h4 {
+  margin-top: var(--s-5);
+}

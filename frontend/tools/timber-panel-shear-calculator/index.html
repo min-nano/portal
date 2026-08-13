@@ -33,13 +33,19 @@
     <portal-section-controls class="section-controls" for="calcForm"></portal-section-controls>
 
     <form id="calcForm" onsubmit="return false;">
-      <!-- 1 ファイル = 1 物件。物件の情報は壁によらず共通。 -->
+      <!-- 1 ファイル = 1 物件。物件の情報は壁によらず共通。
+           節の中の入力欄は 1 つずつ .cert-field で包む。広い画面では
+           そのまま横に並び（節の中身は桝目）、狭い画面では 1 列に戻る。 -->
       <portal-section class="cert-section">
         <h3 slot="title">物件</h3>
-        <label for="projectName">物件名</label>
-        <input type="text" id="projectName" placeholder="○○邸 新築工事">
-        <label for="issuedOn">作成日</label>
-        <input type="date" id="issuedOn">
+        <div class="cert-field">
+          <label for="projectName">物件名</label>
+          <input type="text" id="projectName" placeholder="○○邸 新築工事">
+        </div>
+        <div class="cert-field">
+          <label for="issuedOn">作成日</label>
+          <input type="date" id="issuedOn">
+        </div>
       </portal-section>
 
       <!-- 1 物件の中の複数の壁を、ページ送りで切り替えて編集する。 -->
@@ -58,14 +64,18 @@
         壁はまだありません。「＋ 壁を追加」で登録してください。
       </p>
 
-      <div id="wallEditor">
+      <!-- has-dock: 広い画面では入力（左）と計算結果（右）の 2 列になる。
+           狭い画面ではそのまま縦に流れる（並び順は変わらない）。 -->
+      <div id="wallEditor" class="has-dock">
         <!-- 壁で共通なのは階高・幅と中間材の有無だけ。面材と釘の仕様は
              面材ごと（1 枚の壁でも張り分けられる）なので、下の面材の中に
              ある。 -->
         <portal-section class="cert-section">
           <h3 slot="title">壁</h3>
-          <label for="wallName">壁の名前（この物件内での識別名）</label>
-          <input type="text" id="wallName" placeholder="南面 X1 通り など">
+          <div class="cert-field">
+            <label for="wallName">壁の名前（この物件内での識別名）</label>
+            <input type="text" id="wallName" placeholder="南面 X1 通り など">
+          </div>
 
           <div class="panel-size">
             <label>階高 H [mm]
@@ -94,7 +104,10 @@
         <div id="wallPanels" class="wall-panels"></div>
         <button type="button" id="addWallPanelBtn" class="secondary">＋ 面材を追加</button>
 
-        <portal-section class="cert-section">
+        <!-- result-dock: 広い画面では右の列に貼り付いて、入力しながらでも
+             結果と判定が見えるようにする。見出しの帯の色は判定のまとめ
+             （NG が 1 つでもあれば赤、すべて OK なら緑）。 -->
+        <portal-section class="cert-section result-dock" id="wallResults">
           <h3 slot="title">壁の計算結果（グレー本 3.3）</h3>
           <div id="wallError" class="result-error" hidden></div>
           <div id="wallSummary" class="result-summary"></div>
@@ -140,6 +153,15 @@
     <div id="result" hidden>
       <a id="resultLink" target="_blank" rel="noopener"></a>
     </div>
+
+    <!-- 狭い画面では計算結果が画面の外にあるので、判定の要約を兼ねた
+         「結果へ飛ぶ」ボタンを出す（広い画面では右の列に出ているので出さない）。 -->
+    <a class="verdict-fab" href="#wallResults">
+      <span class="state" data-state="none">計算結果へ</span>
+      <span class="state" data-state="ok">すべて OK</span>
+      <span class="state" data-state="ng">NG あり</span>
+      <span aria-hidden="true">↓</span>
+    </a>
   </div>
 
   <!-- 未保存の入力があるまま新規作成・読み込みへ移るときの確認と、
