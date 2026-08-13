@@ -97,12 +97,16 @@
   font-size: var(--fs-sm);
 }
 
+/* 見本の中の傍注は、罫を片側だけに引く代わりに、その側の角を落とす
+   （.ds-note と同じ形。太い罫を片側だけ引いた角丸の箱は作らない）。 */
 .ds-do {
   border-left: 3px solid var(--ok-500);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
 }
 
 .ds-dont {
   border-left: 3px solid var(--ng-500);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
 }
 
 .ds-do h4,

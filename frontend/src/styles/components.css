@@ -455,11 +455,14 @@ portal-section::part(head):hover {
   margin-top: var(--s-3);
 }
 
+/* 結果の値 1 つぶん。太い罫は注意書きと同じく左右そろえて括弧にする
+   （角を丸めた箱に片側だけの罫を引くと、括弧が欠けたように見える）。 */
 .result-box {
   padding: var(--s-3);
   background: var(--surface);
   border: 1px solid var(--border);
   border-left: 3px solid var(--brand-400);
+  border-right: 3px solid var(--brand-400);
   border-radius: var(--r-md);
   text-align: left;
 }
