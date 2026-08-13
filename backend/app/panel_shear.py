@@ -141,7 +141,7 @@ def preset_panel(preset_id: str) -> dict:
 
 
 def material(material_id: str) -> dict:
-    """グレー本 表 3.3.1 の組合せを、壁の入力欄へ入れる形で返す。
+    """グレー本 表 3.3.1 の組合せを、面材の入力欄へ入れる形で返す。
 
     表 3.3.2 の既定の規格（構造用合板なら JAS 1 級）も一緒に付いてくるので、
     これだけで面材のせん断破壊・せん断座屈の検定まで数値がそろう。
@@ -165,16 +165,21 @@ def material(material_id: str) -> dict:
 
 
 def example_wall_data() -> dict:
-    """グレー本 3.3(3) の計算例を、そのまま計算・作図できるフォーム入力にする。"""
+    """グレー本 3.3(3) の計算例を、そのまま計算・作図できるフォーム入力にする。
+
+    面材と釘は面材ごとの入力なので、2 枚とも同じ組合せを持たせる（計算例の
+    壁は 1 種類の面材と釘で張られている）。
+    """
+    spec = material(EXAMPLE_WALL_MATERIAL)
     return normalize_data(
         {
             "projectName": "グレー本 3.3 の計算例",
             "walls": [
                 {
-                    **material(EXAMPLE_WALL_MATERIAL),
                     **EXAMPLE_WALL,
                     "panels": [
-                        preset_panel(preset_id) for preset_id in EXAMPLE_WALL_PRESETS
+                        {**spec, **preset_panel(preset_id)}
+                        for preset_id in EXAMPLE_WALL_PRESETS
                     ],
                 }
             ],
@@ -506,6 +511,24 @@ def _shrink_to_fit(page: pdf_write.Page, text: str, size: float, width: float) -
     return size
 
 
+def _wrap_to_fit(page: pdf_write.Page, text: str, size: float,
+                 width: float) -> list[str]:
+    """width に収まるように折り返した行を返す。
+
+    日本語には単語の区切りが無いので文字単位で折る（欄からはみ出させない
+    ことが目的で、行末の禁則処理までは見ない）。
+    """
+    lines: list[str] = []
+    line = ""
+    for character in text:
+        if line and page.font.text_width(line + character, size) > width:
+            lines.append(line)
+            line = ""
+        line += character
+    lines.append(line)
+    return lines
+
+
 def _draw_panel_table(page: pdf_write.Page, left: float, right: float, cursor: float,
                       report: dict, columns_key: str = "panelColumns",
                       rows_key: str = "panels") -> float:
@@ -568,7 +591,10 @@ def _draw_wall_page(page: pdf_write.Page, data: dict, report: dict,
     cursor = _draw_section(page, left, right, cursor, "1. 入力")
     for row in report["inputs"]:
         page.text(left + 8, cursor, row["label"], 8.5, gray=0.45)
-        page.text(left + 160, cursor, row["value"], 9)
+        value = row["value"]
+        # 面材と釘が面材ごとに違う壁では、面材の名前と組合せが並ぶので長くなる。
+        size = _shrink_to_fit(page, value, 9, right - left - 168)
+        page.text(left + 160, cursor, value, size)
         cursor -= 13
     cursor -= 8
 
@@ -584,12 +610,20 @@ def _draw_wall_page(page: pdf_write.Page, data: dict, report: dict,
         page.text(box_x + box_width / 2, cursor - 26, item["value"], 13, align="center")
     cursor -= 48
 
-    # --- 3. 面材ごとの値 ---
-    cursor = _draw_section(page, left, right, cursor, "3. 面材ごとの値")
+    # --- 3. 面材ごとの面材と釘 ---
+    # 面材と釘は面材ごとの入力（1 枚の壁でも張り分けられる）ので、どの面材が
+    # どの数値で計算されたのかをここに残す。
+    cursor = _draw_section(page, left, right, cursor, "3. 面材ごとの面材と釘")
+    cursor = _draw_panel_table(
+        page, left, right, cursor, report, "specColumns", "specs"
+    )
+
+    # --- 4. 面材ごとの値 ---
+    cursor = _draw_section(page, left, right, cursor, "4. 面材ごとの値")
     cursor = _draw_panel_table(page, left, right, cursor, report)
 
-    # --- 4. 途中経過 ---
-    cursor = _draw_section(page, left, right, cursor, "4. 壁全体の計算")
+    # --- 5. 途中経過 ---
+    cursor = _draw_section(page, left, right, cursor, "5. 壁全体の計算")
     for row in report["steps"]:
         page.text(left + 8, cursor, row["label"], 8.5, gray=0.35)
         page.text(right - 8, cursor, row["value"], 9, align="right")
@@ -599,24 +633,26 @@ def _draw_wall_page(page: pdf_write.Page, data: dict, report: dict,
         cursor -= 13
     cursor -= 8
 
-    # --- 5. 面材のせん断破壊・せん断座屈（式 3.3.8〜3.3.11） ---
+    # --- 6. 面材のせん断破壊・せん断座屈（式 3.3.8〜3.3.11） ---
     cursor = _draw_section(
-        page, left, right, cursor, "5. 面材のせん断破壊・せん断座屈の検定"
+        page, left, right, cursor, "6. 面材のせん断破壊・せん断座屈の検定"
     )
     cursor = _draw_panel_table(
         page, left, right, cursor, report, "bucklingColumns", "buckling"
     )
 
-    # --- 6. 判定 ---
-    _draw_section(page, left, right, cursor, "6. 判定")
+    # --- 7. 判定 ---
+    _draw_section(page, left, right, cursor, "7. 判定")
     cursor -= 20
     for check in report["checks"]:
         page.text(left + 8, cursor, check["label"], 8.5, gray=0.45)
-        value = check["value"]
-        size = _shrink_to_fit(page, value, 9, right - left - 258)
-        page.text(left + 230, cursor, value, size)
         page.text(right - 8, cursor, "OK" if check["ok"] else "NG", 9, align="right")
-        cursor -= 13
+        # 判定の根拠には、いちばん厳しい面材の名前まで入る。欄に収まらなければ
+        # 字を詰めるのではなく折り返す（OK / NG の欄と重ねない）。
+        for line in _wrap_to_fit(page, check["value"], 8.5, right - left - 260):
+            page.text(left + 230, cursor, line, 8.5)
+            cursor -= 11
+        cursor -= 2
 
     # --- 脚注 ---
     _draw_footnote(page, left, right, _WALL_FOOTNOTE, page_number, page_total)
@@ -629,14 +665,7 @@ def _draw_footnote(page: pdf_write.Page, left: float, right: float, note: str,
     脚注は 1 行に入らないことがあるので幅で折り返し、区切り線はその行数に
     合わせて上げる（本文と重ならないよう、行数は呼ぶ側が気にしなくてよい）。
     """
-    lines: list[str] = []
-    line = ""
-    for character in note:
-        if page.font.text_width(line + character, 6.5) > right - left - 40:
-            lines.append(line)
-            line = ""
-        line += character
-    lines.append(line)
+    lines = _wrap_to_fit(page, note, 6.5, right - left - 40)
 
     baseline = _MARGIN + 6 + 8 * (len(lines) - 1)
     page.line(left, baseline + 10, right, baseline + 10, 0.3, 0.7)

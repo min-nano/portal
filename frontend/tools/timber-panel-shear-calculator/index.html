@@ -59,8 +59,9 @@
       </p>
 
       <div id="wallEditor">
-        <!-- 実際の設計では面材の種類（と釘）が先に決まり、面材の配置・釘の
-             間隔・へりあきで調整する。入力欄もその順番に並べる。 -->
+        <!-- 壁で共通なのは階高・幅と中間材の有無だけ。面材と釘の仕様は
+             面材ごと（1 枚の壁でも張り分けられる）なので、下の面材の中に
+             ある。 -->
         <portal-section class="cert-section">
           <h3 slot="title">壁</h3>
           <label for="wallName">壁の名前（この物件内での識別名）</label>
@@ -74,71 +75,6 @@
               <input type="number" id="wallWidth" inputmode="numeric">
             </label>
           </div>
-        </portal-section>
-
-        <portal-section class="cert-section">
-          <h3 slot="title">面材と釘</h3>
-          <label for="materialSelect">
-            面材と釘の組合せ（グレー本 表 3.3.1）から読み込む
-          </label>
-          <select id="materialSelect">
-            <option value="">選択すると、下の数値へ読み込みます</option>
-          </select>
-          <p class="hint" id="materialNote">
-            表にない組合せは、グレー本 4.5 の試験で求めた k・ΔPv・δv・δu を
-            直接入力してください。読み込んだあとに編集できます。
-          </p>
-
-          <div class="panel-size">
-            <label>面材の厚さ t [mm]
-              <input type="number" id="wallThickness" inputmode="decimal" step="any">
-            </label>
-            <label>せん断弾性係数 GB [kN/mm²]
-              <input type="number" id="wallShearModulus" inputmode="decimal" step="any">
-            </label>
-          </div>
-          <div class="panel-size">
-            <label>釘の剛性 k [kN/mm]
-              <input type="number" id="wallK" inputmode="decimal" step="any">
-            </label>
-            <label>降伏耐力 ΔPv [kN]
-              <input type="number" id="wallDeltaPv" inputmode="decimal" step="any">
-            </label>
-          </div>
-          <div class="panel-size">
-            <label>降伏点変位 δv [mm]
-              <input type="number" id="wallDeltaV" inputmode="decimal" step="any">
-            </label>
-            <label>終局変位 δu [mm]
-              <input type="number" id="wallDeltaU" inputmode="decimal" step="any">
-            </label>
-          </div>
-
-          <label for="gradeSelect">
-            面材の規格（グレー本 表 3.3.2）から読み込む
-          </label>
-          <select id="gradeSelect">
-            <option value="">選択すると、下の数値へ読み込みます</option>
-          </select>
-          <p class="hint">
-            面材のせん断破壊・せん断座屈の検定（式 3.3.8〜3.3.11）に使います。
-            上の組合せを選ぶと、既定の規格（構造用合板なら JAS 1 級）が入ります。
-          </p>
-
-          <div class="panel-size">
-            <label>せん断強度 τmax [N/mm²]
-              <input type="number" id="wallTauMax" inputmode="decimal" step="any">
-            </label>
-            <label>曲げヤング係数 E1 [N/mm²]
-              <input type="number" id="wallE1" inputmode="decimal" step="any">
-            </label>
-            <label>曲げヤング係数 E2 [N/mm²]
-              <input type="number" id="wallE2" inputmode="decimal" step="any">
-            </label>
-          </div>
-          <p class="hint">
-            E1 は面材の繊維直交方向、E2 は繊維平行方向です。
-          </p>
 
           <label class="choice-option">
             <input type="checkbox" id="wallHasStud" checked>
@@ -146,39 +82,52 @@
           </label>
         </portal-section>
 
-        <!-- 壁を構成する面材。1 枚ごとに配置・釘の間隔・へりあきを決め、
-             その場で釘配列諸定数（グレー本 3.2）が出る。 -->
-        <portal-section class="cert-section">
-          <h3 slot="title">面材の配置と釘（釘配列諸定数：グレー本 3.2）</h3>
-          <p class="hint">
-            面材 1 枚ごとに寸法・配列の型・間柱ピッチ・釘ピッチ・へりあきを決めると、
-            その面材の Ixy・Zxy・Cxy（式 3.2.1〜3.2.7）が求まり、そのまま下の壁の計算に入ります。
-            へりあきは、適用範囲 3.3(1)④ の「10 mm 以上かつ接合具径 d ×5 以上」を満たす値を
-            面材ごとに入れてください（面材と釘を選ぶと、足りない面材はその値まで引き上げます）。
-            K0・My・Mu は面材ごとの値の和、塑性率 μ は最小値になります。
-          </p>
-          <div id="wallPanels" class="wall-panels"></div>
-          <button type="button" id="addWallPanelBtn" class="secondary">＋ 面材を追加</button>
-        </portal-section>
+        <!-- 壁を構成する面材。1 枚ごとに面材と釘の仕様・配置・釘の間隔を
+             決め、その場で釘配列諸定数（グレー本 3.2）が出る。面材と釘は
+             面材ごとに選べるので、1 枚の壁で張り分けられる。 -->
+        <p class="hint">
+          面材 1 枚ごとに、面材と釘の組合せ（グレー本 表 3.3.1・3.3.2）と、寸法・配列の型・
+          間柱ピッチ・釘ピッチ・へりあきを決めます。その面材の Ixy・Zxy・Cxy（式 3.2.1〜3.2.7）が
+          求まり、そのまま下の壁の計算に入ります。K0・My・Mu は面材ごとの値の和、塑性率 μ は最小値です。
+          1 枚の壁でも面材ごとに違う面材と釘を使えます（上半分は N50、下半分は CN50 など）。
+        </p>
+        <div id="wallPanels" class="wall-panels"></div>
+        <button type="button" id="addWallPanelBtn" class="secondary">＋ 面材を追加</button>
 
         <portal-section class="cert-section">
           <h3 slot="title">壁の計算結果（グレー本 3.3）</h3>
           <div id="wallError" class="result-error" hidden></div>
           <div id="wallSummary" class="result-summary"></div>
-          <table class="steps-table">
-            <thead id="wallPanelHead"></thead>
-            <tbody id="wallPanelBody"></tbody>
-          </table>
-          <table class="steps-table">
-            <tbody id="wallStepsBody"></tbody>
-          </table>
-          <table class="steps-table">
-            <thead id="wallBucklingHead"></thead>
-            <tbody id="wallBucklingBody"></tbody>
-          </table>
-          <table class="steps-table">
-            <tbody id="wallChecksBody"></tbody>
-          </table>
+          <h4 class="result-heading">面材ごとの面材と釘</h4>
+          <div class="table-scroll">
+            <table class="steps-table">
+              <thead id="wallSpecHead"></thead>
+              <tbody id="wallSpecBody"></tbody>
+            </table>
+          </div>
+          <h4 class="result-heading">面材ごとの値</h4>
+          <div class="table-scroll">
+            <table class="steps-table">
+              <thead id="wallPanelHead"></thead>
+              <tbody id="wallPanelBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table class="steps-table">
+              <tbody id="wallStepsBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table class="steps-table">
+              <thead id="wallBucklingHead"></thead>
+              <tbody id="wallBucklingBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table class="steps-table">
+              <tbody id="wallChecksBody"></tbody>
+            </table>
+          </div>
         </portal-section>
       </div>
 

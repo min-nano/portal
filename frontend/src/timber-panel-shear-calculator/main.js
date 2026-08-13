@@ -4,7 +4,9 @@
 // 面内せん断剛性 K と許容せん断耐力 Pa を求める。壁を構成する面材の釘配列
 // 諸定数 Ixy・Zxy・Cxy（3.2 節）は、その壁の計算の一部として面材ごとに求める。
 // 実際の設計では面材の種類と釘が先に決まっていて、面材の配置・釘の間隔・
-// へりあきで調整するので、入力もその順番に並べてある。
+// へりあきで調整するので、面材 1 枚の入力欄もその順番に並べてある。面材と釘
+// の仕様は面材ごとの入力で、1 枚の壁の中で混在してよい（上半分は N50、
+// 下半分は CN50 のような張り分け）。
 //
 // 編集中の計算は画面の中で完結する（../core.js が読み込む wasm を呼ぶだけで、
 // 入力のたびの往復が無い）。その wasm はサーバが計算に使っているものと同じ
@@ -41,17 +43,16 @@ import {
 import {
   applyWall,
   readWall,
-  renderGradeOptions,
-  renderMaterialOptions,
   renderWallBar,
   renderWallPanels,
   renderWallResult,
-  showNailNote,
+  showNailNotes,
   showPanelArea,
   syncNailModeVisibility,
 } from './form-dom.js';
 import {
   canRemoveWall,
+  capturePanel,
   defaultSaveName,
   emptyFormData,
   formSignature,
@@ -61,12 +62,13 @@ import {
   mergeFormData,
   minimumEdgeDistance,
   nailNote,
+  panelFieldsFromGrade,
+  panelFieldsFromMaterial,
   raiseEdgeDistance,
+  specOf,
   toRequestBody,
   verificationOf,
   verificationWarning,
-  wallFieldsFromGrade,
-  wallFieldsFromMaterial,
   wallLabel,
 } from './form-logic.js';
 import { loadCore } from '../core.js';
@@ -86,7 +88,8 @@ let currentWallIndex = 0;
 let reports = { walls: [] }; // 壁ごとの計算結果（面材ごとの結果もこの中）
 let materials = []; // グレー本 表 3.3.1 の面材と釘の組合せ
 let grades = []; // グレー本 表 3.3.2 の面材の規格
-let panelOptions = { presets: [], arrangements: [] }; // 面材の入力欄が使う一覧
+// 面材の入力欄が使う一覧（釘配列・割り付けの型・面材と釘・面材の規格）。
+let panelOptions = { presets: [], arrangements: [], materials: [], grades: [] };
 let calculateTimer = null;
 
 let sourceFile = null; // 開いているファイル（Drive 上の PDF）。{ id, name }
@@ -116,12 +119,19 @@ function currentWall() {
   return data.walls[currentWallIndex] || null;
 }
 
-/** 入力欄の内容を、編集中の壁へ書き戻す。 */
-function captureCurrentWall() {
+/**
+ * 入力欄の内容を、編集中の壁へ書き戻す。
+ *
+ * 書き戻すと面材はオブジェクトごと作り直されるので、1 枚を書き換えたい
+ * ときは panelIndex を渡して **その面材を戻り値で受け取る**（先に取り出して
+ * おいた面材へ書き換えても、この書き戻しで捨てられる）。
+ */
+function captureCurrentWall(panelIndex) {
   const wall = currentWall();
-  if (wall) Object.assign(wall, readWall(document));
+  const panel = wall ? capturePanel(wall, readWall(document), panelIndex) : null;
   data.projectName = document.getElementById('projectName').value.trim();
   data.issuedOn = document.getElementById('issuedOn').value;
+  return panel;
 }
 
 /** 編集中の壁を入力欄へ写し、タブと計算結果を描き直す。 */
@@ -130,8 +140,13 @@ function renderCurrent() {
   document.getElementById('issuedOn').value = data.issuedOn;
   applyWall(document, currentWall(), panelOptions);
   renderWallBar(document, data.walls, currentWallIndex, goToWall);
-  showNailNote(document, nailNote(materials, (currentWall() || {}).materialId));
+  showPanelNotes();
   renderCurrentResult();
+}
+
+/** 面材ごとの案内（選んだ釘の呼び径と、必要なへりあき）を出し直す。 */
+function showPanelNotes() {
+  showNailNotes(document, (materialId) => nailNote(materials, materialId));
 }
 
 function renderCurrentResult() {
@@ -169,17 +184,26 @@ function removeWall() {
 
 // --- 壁を構成する面材 -------------------------------------------------------
 
-/** 面材を 1 枚増やす（寸法・釘の間隔は、そのあと調整してもらう）。 */
+/**
+ * 面材を 1 枚増やす（寸法・釘の間隔は、そのあと調整してもらう）。
+ *
+ * 面材と釘の仕様は面材ごとに決められるが、実際には壁の中で同じ仕様を使う
+ * ことのほうが多いので、直前の面材の仕様を初期値として引き継ぐ（違う仕様に
+ * するときは、その面材の欄で選び直す）。
+ */
 function addWallPanel() {
   const wall = currentWall();
   if (!wall) return;
   captureCurrentWall();
-  // へりあきの初期値は、選んだ釘で決まる最小値（3.3(1)④）。
+  const spec = specOf(wall.panels[wall.panels.length - 1]);
+  // へりあきの初期値は、引き継いだ釘で決まる最小値（3.3(1)④）。
   wall.panels.push(
-    makePanel({ edgeDistance: minimumEdgeDistance(materials, wall.materialId) })
+    makePanel({
+      ...spec,
+      edgeDistance: minimumEdgeDistance(materials, spec.materialId),
+    })
   );
-  renderWallPanels(document, wall.panels, panelOptions);
-  scheduleCalculate();
+  redrawPanels();
 }
 
 function removeWallPanel(index) {
@@ -187,8 +211,7 @@ function removeWallPanel(index) {
   if (!wall) return;
   captureCurrentWall();
   wall.panels.splice(index, 1);
-  renderWallPanels(document, wall.panels, panelOptions);
-  scheduleCalculate();
+  redrawPanels();
 }
 
 /**
@@ -199,48 +222,53 @@ function removeWallPanel(index) {
  * この割り付けから組み立てる。
  */
 function loadPreset(index, id) {
-  const wall = currentWall();
-  if (!id || !core || !wall || !wall.panels[index]) return;
-  captureCurrentWall();
-  Object.assign(wall.panels[index], core.preset(id));
-  // 表 3.2.1 の配列はへりあき 10 mm が前提なので、選んだ釘で必要な値に
+  if (!id || !core) return;
+  const panel = captureCurrentWall(index);
+  if (!panel) return;
+  Object.assign(panel, core.preset(id));
+  // 表 3.2.1 の配列はへりあき 10 mm が前提なので、この面材の釘で必要な値に
   // 足りなければ引き上げる（適用範囲 3.3(1)④）。
-  raiseEdgeDistance(
-    [wall.panels[index]],
-    minimumEdgeDistance(materials, wall.materialId)
-  );
-  renderWallPanels(document, wall.panels, panelOptions);
-  scheduleCalculate();
+  raiseEdgeDistance([panel], minimumEdgeDistance(materials, panel.materialId));
+  redrawPanels();
 }
 
 /**
- * グレー本 表 3.3.1 の面材と釘の組合せを、今の壁の入力欄へ読み込む。
+ * グレー本 表 3.3.1 の面材と釘の組合せを、その面材の入力欄へ読み込む。
  *
  * 表 3.3.2 の既定の規格（構造用合板なら JAS 1 級）も一緒に入るので、この
  * 1 回でせん断破壊・せん断座屈の検定に要る τmax・E1・E2 までそろう。
- * へりあきは面材ごとの入力欄で調整する（選んだ釘の呼び径を案内に出す）。
+ * 読み込むのは選んだ面材 1 枚だけ（面材ごとに違う組合せを使えるため）。
  */
-function loadMaterial(id) {
-  const wall = currentWall();
+function loadMaterial(index, id) {
+  const panel = captureCurrentWall(index);
   const material = materials.find((entry) => entry.id === id);
-  if (!wall || !material) return;
-  captureCurrentWall();
-  Object.assign(wall, wallFieldsFromMaterial(material));
-  // 釘が変われば必要なへりあきも変わる（3.3(1)④）。足りない面材だけを
-  // 最小値まで引き上げる（設計者が広げた値は狭めない）。
-  raiseEdgeDistance(wall.panels, minimumEdgeDistance(materials, wall.materialId));
-  renderCurrent();
-  scheduleCalculate();
+  if (!panel) return;
+  if (material) {
+    Object.assign(panel, panelFieldsFromMaterial(material));
+    // 釘が変われば必要なへりあきも変わる（3.3(1)④）。足りなければ最小値まで
+    // 引き上げる（設計者が広げた値は狭めない）。
+    raiseEdgeDistance([panel], minimumEdgeDistance(materials, panel.materialId));
+  }
+  // 一覧の先頭（案内の行）へ戻したときは、読み込んだ跡だけが消えて数値は
+  // 残る（4.5 の試験値として、そのまま手で直して使えるように）。
+  redrawPanels();
 }
 
-/** グレー本 表 3.3.2 の面材の規格を、今の壁の入力欄へ読み込む。 */
-function loadGrade(id) {
-  const wall = currentWall();
+/** グレー本 表 3.3.2 の面材の規格を、その面材の入力欄へ読み込む。 */
+function loadGrade(index, id) {
+  const panel = captureCurrentWall(index);
   const grade = grades.find((entry) => entry.id === id);
-  if (!wall || !grade) return;
-  captureCurrentWall();
-  Object.assign(wall, wallFieldsFromGrade(grade));
-  renderCurrent();
+  if (!panel) return;
+  if (grade) Object.assign(panel, panelFieldsFromGrade(grade));
+  redrawPanels();
+}
+
+/** 面材の入力欄を描き直して、計算し直す（面材を書き換えたあとの後始末）。 */
+function redrawPanels() {
+  const wall = currentWall();
+  if (!wall) return;
+  renderWallPanels(document, wall.panels, panelOptions);
+  showPanelNotes();
   scheduleCalculate();
 }
 
@@ -292,6 +320,16 @@ function watchInputs() {
       // 読み込んだあとは、続けて同じものを選び直せるように戻しておく
       //（入力欄を手で直したあと、もう一度読み込みたいことがある）。
       target.value = '';
+      return;
+    }
+    // 面材と釘・面材の規格の一覧は面材ごとにあるので、どの面材のものかを
+    // 入れ物（data-panel-index）から取る。
+    const field = target.getAttribute ? target.getAttribute('data-panel-field') : null;
+    const owner = target.closest ? target.closest('[data-panel-index]') : null;
+    if (owner && (field === 'materialId' || field === 'gradeId')) {
+      const index = Number(owner.getAttribute('data-panel-index'));
+      if (field === 'materialId') loadMaterial(index, target.value);
+      else loadGrade(index, target.value);
       return;
     }
     scheduleCalculate();
@@ -537,12 +575,6 @@ async function start() {
   document
     .getElementById('wallNextBtn')
     .addEventListener('click', () => goToWall(currentWallIndex + 1));
-  document.getElementById('materialSelect').addEventListener('change', (event) => {
-    loadMaterial(event.target.value);
-  });
-  document.getElementById('gradeSelect').addEventListener('change', (event) => {
-    loadGrade(event.target.value);
-  });
   watchInputs();
 
   // ページを閉じる・再読み込みするときも、未保存の入力があれば引き止める。
@@ -565,11 +597,15 @@ async function start() {
 
   // 呼び出せる釘配列（グレー本 表 3.2.1）・割り付けの型・面材と釘の組合せ
   //（同 表 3.3.1）・面材の規格（同 表 3.3.2）は、どれも計算実装が持っている。
-  panelOptions = { presets: core.presets(), arrangements: core.arrangements() };
+  // どれも面材 1 枚ぶんの入力欄が使う（面材と釘は面材ごとに選べる）。
   materials = core.materials();
-  renderMaterialOptions(document, materials);
   grades = core.grades();
-  renderGradeOptions(document, grades);
+  panelOptions = {
+    presets: core.presets(),
+    arrangements: core.arrangements(),
+    materials,
+    grades,
+  };
 
   data = emptyFormData();
   setSourceFile(null);

@@ -13,13 +13,11 @@ import {
   applyWall,
   readPanels,
   readWall,
-  renderGradeOptions,
-  renderMaterialOptions,
   renderPanelResults,
   renderWallBar,
   renderWallPanels,
   renderWallResult,
-  showNailNote,
+  showNailNotes,
   showPanelArea,
   syncNailModeVisibility,
 } from '../src/timber-panel-shear-calculator/form-dom.js';
@@ -37,28 +35,11 @@ const MARKUP = `
       <input type="text" id="wallName">
       <input type="number" id="wallHeight">
       <input type="number" id="wallWidth">
-      <select id="materialSelect">
-        <option value="">選択すると…</option>
-        <option value="plywood12-n65">構造用合板 12mm + 鉄丸釘 N-65</option>
-      </select>
-      <p id="materialNote"></p>
-      <input type="number" id="wallThickness">
-      <input type="number" id="wallShearModulus">
-      <input type="number" id="wallK">
-      <input type="number" id="wallDeltaV">
-      <input type="number" id="wallDeltaU">
-      <input type="number" id="wallDeltaPv">
-      <select id="gradeSelect">
-        <option value="">選択すると…</option>
-        <option value="plywood-jas1">構造用合板 JAS 1 級</option>
-      </select>
-      <input type="number" id="wallTauMax">
-      <input type="number" id="wallE1">
-      <input type="number" id="wallE2">
       <input type="checkbox" id="wallHasStud" checked>
       <div id="wallPanels"></div>
       <div id="wallError" hidden></div>
       <div id="wallSummary"></div>
+      <table><thead id="wallSpecHead"></thead><tbody id="wallSpecBody"></tbody></table>
       <table><thead id="wallPanelHead"></thead><tbody id="wallPanelBody"></tbody></table>
       <table><tbody id="wallStepsBody"></tbody></table>
       <table><thead id="wallBucklingHead"></thead><tbody id="wallBucklingBody"></tbody></table>
@@ -108,11 +89,44 @@ const ARRANGEMENTS = [
   { id: 'hi', label: '日型', note: '川型に加えて、上下端の横架材にも釘を打つ' },
 ];
 
-const OPTIONS = { presets: PRESETS, arrangements: ARRANGEMENTS };
+// 面材と釘の組合せ（表 3.3.1）・面材の規格（表 3.3.2）も、面材 1 枚ごとの
+// 入力欄が使う一覧（1 枚の壁でも面材ごとに選べる）。
+const MATERIALS = [
+  { id: 'plywood12-n65', label: '構造用合板 12mm + 鉄丸釘 N-65' },
+  { id: 'mdf9-cn50', label: '構造用 MDF 9mm + 太め鉄丸釘(CN 釘)50' },
+];
+
+const GRADES = [
+  { id: 'plywood-jas1', label: '構造用合板 JAS 1 級' },
+  { id: 'mdf', label: '構造用 MDF JIS A 5905' },
+];
+
+const OPTIONS = {
+  presets: PRESETS,
+  arrangements: ARRANGEMENTS,
+  materials: MATERIALS,
+  grades: GRADES,
+};
+
+// 面材と釘の仕様は面材ごとの入力（グレー本 3.3(3) の計算例の組合せ）。
+const SPEC = {
+  materialId: 'plywood12-n65',
+  thickness: 12,
+  shearModulus: 0.4,
+  k: 0.483,
+  deltaV: 2.3,
+  deltaU: 17,
+  deltaPv: 1.13,
+  gradeId: 'plywood-jas1',
+  tauMax: 3.6,
+  e1: 3500,
+  e2: 5500,
+};
 
 const PANEL = {
   panelId: 'pn1',
   panelName: '下段',
+  ...SPEC,
   width: 910,
   height: 610,
   mode: 'layout',
@@ -131,17 +145,6 @@ const WALL = {
   wallName: 'グレー本 3.3 の計算例',
   height: 3000,
   width: 910,
-  materialId: 'plywood12-n65',
-  thickness: 12,
-  shearModulus: 0.4,
-  k: 0.483,
-  deltaV: 2.3,
-  deltaU: 17,
-  deltaPv: 1.13,
-  gradeId: 'plywood-jas1',
-  tauMax: 3.6,
-  e1: 3500,
-  e2: 5500,
   hasIntermediateStud: true,
   panels: [
     { ...PANEL },
@@ -198,6 +201,11 @@ const WALL_REPORT = {
     PANEL_REPORT,
     { ok: false, panelId: 'pn2', panelName: '上段', error: '釘座標が入力されていません。' },
   ],
+  specColumns: ['面材', 't [mm]', 'ΔPv [kN]'],
+  specs: [
+    { label: '下段', cells: ['12', '1.13'] },
+    { label: '上段', cells: ['9', '0.93'] },
+  ],
   panelColumns: ['面材', 'Aw [mm²]', 'μ'],
   panels: [
     { label: '下段', cells: ['1,656,200', '5.25012'] },
@@ -243,12 +251,16 @@ describe('applyWall / readWall', () => {
   });
 
   it('未入力の数値は空のまま読み戻す（0 と区別する）', () => {
-    applyWall(document, { ...WALL, k: '', deltaPv: '' }, OPTIONS);
+    applyWall(
+      document,
+      { ...WALL, panels: [{ ...PANEL, k: '', deltaPv: '' }] },
+      OPTIONS
+    );
 
-    const wall = readWall(document);
-    expect(wall.k).toBe('');
-    expect(wall.deltaPv).toBe('');
-    expect(wall.thickness).toBe(12);
+    const panel = readWall(document).panels[0];
+    expect(panel.k).toBe('');
+    expect(panel.deltaPv).toBe('');
+    expect(panel.thickness).toBe(12);
   });
 });
 
@@ -268,6 +280,13 @@ describe('renderWallPanels', () => {
     expect(value(panels[0], 'nailPitch')).toBe('150');
     expect(value(panels[0], 'edgeDistance')).toBe('10');
     expect(value(panels[1], 'grain')).toBe('width');
+  });
+
+  it('途中経過の表は、横スクロールする器に入れる（画面ごと広げない）', () => {
+    renderWallPanels(document, [PANEL], OPTIONS);
+
+    const steps = document.querySelector('[data-panel-steps]').closest('table');
+    expect(steps.parentElement.className).toBe('table-scroll');
   });
 
   it('割り付けの型は、計算実装が配る一覧から選ぶ', () => {
@@ -446,45 +465,40 @@ describe('renderPanelResults', () => {
   });
 });
 
-describe('renderGradeOptions / renderMaterialOptions', () => {
-  it('グレー本 表 3.3.2 の規格を選べるようにする', () => {
-    renderGradeOptions(document, [
-      { id: 'plywood-jas1', label: '構造用合板 JAS 1 級' },
-      { id: 'mdf', label: '構造用 MDF JIS A 5905' },
-    ]);
+describe('面材ごとの面材と釘（表 3.3.1 / 表 3.3.2）', () => {
+  it('面材 1 枚ごとに、組合せと規格の一覧を出す', () => {
+    renderWallPanels(document, [PANEL, { ...PANEL, panelId: 'pn2', materialId: '' }], OPTIONS);
 
-    const select = document.getElementById('gradeSelect');
-    expect(select.options).toHaveLength(3); // 先頭の案内 + 2 件
-    expect(select.options[1].value).toBe('plywood-jas1');
+    const panels = document.querySelectorAll('[data-panel-index]');
+    const select = (node, name) => node.querySelector(`[data-panel-field="${name}"]`);
+    expect(select(panels[0], 'materialId').options).toHaveLength(3); // 案内 + 2 件
+    expect(select(panels[0], 'materialId').value).toBe('plywood12-n65');
+    expect(select(panels[0], 'gradeId').value).toBe('plywood-jas1');
+    // 面材ごとに違う組合せを選べる（選んでいない面材は先頭の案内のまま）。
+    expect(select(panels[1], 'materialId').value).toBe('');
+    expect(select(panels[1], 'gradeId').options[2].textContent).toBe(
+      '構造用 MDF JIS A 5905'
+    );
   });
 
-  it('グレー本 表 3.3.1 の組合せを選べるようにする', () => {
-    renderMaterialOptions(document, [
-      { id: 'plywood12-n50', label: '構造用合板 12mm + 鉄丸釘 N-50' },
-      { id: 'mdf9-cn50', label: '構造用 MDF 9mm + 太め鉄丸釘(CN 釘)50' },
-    ]);
+  it('一覧に無い組合せでも、読み込んだ跡は消さない', () => {
+    renderWallPanels(document, [{ ...PANEL, materialId: '新しい組合せ' }], OPTIONS);
 
-    const select = document.getElementById('materialSelect');
-    expect(select.options).toHaveLength(3); // 先頭の案内 + 2 件
-    expect(select.options[1].value).toBe('plywood12-n50');
-    expect(select.options[2].textContent).toBe('構造用 MDF 9mm + 太め鉄丸釘(CN 釘)50');
+    const select = document.querySelector('[data-panel-field="materialId"]');
+    expect(select.value).toBe('新しい組合せ');
   });
 
-  it('描き直しても選択肢が積み上がらない', () => {
-    const materials = [{ id: 'plywood12-n50', label: '構造用合板' }];
-    renderMaterialOptions(document, materials);
-    renderMaterialOptions(document, materials);
+  it('選んだ釘の呼び径を、へりあきの手がかりとして面材ごとに案内する', () => {
+    renderWallPanels(document, [PANEL, { ...PANEL, panelId: 'pn2', materialId: '' }], OPTIONS);
 
-    expect(document.getElementById('materialSelect').options).toHaveLength(2);
-  });
+    showNailNotes(document, (materialId) =>
+      materialId ? '選んだ釘は 鉄丸釘 N-65（呼び径 φ3.05 mm）です。' : ''
+    );
 
-  it('選んだ釘の呼び径を、へりあきの手がかりとして案内に出す', () => {
-    showNailNote(document, '選んだ釘は 鉄丸釘 N-65（呼び径 φ3.05 mm）です。');
-    expect(document.getElementById('materialNote').textContent).toContain('φ3.05 mm');
-
-    // まだ選んでいないときは、もとの案内へ戻す。
-    showNailNote(document, '');
-    expect(document.getElementById('materialNote').textContent).toContain('4.5 の試験');
+    const notes = [...document.querySelectorAll('[data-panel-note]')];
+    expect(notes[0].textContent).toContain('φ3.05 mm');
+    // まだ選んでいない面材には、もとの案内を出す。
+    expect(notes[1].textContent).toContain('4.5 の試験');
   });
 });
 
@@ -528,6 +542,15 @@ describe('renderWallResult', () => {
       'ΔPa [kN/m]',
     ]);
     expect(boxes[1].querySelector('.value').textContent).toBe('8.38761');
+
+    // 面材と釘は面材ごとの入力なので、どの面材がどの数値で計算されたのかを
+    // 壁の結果にも表で並べる。
+    expect(
+      [...document.querySelectorAll('#wallSpecHead th')].map((th) => th.textContent)
+    ).toEqual(WALL_REPORT.specColumns);
+    const specRows = document.querySelectorAll('#wallSpecBody tr');
+    expect(specRows).toHaveLength(2);
+    expect(specRows[1].children[1].textContent).toBe('9');
 
     // 面材ごとの表は、見出しと面材の数だけ行が並ぶ。
     const head = document.querySelectorAll('#wallPanelHead th');

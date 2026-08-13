@@ -20,6 +20,12 @@
 //! 壁が複数枚の面材で構成される場合、K0・My・Mu は面材ごとの値の和、塑性率
 //! μ は面材ごとの値の最小値とする（グレー本 3.3(3) の計算例の手順 4)〜8)）。
 //!
+//! 面材の種類・厚さと釘の仕様（GB・t・k・δv・δu・ΔPv・τmax・E1・E2）は
+//! **面材 1 枚ごとの入力**で、1 枚の壁の中で混在してよい（上半分は N50、
+//! 下半分は CN50 のような張り分け）。壁で共通なのは階高 H・壁の幅 W と
+//! 中間材（間柱等）の有無だけで、面材ごとの計算はそれぞれの仕様で行い、
+//! K0・My・Mu の和と μ の最小値として壁 1 枚にまとめる。
+//!
 //! あわせて、3.3【解説】の面材のせん断破壊・せん断座屈の検定（式 3.3.8〜
 //! 3.3.11）を面材 1 枚ごとに行う。
 //!
@@ -171,7 +177,11 @@ impl Grain {
     }
 }
 
-/// 壁を構成する面材 1 枚分の入力（寸法と釘配列諸定数）。
+/// 壁を構成する面材 1 枚分の入力（面材と釘の仕様・寸法・釘配列諸定数）。
+///
+/// 面材と釘の仕様を面材ごとに持つのは、1 枚の壁でも面材ごとに違う仕様を
+/// 使うことがあるため（上半分を N50、下半分を CN50 で留めるなど）。壁で
+/// 共通なのは階高・壁幅・中間材の有無だけ。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelSpec {
     /// 画面・計算書で面材を指し示す名前（釘配列パターン名）。
@@ -190,16 +200,23 @@ pub struct PanelSpec {
     pub b: f64,
     /// 繊維方向の見出し（「高さ方向」など。計算書に何を仮定したかを残す）。
     pub grain_label: &'static str,
+    /// この面材そのものの諸元（厚さ・GB・τmax・E1・E2）。
+    pub sheathing: Sheathing,
+    /// この面材を留める釘 1 本あたりの一面せん断（k・δv・δu・ΔPv）。
+    pub nail: NailShear,
 }
 
 impl PanelSpec {
-    /// 釘配列諸定数の計算結果（3.2 節）と面材寸法から、1 枚分の入力を作る。
+    /// 釘配列諸定数の計算結果（3.2 節）と面材寸法・仕様から、1 枚分の入力を作る。
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         label: &str,
         constants: &Constants,
         width: f64,
         height: f64,
         grain: Grain,
+        sheathing: Sheathing,
+        nail: NailShear,
     ) -> PanelSpec {
         let (a, b) = grain.dimensions(width, height);
         PanelSpec {
@@ -211,6 +228,8 @@ impl PanelSpec {
             a,
             b,
             grain_label: grain.label(width, height),
+            sheathing,
+            nail,
         }
     }
 }
@@ -276,8 +295,6 @@ pub struct Wall {
     pub height: f64,
     /// 壁の幅 W [mm]（許容せん断耐力を長さあたりに直すのに使う）。
     pub width: f64,
-    pub sheathing: Sheathing,
-    pub nail: NailShear,
     /// 中間材（間柱等）を設けるか。せん断座屈の ξ になる（式 3.3.11e の下）。
     pub has_intermediate_stud: bool,
     /// 壁を構成する面材（1 枚以上）。
@@ -487,32 +504,37 @@ fn positive(value: f64, label: &str) -> Result<(), WallError> {
 }
 
 /// 壁の入力を検証する。
+///
+/// 面材と釘の仕様は面材ごとなので、足りない数値はどの面材のものかが分かる
+/// ように面材の名前を添えて返す。
 pub fn validate_input(wall: &Wall) -> Result<(), WallError> {
     positive(wall.height, "階高 H")?;
     positive(wall.width, "壁の幅 W")?;
-    positive(wall.sheathing.thickness, "面材の厚さ t")?;
-    positive(wall.sheathing.shear_modulus, "面材のせん断弾性係数 GB")?;
-    positive(wall.sheathing.tau_max, "面材のせん断強度 τmax")?;
-    positive(wall.sheathing.e1, "繊維直交方向の曲げヤング係数 E1")?;
-    positive(wall.sheathing.e2, "繊維平行方向の曲げヤング係数 E2")?;
-    positive(wall.nail.k, "釘 1 本あたりのせん断剛性 k")?;
-    positive(wall.nail.delta_v, "釘の降伏点変位 δv")?;
-    positive(wall.nail.delta_u, "釘の終局変位 δu")?;
-    positive(wall.nail.delta_pv, "釘の降伏耐力 ΔPv")?;
-    if wall.nail.delta_u < wall.nail.delta_v {
-        return Err(WallError::new(
-            "釘の終局変位 δu は降伏点変位 δv 以上である必要があります。",
-        ));
-    }
     if wall.panels.is_empty() {
         return Err(WallError::new(
-            "壁を構成する面材がありません。釘配列パターンを 1 枚以上選んでください。",
+            "壁を構成する面材がありません。面材を 1 枚以上追加してください。",
         ));
     }
     for panel in &wall.panels {
-        positive(panel.area, &format!("「{}」の面材面積 Aw", panel.label))?;
-        positive(panel.a, &format!("「{}」の面材長さ a", panel.label))?;
-        positive(panel.b, &format!("「{}」の面材長さ b", panel.label))?;
+        let named = |label: &str| format!("「{}」の{label}", panel.label);
+        positive(panel.area, &named("面材面積 Aw"))?;
+        positive(panel.a, &named("面材長さ a"))?;
+        positive(panel.b, &named("面材長さ b"))?;
+        positive(panel.sheathing.thickness, &named("面材の厚さ t"))?;
+        positive(panel.sheathing.shear_modulus, &named("面材のせん断弾性係数 GB"))?;
+        positive(panel.sheathing.tau_max, &named("面材のせん断強度 τmax"))?;
+        positive(panel.sheathing.e1, &named("繊維直交方向の曲げヤング係数 E1"))?;
+        positive(panel.sheathing.e2, &named("繊維平行方向の曲げヤング係数 E2"))?;
+        positive(panel.nail.k, &named("釘 1 本あたりのせん断剛性 k"))?;
+        positive(panel.nail.delta_v, &named("釘の降伏点変位 δv"))?;
+        positive(panel.nail.delta_u, &named("釘の終局変位 δu"))?;
+        positive(panel.nail.delta_pv, &named("釘の降伏耐力 ΔPv"))?;
+        if panel.nail.delta_u < panel.nail.delta_v {
+            return Err(WallError(format!(
+                "「{}」の釘の終局変位 δu は降伏点変位 δv 以上である必要があります。",
+                panel.label
+            )));
+        }
     }
     Ok(())
 }
@@ -523,33 +545,34 @@ pub fn validate_input(wall: &Wall) -> Result<(), WallError> {
 pub fn compute(wall: &Wall) -> Result<WallResult, WallError> {
     validate_input(wall)?;
 
-    let shear_rigidity = wall.sheathing.shear_rigidity();
     let xi = buckling_factor(wall.has_intermediate_stud);
 
     // 4)〜8) 面材ごとに K0・My・Mu・μ を求め、あわせて面材のせん断破壊・
-    // せん断座屈の検定（式 3.3.8〜3.3.11）も行う。
+    // せん断座屈の検定（式 3.3.8〜3.3.11）も行う。面材と釘の仕様は面材ごとに
+    // 違ってよいので、GB・t や釘の数値もその面材のものを使う。
     let mut panels = Vec::with_capacity(wall.panels.len());
     for spec in &wall.panels {
-        let k0 = rotational_stiffness(spec.area, spec.ixy, wall.nail.k, shear_rigidity)?;
-        let my = yield_moment(spec.area, spec.zxy, wall.nail.delta_pv);
+        let shear_rigidity = spec.sheathing.shear_rigidity();
+        let k0 = rotational_stiffness(spec.area, spec.ixy, spec.nail.k, shear_rigidity)?;
+        let my = yield_moment(spec.area, spec.zxy, spec.nail.delta_pv);
         let tau_n = ultimate_shear_stress(
             spec.cxy,
             spec.zxy,
-            wall.nail.delta_pv,
-            wall.sheathing.thickness,
+            spec.nail.delta_pv,
+            spec.sheathing.thickness,
         )?;
         let beta =
-            buckling_aspect_ratio(spec.a, spec.b, wall.sheathing.e1, wall.sheathing.e2)?;
-        let tau_cr = critical_buckling_stress(wall.sheathing, spec.a, beta, xi)?;
+            buckling_aspect_ratio(spec.a, spec.b, spec.sheathing.e1, spec.sheathing.e2)?;
+        let tau_cr = critical_buckling_stress(spec.sheathing, spec.a, beta, xi)?;
         panels.push(PanelResult {
             k0,
             my,
             mu: ultimate_moment(spec.cxy, my),
-            ductility: ductility_factor(wall.nail, spec.ixy, shear_rigidity)?,
+            ductility: ductility_factor(spec.nail, spec.ixy, shear_rigidity)?,
             tau_n,
             beta,
             tau_cr,
-            shear_ok: tau_n < wall.sheathing.tau_max,
+            shear_ok: tau_n < spec.sheathing.tau_max,
             buckling_ok: tau_n < tau_cr,
             spec: spec.clone(),
         });
@@ -845,6 +868,12 @@ mod tests {
     /// 繊維方向は指定しない（長辺方向とみなす）。3 × 6 板を縦置きにした
     /// 下側の面材は b = 1820・a = 910、正方形の上側の面材は a = b = 910。
     fn example_panel(id: &str) -> PanelSpec {
+        example_panel_of(id, example_material())
+    }
+
+    /// 表 3.2.1 の配列と、表 3.3.1 の任意の組合せから面材 1 枚分の入力を作る
+    /// （面材と釘の仕様は面材ごとなので、1 枚の壁でも混ぜられる）。
+    fn example_panel_of(id: &str, material: &Material) -> PanelSpec {
         let preset = presets::find(id).expect("表 3.2.1 にある配列");
         let constants =
             nail_array::compute(&preset.nails(), preset.width * preset.height).unwrap();
@@ -854,6 +883,8 @@ mod tests {
             preset.width,
             preset.height,
             Grain::LongSide,
+            material.sheathing(),
+            material.nail,
         )
     }
 
@@ -861,8 +892,6 @@ mod tests {
         Wall {
             height: 3000.0,
             width: 910.0,
-            sheathing: example_material().sheathing(),
-            nail: example_material().nail,
             // 間柱 30 × 105 を @455 で入れている（図 3.3.10）。
             has_intermediate_stud: true,
             panels: vec![
@@ -1114,8 +1143,10 @@ mod tests {
     #[test]
     fn a_thin_panel_fails_both_checks() {
         let mut wall = example_wall();
-        wall.sheathing.thickness = 2.0;
-        wall.sheathing.tau_max = 1.0;
+        for panel in &mut wall.panels {
+            panel.sheathing.thickness = 2.0;
+            panel.sheathing.tau_max = 1.0;
+        }
         let result = compute(&wall).unwrap();
 
         assert!(!result.shear_ok);
@@ -1151,6 +1182,8 @@ mod tests {
                 preset.width,
                 preset.height,
                 grain,
+                example_material().sheathing(),
+                example_material().nail,
             )];
             compute(&wall_with(panels)).unwrap().panels[0].tau_cr
         };
@@ -1182,6 +1215,8 @@ mod tests {
             a: 910.0,
             b: 1820.0,
             grain_label: "高さ方向",
+            sheathing: example_material().sheathing(),
+            nail: example_material().nail,
         }]
     }
 
@@ -1190,13 +1225,13 @@ mod tests {
         let cases: [(&dyn Fn(&mut Wall), &str); 9] = [
             (&|wall: &mut Wall| wall.height = 0.0, "階高 H"),
             (&|wall: &mut Wall| wall.width = -1.0, "壁の幅 W"),
-            (&|wall: &mut Wall| wall.sheathing.thickness = 0.0, "面材の厚さ t"),
-            (&|wall: &mut Wall| wall.sheathing.shear_modulus = 0.0, "せん断弾性係数 GB"),
-            (&|wall: &mut Wall| wall.sheathing.tau_max = 0.0, "せん断強度 τmax"),
-            (&|wall: &mut Wall| wall.sheathing.e1 = 0.0, "曲げヤング係数 E1"),
-            (&|wall: &mut Wall| wall.sheathing.e2 = -1.0, "曲げヤング係数 E2"),
-            (&|wall: &mut Wall| wall.nail.k = 0.0, "せん断剛性 k"),
-            (&|wall: &mut Wall| wall.nail.delta_pv = 0.0, "降伏耐力 ΔPv"),
+            (&|wall: &mut Wall| wall.panels[0].sheathing.thickness = 0.0, "面材の厚さ t"),
+            (&|wall: &mut Wall| wall.panels[0].sheathing.shear_modulus = 0.0, "せん断弾性係数 GB"),
+            (&|wall: &mut Wall| wall.panels[0].sheathing.tau_max = 0.0, "せん断強度 τmax"),
+            (&|wall: &mut Wall| wall.panels[0].sheathing.e1 = 0.0, "曲げヤング係数 E1"),
+            (&|wall: &mut Wall| wall.panels[0].sheathing.e2 = -1.0, "曲げヤング係数 E2"),
+            (&|wall: &mut Wall| wall.panels[0].nail.k = 0.0, "せん断剛性 k"),
+            (&|wall: &mut Wall| wall.panels[0].nail.delta_pv = 0.0, "降伏耐力 ΔPv"),
         ];
         for (break_it, expected) in cases {
             let mut wall = wall_with(one_panel());
@@ -1209,7 +1244,7 @@ mod tests {
     #[test]
     fn rejects_an_ultimate_displacement_below_the_yield_one() {
         let mut wall = wall_with(one_panel());
-        wall.nail.delta_u = 1.0;
+        wall.panels[0].nail.delta_u = 1.0;
         assert!(compute(&wall).unwrap_err().0.contains("δu"));
     }
 
