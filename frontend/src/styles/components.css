@@ -274,25 +274,60 @@ select {
 }
 
 /* 必須の欄。記号ではなく短い札にして、目で拾えるようにする。
-   札は欄の右端にそろえる（ラベルのすぐ隣に置くと、ラベルの一部のように
-   見えてしまい、見出しの語が小さく読めてしまうため）。 */
-.wq-field.required > label {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
+ *
+ * 札は「欄の枠の中の、値と反対の側」に置く。ラベルの隣に置くとラベルの
+ * 一部に見え、ラベルの右端に置くと欄から離れてどの欄の話か分かりにくい。
+ * 枠の中なら、その欄のことだと一目で分かる。
+ *
+ *   左寄せの欄（文字・選択） … 札は右side。選択の矢印の内側に置く
+ *   右寄せの欄（数値）       … 札は左側（単位は右にあるので、どちらも
+ *                              入力した値と重ならない）
+ *
+ * 重なりは「札のぶんの余白を欄に空ける」ことで防ぐ。札そのものは触っても
+ * 下の欄に届く（pointer-events: none）。 */
+.wq-field.required .field-row {
+  position: relative;
 }
 
-.wq-field.required > label::after {
+.wq-field.required .field-row::after {
   content: '必須';
-  flex: none;
-  margin-left: auto;
+  position: absolute;
+  top: 50%;
+  right: var(--s-3);
+  transform: translateY(-50%);
+  pointer-events: none;
   padding: 1px var(--s-2);
   font-size: var(--fs-2xs);
   font-weight: 700;
+  line-height: 1.5;
   color: var(--ng-700);
   background: var(--ng-50);
   border: 1px solid var(--ng-100);
   border-radius: var(--r-pill);
+}
+
+.wq-field.required .field-row > input[type='text'],
+.wq-field.required .field-row > input[type='date'] {
+  padding-right: 4.5em;
+}
+
+/* 選択の欄は、右端の矢印の内側に置く。 */
+.wq-field.required .field-row:has(> select)::after {
+  right: var(--s-8);
+}
+
+.wq-field.required .field-row > select {
+  padding-right: 6em;
+}
+
+/* 数値の欄は右そろえなので、札は左側。 */
+.wq-field.required .field-row:has(> input[type='number'])::after {
+  right: auto;
+  left: var(--s-3);
+}
+
+.wq-field.required .field-row > input[type='number'] {
+  padding-left: 4.5em;
 }
 
 /* 前提を満たしていない欄（その選択肢を選んだときだけ入力できる欄など）。 */

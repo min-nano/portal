@@ -191,7 +191,8 @@
         入力する場所は、どのツールでも同じ形にします。ラベルは太字の小さめ、欄は白い升目、
         単位は欄の右に地続きで付けます（「どこまでが mm の欄か」が読めるように）。
         高さは <code>--tap</code>（44px）以上、文字は 16px で、スマートフォンで触れたときに
-        画面が勝手に拡大しません。
+        画面が勝手に拡大しません。必須の札は<strong>欄の枠の中</strong>の、値と反対の側に置きます
+        （その欄のことだと一目で分かり、入力した値とも重なりません）。
       </p>
 
       <div class="field-grid">
@@ -205,14 +206,17 @@
             <input type="number" id="demoNum" inputmode="numeric" value="2730">
             <span class="unit">mm</span>
           </div>
-          <p class="hint">必須の欄には札を付けます。</p>
+          <p class="hint">数値は右そろえなので、札は左側に付きます。</p>
         </div>
-        <div class="cert-field">
+        <div class="wq-field required">
           <label for="demoSelect">面材の種類</label>
-          <select id="demoSelect">
-            <option>構造用合板 24-10 t=9mm</option>
-            <option>石膏ボード t=12.5mm</option>
-          </select>
+          <div class="field-row">
+            <select id="demoSelect">
+              <option>構造用合板 24-10 t=9mm</option>
+              <option>石膏ボード t=12.5mm</option>
+            </select>
+          </div>
+          <p class="hint">左寄せの欄では、札は右側（矢印の内側）に付きます。</p>
         </div>
         <div class="cert-field disabled">
           <label for="demoDisabled">大臣認定番号</label>
