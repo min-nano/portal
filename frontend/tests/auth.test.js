@@ -4,7 +4,9 @@
 //
 // ここで固定したいのは、画面を開いてから使えるようになるまでの段取り。
 //
-//   1. サインインの確認が終わるまで読み込み中の表示を出し、終わったら消す
+//   1. 画面（#app）を出すのも、読み込み中の表示を消すのも、requireSignIn の
+//      仕事ではない。ツールはサインインのあとにも準備（フォーム定義と計算
+//      実装の取得）があり、そこまで済んでから出したいため
 //   2. サインイン画面（@clerk/ui。React ごと抱えていて重い）は、
 //      **未サインインだと分かってから**でなければ読み込まない
 //
@@ -94,21 +96,33 @@ afterEach(() => {
 });
 
 describe('requireSignIn（サインイン済み）', () => {
-  it('画面を出し、読み込み中の表示を消し、@clerk/ui は読み込まない', async () => {
+  it('@clerk/ui は読み込まず、画面を出すのは呼び出し側に任せる', async () => {
     const { requireSignIn } = await loadAuthModule();
     signedInUser = { primaryEmailAddress: { emailAddress: 'taro@example.com' } };
 
     const clerk = await requireSignIn();
 
     expect(clerk).not.toBeNull();
-    expect(document.getElementById('app').hidden).toBe(false);
     expect(document.getElementById('authGate').hidden).toBe(true);
-    // 待ちが終わったので、読み込み中の表示は残らない。
-    expect(document.getElementById('pageLoading')).toBeNull();
+    // ツールはこのあとにも準備がある。画面はまだ出さず、読み込み中も残す。
+    expect(document.getElementById('app').hidden).toBe(true);
+    expect(document.getElementById('pageLoading')).not.toBeNull();
     // サインイン画面は要らないので、1 バイトも読み込まない。
     expect(clerkUiLoaded).toBe(false);
     expect(mountedInto).toBeNull();
     expect(await isPending(loadOptions.ui.ClerkUI)).toBe(true);
+  });
+
+  it('準備ができたら showApp() で画面が出て、読み込み中が消える', async () => {
+    const { requireSignIn } = await loadAuthModule();
+    const { showApp } = await import('../src/components/loading.js');
+    signedInUser = { primaryEmailAddress: { emailAddress: 'taro@example.com' } };
+
+    await requireSignIn();
+    showApp();
+
+    expect(document.getElementById('app').hidden).toBe(false);
+    expect(document.getElementById('pageLoading')).toBeNull();
   });
 
   it('ヘッダーにアカウントを出す', async () => {
@@ -136,6 +150,7 @@ describe('requireSignIn（未サインイン）', () => {
     expect(clerk).toBeNull();
     expect(document.getElementById('app').hidden).toBe(true);
     expect(document.getElementById('authGate').hidden).toBe(false);
+    // サインイン画面を出すので、ページの読み込み中の表示はここで終わり。
     expect(document.getElementById('pageLoading')).toBeNull();
 
     expect(clerkUiLoaded).toBe(true);

@@ -32,4 +32,4 @@ import './section-controls.js';
 import './pdf-file-ui.js';
 
 export { PortalSection, revealSection, setSectionsOpen } from './collapsible-section.js';
-export { finishPageLoading } from './loading.js';
+export { finishPageLoading, setPageLoadingLabel, showApp } from './loading.js';

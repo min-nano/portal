@@ -2,7 +2,7 @@
 
 import './styles.css';
 import './components/index.js';
-import { finishPageLoading } from './components/loading.js';
+import { finishPageLoading, showApp } from './components/loading.js';
 import { requireSignIn } from './auth.js';
 import { redirectToCanonicalHost } from './canonical-host.js';
 
@@ -10,7 +10,12 @@ async function start() {
   // .web.app へのアクセスはカスタムドメインへ寄せる。リダイレクト中は
   // Clerk を初期化しない（別ドメインでセッションを持たせないため）。
   if (redirectToCanonicalHost()) return;
-  await requireSignIn();
+
+  const clerk = await requireSignIn();
+  if (!clerk) return; // サインイン画面を表示中。
+
+  // ツール一覧は HTML に書いてあるので、サインインが済めばそのまま使える。
+  showApp();
 }
 
 start().catch(function (error) {

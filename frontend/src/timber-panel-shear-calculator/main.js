@@ -27,10 +27,10 @@
 
 import '../styles.css';
 import '../components/index.js';
-import { finishPageLoading } from '../components/loading.js';
+import { setPageLoadingLabel, showApp } from '../components/loading.js';
 import { requireSignIn } from '../auth.js';
 import { redirectToCanonicalHost } from '../canonical-host.js';
-import { apiGet, apiGetBytes, apiPostFile, apiSendJson } from '../api.js';
+import { apiGet, apiGetBytes, apiPostFile, apiSendJson, warmUpApi } from '../api.js';
 import { pickFile, preloadPicker } from '../google-picker.js';
 import { askSaveAs, askUnsaved } from '../save-dialogs.js';
 import {
@@ -555,8 +555,15 @@ async function start() {
   // Clerk を初期化しない（別ドメインでセッションを持たせないため）。
   if (redirectToCanonicalHost()) return;
 
+  // サインインの確認とバックエンドの起動は同時に進める（api.js 参照）。
+  warmUpApi();
+
   const clerk = await requireSignIn();
   if (!clerk) return; // サインイン画面を表示中。
+
+  // ここからは、フォーム定義と計算実装（wasm）を待つ段。読み込み中の表示は
+  // 出したまま、待っているものだけ言い換える。
+  setPageLoadingLabel('計算の準備をしています…');
 
   // Picker の準備は、ボタンが押される前に始めておく（google-picker.js 参照）。
   preloadPicker();
@@ -592,6 +599,8 @@ async function start() {
     // URL に中身のハッシュが付いているので、版が変われば必ず取り直される。
     core = await loadCore(config.core.url, apiGetBytes);
   } catch (error) {
+    // 理由（#message）は画面の中にあるので、出せないときも画面は出す。
+    showApp();
     showMessage(error.message, 'red');
     return;
   }
@@ -614,10 +623,13 @@ async function start() {
   // 組み立て直後の状態を基準にする（これ以降の入力が「未保存の変更」）。
   markSaved();
   scheduleCalculate();
+
+  // 壁 1 枚ぶんの入力欄まで組み立て終わったので、ここで画面を出す。
+  showApp();
 }
 
 start().catch(function (error) {
-  // 待っても出てこないので、読み込み中の表示は消してから理由を出す。
-  finishPageLoading();
+  // 待っても出てこないので、画面を出して（#message はこの中にある）理由を出す。
+  showApp();
   showMessage(error.message, 'red');
 });

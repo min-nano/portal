@@ -7,7 +7,11 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import '../src/components/index.js';
-import { finishPageLoading } from '../src/components/loading.js';
+import {
+  finishPageLoading,
+  setPageLoadingLabel,
+  showApp,
+} from '../src/components/loading.js';
 
 beforeEach(() => {
   document.body.innerHTML = '';
@@ -62,7 +66,19 @@ describe('portal-loading', () => {
     expect(document.querySelector('portal-loading').textContent).toBe('読み込んでいます…');
   });
 
-  it('finishPageLoading で消える（画面かサインイン画面が出せた時点）', () => {
+  it('待っているものが変わったら、文言だけ差し替える', () => {
+    document.body.innerHTML =
+      '<portal-loading id="pageLoading" class="page-loading">サインインを確認しています…</portal-loading>';
+
+    setPageLoadingLabel('計算の準備をしています…');
+
+    const loading = document.getElementById('pageLoading');
+    expect(loading.textContent).toBe('計算の準備をしています…');
+    // 差し替えても表示は消えない（待ちは続いている）。
+    expect(loading.isConnected).toBe(true);
+  });
+
+  it('finishPageLoading で消える（サインイン画面を出すとき）', () => {
     document.body.innerHTML =
       '<portal-loading id="pageLoading" class="page-loading">…</portal-loading>';
 
@@ -71,6 +87,18 @@ describe('portal-loading', () => {
     expect(document.getElementById('pageLoading')).toBeNull();
     // 表示が無いページ（見本ページなど）で呼んでも何も起きない。
     expect(() => finishPageLoading()).not.toThrow();
+    expect(() => setPageLoadingLabel('…')).not.toThrow();
+  });
+
+  it('showApp で画面が出て、読み込み中が消える（入力できるようになった時点）', () => {
+    document.body.innerHTML =
+      '<portal-loading id="pageLoading" class="page-loading">…</portal-loading>' +
+      '<div id="app" class="container" hidden></div>';
+
+    showApp();
+
+    expect(document.getElementById('app').hidden).toBe(false);
+    expect(document.getElementById('pageLoading')).toBeNull();
   });
 });
 

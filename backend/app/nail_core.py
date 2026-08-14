@@ -15,6 +15,7 @@ JSON を受け取るだけの薄い口。**画面（ブラウザ）が動かす�
 呼び出しの手順（線形メモリの受け渡し）は core/src/abi.rs に書いてある。
 """
 
+import gzip
 import hashlib
 import json
 import threading
@@ -39,6 +40,10 @@ class _Core:
     def __init__(self, wasm_bytes: bytes):
         self.wasm_bytes = wasm_bytes
         self.sha256 = hashlib.sha256(wasm_bytes).hexdigest()
+        # 画面へ配るときは gzip で送る（wasm は 1/3 以下になる）。中身は
+        # 起動のあいだ変わらないので、ここで 1 度だけ圧縮して持っておく
+        # （リクエストごとに縮め直さない）。
+        self.wasm_gzip = gzip.compress(wasm_bytes, 9)
 
         engine = Engine()
         self._store = Store(engine)
@@ -129,6 +134,11 @@ def sha256() -> str:
 def wasm_bytes() -> bytes:
     """画面へ配る wasm そのもの。"""
     return core().wasm_bytes
+
+
+def wasm_gzip() -> bytes:
+    """画面へ配る wasm を gzip で縮めたもの（Content-Encoding: gzip で返す）。"""
+    return core().wasm_gzip
 
 
 def config() -> dict:

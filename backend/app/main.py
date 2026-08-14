@@ -115,6 +115,33 @@ def require_user(authorization: str | None = Header(default=None)) -> User:
     return clerk_auth.user_from_authorization_header(authorization)
 
 
+def _core_wasm_response(request: Request) -> Response:
+    """画面が編集中の計算に使う wasm を配る（面材張り大壁・必要壁量で共通）。
+
+    サーバ自身が計算に使っているものと**同じバイト列**をそのまま返すので、
+    「画面とサーバで実装が違う」状態が原理的に起こらない。URL には中身の
+    ハッシュが付く（/config が配る）ため、内容が変わらないうちはブラウザの
+    キャッシュから読ませ、変われば必ず取り直させる。
+
+    この 226 kB ほどの取得は、画面が入力できるようになるまでの待ちに直接
+    効くので、受け取れる相手には gzip（1/3 以下）で送る。縮めたものは
+    起動時に 1 度だけ作って持っている（nail_core.wasm_gzip）。
+    """
+    headers = {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "ETag": f'"{nail_core.sha256()}"',
+        # 同じ URL でも中身の符号化が 2 通りある（gzip / 生）ことを、
+        # 途中のキャッシュへ知らせる。
+        "Vary": "Accept-Encoding",
+    }
+    if "gzip" in request.headers.get("accept-encoding", ""):
+        headers["Content-Encoding"] = "gzip"
+        content = nail_core.wasm_gzip()
+    else:
+        content = nail_core.wasm_bytes()
+    return Response(content=content, media_type="application/wasm", headers=headers)
+
+
 @app.get("/api/healthz")
 async def healthz():
     return {"status": "ok"}
@@ -558,22 +585,9 @@ async def get_panel_shear_config(user: User = Depends(require_user)):
 
 
 @app.get(f"{_PANEL_PREFIX}/core.wasm")
-async def get_panel_shear_core(user: User = Depends(require_user)):
-    """画面が編集中の計算に使う wasm を配る。
-
-    サーバ自身が計算に使っているものと**同じバイト列**をそのまま返すので、
-    「画面とサーバで実装が違う」状態が原理的に起こらない。URL には中身の
-    ハッシュが付く（/config が配る）ため、内容が変わらないうちはブラウザの
-    キャッシュから読ませ、変われば必ず取り直させる。
-    """
-    return Response(
-        content=nail_core.wasm_bytes(),
-        media_type="application/wasm",
-        headers={
-            "Cache-Control": "public, max-age=31536000, immutable",
-            "ETag": f'"{nail_core.sha256()}"',
-        },
-    )
+async def get_panel_shear_core(request: Request, user: User = Depends(require_user)):
+    """画面が編集中の計算に使う wasm を配る（_core_wasm_response 参照）。"""
+    return _core_wasm_response(request)
 
 
 @app.post(f"{_PANEL_PREFIX}/reports")
@@ -677,16 +691,9 @@ async def get_wall_quantity_config(user: User = Depends(require_user)):
 
 
 @app.get(f"{_WALL_PREFIX}/core.wasm")
-async def get_wall_quantity_core(user: User = Depends(require_user)):
+async def get_wall_quantity_core(request: Request, user: User = Depends(require_user)):
     """画面が編集中の計算に使う wasm を配る（面材張り大壁と同じバイト列）。"""
-    return Response(
-        content=nail_core.wasm_bytes(),
-        media_type="application/wasm",
-        headers={
-            "Cache-Control": "public, max-age=31536000, immutable",
-            "ETag": f'"{nail_core.sha256()}"',
-        },
-    )
+    return _core_wasm_response(request)
 
 
 @app.post(f"{_WALL_PREFIX}/worksheets")

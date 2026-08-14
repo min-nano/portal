@@ -16,10 +16,10 @@
 
 import '../styles.css';
 import '../components/index.js';
-import { finishPageLoading } from '../components/loading.js';
+import { setPageLoadingLabel, showApp } from '../components/loading.js';
 import { requireSignIn } from '../auth.js';
 import { redirectToCanonicalHost } from '../canonical-host.js';
-import { apiGet, apiPostFile, apiSendJson } from '../api.js';
+import { apiGet, apiPostFile, apiSendJson, warmUpApi } from '../api.js';
 import { pickFile, preloadPicker } from '../google-picker.js';
 import { askSaveAs, askUnsaved } from '../save-dialogs.js';
 import {
@@ -415,8 +415,15 @@ async function start() {
   // Clerk を初期化しない（別ドメインでセッションを持たせないため）。
   if (redirectToCanonicalHost()) return;
 
+  // サインインの確認とバックエンドの起動は同時に進める（api.js 参照）。
+  warmUpApi();
+
   const clerk = await requireSignIn();
   if (!clerk) return; // サインイン画面を表示中。
+
+  // ここからは、雛形の設定とフォーム定義を待つ段。読み込み中の表示は
+  // 出したまま、待っているものだけ言い換える。
+  setPageLoadingLabel('ツールの準備をしています…');
 
   // Picker の準備（設定の取得と Google のスクリプトの読み込み）は、ボタンが
   // 押される前に始めておく（google-picker.js のコメント参照）。
@@ -445,6 +452,8 @@ async function start() {
     ]);
     config = loadedConfig;
   } catch (error) {
+    // 理由（#message）は画面の中にあるので、出せないときも画面は出す。
+    showApp();
     showMessage(error.message, 'red');
     return;
   }
@@ -455,10 +464,13 @@ async function start() {
   // 組み立て直後の状態を基準にする（これ以降の入力が「未保存の変更」）。
   markSaved();
   updateSubmitState();
+
+  // フォームを組み立て終わったので、ここで画面を出す。
+  showApp();
 }
 
 start().catch(function (error) {
-  // 待っても出てこないので、読み込み中の表示は消してから理由を出す。
-  finishPageLoading();
+  // 待っても出てこないので、画面を出して（#message はこの中にある）理由を出す。
+  showApp();
   showMessage(error.message, 'red');
 });

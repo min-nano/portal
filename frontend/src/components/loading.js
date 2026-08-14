@@ -1,10 +1,14 @@
-// 読み込み中の表示 <portal-loading>。
+// 読み込み中の表示 <portal-loading> と、画面を出すまでの見せ方。
 //
 //   <portal-loading id="pageLoading" class="page-loading">読み込んでいます…</portal-loading>
 //
-// 画面を開いてから使えるようになるまでには、サインインの確認（Clerk の
-// 読み込みとセッションの問い合わせ）で数秒かかることがある。そのあいだ何も
-// 出ないと「壊れている」ように見えるので、待っていることを必ず見せる。
+// 画面を開いてから使えるようになるまでには、
+//
+//   1. サインインの確認（Clerk の読み込みとセッションの問い合わせ）
+//   2. ツールの準備（フォーム定義の取得と、計算実装（wasm）の読み込み）
+//
+// の 2 段があり、合わせて数秒かかることがある。そのあいだ何も出ないと
+// 「壊れている」ように見えるので、待っていることを必ず見せる。
 //
 // この部品は **JS を待たずに出る**のが仕事なので、ほかの部品と約束事が違う。
 //
@@ -13,12 +17,18 @@
 //   - 文言は HTML に直接書く。読み込みの何を待っているかはページごとに違い、
 //     ここで作ると部品の登録待ちになるため。
 //
-// JS 側の仕事は「終わったら消す」ことだけ（auth.js と各ページの start）。
+// JS 側の仕事は 2 つ。段が変わったら文言を差し替えること
+// （setPageLoadingLabel）と、使える状態になったら画面を出すこと（showApp）。
+// 画面（#app）を出すのは**入力できるようになった時点**で、組み立て途中の
+// フォームは見せない。
 
 const TAG = 'portal-loading';
 
 /** ページの読み込み中の表示に使う id（各ページの HTML に置く）。 */
 export const PAGE_LOADING_ID = 'pageLoading';
+
+/** ページ本体の id（各ページの HTML に置く。準備ができるまで hidden）。 */
+export const APP_ID = 'app';
 
 export const DEFAULT_LABEL = '読み込んでいます…';
 
@@ -37,13 +47,40 @@ export class PortalLoading extends HTMLElement {
 }
 
 /**
+ * 待っているものが変わったので、文言を差し替える。
+ * 「サインインを確認しています…」→「ツールの準備をしています…」のように、
+ * **何を待っているか**を書く（role=status なので読み上げにも伝わる）。
+ *
+ * @param {string} label
+ * @param {Document} [doc]
+ */
+export function setPageLoadingLabel(label, doc = document) {
+  const loading = doc.getElementById(PAGE_LOADING_ID);
+  if (loading) loading.textContent = label;
+}
+
+/**
  * ページの読み込み中の表示を消す。
- * 画面（#app）かサインイン画面が出せるようになった時点で呼ぶ。
+ * サインイン画面を出すときや、待っても出てこないと分かったときに呼ぶ。
+ * 画面（#app）を出すときは showApp() を使う。
  *
  * @param {Document} [doc]
  */
 export function finishPageLoading(doc = document) {
   doc.getElementById(PAGE_LOADING_ID)?.remove();
+}
+
+/**
+ * 画面（#app）を出して、読み込み中の表示を消す。
+ * 入力できる状態になった時点――ツールならフォームを組み立て終えた時点――で
+ * 呼ぶ。失敗して先に進めないときも、理由（#message）を見せるために呼ぶ。
+ *
+ * @param {Document} [doc]
+ */
+export function showApp(doc = document) {
+  const app = doc.getElementById(APP_ID);
+  if (app) app.hidden = false;
+  finishPageLoading(doc);
 }
 
 if (!customElements.get(TAG)) customElements.define(TAG, PortalLoading);

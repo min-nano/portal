@@ -98,20 +98,22 @@ export async function getSessionToken() {
 
 /**
  * ページ共通のサインインゲート。
- * サインイン済みなら #app を表示してヘッダーにアカウントを表示し、Clerk の
- * インスタンスを返す。未サインインならサインイン画面をマウントして null を返す。
+ * サインイン済みならヘッダーにアカウントを表示し、Clerk のインスタンスを返す。
+ * 未サインインならサインイン画面をマウントして null を返す。
+ *
+ * 画面（#app）を出すのは呼び出し側の仕事（components/loading.js の showApp）。
+ * ツールはこのあとにも準備（フォーム定義と計算実装の取得）があり、そこまで
+ * 済んでから出したいため、読み込み中の表示もここでは消さない。
  */
 export async function requireSignIn() {
   const gate = document.getElementById('authGate');
-  const app = document.getElementById('app');
 
   const clerk = await initClerk();
 
-  // ここまでが、画面を開いてからいちばん長く待たされるところ。どちらに
-  // 転んでも見せるものが決まったので、読み込み中の表示は消す。
-  finishPageLoading();
-
   if (!clerk.user) {
+    // サインイン画面を出すので、ページの読み込み中の表示はここで終わり
+    // （ゲートの中には、サインイン画面が現れるまでの表示が別にある）。
+    finishPageLoading();
     gate.hidden = false;
     await mountSignInInto(clerk, gate.querySelector('.clerk-mount'));
     return null;
@@ -142,6 +144,5 @@ export async function requireSignIn() {
     if (!user && !signingOut) window.location.reload();
   });
 
-  app.hidden = false;
   return clerk;
 }

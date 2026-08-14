@@ -13,10 +13,10 @@
 
 import '../styles.css';
 import '../components/index.js';
-import { finishPageLoading } from '../components/loading.js';
+import { setPageLoadingLabel, showApp } from '../components/loading.js';
 import { requireSignIn } from '../auth.js';
 import { redirectToCanonicalHost } from '../canonical-host.js';
-import { apiGet, apiGetBytes, apiPostForBlob } from '../api.js';
+import { apiGet, apiGetBytes, apiPostForBlob, warmUpApi } from '../api.js';
 import { loadCore } from '../core.js';
 import {
   buildForm,
@@ -192,8 +192,15 @@ function renderWorksheetInfo() {
 async function start() {
   if (redirectToCanonicalHost()) return;
 
+  // サインインの確認とバックエンドの起動は同時に進める（api.js 参照）。
+  warmUpApi();
+
   const clerk = await requireSignIn();
   if (!clerk) return;
+
+  // ここからは、フォーム定義と計算実装（wasm）を待つ段。読み込み中の表示は
+  // 出したまま、待っているものだけ言い換える。
+  setPageLoadingLabel('計算の準備をしています…');
 
   try {
     config = await apiGet(`${TOOL_API}/config`);
@@ -201,6 +208,8 @@ async function start() {
     // URL には中身のハッシュが付いている（変わらないうちはキャッシュから）。
     core = await loadCore(config.core.url, apiGetBytes);
   } catch (error) {
+    // 理由（#message）は画面の中にあるので、出せないときも画面は出す。
+    showApp();
     showMessage(error.message, 'red');
     return;
   }
@@ -230,10 +239,13 @@ async function start() {
 
   renderBuilding(selector.value);
   document.getElementById('submitBtn').disabled = false;
+
+  // 建物の種別ぶんの入力欄まで組み立て終わったので、ここで画面を出す。
+  showApp();
 }
 
 start().catch(function (error) {
-  // 待っても出てこないので、読み込み中の表示は消してから理由を出す。
-  finishPageLoading();
+  // 待っても出てこないので、画面を出して（#message はこの中にある）理由を出す。
+  showApp();
   showMessage(error.message, 'red');
 });
