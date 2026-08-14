@@ -163,6 +163,9 @@ jobs:
         # ビルドが通ること自体をスモークテストとして確認する。キーはダミーでよい。
         env:
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_dummy
+          # 本番では配らない見本ページ（/design/）も、ここでは含めて組み立てる
+          # （本番に出ないページでもビルドが壊れていないことを確かめるため）。
+          PORTAL_DESIGN_PAGE: '1'
         run: |
           cd frontend
           npm run build
