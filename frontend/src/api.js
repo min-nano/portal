@@ -28,6 +28,23 @@ async function raiseForError(resp) {
   throw new Error(message);
 }
 
+/**
+ * バックエンド（Cloud Run）を起こしておく。
+ *
+ * ツールの準備は「サインインの確認 → /config → 計算実装（wasm）」という
+ * 直列の並びで、最初の /config が**インスタンスの起動待ち**を丸ごと被る
+ * （常時起動のインスタンスは置いていない）。そこで、サインインの確認を
+ * 始めるのと同時に、認証の要らない /api/healthz を投げておく。Clerk と
+ * やり取りしているあいだに起動が済むので、その分が待ち時間から消える。
+ *
+ * 失敗しても構わない（起きていないなら、続く /config が普通に起こす）。
+ * 呼び出し側は待たない。
+ */
+export function warmUpApi() {
+  // no-store: 起こすのが目的なので、キャッシュで済まされては意味がない。
+  fetch('/api/healthz', { cache: 'no-store' }).catch(() => {});
+}
+
 export async function apiGet(path) {
   const resp = await authorizedFetch(path);
   await raiseForError(resp);

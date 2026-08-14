@@ -106,6 +106,32 @@ def test_core_wasm_requires_auth(anon_client):
     assert anon_client.get(CORE_URL).status_code == 401
 
 
+def test_core_wasm_is_sent_gzipped_to_clients_that_accept_it(client):
+    """画面が入力できるようになるまでの待ちに直接効くので、縮めて送る。
+
+    この取得は「サインインの確認 → /config → wasm」という直列の並びの
+    最後にあり、そのまま送ると 200 kB 超になる。
+    """
+    resp = client.get(CORE_URL, headers={"Accept-Encoding": "gzip"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-encoding"] == "gzip"
+    # 同じ URL で符号化が 2 通りあることを、途中のキャッシュへ知らせる。
+    assert resp.headers["vary"] == "Accept-Encoding"
+    # 実際に縮んでいる（wasm は 1/3 以下になる）。
+    assert int(resp.headers["content-length"]) < len(nail_core.wasm_bytes()) / 2
+    # 受け取った側が展開すれば、サーバが計算に使うバイト列そのもの。
+    assert resp.content == nail_core.wasm_bytes()
+
+
+def test_core_wasm_is_sent_as_is_when_gzip_is_not_accepted(client):
+    resp = client.get(CORE_URL, headers={"Accept-Encoding": "identity"})
+
+    assert resp.status_code == 200
+    assert "content-encoding" not in resp.headers
+    assert resp.content == nail_core.wasm_bytes()
+
+
 # --- 保存 --------------------------------------------------------------------
 
 

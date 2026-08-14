@@ -12,6 +12,11 @@ const TAG = 'portal-auth-gate';
 
 export const DEFAULT_NOTE = '社内の Google アカウントでサインインしてください。';
 
+// Clerk のサインイン画面は、未サインインだと分かってから読み込む
+// （auth.js の loadClerkUI）。描かれるまでのあいだ枠だけが空で残らないよう、
+// マウント先に読み込み中の表示を置いておく（auth.js が消す）。
+export const SIGN_IN_LOADING = 'サインイン画面を読み込んでいます…';
+
 export class PortalAuthGate extends HTMLElement {
   connectedCallback() {
     if (this.dataset.ready) return;
@@ -23,6 +28,10 @@ export class PortalAuthGate extends HTMLElement {
     note.textContent = this.getAttribute('note') || DEFAULT_NOTE;
     const mount = doc.createElement('div');
     mount.className = 'clerk-mount';
+    const loading = doc.createElement('portal-loading');
+    loading.className = 'page-loading';
+    loading.textContent = SIGN_IN_LOADING;
+    mount.appendChild(loading);
 
     this.append(note, mount);
   }

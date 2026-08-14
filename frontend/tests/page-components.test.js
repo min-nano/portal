@@ -7,6 +7,11 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import '../src/components/index.js';
+import {
+  finishPageLoading,
+  setPageLoadingLabel,
+  showApp,
+} from '../src/components/loading.js';
 
 beforeEach(() => {
   document.body.innerHTML = '';
@@ -42,6 +47,70 @@ describe('portal-header', () => {
   });
 });
 
+describe('portal-loading', () => {
+  it('HTML に書いた文言をそのまま使う（JS で作り直さない）', () => {
+    document.body.innerHTML =
+      '<portal-loading id="pageLoading" class="page-loading">サインインを確認しています…</portal-loading>';
+
+    const loading = document.getElementById('pageLoading');
+    expect(loading.textContent).toBe('サインインを確認しています…');
+    // 回る輪は CSS の擬似要素で描くので、中に印は作らない。
+    expect(loading.children).toHaveLength(0);
+    // 待ち終わりが読み上げに伝わるようにする。
+    expect(loading.getAttribute('role')).toBe('status');
+  });
+
+  it('文言を書かずに置いたときだけ既定の文言を入れる', () => {
+    document.body.innerHTML = '<portal-loading class="page-loading"></portal-loading>';
+
+    expect(document.querySelector('portal-loading').textContent).toBe('読み込んでいます…');
+  });
+
+  it('待っているものが変わったら、文言だけ差し替える', () => {
+    document.body.innerHTML =
+      '<portal-loading id="pageLoading" class="page-loading">サインインを確認しています…</portal-loading>';
+
+    setPageLoadingLabel('計算の準備をしています…');
+
+    const loading = document.getElementById('pageLoading');
+    expect(loading.textContent).toBe('計算の準備をしています…');
+    // 差し替えても表示は消えない（待ちは続いている）。
+    expect(loading.isConnected).toBe(true);
+  });
+
+  it('finishPageLoading で消える（サインイン画面を出すとき）', () => {
+    document.body.innerHTML =
+      '<portal-loading id="pageLoading" class="page-loading">…</portal-loading>';
+
+    finishPageLoading();
+
+    expect(document.getElementById('pageLoading')).toBeNull();
+    // 表示が無いページ（見本ページなど）で呼んでも何も起きない。
+    expect(() => finishPageLoading()).not.toThrow();
+    expect(() => setPageLoadingLabel('…')).not.toThrow();
+  });
+
+  it('done() でも消える（要素から直に終わらせる）', () => {
+    document.body.innerHTML =
+      '<portal-loading id="pageLoading" class="page-loading">…</portal-loading>';
+
+    document.getElementById('pageLoading').done();
+
+    expect(document.getElementById('pageLoading')).toBeNull();
+  });
+
+  it('showApp で画面が出て、読み込み中が消える（入力できるようになった時点）', () => {
+    document.body.innerHTML =
+      '<portal-loading id="pageLoading" class="page-loading">…</portal-loading>' +
+      '<div id="app" class="container" hidden></div>';
+
+    showApp();
+
+    expect(document.getElementById('app').hidden).toBe(false);
+    expect(document.getElementById('pageLoading')).toBeNull();
+  });
+});
+
 describe('portal-auth-gate', () => {
   it('案内文と Clerk のマウント先を出す', () => {
     document.body.innerHTML =
@@ -51,6 +120,15 @@ describe('portal-auth-gate', () => {
     expect(gate.hidden).toBe(true);
     expect(gate.querySelector('.note').textContent).toContain('Google アカウント');
     expect(gate.querySelector('.clerk-mount')).not.toBeNull();
+  });
+
+  it('サインイン画面が現れるまで、マウント先に読み込み中を出しておく', () => {
+    document.body.innerHTML =
+      '<portal-auth-gate id="authGate" class="auth-gate" hidden></portal-auth-gate>';
+
+    const loading = document.querySelector('.clerk-mount portal-loading');
+    expect(loading).not.toBeNull();
+    expect(loading.textContent).toContain('サインイン画面');
   });
 });
 

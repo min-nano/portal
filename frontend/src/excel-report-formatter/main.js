@@ -8,8 +8,7 @@
 
 import '../styles.css';
 import '../components/index.js';
-import { requireSignIn } from '../auth.js';
-import { redirectToCanonicalHost } from '../canonical-host.js';
+import { startPage } from '../page-start.js';
 import { apiGet, apiPostForBlob, apiSendJson } from '../api.js';
 import { pickFile, preloadPicker } from '../google-picker.js';
 import { collectWarnings, selectFocusTarget } from './form-logic.js';
@@ -361,14 +360,9 @@ function bindStickyHeadWorkarounds() {
   });
 }
 
-async function start() {
-  // .web.app へのアクセスはカスタムドメインへ寄せる。リダイレクト中は
-  // Clerk を初期化しない（別ドメインでセッションを持たせないため）。
-  if (redirectToCanonicalHost()) return;
-
-  const clerk = await requireSignIn();
-  if (!clerk) return; // サインイン画面を表示中。
-
+// このツールの準備。ここが終わった時点で「入力できる」とみなされ、
+// page-start.js が画面を出す（それまでは読み込み中の表示のまま）。
+async function prepare() {
   // Picker の準備（設定の取得と Google のスクリプトの読み込み）は、ボタンが
   // 押される前に始めておく（google-picker.js のコメント参照）。
   preloadPicker();
@@ -380,20 +374,13 @@ async function start() {
   bindStickyHeadWorkarounds();
 
   // フォーム定義と雛形設定を並行して取得してから、最初の 1 部屋を表示する。
-  try {
-    const [loadedConfig] = await Promise.all([
-      apiGet(`${TOOL_API}/config`),
-      refreshTemplateStatus(),
-    ]);
-    config = loadedConfig;
-  } catch (error) {
-    showMessage(error.message, 'red');
-    return;
-  }
+  const [loadedConfig] = await Promise.all([
+    apiGet(`${TOOL_API}/config`),
+    refreshTemplateStatus(),
+  ]);
+  config = loadedConfig;
   updateSubmitState();
   addRoom();
 }
 
-start().catch(function (error) {
-  showMessage(error.message, 'red');
-});
+startPage({ prepare, usesApi: true, preparing: 'ツールの準備をしています…' });

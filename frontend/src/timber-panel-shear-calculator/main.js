@@ -27,8 +27,7 @@
 
 import '../styles.css';
 import '../components/index.js';
-import { requireSignIn } from '../auth.js';
-import { redirectToCanonicalHost } from '../canonical-host.js';
+import { startPage } from '../page-start.js';
 import { apiGet, apiGetBytes, apiPostFile, apiSendJson } from '../api.js';
 import { pickFile, preloadPicker } from '../google-picker.js';
 import { askSaveAs, askUnsaved } from '../save-dialogs.js';
@@ -549,14 +548,9 @@ async function sendSaveRequest(saveSpec) {
 
 // --- 初期化 -----------------------------------------------------------------
 
-async function start() {
-  // .web.app へのアクセスはカスタムドメインへ寄せる。リダイレクト中は
-  // Clerk を初期化しない（別ドメインでセッションを持たせないため）。
-  if (redirectToCanonicalHost()) return;
-
-  const clerk = await requireSignIn();
-  if (!clerk) return; // サインイン画面を表示中。
-
+// このツールの準備。ここが終わった時点で「入力できる」とみなされ、
+// page-start.js が画面を出す（それまでは読み込み中の表示のまま）。
+async function prepare() {
   // Picker の準備は、ボタンが押される前に始めておく（google-picker.js 参照）。
   preloadPicker();
 
@@ -585,15 +579,10 @@ async function start() {
     event.returnValue = '';
   });
 
-  try {
-    config = await apiGet(`${TOOL_API}/config`);
-    // 計算実装（wasm）は、サーバが自分の計算に使っているものと同じバイト列。
-    // URL に中身のハッシュが付いているので、版が変われば必ず取り直される。
-    core = await loadCore(config.core.url, apiGetBytes);
-  } catch (error) {
-    showMessage(error.message, 'red');
-    return;
-  }
+  config = await apiGet(`${TOOL_API}/config`);
+  // 計算実装（wasm）は、サーバが自分の計算に使っているものと同じバイト列。
+  // URL に中身のハッシュが付いているので、版が変われば必ず取り直される。
+  core = await loadCore(config.core.url, apiGetBytes);
 
   // 呼び出せる釘配列（グレー本 表 3.2.1）・割り付けの型・面材と釘の組合せ
   //（同 表 3.3.1）・面材の規格（同 表 3.3.2）は、どれも計算実装が持っている。
@@ -615,6 +604,4 @@ async function start() {
   scheduleCalculate();
 }
 
-start().catch(function (error) {
-  showMessage(error.message, 'red');
-});
+startPage({ prepare, usesApi: true, preparing: '計算の準備をしています…' });
