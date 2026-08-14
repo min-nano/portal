@@ -24,11 +24,10 @@ describe('warmUpApi', () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', fetchMock);
 
-    const returned = warmUpApi();
+    // 呼び出し側は待たない（await しない）。投げっぱなしで、その場で戻る。
+    warmUpApi();
 
     expect(fetchMock).toHaveBeenCalledWith('/api/healthz', { cache: 'no-store' });
-    // 呼び出し側は待たない（入口の段取りを止めない）。
-    expect(returned).toBeUndefined();
   });
 
   it('失敗しても投げない（起こせなければ、続く /config が起こす）', async () => {
