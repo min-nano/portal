@@ -13,10 +13,8 @@
 
 import '../styles.css';
 import '../components/index.js';
-import { setPageLoadingLabel, showApp } from '../components/loading.js';
-import { requireSignIn } from '../auth.js';
-import { redirectToCanonicalHost } from '../canonical-host.js';
-import { apiGet, apiGetBytes, apiPostForBlob, warmUpApi } from '../api.js';
+import { startPage } from '../page-start.js';
+import { apiGet, apiGetBytes, apiPostForBlob } from '../api.js';
 import { loadCore } from '../core.js';
 import {
   buildForm,
@@ -189,30 +187,13 @@ function renderWorksheetInfo() {
   chip.title = `${info.name}（${info.publisher}）`;
 }
 
-async function start() {
-  if (redirectToCanonicalHost()) return;
-
-  // サインインの確認とバックエンドの起動は同時に進める（api.js 参照）。
-  warmUpApi();
-
-  const clerk = await requireSignIn();
-  if (!clerk) return;
-
-  // ここからは、フォーム定義と計算実装（wasm）を待つ段。読み込み中の表示は
-  // 出したまま、待っているものだけ言い換える。
-  setPageLoadingLabel('計算の準備をしています…');
-
-  try {
-    config = await apiGet(`${TOOL_API}/config`);
-    // 計算実装（wasm）。サーバーが自分の計算に使っているものと同じバイト列で、
-    // URL には中身のハッシュが付いている（変わらないうちはキャッシュから）。
-    core = await loadCore(config.core.url, apiGetBytes);
-  } catch (error) {
-    // 理由（#message）は画面の中にあるので、出せないときも画面は出す。
-    showApp();
-    showMessage(error.message, 'red');
-    return;
-  }
+// このツールの準備。ここが終わった時点で「入力できる」とみなされ、
+// page-start.js が画面を出す（それまでは読み込み中の表示のまま）。
+async function prepare() {
+  config = await apiGet(`${TOOL_API}/config`);
+  // 計算実装（wasm）。サーバーが自分の計算に使っているものと同じバイト列で、
+  // URL には中身のハッシュが付いている（変わらないうちはキャッシュから）。
+  core = await loadCore(config.core.url, apiGetBytes);
 
   renderWorksheetInfo();
 
@@ -239,13 +220,6 @@ async function start() {
 
   renderBuilding(selector.value);
   document.getElementById('submitBtn').disabled = false;
-
-  // 建物の種別ぶんの入力欄まで組み立て終わったので、ここで画面を出す。
-  showApp();
 }
 
-start().catch(function (error) {
-  // 待っても出てこないので、画面を出して（#message はこの中にある）理由を出す。
-  showApp();
-  showMessage(error.message, 'red');
-});
+startPage({ prepare, usesApi: true, preparing: '計算の準備をしています…' });

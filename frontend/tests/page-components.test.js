@@ -90,6 +90,15 @@ describe('portal-loading', () => {
     expect(() => setPageLoadingLabel('…')).not.toThrow();
   });
 
+  it('done() でも消える（要素から直に終わらせる）', () => {
+    document.body.innerHTML =
+      '<portal-loading id="pageLoading" class="page-loading">…</portal-loading>';
+
+    document.getElementById('pageLoading').done();
+
+    expect(document.getElementById('pageLoading')).toBeNull();
+  });
+
   it('showApp で画面が出て、読み込み中が消える（入力できるようになった時点）', () => {
     document.body.innerHTML =
       '<portal-loading id="pageLoading" class="page-loading">…</portal-loading>' +

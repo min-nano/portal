@@ -416,6 +416,12 @@
         （<code>#message</code>）が画面の中にあるからで、回り続けたまま終わる画面を
         作らないためでもあります。
       </p>
+      <p class="ds-note">
+        この段取り（ドメインを寄せる → バックエンドを起こす → サインインの確認 →
+        準備 → 画面を出す）は <code>src/page-start.js</code> に 1 つだけ置いてあります。
+        新しい画面を作るときは <code>startPage({ prepare, … })</code> を呼び、
+        <strong>そのページの準備だけ</strong>を書いてください。
+      </p>
       <table class="ds-token-table">
         <tr>
           <th><code>#pageLoading</code></th>

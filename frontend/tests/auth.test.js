@@ -172,6 +172,27 @@ describe('requireSignIn（未サインイン）', () => {
   });
 });
 
+describe('requireSignIn（サインイン画面を読み込めない）', () => {
+  it('待たせたままにせず、ゲートの中の読み込み中を片付けて投げる', async () => {
+    vi.resetModules();
+    document.body.innerHTML = '';
+    // @clerk/ui の取得そのものが失敗する状況（配信の不調・古いキャッシュ）。
+    vi.doMock('@clerk/ui/entry', () => {
+      throw new Error('サインイン画面を読み込めませんでした。');
+    });
+    await import('../src/components/index.js');
+    document.body.innerHTML = PAGE;
+    const { requireSignIn } = await import('../src/auth.js');
+
+    // 失敗はそのまま投げ返す（理由の出し方はページが決める）。
+    await expect(requireSignIn()).rejects.toThrow();
+
+    // 回り続ける輪を残さない（理由は呼び出し側＝page-start.js が出す）。
+    expect(document.querySelector('.clerk-mount portal-loading')).toBeNull();
+    vi.doUnmock('@clerk/ui/entry');
+  });
+});
+
 describe('requireSignIn（鍵が未設定）', () => {
   it('設定の不備を投げる（呼び出し側が画面に出す）', async () => {
     const { requireSignIn } = await loadAuthModule();

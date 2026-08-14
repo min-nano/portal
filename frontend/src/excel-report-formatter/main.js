@@ -8,10 +8,8 @@
 
 import '../styles.css';
 import '../components/index.js';
-import { setPageLoadingLabel, showApp } from '../components/loading.js';
-import { requireSignIn } from '../auth.js';
-import { redirectToCanonicalHost } from '../canonical-host.js';
-import { apiGet, apiPostForBlob, apiSendJson, warmUpApi } from '../api.js';
+import { startPage } from '../page-start.js';
+import { apiGet, apiPostForBlob, apiSendJson } from '../api.js';
 import { pickFile, preloadPicker } from '../google-picker.js';
 import { collectWarnings, selectFocusTarget } from './form-logic.js';
 
@@ -362,21 +360,9 @@ function bindStickyHeadWorkarounds() {
   });
 }
 
-async function start() {
-  // .web.app へのアクセスはカスタムドメインへ寄せる。リダイレクト中は
-  // Clerk を初期化しない（別ドメインでセッションを持たせないため）。
-  if (redirectToCanonicalHost()) return;
-
-  // サインインの確認とバックエンドの起動は同時に進める（api.js 参照）。
-  warmUpApi();
-
-  const clerk = await requireSignIn();
-  if (!clerk) return; // サインイン画面を表示中。
-
-  // ここからは、雛形の設定とフォーム定義を待つ段。読み込み中の表示は
-  // 出したまま、待っているものだけ言い換える。
-  setPageLoadingLabel('ツールの準備をしています…');
-
+// このツールの準備。ここが終わった時点で「入力できる」とみなされ、
+// page-start.js が画面を出す（それまでは読み込み中の表示のまま）。
+async function prepare() {
   // Picker の準備（設定の取得と Google のスクリプトの読み込み）は、ボタンが
   // 押される前に始めておく（google-picker.js のコメント参照）。
   preloadPicker();
@@ -388,27 +374,13 @@ async function start() {
   bindStickyHeadWorkarounds();
 
   // フォーム定義と雛形設定を並行して取得してから、最初の 1 部屋を表示する。
-  try {
-    const [loadedConfig] = await Promise.all([
-      apiGet(`${TOOL_API}/config`),
-      refreshTemplateStatus(),
-    ]);
-    config = loadedConfig;
-  } catch (error) {
-    // 理由（#message）は画面の中にあるので、出せないときも画面は出す。
-    showApp();
-    showMessage(error.message, 'red');
-    return;
-  }
+  const [loadedConfig] = await Promise.all([
+    apiGet(`${TOOL_API}/config`),
+    refreshTemplateStatus(),
+  ]);
+  config = loadedConfig;
   updateSubmitState();
   addRoom();
-
-  // 最初の 1 部屋まで組み立て終わったので、ここで画面を出す。
-  showApp();
 }
 
-start().catch(function (error) {
-  // 待っても出てこないので、画面を出して（#message はこの中にある）理由を出す。
-  showApp();
-  showMessage(error.message, 'red');
-});
+startPage({ prepare, usesApi: true, preparing: 'ツールの準備をしています…' });
