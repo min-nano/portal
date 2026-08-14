@@ -175,6 +175,7 @@ GAS 版の機能をそのまま移植しています。
 | `.choice-option` | 行ごと押せる選択肢（選んだものは下地と枠で残る） |
 | `.has-dock` + `.result-dock` | 1080px 以上で「入力（左）・結果（右・貼り付き）」の 2 列にする。DOM の並びは変えないので、読み上げ順とタブ順は入力 → 結果のまま |
 | `.verdict.ok` / `.verdict.ng` | 判定の升目。結果の帯と「結果へ飛ぶ」ボタンの色が、ここから決まる |
+| `portal-loading.page-loading` | 読み込み中の表示。JS を待たずに出て、`finishPageLoading()` で消える |
 
 色・余白・文字の値は `src/styles/tokens.css` の**役割の名前**（`--surface`・`--text-2`・`--ng-600` など）だけを使い、画面側の CSS には生の値を書きません。明暗テーマは `light-dark()` でこのファイルの中だけにまとまっていて、部品側の CSS は 1 行も分岐しません（端末の設定に従い、`<html data-theme="light|dark">` で固定もできます）。新しい色を足したくなったら、まず既にある役割で言い表せないかを考えてください。
 
@@ -189,6 +190,7 @@ GAS 版の機能をそのまま移植しています。
 | 要素 | 役割 |
 | --- | --- |
 | `<portal-header>` | ヘッダー（ポータル名・サインイン中のアカウント欄） |
+| `<portal-loading>` | **読み込み中の表示**（JS を待たずに出る） |
 | `<portal-auth-gate>` | サインインゲート（Clerk のサインイン画面のマウント先） |
 | `<portal-section>` | **折り畳めるセクション** |
 | `<portal-section-controls>` | セクションの一括開閉（すべて展開 / すべて折りたたむ） |
@@ -205,6 +207,17 @@ GAS 版の機能をそのまま移植しています。
 * 面材張り大壁ツールは**面材 1 枚ごと**、現況検査レポートは**部屋 1 つごと**にも折り畳める。閉じているあいだも、見出しの行には見分けが付く情報（面材名 / 部屋の階数・部屋名）を残す
 
 部品を足すときの約束事は `frontend/src/components/index.js` の冒頭に書いてあります（要点は「名前は `portal-` で始める」「中身は原則 light DOM に作り、ページ共通の CSS と既存の id 参照をそのまま使えるようにする」「shadow DOM はページ側の CSS から隔てたい部分だけに使い、外から整えたいところは `part` で出す」）。
+
+### 画面が出るまで（読み込み中の表示と、その短縮）
+
+画面を開いてから使えるようになるまでには、**サインインの確認**（Clerk の読み込みと、Clerk のフロントエンド API へのセッションの問い合わせ）で数秒かかることがあります。ここは 2 つに分けて手当てしてあります。
+
+**① 待っていることを必ず見せる。** 各ページの HTML に `<portal-loading id="pageLoading">` を置いてあります。**回る輪は CSS の擬似要素だけで描き、文言は HTML に直接書く**ので、スクリプトを 1 行も読み込む前――HTML と CSS が届いた時点――で出ます（部品の登録すら待ちません）。消すのは「見せるものが決まった時点」、つまり画面（`#app`）かサインイン画面のどちらを出すかが決まったところで、`auth.js` が `finishPageLoading()` を呼びます。失敗したときも必ず消して、代わりに理由を出します。キャッシュが効いて一瞬で終わるときにちらつかないよう、出るのは 0.2 秒（`--wait-visible`）だけ遅らせてあります。見本は `/design/` の「9. 待たせるとき」にあります。
+
+**② 待ち時間そのものを削る。** 次の 2 つで、最初に取りに行く JS が 18 ファイル 625 kB（gzip）から **4 ファイル 576 kB** に減り、Clerk への最初の問い合わせが 1 往復ぶん早くなります。
+
+* **サインイン画面（`@clerk/ui`）は、未サインインだと分かってから読み込む。** この一式は React ごと抱えていて重いのに、使うのは未サインインのときだけです。clerk-js は `ui.ClerkUI` に **Promise** を渡せて、それを待つのはサインイン画面などをマウントするときだけ、という作りになっているので、`load()` には「まだ果たしていない約束」を渡しておき、未サインインだと分かってから動的 `import()` で果たします（`frontend/src/auth.js`）。サインイン済み（＝ふだんの利用）では 1 バイトも読み込みません。読み込むあいだはサインインゲートの中に読み込み中の表示が出ます。
+* **Clerk のフロントエンド API へ preconnect する。** 接続先のホスト名は Publishable Key に入っている（`pk_test_` / `pk_live_` + base64）ので、ビルド時に取り出して各ページの `<head>` へ `<link rel="preconnect">` を書き出します（`frontend/src/clerk-frontend-api.js` と `vite.config.js` の `clerkPreconnectPlugin`）。名前解決・TCP・TLS の握手が JS の読み込みと並行して進みます。鍵が未設定・壊れているときは何も書き出しません（画面の動きは変わりません）。
 
 ## 📁 リポジトリ構成
 
@@ -227,11 +240,13 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   src/components/             # 画面共通の部品（Web Components）
     index.js                  # 部品の読み込み口と、部品を足すときの約束事
     page-header.js            # <portal-header>（ヘッダー・アカウント欄）
+    loading.js                # <portal-loading>（読み込み中。JS を待たずに出る）
     auth-gate.js              # <portal-auth-gate>（サインインゲート）
     collapsible-section.js    # <portal-section>（折り畳めるセクション）
     section-controls.js       # <portal-section-controls>（一括開閉）
     pdf-file-ui.js            # <portal-edit-bar> / <portal-save-bar> / <portal-save-dialogs>
-  src/auth.js                 # Clerk（サインインゲート・トークン取得）
+  src/auth.js                 # Clerk（サインインゲート・トークン取得。サインイン画面は必要になってから読む）
+  src/clerk-frontend-api.js   # Publishable Key から Clerk の接続先を取り出す（preconnect 用）
   src/api.js                  # Bearer 付き fetch ラッパー
   src/core.js                 # 計算実装（wasm）の読み込みと呼び出し（ツール共通）
   src/google-picker.js        # 公式 Google Picker（Drive のファイル選択）

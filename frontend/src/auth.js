@@ -7,16 +7,39 @@
 // 「アクセスしているユーザーとして実行」に相当する本人性の根拠になる。
 
 import { Clerk } from '@clerk/clerk-js';
-// clerk-js v6 から、サインイン画面などの UI コンポーネントは本体に含まれず
-// @clerk/ui として分離された。load() に渡さないと mountSignIn() が
-// 「Clerk was not loaded with Ui components」で失敗する。
-import { ClerkUI } from '@clerk/ui/entry';
 import { jaJP } from '@clerk/localizations';
+import { finishPageLoading } from './components/loading.js';
 
 let clerkInstance = null;
 // このタブでサインアウト操作中かどうか。下のセッション監視リスナーが
 // サインアウトの処理中に割り込んで reload するのを防ぐ。
 let signingOut = false;
+
+// clerk-js v6 から、サインイン画面などの UI コンポーネントは本体に含まれず
+// @clerk/ui として分離された。load() に渡さないと mountSignIn() が
+// 「Clerk was not loaded with Ui components」で失敗する。
+//
+// ただし @clerk/ui は React ごと抱えていて、ポータルの JS のおよそ 2/3 を
+// 占める。使うのは**未サインインのときだけ**なので、すでにサインイン済み
+// （＝ふだんの利用）では最初から読み込まない。
+//
+// clerk-js は ui.ClerkUI に Promise を渡せて、それを待つのはサインイン画面
+// などをマウントするときだけ、という作りになっている。そこで「まだ果たして
+// いない約束」を渡しておき、未サインインだと分かってから動的 import で
+// 果たす（loadClerkUI）。サインイン済みのまま終われば、この約束は果たされず
+// @clerk/ui は 1 バイトも読み込まれない。
+let fulfillClerkUI;
+const clerkUI = new Promise((resolve) => {
+  fulfillClerkUI = resolve;
+});
+
+/** @clerk/ui を読み込み、clerk-js に渡してある約束を果たす。 */
+async function loadClerkUI() {
+  const { ClerkUI } = await import('@clerk/ui/entry');
+  fulfillClerkUI(ClerkUI);
+  // clerk-js 側が ClerkUI を組み立て終える（＝マウントできる）まで待つ。
+  await clerkUI;
+}
 
 async function initClerk() {
   const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
@@ -26,8 +49,38 @@ async function initClerk() {
     );
   }
   clerkInstance = new Clerk(publishableKey);
-  await clerkInstance.load({ localization: jaJP, ui: { ClerkUI } });
+  await clerkInstance.load({ localization: jaJP, ui: { ClerkUI: clerkUI } });
   return clerkInstance;
+}
+
+/**
+ * サインイン画面をゲートの中にマウントする。
+ * 描き終わるまでのあいだは、ゲートに置いてある読み込み中の表示を残す
+ * （@clerk/ui の読み込みと、Clerk 自身の画面の組み立ての 2 段があるため）。
+ *
+ * @param {import('@clerk/clerk-js').Clerk} clerk
+ * @param {HTMLElement} mount .clerk-mount
+ */
+async function mountSignInInto(clerk, mount) {
+  const loading = mount.querySelector('portal-loading');
+  // Clerk が中身を差し込んだら消す（マウントの完了を知らせる口が無いため、
+  // マウント先に子が増えたことで判断する）。
+  const observer = new MutationObserver(() => {
+    if (!mount.querySelector(':scope > *:not(portal-loading)')) return;
+    observer.disconnect();
+    loading.remove();
+  });
+  if (loading) observer.observe(mount, { childList: true });
+
+  try {
+    await loadClerkUI();
+    clerk.mountSignIn(mount);
+  } catch (error) {
+    // 出てこないものを待たせない（理由は呼び出し側が画面に出す）。
+    observer.disconnect();
+    loading?.remove();
+    throw error;
+  }
 }
 
 /**
@@ -54,9 +107,13 @@ export async function requireSignIn() {
 
   const clerk = await initClerk();
 
+  // ここまでが、画面を開いてからいちばん長く待たされるところ。どちらに
+  // 転んでも見せるものが決まったので、読み込み中の表示は消す。
+  finishPageLoading();
+
   if (!clerk.user) {
     gate.hidden = false;
-    clerk.mountSignIn(gate.querySelector('.clerk-mount'));
+    await mountSignInInto(clerk, gate.querySelector('.clerk-mount'));
     return null;
   }
 

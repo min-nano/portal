@@ -971,6 +971,80 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   flex: none;
 }
 
+/* --- 読み込み中 ----------------------------------------------------------
+ * サインインの確認（Clerk の読み込みとセッションの問い合わせ）には数秒
+ * かかることがある。そのあいだ画面に何も出ないと「壊れている」ように
+ * 見えるので、待っていることを必ず見せる。
+ *
+ * この表示は **JS を待たずに出す**（部品の登録も待たない）。そのために、
+ *   - 回る輪は擬似要素だけで描く（HTML には印を置かない）
+ *   - 文言は HTML に直接置く（src/components/loading.js の約束事）
+ * の 2 つを守る。JS 側の仕事は「終わったら消す」だけ。
+ *
+ * 出るのは --wait-visible だけ遅らせる。キャッシュが効いていて一瞬で
+ * 終わる読み込みでは、輪が光って消えるちらつきを見せない。 */
+
+.page-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  padding: var(--s-12) var(--s-4);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  animation: portal-loading-in var(--dur) var(--ease) var(--wait-visible) both;
+}
+
+.page-loading::before {
+  content: '';
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--brand-600);
+  border-radius: 50%;
+  animation: portal-loading-spin var(--dur-spin) linear infinite;
+}
+
+/* サインインゲートの中（Clerk のサインイン画面が現れるまで）は、
+   カードの中に収める。 */
+.auth-gate .page-loading {
+  padding: var(--s-6) 0;
+}
+
+@keyframes portal-loading-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes portal-loading-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+/* 動きを減らす設定のときは回さない。ただし「止まっている」と読まれると
+   困るので、輪の濃さをゆっくり変えて動いていることは残す。 */
+@media (prefers-reduced-motion: reduce) {
+  .page-loading::before {
+    animation: portal-loading-pulse 1.6s var(--ease) infinite;
+  }
+
+  @keyframes portal-loading-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+}
+
 /* --- ツール一覧（ポータルトップ） ---------------------------------------- */
 
 .tool-list {

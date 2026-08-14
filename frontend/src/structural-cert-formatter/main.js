@@ -16,6 +16,7 @@
 
 import '../styles.css';
 import '../components/index.js';
+import { finishPageLoading } from '../components/loading.js';
 import { requireSignIn } from '../auth.js';
 import { redirectToCanonicalHost } from '../canonical-host.js';
 import { apiGet, apiPostFile, apiSendJson } from '../api.js';
@@ -457,5 +458,7 @@ async function start() {
 }
 
 start().catch(function (error) {
+  // 待っても出てこないので、読み込み中の表示は消してから理由を出す。
+  finishPageLoading();
   showMessage(error.message, 'red');
 });

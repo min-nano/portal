@@ -371,7 +371,67 @@
     </portal-section>
 
     <portal-section class="cert-section ds-section">
-      <h3 slot="title">9. 骨組み（広い画面と狭い画面）</h3>
+      <h3 slot="title">9. 待たせるとき（読み込み中）</h3>
+      <p class="hint">
+        画面を開いてから使えるようになるまでには、サインインの確認（Clerk の読み込みと
+        セッションの問い合わせ）で数秒かかることがあります。そのあいだ何も出ないと
+        「壊れている」ように見えるので、<strong>待たせるなら必ず見せる</strong>を決めごとにします。
+      </p>
+
+      <h4>JS を待たずに出す</h4>
+      <p class="hint">
+        いちばん長く待つのは JS そのものの読み込みなので、読み込み中の表示を JS で作ると
+        間に合いません。回る輪は CSS の擬似要素だけで描き（<code>.page-loading</code>）、
+        文言は HTML に直接書きます。こうすると、スクリプトを 1 行も読む前――HTML と CSS が
+        届いた時点――で出ます。
+      </p>
+      <div class="ds-loading-demo">
+        <portal-loading class="page-loading">サインインを確認しています…</portal-loading>
+      </div>
+      <p class="ds-note">
+        文言は「何を待っているか」を書きます（「読み込み中」だけだと、待っているのが
+        画面なのか計算なのか分かりません）。<code>role="status"</code> が付くので、
+        文言が変わったことは読み上げにも伝わります。
+      </p>
+
+      <h4>速く終わるときは見せない</h4>
+      <p class="hint">
+        キャッシュが効いていて一瞬で終わる読み込みでは、輪が光って消えるちらつきだけが
+        残ります。そこで、出るのを <code>--wait-visible</code>（0.2 秒）だけ遅らせます。
+        それより早く終われば、何も見えないまま画面が出ます。
+        <strong>動きを減らす設定</strong>（<code>prefers-reduced-motion</code>）のときは回さず、
+        濃さをゆっくり変えて「動いている」ことだけを残します。
+      </p>
+
+      <h4>消すのは JS の仕事</h4>
+      <p class="hint">
+        表示を消すのは「見せるものが決まった時点」――画面（<code>#app</code>）か
+        サインイン画面のどちらを出すかが決まったところ――です
+        （<code>finishPageLoading()</code>）。失敗したときも必ず消して、代わりに理由を出します。
+        回り続けたまま終わる画面を作らないでください。
+      </p>
+      <table class="ds-token-table">
+        <tr>
+          <th><code>#pageLoading</code></th>
+          <td>ページの読み込み中。各ページの HTML に置き、サインインの確認が終わったら消える</td>
+        </tr>
+        <tr>
+          <th>ゲートの中</th>
+          <td>
+            サインイン画面（<code>@clerk/ui</code>）は未サインインだと分かってから読み込むので、
+            マウント先にも同じ表示を置く。Clerk が描いたら消える
+          </td>
+        </tr>
+        <tr>
+          <th><code>--wait-visible</code></th>
+          <td>出すまでの間（0.2 秒）。これより早く終わる読み込みでは見せない</td>
+        </tr>
+        <tr><th><code>--dur-spin</code></th><td>回る輪の 1 周（0.9 秒）</td></tr>
+      </table>
+    </portal-section>
+
+    <portal-section class="cert-section ds-section">
+      <h3 slot="title">10. 骨組み（広い画面と狭い画面）</h3>
       <p class="hint">
         ページの最大幅は <code>--shell-max</code>（1280px）。1080px 以上では、入力（左）と
         結果（右）の 2 列になります。<code>.has-dock</code> を付けた要素の中で、
@@ -400,7 +460,7 @@
     </portal-section>
 
     <portal-section class="cert-section ds-section">
-      <h3 slot="title">10. 使い方（新しい画面を作るとき）</h3>
+      <h3 slot="title">11. 使い方（新しい画面を作るとき）</h3>
       <table class="ds-token-table">
         <tr><th><code>.container</code></th><td>ページ本体。この中に節を並べる</td></tr>
         <tr><th><code>.page-head</code></th><td>見出しの行（右端に設定のチップを置ける）</td></tr>
@@ -414,6 +474,7 @@
         <tr><th><code>.result-summary</code> / <code>.result-box</code></th><td>結果の要約（数値の枠）</td></tr>
         <tr><th><code>.steps-table</code> + <code>.table-scroll</code></th><td>途中経過・検定の表（狭い画面では表の中だけ横送り）</td></tr>
         <tr><th><code>.hint</code></th><td>補足の文</td></tr>
+        <tr><th><code>portal-loading.page-loading</code></th><td>読み込み中の表示（JS を待たずに出る。<code>finishPageLoading()</code> で消す）</td></tr>
       </table>
       <p class="ds-note">
         新しい色・新しい余白は足しません。足したくなったときは、まず既にある役割で

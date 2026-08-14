@@ -6,6 +6,7 @@
 // 読み込むだけでよい。
 //
 //   <portal-header>            ヘッダー（ポータル名・アカウント欄）
+//   <portal-loading>           読み込み中の表示（JS を待たずに出る）
 //   <portal-auth-gate>         サインインゲート
 //   <portal-section>           折り畳めるセクション
 //   <portal-section-controls>  セクションの一括開閉
@@ -24,9 +25,11 @@
 //     境界を越えられないため。
 
 import './page-header.js';
+import './loading.js';
 import './auth-gate.js';
 import './collapsible-section.js';
 import './section-controls.js';
 import './pdf-file-ui.js';
 
 export { PortalSection, revealSection, setSectionsOpen } from './collapsible-section.js';
+export { finishPageLoading } from './loading.js';
