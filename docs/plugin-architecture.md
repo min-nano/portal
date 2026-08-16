@@ -74,7 +74,7 @@ portal を開かなくてよい」状態になりません。したがって **3
 | **画面** | 色・余白・字送りの原器（`tokens.css`）、素の要素（`base.css`）、骨組み（`layout.css`）、部品（`components.css`）、Web Components（`<portal-header>` 〜 `<portal-save-dialogs>`）、サインイン、`api.js`、`core.js`、Google Picker、`page-start.js`、デザインシステムの見本ページ | そのツールのページ（HTML）、`main.js` / `form-dom.js` / `form-logic.js`、**そのツールにしか出てこない CSS**（計測値の表・釘配列図・配布物にそろえた出力欄など）、そのツール専用の部品 |
 | **API** | Clerk JWT の検証、代理アクセス（Drive / Docs）、共有設定（Firestore）、PDF ライター、xlsx エディタ、wasm の実行、PDF の保存先の解決、エラーの返し方、`/api/healthz`・`/api/me`・`/api/picker/**` | `/api/tools/<ツール名>/**` のルート、マッピング JSON、同梱する雛形・配布物、生成と解析 |
 | **計算** | JSON の読み書き、wasm の受け渡し口（線形メモリ）、有効桁と 3 桁区切りの整形 | 式そのもの（グレー本 3.2・3.3、配布物の数式など）、入力の解釈、結果の組み立て |
-| **配布** | Firebase Hosting・Cloud Run・Firestore ルール・CI/CD・PR プレビュー・ツール一覧・`tools.json` | ツール単体の CI（テスト）・タグ付け（リリース） |
+| **配布** | Firebase Hosting・Cloud Run・Firestore ルール・CI/CD・PR プレビュー・ツール一覧・`tools.json`・**配るものを作るビルド（画面のバンドル・`.wasm`・Cloud Run イメージ）** | ツール単体の CI（テスト）・タグ付け |
 
 > **デザインシステムは portal にしか無い。** ツール側で色や余白の生の値を書くことは
 > ありません。ツールの CSS が使ってよいのは `tokens.css` の変数（`var(--s-3)` など）
@@ -104,14 +104,19 @@ tool-wall-quantity-calculator/
       templates/
   core/
     Cargo.toml              # portal-core に依存する cdylib
+    rust-toolchain.toml     # toolchain の固定（どこでビルドしても同じバイト列にする）
     src/lib.rs              # 呼び出し口（op の割り振り）
     src/wall_quantity.rs    # 式そのもの
+    build.sh                # 手元とツール側 CI 用（成果物はここから出ていかない）
   tests/                    # web（vitest）・api（pytest）・core（cargo test）
   dev/                      # ローカルプレビュー用のシェル（§6）
   .github/workflows/
     tests.yml               # 3 層のテスト
-    release.yml             # タグを打つと wasm を作って検証し、リリースにする
 ```
+
+> **ツールのリポジトリはリリース成果物を持ちません。** 「リリース」はタグを
+> 打つことだけで、配るのはソースです。`.wasm` を作るのは portal の CI で、
+> ツール側の `core/build.sh` は手元と自分のテストのためにあります（§4.3）。
 
 **ツールのリポジトリだけで完結すること**（これが分割の目的そのものです）:
 
@@ -200,17 +205,30 @@ portal の `backend/app/main.py` は、登録されたツールを順に載せ�
 **同じバイト列**を受け取っています。分割後は **ツールごとに 1 つの `.wasm`** になります。
 
 ```
-tool-xxx/core/src/*.rs
-  └─ cargo build --target wasm32-unknown-unknown
-       └─ <id>.wasm
+tools.json が固定したタグのソース（tool-xxx/core/src/*.rs）
+  └─ portal の CI が cargo build --target wasm32-unknown-unknown
+       └─ backend/app/wasm/<id>.wasm
             ├─ サーバ（portal_sdk が wasmtime で動かす）
             └─ GET /api/tools/<id>/core.wasm → 画面
 ```
 
-**「画面とサーバが同じバイト列を動かす」という今の保証は変わりません。**
-むしろ強くなります。分割後は、その `.wasm` を **ツールのリポジトリの CI が作り、
-`tools.json` に SHA-256 を書いて固定する**ため、portal のバージョン上げ PR の差分に
-「計算の中身が変わった」ことがハッシュとして現れます。
+**`.wasm` はコミットしません。portal の CI が、そのつどソースからビルドします。**
+今の `core/build.sh` と同じ考え方で、置き場所と本数がツールごとに増えるだけです。
+
+* **ツールのリポジトリは `.wasm` を成果物として配りません。** 配るのは Rust の
+  ソースだけで、ビルドするのは portal です。ツール側の CI が `.wasm` を作るのは
+  自分のテストとローカルプレビューのためで、その成果物がどこかへ出ていくことは
+  ありません
+* ビルドが 1 か所なので、**本番・PR プレビュー・テストのすべてで同じ手順**を
+  通ります。「デプロイされている `.wasm` が、どのソースから出たものか分からない」が
+  起こりません
+* 再現性はツール側の `rust-toolchain.toml` が担保します（外部クレートに依存
+  しないという今の決めごとも、ツールの crate に引き継ぎます）。同じタグからは
+  何度ビルドしても同じバイト列になります
+
+**「画面とサーバが同じバイト列を動かす」という今の保証も変わりません。**
+サーバが読み込むファイルと `/core.wasm` が配るファイルは同一で、その 1 本を
+portal の CI が作るためです。
 
 * `portal-core`（portal 側）… `json.rs`・`abi.rs`・`format.rs`。式を持たない土台
 * ツール側 … 式そのもの・入力の解釈・結果の組み立て
@@ -234,7 +252,7 @@ portal のリポジトリの根に、載せるツールと版を並べた 1 枚�
       "id": "wall-quantity-calculator",
       "repo": "min-nano/tool-wall-quantity-calculator",
       "version": "1.4.0",
-      "wasm_sha256": "9a75fe29…"
+      "commit": "9a75fe29538d3800b3da57f6f6efb64cba5c720a"
     }
   ]
 }
@@ -245,13 +263,24 @@ portal のリポジトリの根に、載せるツールと版を並べた 1 枚�
 
 | 層 | 取り込み方 |
 | --- | --- |
-| 画面 | `npm` の git 依存 … `"@min-nano/tool-x": "github:min-nano/tool-x#v1.4.0"` |
-| API | `pip` の git 依存 … `portal-tool-x @ git+https://github.com/min-nano/tool-x@v1.4.0#subdirectory=api` |
-| 計算 | タグのリリース成果物 `<id>.wasm` を取得し、`wasm_sha256` と照合する |
+| 画面 | `npm` の git 依存 … `"@min-nano/tool-x": "github:min-nano/tool-x#<commit>"` |
+| API | `pip` の git 依存 … `portal-tool-x @ git+https://github.com/min-nano/tool-x@<commit>#subdirectory=api` |
+| 計算 | その commit を浅くクローンし、`core/` を **portal の CI が** `cargo build` する |
+
+**3 つとも「git からソースを取ってきて、portal がビルドする」で揃えてあります。**
+片方だけが出来合いの成果物を受け取る、という非対称を作らないためです
+（`.wasm` をツール側の成果物にすると、そこだけ「誰がいつ何から作ったか」が
+portal の CI の外に出てしまいます）。
 
 **なぜ git タグ直参照か。** npm レジストリや PyPI を用意せず、認証も要らず、
 タグを打った時点で版が確定します。バージョン上げ PR は `tools.json` の
 数行の差分になり、何が変わったのかがそのまま読めます。
+
+**`version` と `commit` の両方を持つ理由。** 実際に取ってくるのは `commit` です。
+git のタグは後から動かせるので、それだけを頼りにすると「同じ版のはずが中身が
+違う」が起こりえます。`version` は人が読むため（PR の差分で「1.3.2 → 1.4.0」と
+分かる）にあり、`commit` がその版の実体を固定します。CI は「そのタグがこの
+commit を指していること」を確かめてから進みます。
 
 ### 5.2 循環しないようにする
 
@@ -311,15 +340,16 @@ Firestore に実際に触る部分（雛形の取得・PDF の保存）は、今
 
 ```
 ① ツールのリポジトリ
-     PR → レビュー → main へマージ
-     タグ v1.4.0 を打つ
-       └─ release.yml が wasm を作り、SHA-256 を添えてリリースにする
+     PR → tests.yml（3 層のテスト）→ レビュー → main へマージ
+     タグ v1.4.0 を打つ（配るのはソース。成果物は作らない）
 
 ② portal のリポジトリ
-     tools.json の version と wasm_sha256 を書き換える PR
-       └─ preview.yml が PR ごとのプレビュー環境を作る
+     tools.json の version と commit を書き換える PR
+       └─ tests.yml    ツールのソースを取ってきて .wasm をビルドし、
+                       組み合わせでのビルドとテストを通す
+       └─ preview.yml  PR ごとのプレビュー環境を作る
             Hosting: pr-<番号> チャンネル
-            Cloud Run: portal-api-pr-<番号>
+            Cloud Run: portal-api-pr-<番号>（ビルドした .wasm 入り）
             Firestore: preview-channels/pr-<番号>
 
 ③ プレビュー URL で確認 → マージ → 本番へデプロイ
@@ -330,7 +360,12 @@ Firestore に実際に触る部分（雛形の取得・PDF の保存）は、今
 テストを 2 回走らせても、分かることは増えないため）。portal の CI が確かめるのは
 「その版の組み合わせでビルドが通り、画面が出て、API が応えるか」です。
 
-②の PR は手で作っても 3 行の差分ですが、ツール側の `release.yml` から自動で
+**ビルドだけは分担しません。** テストはそれぞれのリポジトリで、**配るものを作る
+のは portal の CI だけ**です。`.wasm` も画面のバンドルも Cloud Run のイメージも、
+すべて同じ 1 回のワークフローから出ます。「どのソースから出た成果物が動いて
+いるのか」を追うのに、portal の CI のログ 1 か所で足りるようにするためです。
+
+②の PR は手で作っても 2 行の差分ですが、ツール側でタグを打ったときに自動で
 起こすこともできます（portal への書き込み権限を持つトークンが要ります）。
 まずは手で起こし、回数が増えてから自動化するのがよいと考えています。
 
@@ -357,6 +392,11 @@ Firestore に実際に触る部分（雛形の取得・PDF の保存）は、今
   作業になります。→ 文言や振る舞いの共通部分は極力 `portal-ui` 側へ寄せます。
 * **リリースの手数が増える。** タグを打つ・版を上げる、が 1 往復増えます。
   → これは意図した往復でもあります（プレビューで確認する場が明示的にできる）。
+* **portal の CI が長くなる。** 載せたツールのぶんだけ `.wasm` をビルドするので、
+  今の 1 本が N 本になります。→ 取ってくるソースは commit で固定されているので、
+  `~/.cargo` と `target/` を commit をキーにキャッシュすれば、版が変わっていない
+  ツールは再ビルドされません。それでも「配るものは portal が作る」を崩す理由には
+  しません（ここを譲ると、動いている成果物の出どころが追えなくなるため）。
 
 **分割しない選択肢との比較。** 「1 リポジトリのままディレクトリを整理し、
 `CLAUDE.md` で読む範囲を導く」でも、読み込み量はある程度減らせます。分割が
