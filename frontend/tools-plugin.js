@@ -68,13 +68,54 @@ function toolFile(tool, name) {
 const SLOTS = ['%TOOL_TITLE%', '%TOOL_PAGE%', '%TOOL_OVERLAY%'];
 
 /**
- * 外枠の目印が、ちょうど 1 つずつあることを確かめる。
+ * 外枠を読んで、配る形（ページそのもの）にして返す。
+ *
+ * tool-frame.html の先頭には、組み立てるしくみの覚え書きがコメントで
+ * 書いてある。これはページの一部ではないので、配るものには入れない。
+ *
+ * 落とし方は「コメントらしきものを消す」ではなく、**先頭から順に読み飛ばして
+ * <html> に行き当たるまで進む**。覚え書きの中に <html> や目印（%TOOL_PAGE%
+ * など）が文字として出てきても、境目を取り違えないようにするため
+ * （実際、この外枠の覚え書きにはどちらも出てくる）。
+ *
+ * DOCTYPE は外枠から拾わずここで付け直す。覚え書きと DOCTYPE のどちらが先に
+ * 書いてあっても同じ結果になる。
+ */
+function readFrame(root) {
+  let rest = readFileSync(resolve(root, 'tool-frame.html'), 'utf8').trimStart();
+
+  // <html> より前にあってよいのは、覚え書き（コメント）と DOCTYPE だけ。
+  // 1 つずつ丸ごと読み飛ばすので、その中に何が書いてあっても影響しない。
+  for (;;) {
+    if (rest.startsWith('<!--')) {
+      const end = rest.indexOf('-->');
+      if (end < 0) throw new Error('tool-frame.html のコメントが閉じていません。');
+      rest = rest.slice(end + '-->'.length).trimStart();
+    } else if (rest.slice(0, '<!doctype'.length).toLowerCase() === '<!doctype') {
+      const end = rest.indexOf('>');
+      if (end < 0) throw new Error('tool-frame.html の DOCTYPE が閉じていません。');
+      rest = rest.slice(end + 1).trimStart();
+    } else {
+      break;
+    }
+  }
+
+  if (!rest.startsWith('<html')) {
+    throw new Error('tool-frame.html に <html> がありません。');
+  }
+
+  const frame = `<!DOCTYPE html>\n${rest}`;
+  checkSlots(frame);
+  return frame;
+}
+
+/**
+ * 目印が、ちょうど 1 つずつあることを確かめる。
  *
  * 0 個なら差し込む場所が無く、2 個以上なら「どちらに入るか」が書いた順で
- * 決まってしまう（外枠の説明文に目印を書き写すと、そちらが先に置き換わって
- * 壊れたページが黙って出来上がる）。組み立てる前にここで落とす。
+ * 決まってしまい、壊れたページが黙って出来上がる。組み立てる前に落とす。
  */
-function checkFrame(frame) {
+function checkSlots(frame) {
   for (const slot of SLOTS) {
     const count = frame.split(slot).length - 1;
     if (count !== 1) {
@@ -99,13 +140,9 @@ function stageTool(tool, { root, frame }) {
     ? readFileSync(toolFile(tool, tool.overlay), 'utf8').trimEnd()
     : '';
 
-  // 外枠の先頭にある説明（<html> より前のコメント）は、組み立てるしくみの
-  // 覚え書きであってページの一部ではないので、配るものからは落とす。
-  //
   // 置き換えは関数で渡す。文字列で渡すと $& や $' が特別扱いされ、そういう
   // 文字を含むページが黙って壊れるため。
   const html = frame
-    .replace(/<!--[\s\S]*?-->\s*(?=<html\b)/, '')
     .replace('%TOOL_TITLE%', () => escapeHtml(tool.title ?? tool.name))
     .replace('%TOOL_PAGE%', () => indent(page, 4))
     .replace('%TOOL_OVERLAY%', () => indent(overlay, 2));
@@ -187,9 +224,7 @@ export function stageTools(tools, root) {
   // ときに、古いページが残って配られ続けることがないようにする。
   rmSync(resolve(root, STAGE_DIR), { recursive: true, force: true });
 
-  const frame = readFileSync(resolve(root, 'tool-frame.html'), 'utf8');
-  checkFrame(frame);
-
+  const frame = readFrame(root);
   const inputs = {};
   for (const tool of tools) {
     inputs[tool.id] = stageTool(tool, { root, frame });

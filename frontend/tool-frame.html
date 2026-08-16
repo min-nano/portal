@@ -8,15 +8,18 @@
   （tools-plugin.js）。ツールが書くのは <div id="app"> の中身（page.html）と、
   必要なら保存ダイアログのような重ね物（overlay.html）だけ。
 
-  差し込む場所は、下の 3 つの目印（tools-plugin.js が組み立てる前に置き換える
-  ので、Vite の %VITE_XXX% 置換とはぶつからない）。目印は 1 つずつしか置け
-  ない（このコメントに書き写すと 2 つになってしまうため、名前だけ挙げる）:
+  差し込む場所は下の 3 つ。tools-plugin.js が組み立てる前に置き換えるので、
+  Vite の %VITE_XXX% 置換とはぶつからない。ページの中には 1 つずつしか
+  置けない（2 つあると、どちらに入るかが書いた順で決まってしまう）:
 
-    TOOL_TITLE    ツールの名前（マニフェストの title）
-    TOOL_PAGE     ツールの page.html
-    TOOL_OVERLAY  ツールの overlay.html（無ければ空）
+    %TOOL_TITLE%    ツールの名前（マニフェストの title）
+    %TOOL_PAGE%     ツールの page.html
+    %TOOL_OVERLAY%  ツールの overlay.html（無ければ空）
 
   入口は組み立て先に置かれる entry.js（マニフェストの entry を読み込むだけ）。
+
+  この覚え書きは配らない。組み立てるとき、下の <html> から先だけを取る。
+  だからここに目印を書き写しても、組み立てには影響しない。
 -->
 <html lang="ja">
 <head>

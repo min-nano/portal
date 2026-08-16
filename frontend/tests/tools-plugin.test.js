@@ -38,6 +38,23 @@ function staged(id, file) {
   return readFileSync(resolve(root, 'tools', id, file), 'utf8');
 }
 
+/**
+ * 外枠を書き換えた使い捨ての組み立て先で、1 つのことを確かめる。
+ *
+ * @param {(frame: string) => string} edit 本物の外枠をどう壊す（変える）か
+ * @param {(root: string) => void} check その外枠で何を確かめるか
+ */
+function withFrame(edit, check) {
+  const dir = mkdtempSync(resolve(tmpdir(), 'portal-tools-frame-'));
+  try {
+    const frame = readFileSync(resolve(FRONTEND, 'tool-frame.html'), 'utf8');
+    writeFileSync(resolve(dir, 'tool-frame.html'), edit(frame));
+    check(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 beforeAll(() => {
   root = mkdtempSync(resolve(tmpdir(), 'portal-tools-'));
   cpSync(resolve(FRONTEND, 'tool-frame.html'), resolve(root, 'tool-frame.html'));
@@ -148,19 +165,42 @@ describe('ページの組み立て', () => {
     }
   });
 
-  it('外枠の目印が 1 つでなければ、組み立てずに落とす', () => {
-    const broken = mkdtempSync(resolve(tmpdir(), 'portal-tools-broken-'));
-    try {
-      const frame = readFileSync(resolve(FRONTEND, 'tool-frame.html'), 'utf8');
-      // 説明文へ目印を書き写してしまった、という壊し方を再現する。
-      writeFileSync(
-        resolve(broken, 'tool-frame.html'),
-        frame.replace('<html lang="ja">', '<!-- %TOOL_PAGE% -->\n<html lang="ja">')
-      );
-      expect(() => stageTools(tools, broken)).toThrow(/%TOOL_PAGE%.*2 個/);
-    } finally {
-      rmSync(broken, { recursive: true, force: true });
-    }
+  it('ページの中の目印が 1 つでなければ、組み立てずに落とす', () => {
+    withFrame(
+      // 覚え書きの中にも <div id="app"> という字は出てくるので、実物のほう
+      // （class の付いた開始タグ）を狙う。
+      (frame) =>
+        frame.replace(
+          '<div id="app" class',
+          '%TOOL_PAGE%\n  <div id="app" class'
+        ),
+      (root) => expect(() => stageTools(tools, root)).toThrow(/%TOOL_PAGE%.*2 個/)
+    );
+  });
+
+  it('組み立てのしくみの覚え書きは、配るものに入らない', () => {
+    // 覚え書きは <html> より前にあり、そこに目印が書いてあっても
+    // 組み立てには影響しない（配るのは <html> から先だけなので）。
+    withFrame(
+      (frame) => `<!-- %TOOL_PAGE% %TOOL_TITLE% おぼえがき -->\n${frame}`,
+      (root) => {
+        stageTools(tools, root);
+        const html = readFileSync(
+          resolve(root, 'tools', tools[0].id, 'index.html'),
+          'utf8'
+        );
+        expect(html).not.toContain('おぼえがき');
+        expect(html).toMatch(/^<!DOCTYPE html>\n<html\b/);
+        expect(html).toContain(`<title>${tools[0].title ?? tools[0].name}</title>`);
+      }
+    );
+  });
+
+  it('外枠に <html> が無ければ、組み立てずに落とす', () => {
+    withFrame(
+      (frame) => frame.replaceAll('<html lang="ja">', '<body>'),
+      (root) => expect(() => stageTools(tools, root)).toThrow(/<html> がありません/)
+    );
   });
 });
 
