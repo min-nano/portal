@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildDiagram } from '../src/timber-panel-shear-calculator/diagram.js';
+import {
+  buildDiagram,
+  buildWallDiagram,
+} from '../src/timber-panel-shear-calculator/diagram.js';
 
 // 釘が面材からはみ出した配列（幅 610 に対して X が 890 まである）。
 // 入力の打ち間違いでも図が壊れないことを確かめるための、意図的な例。
@@ -79,5 +82,123 @@ describe('buildDiagram', () => {
 
   it('計算結果がまだ無ければ図も描かない', () => {
     expect(buildDiagram(NAILS, null)).toBeNull();
+  });
+});
+
+// 壁内の面材配列（計算実装が返す wallDiagram）。幅 910・階高 3000 の壁の
+// 表面に 910×1820 と 910×910 を積み、裏面にも 910×1820 を張った両面張り。
+const WALL_DIAGRAM = {
+  wallWidth: 910,
+  wallHeight: 3000,
+  minX: 0,
+  minY: 0,
+  maxX: 910,
+  maxY: 3000,
+  sides: [
+    {
+      id: 'front',
+      label: '表面',
+      count: 2,
+      area: 2484300,
+      panels: [
+        {
+          label: '下段', x: 0, y: 0, width: 910, height: 1820,
+          sizeLabel: '910 × 1,820 mm', note: '', ok: true,
+        },
+        {
+          label: '上段', x: 0, y: 1820, width: 910, height: 910,
+          sizeLabel: '910 × 910 mm', note: '', ok: true,
+        },
+      ],
+    },
+    {
+      id: 'back',
+      label: '裏面',
+      count: 1,
+      area: 1656200,
+      panels: [
+        {
+          label: '裏 下段', x: 0, y: 0, width: 910, height: 1820,
+          sizeLabel: '910 × 1,820 mm', note: '', ok: true,
+        },
+      ],
+    },
+  ],
+  unplaced: [],
+};
+
+describe('buildWallDiagram', () => {
+  it('配置が無ければ図も描かない', () => {
+    expect(buildWallDiagram(null)).toBeNull();
+    expect(buildWallDiagram({ ...WALL_DIAGRAM, sides: [] })).toBeNull();
+    expect(buildWallDiagram({ ...WALL_DIAGRAM, wallWidth: 0 })).toBeNull();
+  });
+
+  it('原点が壁の左下に見えるよう y を反転する', () => {
+    const diagram = buildWallDiagram(WALL_DIAGRAM);
+
+    const [lower, upper] = diagram.sides[0].panels;
+    // SVG の y は下向きなので、上の段ほど y が小さい。
+    expect(upper.y).toBeLessThan(lower.y);
+    // 下段の下端は壁の下端に接する。
+    expect(lower.y + lower.height).toBeCloseTo(
+      diagram.sides[0].frame.y + diagram.sides[0].frame.height
+    );
+  });
+
+  it('両面張りは、表と裏を同じ縮尺で横に並べる', () => {
+    const diagram = buildWallDiagram(WALL_DIAGRAM);
+
+    expect(diagram.sides.map((side) => side.label)).toEqual([
+      '表面（2 枚）',
+      '裏面（1 枚）',
+    ]);
+    // 裏面は表面の右側にあり、どちらも SVG の中に収まる。
+    expect(diagram.sides[1].frame.x).toBeGreaterThan(
+      diagram.sides[0].frame.x + diagram.sides[0].frame.width
+    );
+    expect(diagram.sides[1].frame.x + diagram.sides[1].frame.width)
+      .toBeLessThanOrEqual(diagram.svgWidth);
+    // 同じ寸法の面材が、面によって違う大きさに見えないこと。
+    expect(diagram.sides[1].panels[0].height)
+      .toBeCloseTo(diagram.sides[0].panels[0].height);
+  });
+
+  it('壁からはみ出す面材も切り取らずに収める', () => {
+    const diagram = buildWallDiagram({
+      ...WALL_DIAGRAM,
+      maxY: 3410,
+      sides: [
+        {
+          ...WALL_DIAGRAM.sides[0],
+          panels: [
+            {
+              ...WALL_DIAGRAM.sides[0].panels[1],
+              y: 2500, note: 'はみ出し', ok: false,
+            },
+          ],
+        },
+      ],
+    });
+
+    const [overhang] = diagram.sides[0].panels;
+    expect(overhang.ok).toBe(false);
+    expect(overhang.note).toBe('はみ出し');
+    // 壁枠の上端より外に描かれるが、SVG の中には収まっている。
+    expect(overhang.y).toBeLessThan(diagram.sides[0].frame.y);
+    expect(overhang.y).toBeGreaterThanOrEqual(0);
+  });
+
+  it('壁の寸法を、図に添える文字として返す', () => {
+    const diagram = buildWallDiagram(WALL_DIAGRAM);
+
+    expect(diagram.sides[0].widthLabel).toBe('W = 910 mm');
+    expect(diagram.sides[0].heightLabel).toBe('H = 3,000 mm');
+  });
+
+  it('図に描けない面材（位置が未指定）を持ち帰る', () => {
+    const diagram = buildWallDiagram({ ...WALL_DIAGRAM, unplaced: ['面材3'] });
+
+    expect(diagram.unplaced).toEqual(['面材3']);
   });
 });

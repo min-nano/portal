@@ -14,7 +14,7 @@
 //! {"op": "validate",   "data": {...}}  → {"ok": true,  "walls": [...]}
 //! {"op": "normalize",  "data": {...}}  → {"ok": true,  "data": {...}}
 //! {"op": "presets"}                    → {"ok": true,  "presets": [...]}
-//! {"op": "preset",     "data": {...}}  → {"ok": true,  "preset": {...}, "panel": {...}}
+//! {"op": "preset",     "data": {...}}  → {"ok": true,  "preset": {...}, "wall": {...}, "panel": {...}}
 //! {"op": "materials"}                  → {"ok": true,  "materials": [...]}
 //! {"op": "grades"}                     → {"ok": true,  "grades": [...]}
 //!
@@ -40,6 +40,7 @@ pub mod nail_array;
 pub mod presets;
 pub mod report;
 pub mod wall;
+pub mod wall_layout;
 pub mod wall_quantity;
 
 use json::Value;
@@ -87,17 +88,19 @@ fn dispatch(request: &str) -> Result<Value, String> {
             let form = report::normalize_data(data())?;
             Ok(Value::obj([("data", form.to_value())]))
         }
-        // グレー本 表 3.2.1 の標準的な配列。一覧には釘座標を載せず
-        // （106 通りある）、選ばれた 1 つだけを "preset" で組み立てる。
+        // グレー本 表 3.2.1 の標準的な組み合わせ（面材寸法・間柱ピッチ・
+        // 釘ピッチ）。配列の型は面材が壁のどこに来るかで決まるので、選択肢に
+        // 並べるのは型を除いた 33 通り。
         "presets" => Ok(Value::obj([(
             "presets",
             Value::Arr(
-                presets::all()
+                presets::catalogue()
                     .iter()
                     .map(presets::Preset::to_value)
                     .collect(),
             ),
         )])),
+        // 選ばれた 1 つを、壁と面材それぞれへ入る値に組み立てる。
         "preset" => {
             let id = data()
                 .get("id")
@@ -106,6 +109,7 @@ fn dispatch(request: &str) -> Result<Value, String> {
             let preset = presets::find(id).ok_or_else(|| format!("知らない釘配列です: {id}"))?;
             Ok(Value::obj([
                 ("preset", preset.to_value()),
+                ("wall", preset.to_wall_value()),
                 ("panel", preset.to_panel_value()),
             ]))
         }
@@ -165,8 +169,6 @@ fn dispatch(request: &str) -> Result<Value, String> {
                     .collect(),
             ),
         )])),
-        // 割り付けの型（川型・山型・ロ型・日型）。画面の選択肢になる。
-        "arrangements" => Ok(Value::obj([("arrangements", report::arrangements())])),
         // 小規模木造建築物の必要壁量（表計算ツールの数式）。入力が足りない
         // ところは配布物と同じく空欄で返るので、編集中もそのまま呼べる。
         "wallQuantity" => Ok(Value::obj([("result", wall_quantity::compute(data())?)])),
@@ -219,6 +221,7 @@ fn dispatch(request: &str) -> Result<Value, String> {
             ("maxWalls", report::MAX_WALLS.into()),
             ("maxWallPanels", report::MAX_WALL_PANELS.into()),
             ("defaultEdgeDistance", layout::DEFAULT_EDGE_DISTANCE.into()),
+            ("defaultStudPitch", report::DEFAULT_STUD_PITCH.into()),
             ("minEdgeDistance", wall::MIN_EDGE_DISTANCE.into()),
             ("allowableShearLimit", wall::ALLOWABLE_SHEAR_LIMIT.into()),
             ("significantDigits", format::SIGNIFICANT_DIGITS.into()),
@@ -240,16 +243,14 @@ mod tests {
     fn compute_all_returns_one_entry_per_wall() {
         let response = call_json(
             r#"{"op": "computeAll", "data": {"walls": [
-                   {"wallId": "w1", "height": 3000, "width": 910,
-                    "hasIntermediateStud": true,
-                    "panels": [{"width": 910, "height": 610, "mode": "grid",
-                                "gridX": "10, 455, 900",
-                                "gridY": "10, 155, 305, 455, 600",
+                   {"wallId": "w1", "height": 3000, "width": 910, "studPitch": 455,
+                    "panels": [{"left": 0, "bottom": 0, "right": 910, "top": 610,
+                                "nailPitch": 150,
                                 "thickness": 12, "shearModulus": 0.4, "k": 0.483,
                                 "deltaV": 2.3, "deltaU": 17, "deltaPv": 1.13,
                                 "tauMax": 3.6, "e1": 3500, "e2": 5500}]},
-                   {"wallId": "w2", "height": 3000, "width": 910,
-                    "hasIntermediateStud": true, "panels": []}
+                   {"wallId": "w2", "height": 3000, "width": 910, "studPitch": 455,
+                    "panels": []}
                  ]}}"#,
         );
 
@@ -344,31 +345,38 @@ mod tests {
         assert_eq!(data.get("walls").unwrap().as_array().unwrap().len(), 1);
     }
 
+    /// 一覧は、型を除いた 33 通り（配列の型は面材の位置で決まる）。
     #[test]
-    fn presets_list_the_arrangements_of_the_book_table() {
+    fn presets_list_the_standard_combinations_of_the_book_table() {
         let response = call_json(r#"{"op": "presets"}"#);
 
         let presets = response.get("presets").unwrap().as_array().unwrap();
-        assert_eq!(presets.len(), 106);
+        assert_eq!(presets.len(), 33);
         assert_eq!(
             presets[0].get("id").unwrap().as_str(),
-            Some("910x3030-s455-n150-kawa")
+            Some("910x3030-s455-n150-hi")
+        );
+        assert_eq!(
+            presets[0].get("label").unwrap().as_str(),
+            Some("3030×910 縦置（間柱・根太 @455 / 釘 @150）")
         );
         // 一覧は選ぶための情報だけ（釘座標は "preset" で組み立てる）。
         assert_eq!(presets[0].get("coords"), None);
     }
 
-    /// 呼び出した配列は、面材 1 枚の割り付けの欄（寸法・型・ピッチ・
-    /// へりあき）へそのまま入る。
+    /// 呼び出した組み合わせは、壁（間柱ピッチ）と面材（釘ピッチ・大きさ）へ
+    /// 分かれて入る。
     #[test]
-    fn preset_builds_a_panel_that_can_be_calculated() {
-        let response = call_json(r#"{"op": "preset", "data": {"id": "910x610-s455-n150-kawa"}}"#);
+    fn preset_loads_into_the_wall_and_the_panel() {
+        let response = call_json(r#"{"op": "preset", "data": {"id": "910x610-s455-n150-hi"}}"#);
 
+        assert_eq!(
+            response.get("wall").unwrap().get("studPitch").unwrap().as_f64(),
+            Some(455.0)
+        );
         let panel = response.get("panel").unwrap();
         assert_eq!(panel.get("width").unwrap().as_f64(), Some(910.0));
         assert_eq!(panel.get("height").unwrap().as_f64(), Some(610.0));
-        assert_eq!(panel.get("mode").unwrap().as_str(), Some("layout"));
-        assert_eq!(panel.get("arrangement").unwrap().as_str(), Some("kawa"));
         assert_eq!(panel.get("nailPitch").unwrap().as_f64(), Some(150.0));
         assert_eq!(panel.get("edgeDistance").unwrap().as_f64(), Some(10.0));
         assert_eq!(
@@ -378,17 +386,8 @@ mod tests {
                 .get("nailCount")
                 .unwrap()
                 .as_f64(),
-            Some(15.0)
+            Some(23.0)
         );
-    }
-
-    /// 割り付けの型は、画面が選択肢として並べられる形で配る。
-    #[test]
-    fn arrangements_are_listed_for_the_form() {
-        let response = call_json(r#"{"op": "arrangements"}"#);
-        let arrangements = response.get("arrangements").unwrap().as_array().unwrap();
-        assert_eq!(arrangements.len(), 4);
-        assert_eq!(arrangements[0].get("id").unwrap().as_str(), Some("kawa"));
     }
 
     #[test]

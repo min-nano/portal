@@ -19,7 +19,6 @@ import {
   renderWallResult,
   showNailNotes,
   showPanelArea,
-  syncNailModeVisibility,
 } from '../src/timber-panel-shear-calculator/form-dom.js';
 
 // tools/timber-panel-shear-calculator/index.html の、この関数群が触る部分。
@@ -35,10 +34,15 @@ const MARKUP = `
       <input type="text" id="wallName">
       <input type="number" id="wallHeight">
       <input type="number" id="wallWidth">
-      <input type="checkbox" id="wallHasStud" checked>
+      <input type="number" id="wallStudPitch">
       <div id="wallPanels"></div>
       <div id="wallError" hidden></div>
       <div id="wallSummary"></div>
+      <div id="wallLayout" hidden>
+        <svg id="wallLayoutDiagram" hidden></svg>
+        <p id="wallLayoutNote" hidden></p>
+        <table><thead id="wallLayoutHead"></thead><tbody id="wallLayoutBody"></tbody></table>
+      </div>
       <table><thead id="wallSpecHead"></thead><tbody id="wallSpecBody"></tbody></table>
       <table><thead id="wallPanelHead"></thead><tbody id="wallPanelBody"></tbody></table>
       <table><tbody id="wallStepsBody"></tbody></table>
@@ -51,42 +55,38 @@ const MARKUP = `
 // 計算実装（wasm）が配る一覧の形（グレー本 表 3.2.1 と、割り付けの型）。
 const PRESETS = [
   {
-    id: '910x610-s455-n150-kawa',
-    sizeLabel: '910×610',
-    orientation: '横置',
-    arrangementLabel: '川型',
-    arrangementNote: '面材の左右の端と間柱に釘を打つ',
-    studPitch: 455,
-    nailPitch: 150,
-    nailCount: 15,
-  },
-  {
     id: '910x610-s455-n150-hi',
+    label: '910×610 横置（間柱・根太 @455 / 釘 @150）',
     sizeLabel: '910×610',
     orientation: '横置',
-    arrangementLabel: '日型',
-    arrangementNote: '川型に加えて、上下端の横架材にも釘を打つ',
+    width: 910,
+    height: 610,
     studPitch: 455,
     nailPitch: 150,
     nailCount: 23,
   },
   {
-    id: '910x610-s455-n100-kawa',
+    id: '910x610-s455-n100-hi',
+    label: '910×610 横置（間柱・根太 @455 / 釘 @100）',
     sizeLabel: '910×610',
     orientation: '横置',
-    arrangementLabel: '川型',
-    arrangementNote: '面材の左右の端と間柱に釘を打つ',
+    width: 910,
+    height: 610,
     studPitch: 455,
     nailPitch: 100,
-    nailCount: 21,
+    nailCount: 31,
   },
-];
-
-const ARRANGEMENTS = [
-  { id: 'kawa', label: '川型', note: '面材の左右の端と間柱に釘を打つ' },
-  { id: 'yama', label: '山型', note: '川型に加えて、下端の横架材にも釘を打つ' },
-  { id: 'ro', label: 'ロ型', note: '面材の四周だけに釘を打つ' },
-  { id: 'hi', label: '日型', note: '川型に加えて、上下端の横架材にも釘を打つ' },
+  {
+    id: '910x1820-s455-n150-hi',
+    label: '1820×910 縦置（間柱・根太 @455 / 釘 @150）',
+    sizeLabel: '1820×910',
+    orientation: '縦置',
+    width: 910,
+    height: 1820,
+    studPitch: 455,
+    nailPitch: 150,
+    nailCount: 38,
+  },
 ];
 
 // 面材と釘の組合せ（表 3.3.1）・面材の規格（表 3.3.2）も、面材 1 枚ごとの
@@ -101,12 +101,7 @@ const GRADES = [
   { id: 'mdf', label: '構造用 MDF JIS A 5905' },
 ];
 
-const OPTIONS = {
-  presets: PRESETS,
-  arrangements: ARRANGEMENTS,
-  materials: MATERIALS,
-  grades: GRADES,
-};
+const OPTIONS = { presets: PRESETS, materials: MATERIALS, grades: GRADES };
 
 // 面材と釘の仕様は面材ごとの入力（グレー本 3.3(3) の計算例の組合せ）。
 const SPEC = {
@@ -123,20 +118,18 @@ const SPEC = {
   e2: 5500,
 };
 
+// 面材は「壁の中で占める領域」。寸法も釘配列もここから決まる。
 const PANEL = {
   panelId: 'pn1',
   panelName: '下段',
   ...SPEC,
-  width: 910,
-  height: 610,
-  mode: 'layout',
-  arrangement: 'kawa',
-  studPitch: 455,
+  side: 'front',
+  left: 0,
+  bottom: 0,
+  right: 910,
+  top: 610,
   nailPitch: 150,
   edgeDistance: 10,
-  gridX: '',
-  gridY: '',
-  coords: '',
   grain: '',
 };
 
@@ -145,10 +138,17 @@ const WALL = {
   wallName: 'グレー本 3.3 の計算例',
   height: 3000,
   width: 910,
-  hasIntermediateStud: true,
+  studPitch: 455,
   panels: [
     { ...PANEL },
-    { ...PANEL, panelId: 'pn2', panelName: '上段', mode: 'coords', coords: '10, 10\n455, 305', grain: 'width' },
+    {
+      ...PANEL,
+      panelId: 'pn2',
+      panelName: '上段',
+      grain: 'width',
+      bottom: 610,
+      top: 1220,
+    },
   ],
 };
 
@@ -226,6 +226,39 @@ const WALL_REPORT = {
     { label: 'Pa を決めた項', value: '変形角 1/150 時のモーメント K0/150', ok: true },
     { label: '適用範囲 3.3(1)①', value: 'ΔPa = 9.21715 kN/m ≦ 13.7200 kN/m', ok: true },
   ],
+  // 壁内の面材配列（位置を入れた壁にだけ付く）。
+  wallDiagram: {
+    wallWidth: 910,
+    wallHeight: 3000,
+    minX: 0,
+    minY: 0,
+    maxX: 910,
+    maxY: 3000,
+    sides: [
+      {
+        id: 'front',
+        label: '表面',
+        count: 2,
+        area: 1_110_200,
+        panels: [
+          {
+            label: '下段', x: 0, y: 0, width: 910, height: 610,
+            sizeLabel: '910 × 610 mm', note: '', ok: true,
+          },
+          {
+            label: '上段', x: 0, y: 610, width: 910, height: 610,
+            sizeLabel: '910 × 610 mm', note: '', ok: true,
+          },
+        ],
+      },
+    ],
+    unplaced: [],
+  },
+  layoutColumns: ['面材', '張る面', '寸法 W × H', '左下 (X, Y) [mm]', '面積 Aw [mm²]', '配置'],
+  layout: [
+    { label: '下段', ok: true, cells: ['表面', '910 × 610 mm', '(0, 0)', '555,100', 'OK'] },
+    { label: '上段', ok: true, cells: ['表面', '910 × 610 mm', '(0, 610)', '555,100', 'OK'] },
+  ],
 };
 
 beforeEach(() => {
@@ -262,10 +295,28 @@ describe('applyWall / readWall', () => {
     expect(panel.deltaPv).toBe('');
     expect(panel.thickness).toBe(12);
   });
+
+  it('壁の間柱ピッチと、面材の張る面・占有領域を読み戻せる', () => {
+    applyWall(
+      document,
+      {
+        ...WALL,
+        studPitch: 500,
+        panels: [{ ...PANEL, side: 'back', left: 455, right: 1365 }],
+      },
+      OPTIONS
+    );
+
+    const wall = readWall(document);
+    expect(wall.studPitch).toBe(500);
+    expect(wall.panels[0].side).toBe('back');
+    expect(wall.panels[0].left).toBe(455);
+    expect(wall.panels[0].right).toBe(1365);
+  });
 });
 
 describe('renderWallPanels', () => {
-  it('面材 1 枚ごとに、寸法・割り付け・へりあきの入力欄を出す', () => {
+  it('面材 1 枚ごとに、占有領域・釘ピッチ・へりあきの入力欄を出す', () => {
     renderWallPanels(document, WALL.panels, OPTIONS);
 
     const panels = document.querySelectorAll('[data-panel-index]');
@@ -275,11 +326,17 @@ describe('renderWallPanels', () => {
     const value = (node, name) =>
       node.querySelector(`[data-panel-field="${name}"]`).value;
     expect(value(panels[0], 'panelName')).toBe('下段');
-    expect(value(panels[0], 'width')).toBe('910');
-    expect(value(panels[0], 'arrangement')).toBe('kawa');
+    expect(value(panels[0], 'left')).toBe('0');
+    expect(value(panels[0], 'bottom')).toBe('0');
+    expect(value(panels[0], 'right')).toBe('910');
+    expect(value(panels[0], 'top')).toBe('610');
+    expect(value(panels[0], 'side')).toBe('front');
     expect(value(panels[0], 'nailPitch')).toBe('150');
     expect(value(panels[0], 'edgeDistance')).toBe('10');
     expect(value(panels[1], 'grain')).toBe('width');
+    // 寸法も型も入力欄には無い（配置と壁の軸組から決まる）。
+    expect(panels[0].querySelector('[data-panel-field="width"]')).toBeNull();
+    expect(panels[0].querySelector('[data-panel-field="arrangement"]')).toBeNull();
   });
 
   it('途中経過の表は、横スクロールする器に入れる（画面ごと広げない）', () => {
@@ -289,65 +346,31 @@ describe('renderWallPanels', () => {
     expect(steps.parentElement.className).toBe('table-scroll');
   });
 
-  it('割り付けの型は、計算実装が配る一覧から選ぶ', () => {
-    renderWallPanels(document, [PANEL], OPTIONS);
-
-    const select = document.querySelector('[data-panel-field="arrangement"]');
-    expect([...select.options].map((option) => option.textContent)).toEqual([
-      '川型',
-      '山型',
-      'ロ型',
-      '日型',
-    ]);
-  });
-
-  it('標準的な釘配列（表 3.2.1）は、寸法とピッチごとにまとめて選べる', () => {
+  it('標準的な組み合わせ（表 3.2.1）は、面材寸法ごとにまとめて選べる', () => {
     renderWallPanels(document, [PANEL], OPTIONS);
 
     const select = document.querySelector('[data-panel-preset]');
     const groups = [...select.querySelectorAll('optgroup')];
+    // 配列の型は面材の位置で決まるので、選択肢はピッチの組み合わせだけ。
     expect(groups.map((group) => group.label)).toEqual([
-      '910×610 横置（間柱・根太 @455 / 釘 @150）',
-      '910×610 横置（間柱・根太 @455 / 釘 @100）',
+      '910×610 横置',
+      '1820×910 縦置',
     ]);
     expect([...groups[0].children].map((option) => option.textContent)).toEqual([
-      '川型（釘 15 本）',
-      '日型（釘 23 本）',
+      '間柱・根太 @455 / 釘 @150（壁の左端に張ると釘 23 本）',
+      '間柱・根太 @455 / 釘 @100（壁の左端に張ると釘 31 本）',
     ]);
     // 先頭は「読み込む」の 1 行。選ぶまでは何も起きない。
     expect(select.options[0].value).toBe('');
   });
 
-  it('入力方式に応じて、割り付け／格子／座標の欄を出し分ける', () => {
-    renderWallPanels(document, WALL.panels, OPTIONS);
-
-    const section = (index, name) =>
-      document.querySelectorAll('[data-panel-index]')[index].querySelector(
-        `[data-panel-section="${name}"]`
-      );
-    expect(section(0, 'layout').hidden).toBe(false);
-    expect(section(0, 'grid').hidden).toBe(true);
-    expect(section(0, 'coords').hidden).toBe(true);
-    // 2 枚目は座標を直接入力している。
-    expect(section(1, 'layout').hidden).toBe(true);
-    expect(section(1, 'coords').hidden).toBe(false);
-
-    // 方式を切り替えると、出す欄も入れ替わる。
-    const radios = document
-      .querySelectorAll('[data-panel-index]')[0]
-      .querySelectorAll('input[data-panel-mode]');
-    radios[1].checked = true;
-    syncNailModeVisibility(document);
-    expect(section(0, 'layout').hidden).toBe(true);
-    expect(section(0, 'grid').hidden).toBe(false);
-    expect(readPanels(document)[0].mode).toBe('grid');
-  });
-
-  it('面積の目安を幅 × 高さから出す', () => {
+  it('面材の寸法と面積を、占有領域から出す', () => {
     renderWallPanels(document, [PANEL], OPTIONS);
-    expect(document.querySelector('[data-panel-area]').textContent).toBe('555,100 mm²');
+    expect(document.querySelector('[data-panel-area]').textContent).toBe(
+      '910 × 610 mm ／ 555,100 mm²'
+    );
 
-    document.querySelector('[data-panel-field="width"]').value = '';
+    document.querySelector('[data-panel-field="right"]').value = '';
     showPanelArea(document);
     expect(document.querySelector('[data-panel-area]').textContent).toBe('-');
   });
@@ -402,7 +425,7 @@ describe('renderWallPanels', () => {
 
     // 折り畳んでも入力欄は残る（読み戻す内容は変わらない）。
     panel.open = false;
-    expect(readPanels(document)[0].width).toBe(910);
+    expect(readPanels(document)[0].right).toBe(910);
   });
 });
 
@@ -573,6 +596,63 @@ describe('renderWallResult', () => {
     const first = document.querySelectorAll('[data-panel-index]')[0];
     expect(first.querySelectorAll('.result-box')).toHaveLength(3);
     expect(first.querySelector('[data-panel-diagram]').hasAttribute('hidden')).toBe(false);
+  });
+
+  it('壁内の位置を入れた壁には、面材配列図と面材の一覧を出す', () => {
+    renderWallPanels(document, WALL.panels, OPTIONS);
+    renderWallResult(document, WALL_REPORT);
+
+    expect(document.getElementById('wallLayout').hidden).toBe(false);
+    const diagram = document.getElementById('wallLayoutDiagram');
+    expect(diagram.hasAttribute('hidden')).toBe(false);
+    // 壁の枠（面ごとに、塗りと線で 2 回）と、面材の枠。
+    expect(diagram.querySelectorAll('rect')).toHaveLength(4);
+    expect([...diagram.querySelectorAll('text')].map((t) => t.textContent))
+      .toContain('表面（2 枚）');
+    // 一覧は、壁の他の表と同じ組み方（見出し ＋ 面材ごとの行）。
+    expect(
+      [...document.querySelectorAll('#wallLayoutHead th')].map((th) => th.textContent)
+    ).toEqual(WALL_REPORT.layoutColumns);
+    expect(document.querySelectorAll('#wallLayoutBody tr')).toHaveLength(2);
+    expect(document.getElementById('wallLayoutNote').hidden).toBe(true);
+  });
+
+  it('図に描けない面材があれば、その名前を添える', () => {
+    const wallDiagram = { ...WALL_REPORT.wallDiagram, unplaced: ['上段'] };
+    renderWallResult(document, { ...WALL_REPORT, wallDiagram });
+
+    const note = document.getElementById('wallLayoutNote');
+    expect(note.hidden).toBe(false);
+    expect(note.textContent).toContain('上段');
+  });
+
+  it('壁内の位置を入れていない壁では、面材配列図の節ごと出さない', () => {
+    renderWallResult(document, { ...WALL_REPORT, wallDiagram: null, layout: [] });
+
+    expect(document.getElementById('wallLayout').hidden).toBe(true);
+    expect(document.getElementById('wallLayoutDiagram').hasAttribute('hidden')).toBe(true);
+    expect(document.querySelectorAll('#wallLayoutBody tr')).toHaveLength(0);
+  });
+
+  it('はみ出した面材は、図の中で印を付けて出す', () => {
+    const side = WALL_REPORT.wallDiagram.sides[0];
+    const wallDiagram = {
+      ...WALL_REPORT.wallDiagram,
+      sides: [
+        {
+          ...side,
+          panels: [{ ...side.panels[0], note: 'はみ出し', ok: false }],
+        },
+      ],
+    };
+    renderWallResult(document, { ...WALL_REPORT, wallDiagram });
+
+    const labels = [...document.querySelectorAll('#wallLayoutDiagram text')]
+      .map((text) => text.textContent);
+    expect(labels).toContain('※ 下段');
+    expect(
+      document.querySelector('#wallLayoutDiagram title').textContent
+    ).toContain('はみ出し');
   });
 
   it('適用範囲を外れた壁は NG と出す', () => {

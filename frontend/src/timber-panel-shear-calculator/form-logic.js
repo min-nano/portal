@@ -22,8 +22,8 @@ import { sanitizeFileName } from '../pdf-file-ops.js';
 const DEFAULT_PANEL_WIDTH = 910;
 const DEFAULT_PANEL_HEIGHT = 1820;
 
-/** 割り付けの既定値 [mm]（尺モジュールの間柱ピッチ・釘ピッチ）。 */
-const DEFAULT_STUD_PITCH = 455;
+/** 壁の軸組と釘の既定値 [mm]（尺モジュールの間柱ピッチ・釘ピッチ）。 */
+export const DEFAULT_STUD_PITCH = 455;
 const DEFAULT_NAIL_PITCH = 150;
 
 /**
@@ -70,8 +70,9 @@ export const EMPTY_SPEC = {
 /**
  * 新しい面材（壁を構成する 1 枚）を作る。
  *
- * 既定の釘配列は「割り付け・日型（四周打ち）」。面材張り大壁は適用範囲
- * 3.3(1)⑤ で面材の四周を釘打ちすると定められているため。
+ * 面材は「壁の中で占める領域」。既定では壁の左下に 3×6 板を 1 枚置く形に
+ * しておき、そこから動かしてもらう。釘配列はこの領域と壁の間柱ピッチから
+ * 決まるので、面材が持つ釘の入力は釘ピッチとへりあきだけ。
  *
  * 面材と釘の数値は空のままにしておき、表 3.3.1 の一覧から読み込むか、
  * 4.5 の試験で得た値を直接入力してもらう（既定値を入れておくと、確かめない
@@ -83,16 +84,13 @@ export function makePanel(overrides) {
     panelId: newPanelId(),
     panelName: `面材${panelSequence}`,
     ...EMPTY_SPEC,
-    width: DEFAULT_PANEL_WIDTH,
-    height: DEFAULT_PANEL_HEIGHT,
-    mode: 'layout',
-    arrangement: 'hi',
-    studPitch: DEFAULT_STUD_PITCH,
+    side: 'front',
+    left: 0,
+    bottom: 0,
+    right: DEFAULT_PANEL_WIDTH,
+    top: DEFAULT_PANEL_HEIGHT,
     nailPitch: DEFAULT_NAIL_PITCH,
     edgeDistance: MIN_EDGE_DISTANCE,
-    gridX: '',
-    gridY: '',
-    coords: '',
     grain: '',
     ...(overrides || {}),
   };
@@ -101,8 +99,8 @@ export function makePanel(overrides) {
 /**
  * 新しい壁（面材張り大壁 1 枚分の入力）を作る。
  *
- * 面材と釘の仕様は面材ごとの入力なので、壁が持つのは階高・幅と中間材の
- * 有無だけ。面材は 1 枚から始める。
+ * 壁は面材を張る**軸組**として持つ: 階高・幅と、間柱ピッチ。面材と釘の仕様は
+ * 面材ごとの入力。面材は 1 枚から始める。
  */
 export function makeWall(overrides) {
   wallSequence += 1;
@@ -111,8 +109,8 @@ export function makeWall(overrides) {
     wallName: `壁${wallSequence}`,
     height: DEFAULT_WALL_HEIGHT,
     width: DEFAULT_WALL_WIDTH,
-    // 適用範囲 3.3(1)⑦ は中間材（間柱等）を求めているので、既定は「あり」。
-    hasIntermediateStud: true,
+    // 釘の縦列の位置も、せん断座屈の ξ（中間材の有無）も、このピッチで決まる。
+    studPitch: DEFAULT_STUD_PITCH,
     panels: [makePanel()],
     ...(overrides || {}),
   };
@@ -142,6 +140,40 @@ export function specOf(panel) {
     spec[key] = (panel || {})[key] === undefined ? '' : panel[key];
   });
   return spec;
+}
+
+/**
+ * 面材を足すときの、壁の中で占める領域の初期値。
+ *
+ * 直前の面材と同じ大きさのものを、その**真上**（同じ面・同じ左右の位置）に
+ * 置く。壁は下から段を重ねて張ることが多いので、そのまま使えることが多く、
+ * 違えばその面材の欄で動かせる。
+ */
+export function nextPlacement(previous) {
+  const panel = previous || {};
+  const side = panel.side === 'back' ? 'back' : 'front';
+  const left = Number(panel.left) || 0;
+  const right = Number(panel.right) || left + DEFAULT_PANEL_WIDTH;
+  const top = Number(panel.top) || 0;
+  const height = Math.max(top - (Number(panel.bottom) || 0), 0) || DEFAULT_PANEL_HEIGHT;
+  return { side, left, bottom: top, right, top: top + height };
+}
+
+/**
+ * 表 3.2.1 の組み合わせを、面材の入力欄へ入れる形にする。
+ *
+ * 大きさは「左下をそのままに右上を動かす」形で入る（面材は壁の中で占める
+ * 領域なので、読み込みで位置まで動かさない）。
+ */
+export function panelFieldsFromPreset(panel, preset) {
+  const left = Number(panel.left) || 0;
+  const bottom = Number(panel.bottom) || 0;
+  return {
+    nailPitch: preset.nailPitch,
+    edgeDistance: preset.edgeDistance,
+    right: left + Number(preset.width),
+    top: bottom + Number(preset.height),
+  };
 }
 
 /**
@@ -263,7 +295,7 @@ export function mergeFormData(parsed) {
       wallName: String(wall.wallName || '') || `壁${index + 1}`,
       height: Number(wall.height) || 0,
       width: Number(wall.width) || 0,
-      hasIntermediateStud: wall.hasIntermediateStud !== false,
+      studPitch: Number(wall.studPitch) || DEFAULT_STUD_PITCH,
       panels: (Array.isArray(wall.panels) ? wall.panels : []).map((panel, position) =>
         makePanel({
           panelId: String(panel.panelId || '') || newPanelId(),
@@ -282,16 +314,15 @@ export function mergeFormData(parsed) {
           tauMax: Number(panel.tauMax) || 0,
           e1: Number(panel.e1) || 0,
           e2: Number(panel.e2) || 0,
-          width: Number(panel.width) || 0,
-          height: Number(panel.height) || 0,
-          mode: panelMode(panel.mode),
-          arrangement: String(panel.arrangement || 'hi'),
-          studPitch: Number(panel.studPitch) || 0,
+          // 面材は壁の中で占める領域。読み込みの時点で計算実装が
+          // 前の版の入力（寸法だけ・左下だけ）を領域へ直し終えている。
+          side: panel.side === 'back' ? 'back' : 'front',
+          left: Number(panel.left) || 0,
+          bottom: Number(panel.bottom) || 0,
+          right: Number(panel.right) || 0,
+          top: Number(panel.top) || 0,
           nailPitch: Number(panel.nailPitch) || 0,
           edgeDistance: Number(panel.edgeDistance) || 0,
-          gridX: String(panel.gridX || ''),
-          gridY: String(panel.gridY || ''),
-          coords: String(panel.coords || ''),
           grain: String(panel.grain || ''),
         })
       ),
@@ -303,11 +334,6 @@ export function mergeFormData(parsed) {
     issuedOn: String((parsed && parsed.issuedOn) || '') || todayIso(),
     walls: merged.length > 0 ? merged : [makeWall()],
   };
-}
-
-/** 釘配列の入力方式（知らない値は割り付けに寄せる）。 */
-export function panelMode(mode) {
-  return mode === 'grid' || mode === 'coords' ? mode : 'layout';
 }
 
 /** バックエンドへ送る本文（保存・計算で共通）。 */

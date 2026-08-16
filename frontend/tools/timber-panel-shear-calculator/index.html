@@ -71,11 +71,11 @@
       <!-- has-dock: 広い画面では入力（左）と計算結果（右）の 2 列になる。
            狭い画面ではそのまま縦に流れる（並び順は変わらない）。 -->
       <div id="wallEditor" class="has-dock">
-        <!-- 壁で共通なのは階高・幅と中間材の有無だけ。面材と釘の仕様は
-             面材ごと（1 枚の壁でも張り分けられる）なので、下の面材の中に
-             ある。 -->
+        <!-- 壁は面材を張る軸組。階高・幅と間柱ピッチだけを持つ。面材と釘の
+             仕様は面材ごと（1 枚の壁でも張り分けられる）なので、下の面材の
+             中にある。 -->
         <portal-section class="cert-section">
-          <h3 slot="title">壁</h3>
+          <h3 slot="title">壁（面材を張る軸組）</h3>
           <div class="cert-field">
             <label for="wallName">壁の名前（この物件内での識別名）</label>
             <input type="text" id="wallName" placeholder="南面 X1 通り など">
@@ -88,21 +88,26 @@
             <label>壁の幅 W [mm]
               <input type="number" id="wallWidth" inputmode="numeric">
             </label>
+            <label>間柱・根太ピッチ [mm]
+              <input type="number" id="wallStudPitch" inputmode="numeric">
+            </label>
           </div>
-
-          <label class="choice-option">
-            <input type="checkbox" id="wallHasStud" checked>
-            中間材（間柱等）を設ける ― せん断座屈の ξ が 2 になります（なしは 1）
-          </label>
+          <p class="hint">
+            間柱は壁の左端から等間隔に立つものとします。面材の釘の縦列は、その面材の
+            左右の縁と、この間柱のうち面材にかかるものに入ります。せん断座屈の ξ も
+            ここで決まります（壁の中に間柱が 1 本でも立てば 2、立たなければ 1）。
+          </p>
         </portal-section>
 
         <!-- 壁を構成する面材。1 枚ごとに面材と釘の仕様・配置・釘の間隔を
              決め、その場で釘配列諸定数（グレー本 3.2）が出る。面材と釘は
              面材ごとに選べるので、1 枚の壁で張り分けられる。 -->
         <p class="hint">
-          面材 1 枚ごとに、面材と釘の組合せ（グレー本 表 3.3.1・3.3.2）と、寸法・配列の型・
-          間柱ピッチ・釘ピッチ・へりあきを決めます。その面材の Ixy・Zxy・Cxy（式 3.2.1〜3.2.7）が
-          求まり、そのまま下の壁の計算に入ります。K0・My・Mu は面材ごとの値の和、塑性率 μ は最小値です。
+          面材 1 枚ごとに、面材と釘の組合せ（グレー本 表 3.3.1・3.3.2）と、
+          <strong>壁の中で占める領域</strong>・釘ピッチ・へりあきを決めます。面材の寸法も釘配列も
+          この領域と上の間柱ピッチから決まるので、別に入力する欄はありません。その面材の
+          Ixy・Zxy・Cxy（式 3.2.1〜3.2.7）が求まり、そのまま下の壁の計算に入ります。
+          K0・My・Mu は面材ごとの値の和、塑性率 μ は最小値です。
           1 枚の壁でも面材ごとに違う面材と釘を使えます（上半分は N50、下半分は CN50 など）。
         </p>
         <div id="wallPanels" class="wall-panels"></div>
@@ -115,6 +120,22 @@
           <h3 slot="title">壁の計算結果（グレー本 3.3）</h3>
           <div id="wallError" class="result-error" hidden></div>
           <div id="wallSummary" class="result-summary"></div>
+
+          <!-- 壁内の面材配列。面材に壁内の位置を入れたときだけ出る（計算は
+               面材ごとの値の和なので、配置そのものは数値に影響しない）。 -->
+          <div id="wallLayout" hidden>
+            <h4 class="result-heading">壁の面材配列図</h4>
+            <svg id="wallLayoutDiagram" class="wall-layout-diagram" role="img"
+                 aria-label="壁の面材配列図" hidden></svg>
+            <p class="hint" id="wallLayoutNote" hidden></p>
+            <div class="table-scroll">
+              <table class="steps-table">
+                <thead id="wallLayoutHead"></thead>
+                <tbody id="wallLayoutBody"></tbody>
+              </table>
+            </div>
+          </div>
+
           <h4 class="result-heading">面材ごとの面材と釘</h4>
           <div class="table-scroll">
             <table class="steps-table">

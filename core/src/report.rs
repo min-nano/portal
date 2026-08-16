@@ -22,6 +22,7 @@ use crate::json::Value;
 use crate::layout::{self, Arrangement, Layout, DEFAULT_EDGE_DISTANCE};
 use crate::nail_array::{self, Nail};
 use crate::wall;
+use crate::wall_layout::{self, Piece, Side};
 
 /// 面材 1 枚あたりの釘の上限。実務の面材 1 枚では 100 本程度なので十分に
 /// 余裕がある。桁を間違えた入力（釘ピッチに 1 mm と書くなど）で計算と
@@ -31,26 +32,44 @@ pub const MAX_NAILS: usize = 2000;
 pub const MAX_WALLS: usize = 50;
 pub const MAX_WALL_PANELS: usize = 20;
 
+/// 間柱・根太ピッチの既定値 [mm]（尺モジュール）。
+pub const DEFAULT_STUD_PITCH: f64 = 455.0;
+
 /// 釘配列図に添える座標値の有効桁数（図は小さいので本文より粗くする）。
 const DIAGRAM_AXIS_DIGITS: usize = 4;
 
-/// 壁を構成する面材 1 枚分の入力（面材と釘の仕様・寸法・釘配列）。
+/// 壁を構成する面材 1 枚分の入力。
+///
+/// **面材は「壁の中で占める領域」で表す**。左下 (left, bottom) と右上
+/// (right, top) を壁の左下を原点として入れると、面材の寸法 W・H も面積 Aw も
+/// そこから決まる。実際の設計でも決めているのは「どの面材を壁のどこに張るか」
+/// なので、寸法を別に入力させない（入力と図が食い違いようがない）。
+///
+/// **釘配列も配置から決まる**。釘を打つ線は
+///
+///   - 縦線: 面材の左右の縁と、その面材にかかる間柱（壁の左端から等間隔）
+///   - 横線: 面材の上下の縁（面材張り大壁は適用範囲 3.3(1)⑤ で四周打ち）
+///
+/// なので、壁の間柱ピッチと面材の占有領域が分かれば釘座標が組み立てられる。
+/// 面材ごとに残る釘の入力は、釘ピッチとへりあきだけ。
 ///
 /// 面材と釘の仕様は面材ごとに持つ。1 枚の壁でも面材ごとに違う仕様を使う
 /// ことがあるため（上半分は N50、下半分は CN50 のような張り分け）。
-///
-/// 釘配列の入れ方は 3 通り:
-///   - `layout`: 割り付け（型・間柱ピッチ・釘ピッチ・へりあき）から座標を作る
-///   - `grid`  : X と Y の座標リストの全組合せ
-///   - `coords`: 「x, y」を 1 行に 1 本ずつ
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelInput {
     pub panel_id: String,
     pub panel_name: String,
-    /// 面材の幅 W [mm]。
-    pub width: f64,
-    /// 面材の高さ H [mm]。
-    pub height: f64,
+    /// この面材を張る面（"front" 表面 / "back" 裏面）。両面張りの壁を
+    /// 配列図で描き分け、重なりの判定も同じ面の中だけで行うために持つ。
+    pub side: String,
+    /// 壁の中でこの面材が占める領域 [mm]（壁の左下が原点）。
+    ///
+    /// left < right・bottom < top であることが、この面材を計算できる条件。
+    /// 面材の寸法 W = right − left、H = top − bottom はここから決まる。
+    pub left: f64,
+    pub bottom: f64,
+    pub right: f64,
+    pub top: f64,
     /// 表 3.3.1 から読み込んだ組合せの id（読み込んだ跡を残すだけで、計算には
     /// 使わない。読み込んだあと数値を手で直せるようにするため）。
     pub material_id: String,
@@ -74,29 +93,24 @@ pub struct PanelInput {
     pub e1: f64,
     /// 繊維平行方向の曲げヤング係数 E2 [N/mm²]。
     pub e2: f64,
-    pub mode: String,
-    /// 配列の型（川型・山型・ロ型・日型）。
-    pub arrangement: String,
-    /// 間柱・根太ピッチ [mm]。
-    pub stud_pitch: f64,
     /// 釘ピッチ [mm]。
     pub nail_pitch: f64,
     /// へりあき（面材の縁から釘の中心までの距離）[mm]。
     ///
-    /// 面材の種類・釘の呼び径に合わせて面材ごとに決められるよう、割り付けの
-    /// 入力欄にしてある（未入力なら既定の 10 mm）。
+    /// 面材の種類・釘の呼び径に合わせて面材ごとに決められる（未入力なら
+    /// 既定の 10 mm）。
     pub edge_distance: f64,
-    pub grid_x: String,
-    pub grid_y: String,
-    pub coords: String,
     /// 面材の繊維方向（"" は長辺方向）。せん断座屈の a・b の取り方を決める。
     pub grain: String,
 }
 
 /// 壁 1 枚分の入力（グレー本 3.3 の面材張り大壁）。
 ///
-/// 面材と釘の仕様は面材ごと（`PanelInput`）なので、壁が持つのは階高・幅と
-/// 中間材の有無だけ。
+/// 壁は**面材を張る軸組**として持つ: 階高・幅と、間柱ピッチ。面材の釘配列は
+/// この軸組と面材の占有領域から決まるので、間柱ピッチは面材ごとではなく壁の
+/// 入力になる（1 枚の壁の中で間柱の間隔が面材ごとに変わることはない）。
+///
+/// 面材と釘の仕様は面材ごと（`PanelInput`）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct WallInput {
     pub wall_id: String,
@@ -105,10 +119,23 @@ pub struct WallInput {
     pub height: f64,
     /// 壁の幅 W [mm]。
     pub width: f64,
-    /// 中間材（間柱等）を設けるか。せん断座屈の ξ になる。
-    pub has_intermediate_stud: bool,
+    /// 間柱・根太ピッチ [mm]（壁の左端から等間隔）。
+    ///
+    /// 釘の縦列の位置と、せん断座屈の ξ（中間材の有無）の両方がここで決まる。
+    pub stud_pitch: f64,
     /// 壁を構成する面材。
     pub panels: Vec<PanelInput>,
+}
+
+impl WallInput {
+    /// 中間材（間柱等）があるか。せん断座屈の ξ になる（式 3.3.11e の下）。
+    ///
+    /// 「間柱を設けるかどうか」を別の入力にすると、間柱ピッチと食い違った
+    /// まま計算できてしまう（釘は間柱に打っているのに ξ = 1、など）。
+    /// 壁の幅の内側に間柱が 1 本でも立つかどうかで決める。
+    pub fn has_intermediate_stud(&self) -> bool {
+        self.stud_pitch > 0.0 && self.stud_pitch < self.width
+    }
 }
 
 /// フォーム全体の入力（1 ファイル = 1 物件）。
@@ -120,19 +147,34 @@ pub struct FormData {
 }
 
 impl PanelInput {
-    pub fn panel_area(&self) -> f64 {
-        self.width * self.height
+    /// 面材の幅 W [mm]（占有領域の横の長さ）。
+    pub fn width(&self) -> f64 {
+        self.right - self.left
     }
 
-    /// 割り付け（mode = "layout"）としての読み方。
-    pub fn layout(&self) -> Layout {
+    /// 面材の高さ H [mm]（占有領域の縦の長さ）。
+    pub fn height(&self) -> f64 {
+        self.top - self.bottom
+    }
+
+    pub fn panel_area(&self) -> f64 {
+        self.width() * self.height()
+    }
+
+    /// 壁の軸組（間柱ピッチ）と、この面材の占有領域から決まる釘の割り付け。
+    ///
+    /// 面材張り大壁は適用範囲 3.3(1)⑤ で面材の四周を釘打ちすると定められて
+    /// いるので、型は常に日型（四周打ち）。中間の縦線は、この面材にかかる
+    /// 間柱の位置に入る。
+    pub fn layout(&self, stud_pitch: f64) -> Layout {
         Layout {
-            width: self.width,
-            height: self.height,
-            stud_pitch: self.stud_pitch,
+            width: self.width(),
+            height: self.height(),
+            stud_pitch,
+            stud_origin: self.left,
             nail_pitch: self.nail_pitch,
             edge_distance: self.edge_distance,
-            arrangement: Arrangement::from_id(&self.arrangement),
+            arrangement: Arrangement::Hi,
         }
     }
 
@@ -144,6 +186,22 @@ impl PanelInput {
             tau_max: self.tau_max,
             e1: self.e1,
             e2: self.e2,
+        }
+    }
+
+    /// この面材を張る面（表面 / 裏面）。
+    pub fn side(&self) -> Side {
+        Side::from_id(&self.side)
+    }
+
+    /// 配列図に並べる 1 枚として見た、この面材。
+    pub fn piece(&self, label: String) -> Piece {
+        Piece {
+            label,
+            width: self.width(),
+            height: self.height(),
+            side: self.side(),
+            origin: (self.left, self.bottom),
         }
     }
 
@@ -161,8 +219,12 @@ impl PanelInput {
         Value::obj([
             ("panelId", self.panel_id.clone().into()),
             ("panelName", self.panel_name.clone().into()),
-            ("width", self.width.into()),
-            ("height", self.height.into()),
+            ("side", self.side.clone().into()),
+            // 面材は壁の中で占める領域そのもの（寸法はここから決まる）。
+            ("left", self.left.into()),
+            ("bottom", self.bottom.into()),
+            ("right", self.right.into()),
+            ("top", self.top.into()),
             ("materialId", self.material_id.clone().into()),
             ("thickness", self.thickness.into()),
             ("shearModulus", self.shear_modulus.into()),
@@ -174,14 +236,8 @@ impl PanelInput {
             ("tauMax", self.tau_max.into()),
             ("e1", self.e1.into()),
             ("e2", self.e2.into()),
-            ("mode", self.mode.clone().into()),
-            ("arrangement", self.arrangement.clone().into()),
-            ("studPitch", self.stud_pitch.into()),
             ("nailPitch", self.nail_pitch.into()),
             ("edgeDistance", self.edge_distance.into()),
-            ("gridX", self.grid_x.clone().into()),
-            ("gridY", self.grid_y.clone().into()),
-            ("coords", self.coords.clone().into()),
             ("grain", self.grain.clone().into()),
         ])
     }
@@ -194,7 +250,7 @@ impl WallInput {
             ("wallName", self.wall_name.clone().into()),
             ("height", self.height.into()),
             ("width", self.width.into()),
-            ("hasIntermediateStud", self.has_intermediate_stud.into()),
+            ("studPitch", self.stud_pitch.into()),
             (
                 "panels",
                 Value::Arr(self.panels.iter().map(PanelInput::to_value).collect()),
@@ -268,6 +324,9 @@ pub fn normalize_wall(item: &Value, index: usize) -> Result<WallInput, String> {
             "1 枚の壁に置ける面材は {MAX_WALL_PANELS} 枚までです。"
         ));
     }
+    // 面材ごとに寸法・型・間柱ピッチを持っていた版の入力は、ここで
+    // 「壁の軸組 ＋ 面材の占有領域」へ移し替える。
+    let raw_panels = placed_panels(raw_panels);
     let mut panels = Vec::with_capacity(raw_panels.len());
     for (position, panel) in raw_panels.iter().enumerate() {
         // 面材と釘の仕様を壁が持っていた版の入力は、ここで面材へ移し替える。
@@ -279,9 +338,78 @@ pub fn normalize_wall(item: &Value, index: usize) -> Result<WallInput, String> {
         wall_name: text_of(item.get("wallName")),
         height: float_of(item.get("height"), "階高 H")?,
         width: float_of(item.get("width"), "壁の幅 W")?,
-        has_intermediate_stud: matches!(item.get("hasIntermediateStud"), Some(Value::Bool(true))),
+        stud_pitch: wall_stud_pitch(item, &raw_panels)?,
         panels,
     })
+}
+
+/// 壁の間柱ピッチ [mm]。
+///
+/// 間柱ピッチは壁の入力だが、前の版では面材ごとの割り付けの欄にあった。
+/// 壁が持っていなければ、面材が持っていた値のうち最初の 1 つを採る（1 枚の
+/// 壁の中で間柱の間隔が面材ごとに変わることはないので、これで当時の入力の
+/// 意味がそのまま保たれる）。どこにも無ければ尺モジュールの 455 mm。
+fn wall_stud_pitch(wall: &Value, panels: &[Value]) -> Result<f64, String> {
+    if !is_blank(wall.get("studPitch")) {
+        return float_of(wall.get("studPitch"), "間柱・根太ピッチ");
+    }
+    for panel in panels {
+        if !is_blank(panel.get("studPitch")) {
+            return float_of(panel.get("studPitch"), "間柱・根太ピッチ");
+        }
+    }
+    Ok(DEFAULT_STUD_PITCH)
+}
+
+/// 面材の並びを、どれも「壁の中で占める領域」を持つ形にそろえる。
+///
+/// 面材が left/right/bottom/top を持っていればそのまま。持っていない前の版の
+/// 入力（面材ごとに width・height を持ち、壁の中の位置は持たないか、左下だけを
+/// 持っていた形）は、
+///
+///   - 左下が分かるならそこへ、
+///   - 分からないなら**張る面ごとに下から順に積んで**、
+///
+/// 領域に直す。積むのは、壁は下から段を重ねて張るのがふつうで、面材が重なった
+/// 状態（＝枚数を二重に数えている、と判定が出る状態）を作らないため。壁より
+/// 高く積み上がれば、そのぶんは「はみ出し」として判定に出る。
+fn placed_panels(panels: &[Value]) -> Vec<Value> {
+    let mut stacked_front = 0.0_f64;
+    let mut stacked_back = 0.0_f64;
+    panels
+        .iter()
+        .map(|panel| {
+            if !is_blank(panel.get("right")) || !is_blank(panel.get("top")) {
+                return panel.clone();
+            }
+            let width = float_of(panel.get("width"), "面材の幅 W").unwrap_or(0.0);
+            let height = float_of(panel.get("height"), "面材の高さ H").unwrap_or(0.0);
+            let stacked = if Side::from_id(&text_of(panel.get("side"))) == Side::Back {
+                &mut stacked_back
+            } else {
+                &mut stacked_front
+            };
+            // 前の版で左下だけを入れていた入力は、その位置をそのまま使う。
+            let left = float_of(panel.get("originX"), "壁内の位置 X").unwrap_or(0.0);
+            let bottom = match is_blank(panel.get("originY")) {
+                true => *stacked,
+                false => float_of(panel.get("originY"), "壁内の位置 Y").unwrap_or(0.0),
+            };
+            *stacked = bottom + height;
+
+            let mut entries: Vec<(String, Value)> = match panel {
+                Value::Obj(entries) => entries.clone(),
+                _ => Vec::new(),
+            };
+            entries.extend([
+                ("left".to_string(), left.into()),
+                ("bottom".to_string(), bottom.into()),
+                ("right".to_string(), (left + width).into()),
+                ("top".to_string(), (bottom + height).into()),
+            ]);
+            Value::Obj(entries)
+        })
+        .collect()
 }
 
 /// 面材と釘の仕様のキー（面材 1 枚ごとの入力。前の版では壁が持っていた）。
@@ -343,16 +471,14 @@ pub fn normalize_panel(panel: &Value, wall_id: &str, index: usize) -> Result<Pan
         id if id.is_empty() => format!("{wall_id}-p{}", index + 1),
         id => id,
     };
-    let mode = match text_of(panel.get("mode")).as_str() {
-        "coords" => "coords".to_string(),
-        "grid" => "grid".to_string(),
-        _ => "layout".to_string(),
-    };
     Ok(PanelInput {
         panel_id,
         panel_name: text_of(panel.get("panelName")),
-        width: float_of(panel.get("width"), "面材の幅 W")?,
-        height: float_of(panel.get("height"), "面材の高さ H")?,
+        side: Side::from_id(&text_of(panel.get("side"))).id().to_string(),
+        left: float_of(panel.get("left"), "面材の左端 X")?,
+        bottom: float_of(panel.get("bottom"), "面材の下端 Y")?,
+        right: float_of(panel.get("right"), "面材の右端 X")?,
+        top: float_of(panel.get("top"), "面材の上端 Y")?,
         material_id: text_of(panel.get("materialId")),
         thickness: float_of(panel.get("thickness"), "面材の厚さ t")?,
         shear_modulus: float_of(panel.get("shearModulus"), "面材のせん断弾性係数 GB")?,
@@ -364,17 +490,9 @@ pub fn normalize_panel(panel: &Value, wall_id: &str, index: usize) -> Result<Pan
         tau_max: float_of(panel.get("tauMax"), "面材のせん断強度 τmax")?,
         e1: float_of(panel.get("e1"), "曲げヤング係数 E1")?,
         e2: float_of(panel.get("e2"), "曲げヤング係数 E2")?,
-        mode,
-        arrangement: Arrangement::from_id(&text_of(panel.get("arrangement")))
-            .id()
-            .to_string(),
-        stud_pitch: float_of(panel.get("studPitch"), "間柱・根太ピッチ")?,
         nail_pitch: float_of(panel.get("nailPitch"), "釘ピッチ")?,
         // 未入力のへりあきは、表 3.2.1 の配列が前提とする 10 mm とみなす。
         edge_distance: float_or(panel.get("edgeDistance"), "へりあき", DEFAULT_EDGE_DISTANCE)?,
-        grid_x: text_of(panel.get("gridX")),
-        grid_y: text_of(panel.get("gridY")),
-        coords: text_of(panel.get("coords")),
         grain: wall::Grain::from_id(&text_of(panel.get("grain")))
             .id()
             .to_string(),
@@ -522,85 +640,22 @@ fn float_or(value: Option<&Value>, label: &str, default: f64) -> Result<f64, Str
     Ok(number)
 }
 
-/// 「0, 445, 890」のようなカンマ・空白区切りの数値列を読む。
+/// この面材の釘座標を組み立てられない理由を返す（組み立てられるなら None）。
 ///
-/// 区切りは半角・全角どちらの読点・空白でもよく、数字が全角（４４５）でも
-/// 読む。日本語入力のまま打ち込んだ座標を、入力し直させないため。
-pub fn parse_number_list(text: &str) -> Vec<f64> {
-    text.split(|character: char| {
-        matches!(character, ',' | '，' | '、') || character.is_whitespace()
-    })
-        .filter(|token| !token.is_empty())
-        .filter_map(|token| to_halfwidth(token).parse::<f64>().ok())
-        .filter(|number| number.is_finite())
-        .collect()
-}
-
-/// 全角の数字・符号・小数点を半角へ直す（それ以外の文字はそのまま）。
-fn to_halfwidth(token: &str) -> String {
-    token
-        .chars()
-        .map(|character| match character {
-            '０'..='９' => char::from_u32(character as u32 - '０' as u32 + '0' as u32)
-                .expect("全角数字は半角数字へ移せる"),
-            '．' => '.',
-            '＋' => '+',
-            '－' | 'ー' | '−' => '-',
-            other => other,
-        })
-        .collect()
-}
-
-/// 「x, y」を 1 行に 1 本ずつ書いた釘座標を読む。
-pub fn parse_coord_lines(text: &str) -> Vec<Nail> {
-    text.lines()
-        .filter_map(|line| {
-            let parts = parse_number_list(line);
-            match parts.as_slice() {
-                [x, y, ..] => Some(Nail { x: *x, y: *y }),
-                _ => None,
-            }
-        })
-        .collect()
-}
-
-/// この面材を計算できない理由を返す（計算できるなら None）。
+/// 面材の占有領域と壁の軸組から釘座標を作るので、止まるのは
 ///
-/// nail_array 側にも同じ状況を弾く guard があるが、あちらは計算式が壊れた
-/// 入力を受け取らないための最終防衛線で、文言も式の言葉（「Ix + Iy が 0」）で
-/// 書かれている。画面に出すのは、入力欄の言葉で書いたこちらの理由。
+///   - 領域が矩形になっていない（右端が左端より左にある、など）
+///   - 釘ピッチ・へりあきが釘を置けない値
+///   - 桁を間違えたピッチで釘が数え切れないほど増える
 ///
-/// ここで挙げるものが、入力から到達しうる計算不能のすべて:
-///   - 釘が無い / 面積が 0     … nail_array::validate_input
-///   - 釘が 1 点に集中している … Ix + Iy = 0
-///   - 釘が 1 直線上に並ぶ     … Zx もしくは Zy が 0 → Zxy = 0
-fn unusable_reason(panel: &PanelInput, nails: &[Nail]) -> Option<String> {
-    if nails.is_empty() {
-        return Some("釘座標が入力されていません。少なくとも 1 本の釘が必要です。".to_string());
-    }
-    if !(panel.panel_area() > 0.0) {
-        return Some("面材の幅 W と高さ H に正の数値を入力してください。".to_string());
-    }
-
-    let spread_x = nails.iter().any(|nail| nail.x != nails[0].x);
-    let spread_y = nails.iter().any(|nail| nail.y != nails[0].y);
-    if !spread_x && !spread_y {
-        return Some("釘が 1 点に集中しているため、釘配列諸定数を求められません。".to_string());
-    }
-    if !spread_x || !spread_y {
+/// のいずれか。文面は入力欄の言葉で書く（nail_array 側にも同じ状況を弾く
+/// guard があるが、あちらは式の言葉で書かれた最終防衛線）。
+fn unusable_reason(panel: &PanelInput, stud_pitch: f64) -> Option<String> {
+    if !(panel.width() > 0.0) || !(panel.height() > 0.0) {
         return Some(
-            "釘が 1 直線上に並んでいるため、釘配列諸定数を求められません。\
-             X 方向・Y 方向のどちらにも広がりが必要です。"
+            "壁の中で面材が占める領域を入力してください（右端は左端より右、上端は下端より上）。"
                 .to_string(),
         );
-    }
-    None
-}
-
-/// 割り付け（mode = "layout"）が釘を置けない理由を返す。
-fn unusable_layout_reason(panel: &PanelInput) -> Option<String> {
-    if !(panel.panel_area() > 0.0) {
-        return Some("面材の幅 W と高さ H に正の数値を入力してください。".to_string());
     }
     if !(panel.nail_pitch > 0.0) {
         return Some("釘ピッチには正の数値を入力してください。".to_string());
@@ -608,79 +663,49 @@ fn unusable_layout_reason(panel: &PanelInput) -> Option<String> {
     if panel.edge_distance < 0.0 {
         return Some("へりあきには 0 以上の数値を入力してください。".to_string());
     }
-    let span_x = panel.width - panel.edge_distance * 2.0;
-    let span_y = panel.height - panel.edge_distance * 2.0;
+    let span_x = panel.width() - panel.edge_distance * 2.0;
+    let span_y = panel.height() - panel.edge_distance * 2.0;
     if !(span_x > 0.0) || !(span_y > 0.0) {
         return Some(
             "へりあきが面材の寸法に対して大きすぎます。面材の内側に釘を置けません。".to_string(),
         );
     }
     // 間柱の位置は数え上げで作るので、桁違いに小さいピッチは先に止める。
-    if panel.stud_pitch > 0.0 && panel.width / panel.stud_pitch > MAX_NAILS as f64 {
+    if stud_pitch > 0.0 && panel.width() / stud_pitch > MAX_NAILS as f64 {
         return Some(format!(
             "間柱・根太ピッチが小さすぎます（面材の幅 {} mm に対して釘の列が {} 本を超えます）。",
-            format_int(panel.width),
+            format_int(panel.width()),
             MAX_NAILS
         ));
     }
     None
 }
 
-/// 釘リストと、計算できない理由（計算できるなら None）を返す。
+/// 釘リストと、組み立てられない理由（組み立てられるなら None）を返す。
 ///
 /// 理由をエラーではなく戻り値にしているのは、入力途中の面材を画面へ
 /// そのまま出すため。
-fn nails_and_reason(panel: &PanelInput) -> (Vec<Nail>, Option<String>) {
-    let too_many = |count: usize| {
-        format!(
-            "釘の本数が多すぎます（{count} 本）。面材 1 枚あたり {MAX_NAILS} 本までにしてください。"
-        )
-    };
-    let nails = match panel.mode.as_str() {
-        "layout" => {
-            if let Some(reason) = unusable_layout_reason(panel) {
-                return (Vec::new(), Some(reason));
-            }
-            let layout = panel.layout();
-            // 割り付けは本数が寸法とピッチで決まるので、作る前に数える。
-            let count = layout.nail_count();
-            if count > MAX_NAILS {
-                return (Vec::new(), Some(too_many(count)));
-            }
-            layout.nails()
-        }
-        "grid" => {
-            let xs = parse_number_list(&panel.grid_x);
-            let ys = parse_number_list(&panel.grid_y);
-            // 格子は組み合わせの数で増えるので、作る前に本数を確かめる。
-            if xs.len() * ys.len() > MAX_NAILS {
-                return (
-                    Vec::new(),
-                    Some(format!(
-                        "釘の本数が多すぎます（{} × {} 本）。面材 1 枚あたり {} 本までにしてください。",
-                        xs.len(),
-                        ys.len(),
-                        MAX_NAILS
-                    )),
-                );
-            }
-            nail_array::build_rectangular_grid(&xs, &ys)
-        }
-        _ => {
-            let nails = parse_coord_lines(&panel.coords);
-            if nails.len() > MAX_NAILS {
-                return (Vec::new(), Some(too_many(nails.len())));
-            }
-            nails
-        }
-    };
-    let reason = unusable_reason(panel, &nails);
-    (nails, reason)
+fn nails_and_reason(panel: &PanelInput, stud_pitch: f64) -> (Vec<Nail>, Option<String>) {
+    if let Some(reason) = unusable_reason(panel, stud_pitch) {
+        return (Vec::new(), Some(reason));
+    }
+    let layout = panel.layout(stud_pitch);
+    // 本数は寸法とピッチで決まるので、座標を作る前に数える。
+    let count = layout.nail_count();
+    if count > MAX_NAILS {
+        return (
+            Vec::new(),
+            Some(format!(
+                "釘の本数が多すぎます（{count} 本）。面材 1 枚あたり {MAX_NAILS} 本までにしてください。"
+            )),
+        );
+    }
+    (layout.nails(), None)
 }
 
-/// 面材の入力方式に応じて釘リストを組み立てる（計算できない入力はエラー）。
-pub fn nails_of(panel: &PanelInput) -> Result<Vec<Nail>, String> {
-    let (nails, reason) = nails_and_reason(panel);
+/// 面材の占有領域と壁の軸組から釘リストを組み立てる（作れない入力はエラー）。
+pub fn nails_of(panel: &PanelInput, stud_pitch: f64) -> Result<Vec<Nail>, String> {
+    let (nails, reason) = nails_and_reason(panel, stud_pitch);
     match reason {
         Some(reason) => Err(reason),
         None => Ok(nails),
@@ -734,10 +759,10 @@ fn compute_all_panels(input: &WallInput) -> Value {
             .iter()
             .enumerate()
             .map(|(index, panel)| {
-                let (nails, reason) = nails_and_reason(panel);
+                let (nails, reason) = nails_and_reason(panel, input.stud_pitch);
                 let report = match reason {
                     Some(reason) => Err(reason),
-                    None => build_panel_report(panel, &nails, index),
+                    None => build_panel_report(panel, &nails, input.stud_pitch, index),
                 };
                 match report {
                     Ok(report) => with_ok(report),
@@ -768,9 +793,9 @@ pub fn validate_walls(data: &FormData) -> Result<Vec<Value>, String> {
 ///
 /// 表示用の文字列（有効桁・単位）まで組み立てて返すことで、画面と計算書で
 /// 桁の丸め方が食い違わないようにしている。
-pub fn compute_panel(panel: &PanelInput, index: usize) -> Result<Value, String> {
-    let nails = nails_of(panel)?;
-    build_panel_report(panel, &nails, index)
+pub fn compute_panel(panel: &PanelInput, stud_pitch: f64, index: usize) -> Result<Value, String> {
+    let nails = nails_of(panel, stud_pitch)?;
+    build_panel_report(panel, &nails, stud_pitch, index)
 }
 
 /// 面材の見出しに使う名前（未入力なら通し番号で代替する）。
@@ -791,18 +816,30 @@ pub fn wall_label(input: &WallInput, index: usize) -> String {
     }
 }
 
-fn nail_arrangement_text(panel: &PanelInput, nails: &[Nail]) -> String {
-    match panel.mode.as_str() {
-        "layout" => format!(
-            "割り付け　{}　／　間柱・根太 @{}　／　釘 @{}　／　へりあき {} mm",
-            Arrangement::from_id(&panel.arrangement).label(),
-            format_dimension(panel.stud_pitch),
-            format_dimension(panel.nail_pitch),
-            format_dimension(panel.edge_distance),
-        ),
-        "grid" => format!("格子　X: {}　／　Y: {}", panel.grid_x, panel.grid_y),
-        _ => format!("座標を直接入力（{} 点）", nails.len()),
-    }
+/// 釘配列が何から決まったのかを、そのまま読める 1 行にする。
+///
+/// 釘座標は入力せず、壁の軸組（間柱ピッチ）と面材の占有領域から組み立てる。
+/// その根拠が計算書の上で追えるように、決め手になった値をそのまま並べる。
+fn nail_arrangement_text(panel: &PanelInput, stud_pitch: f64, columns: usize) -> String {
+    format!(
+        "四周打ち ＋ 間柱 @{}（この面材にかかる縦列 {} 本）　／　釘 @{}　／　へりあき {} mm",
+        format_dimension(stud_pitch),
+        format_int(columns as f64),
+        format_dimension(panel.nail_pitch),
+        format_dimension(panel.edge_distance),
+    )
+}
+
+/// 面材 1 枚が壁の中で占める領域を、そのまま読める 1 行にする。
+fn placement_text(panel: &PanelInput) -> String {
+    format!(
+        "{}　左下 ({}, {}) 〜 右上 ({}, {}) mm",
+        panel.side().label(),
+        format_dimension(panel.left),
+        format_dimension(panel.bottom),
+        format_dimension(panel.right),
+        format_dimension(panel.top),
+    )
 }
 
 /// 壁を構成する面材が、どれも同じ面材と釘の仕様か。
@@ -886,8 +923,254 @@ fn spec_rows(panel: &PanelInput) -> Vec<Value> {
     rows
 }
 
+// --- 壁内の面材配列（配列図と、配置・計算の突き合わせ） ----------------------
+
+/// 壁内の面材配列としてまとめたもの（画面・計算書がそのまま並べられる形）。
+struct WallLayoutReport {
+    /// 壁の入力の控えに出す 1 行。
+    summary: String,
+    /// 壁の面材配列図。
+    diagram: Value,
+    /// 面材の一覧（面材・張る面・寸法・位置・面積）。
+    rows: Vec<Value>,
+    /// 判定の 1 行。
+    check: Value,
+}
+
+/// 壁内の面材配列を組み立てる。
+///
+/// 面材は「壁の中で占める領域」そのものなので、配列図は必ず描ける。図と表で
+/// 「この壁をどう張る前提の計算か」を残し、配置と計算の食い違い（はみ出し・
+/// 重なり）を判定に出す。
+fn build_wall_layout(input: &WallInput) -> WallLayoutReport {
+    let pieces: Vec<Piece> = input
+        .panels
+        .iter()
+        .enumerate()
+        .map(|(position, panel)| panel.piece(panel_label(panel, position)))
+        .collect();
+    let inspection = wall_layout::inspect(input.width, input.height, &pieces);
+
+    let placement: Vec<String> = inspection
+        .sides
+        .iter()
+        .map(|(side, count, _)| format!("{} {} 枚", side.label(), count))
+        .collect();
+
+    WallLayoutReport {
+        summary: format!(
+            "壁の面材配列図のとおり（{}{}）",
+            placement.join("・"),
+            if inspection.sides.len() > 1 {
+                " ＝ 両面張り"
+            } else {
+                ""
+            }
+        ),
+        diagram: layout_diagram(input, &pieces, &inspection),
+        rows: layout_rows(&pieces, &inspection),
+        check: Value::obj([
+            ("label", "面材の配置（壁の面材配列図との整合）".into()),
+            ("value", layout_check_text(input, &pieces, &inspection).into()),
+            ("ok", inspection.ok.into()),
+        ]),
+    }
+}
+
+/// 壁の面材配列図に要る幾何（描画範囲と、面ごとの面材の矩形）。
+///
+/// 縮尺は画面（SVG）と計算書 PDF がそれぞれ決めるが、「どこからどこまでを
+/// 描くか」「どの面材に注意の印を付けるか」はここで決めた 1 つを両方が読む。
+///
+/// 描画範囲は表面・裏面をまとめた 1 つにする。両面張りの壁は面ごとに枠を
+/// 描き分けるが、範囲（＝縮尺）が面ごとに違うと、同じ寸法の面材が表と裏で
+/// 違う大きさに見えてしまうため。
+fn layout_diagram(
+    input: &WallInput,
+    pieces: &[Piece],
+    inspection: &wall_layout::Inspection,
+) -> Value {
+    let (min_x, min_y, max_x, max_y) = wall_layout::bounds(input.width, input.height, pieces);
+
+    let sides: Vec<Value> = inspection
+        .sides
+        .iter()
+        .map(|(side, count, area)| {
+            let on_side: Vec<(usize, &Piece)> = pieces
+                .iter()
+                .enumerate()
+                .filter(|(_, piece)| piece.side == *side)
+                .collect();
+            Value::obj([
+                ("id", side.id().into()),
+                ("label", side.label().into()),
+                ("count", (*count as f64).into()),
+                ("area", (*area).into()),
+                (
+                    "panels",
+                    Value::Arr(
+                        on_side
+                            .iter()
+                            .map(|(index, piece)| {
+                                let (x, y) = piece.origin;
+                                Value::obj([
+                                    ("label", piece.label.clone().into()),
+                                    ("x", x.into()),
+                                    ("y", y.into()),
+                                    ("width", piece.width.into()),
+                                    ("height", piece.height.into()),
+                                    ("sizeLabel", size_text(piece).into()),
+                                    ("note", placement_note(inspection, *index).into()),
+                                    (
+                                        "ok",
+                                        (!inspection.outside[*index]
+                                            && !inspection.overlapping[*index])
+                                            .into(),
+                                    ),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ])
+        })
+        .collect();
+
+    Value::obj([
+        ("wallWidth", input.width.into()),
+        ("wallHeight", input.height.into()),
+        // 壁枠と、置いた全ての面材の外接矩形。はみ出した面材も切り取らず、
+        // はみ出していることが図で見えるようにする。
+        ("minX", min_x.into()),
+        ("minY", min_y.into()),
+        ("maxX", max_x.into()),
+        ("maxY", max_y.into()),
+        ("sides", Value::Arr(sides)),
+    ])
+}
+
+/// 面材の寸法の見出し（「910 × 1,820 mm」）。
+fn size_text(piece: &Piece) -> String {
+    format!(
+        "{} × {} mm",
+        format_int(piece.width),
+        format_int(piece.height)
+    )
+}
+
+/// この面材の配置に付ける注意（無ければ空文字）。
+fn placement_note(inspection: &wall_layout::Inspection, index: usize) -> String {
+    match (inspection.outside[index], inspection.overlapping[index]) {
+        (true, true) => "はみ出し・重なり".to_string(),
+        (true, false) => "はみ出し".to_string(),
+        (false, true) => "重なり".to_string(),
+        (false, false) => String::new(),
+    }
+}
+
+/// 面材の一覧（面材・張る面・寸法・左下の位置・面積・配置の判定）。
+fn layout_rows(pieces: &[Piece], inspection: &wall_layout::Inspection) -> Vec<Value> {
+    pieces
+        .iter()
+        .enumerate()
+        .map(|(index, piece)| {
+            let note = placement_note(inspection, index);
+            let (x, y) = piece.origin;
+            let position = format!("({}, {})", format_dimension(x), format_dimension(y));
+            let verdict = if note.is_empty() {
+                "OK".to_string()
+            } else {
+                note
+            };
+            Value::obj([
+                ("label", piece.label.clone().into()),
+                ("ok", (verdict == "OK").into()),
+                (
+                    "cells",
+                    Value::Arr(
+                        [
+                            piece.side.label().to_string(),
+                            size_text(piece),
+                            position,
+                            format_int(piece.area()),
+                            verdict,
+                        ]
+                        .into_iter()
+                        .map(Value::from)
+                        .collect(),
+                    ),
+                ),
+            ])
+        })
+        .collect()
+}
+
+/// 配置と計算の食い違いを、そのまま読める文にする。
+fn layout_check_text(
+    input: &WallInput,
+    pieces: &[Piece],
+    inspection: &wall_layout::Inspection,
+) -> String {
+    let names = |labels: &[String]| {
+        labels
+            .iter()
+            .map(|label| format!("「{label}」"))
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    let mut problems: Vec<String> = Vec::new();
+    let outside: Vec<String> = inspection
+        .outside
+        .iter()
+        .enumerate()
+        .filter(|(_, flag)| **flag)
+        .map(|(index, _)| pieces[index].label.clone())
+        .collect();
+    if !outside.is_empty() {
+        problems.push(format!(
+            "面材{}が壁（{} × {} mm）からはみ出しています",
+            names(&outside),
+            format_int(input.width),
+            format_int(input.height)
+        ));
+    }
+    for (left, right) in &inspection.overlaps {
+        problems.push(format!("面材「{left}」と「{right}」が同じ面で重なっています"));
+    }
+    if !problems.is_empty() {
+        return problems.join("／");
+    }
+
+    let wall_area = input.width * input.height;
+    let covered: Vec<String> = inspection
+        .sides
+        .iter()
+        .map(|(side, _, area)| {
+            format!(
+                "{} {} mm²（壁面積の {}%）",
+                side.label(),
+                format_int(*area),
+                format_int(area / wall_area * 100.0)
+            )
+        })
+        .collect();
+    format!(
+        "はみ出し・重なりなし　張った面積 {}　壁面積 {} × {} = {} mm²",
+        covered.join("・"),
+        format_int(input.width),
+        format_int(input.height),
+        format_int(wall_area)
+    )
+}
+
 /// 計算できると分かっている面材の結果を組み立てる。
-fn build_panel_report(panel: &PanelInput, nails: &[Nail], index: usize) -> Result<Value, String> {
+fn build_panel_report(
+    panel: &PanelInput,
+    nails: &[Nail],
+    stud_pitch: f64,
+    index: usize,
+) -> Result<Value, String> {
     let area = panel.panel_area();
     let result = nail_array::compute(nails, area).map_err(|error| error.0)?;
     let six = |value: f64| significant(value, SIGNIFICANT_DIGITS);
@@ -900,6 +1183,10 @@ fn build_panel_report(panel: &PanelInput, nails: &[Nail], index: usize) -> Resul
         ])
     };
 
+    // この面材にかかった釘の縦列の本数（面材の左右の縁 ＋ 中間の間柱）。
+    // 釘配列が壁の軸組から決まったことを、計算書の上で追えるようにする。
+    let columns = panel.layout(stud_pitch).stud_positions().len();
+
     // 釘配列諸定数（3.2）そのものには面材と釘の仕様は要らないが、この面材が
     // 壁の計算（3.3）へ何を持ち込むのかが 1 ページで分かるように控えを添える。
     let mut inputs = vec![
@@ -909,8 +1196,8 @@ fn build_panel_report(panel: &PanelInput, nails: &[Nail], index: usize) -> Resul
                 "value",
                 format!(
                     "{} × {} mm",
-                    format_int(panel.width),
-                    format_int(panel.height)
+                    format_int(panel.width()),
+                    format_int(panel.height())
                 )
                 .into(),
             ),
@@ -920,8 +1207,15 @@ fn build_panel_report(panel: &PanelInput, nails: &[Nail], index: usize) -> Resul
             ("value", format!("{} mm²", format_int(area)).into()),
         ]),
         Value::obj([
+            ("label", "壁内の配置".into()),
+            ("value", placement_text(panel).into()),
+        ]),
+        Value::obj([
             ("label", "釘配列".into()),
-            ("value", nail_arrangement_text(panel, nails).into()),
+            (
+                "value",
+                nail_arrangement_text(panel, stud_pitch, columns).into(),
+            ),
         ]),
         Value::obj([
             // 実際に置かれた釘の座標から測る（どの入力方式でも同じ）。
@@ -930,7 +1224,11 @@ fn build_panel_report(panel: &PanelInput, nails: &[Nail], index: usize) -> Resul
                 "value",
                 format!(
                     "{} mm",
-                    format_dimension(layout::min_edge_clearance(nails, panel.width, panel.height))
+                    format_dimension(layout::min_edge_clearance(
+                        nails,
+                        panel.width(),
+                        panel.height()
+                    ))
                 )
                 .into(),
             ),
@@ -945,8 +1243,8 @@ fn build_panel_report(panel: &PanelInput, nails: &[Nail], index: usize) -> Resul
     Ok(Value::obj([
         ("panelId", panel.panel_id.clone().into()),
         ("panelName", panel_label(panel, index).into()),
-        ("width", panel.width.into()),
-        ("height", panel.height.into()),
+        ("width", panel.width().into()),
+        ("height", panel.height().into()),
         (
             "nails",
             Value::Arr(
@@ -1045,16 +1343,25 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
                 panel_label(panel, position)
             )
         };
-        let nails = nails_of(panel).map_err(named)?;
+        let nails = nails_of(panel, input.stud_pitch).map_err(named)?;
         let constants =
             nail_array::compute(&nails, panel.panel_area()).map_err(|error| named(error.0))?;
-        clearances.push(layout::min_edge_clearance(&nails, panel.width, panel.height));
-        panel_reports.push(with_ok(build_panel_report(panel, &nails, position)?));
+        clearances.push(layout::min_edge_clearance(
+            &nails,
+            panel.width(),
+            panel.height(),
+        ));
+        panel_reports.push(with_ok(build_panel_report(
+            panel,
+            &nails,
+            input.stud_pitch,
+            position,
+        )?));
         specs.push(wall::PanelSpec::new(
             &panel_label(panel, position),
             &constants,
-            panel.width,
-            panel.height,
+            panel.width(),
+            panel.height(),
             wall::Grain::from_id(&panel.grain),
             panel.sheathing(),
             panel.nail(),
@@ -1064,10 +1371,15 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
     let result = wall::compute(&wall::Wall {
         height: input.height,
         width: input.width,
-        has_intermediate_stud: input.has_intermediate_stud,
+        has_intermediate_stud: input.has_intermediate_stud(),
         panels: specs,
     })
     .map_err(|error| error.0)?;
+
+    // 壁内の面材配列（配列図・面材の一覧・配置と計算の突き合わせ）。計算その
+    // ものには効かないが、「どう張る前提の計算か」を計算書に残し、配置と
+    // 計算の食い違いをその場で拾う。
+    let arrangement = build_wall_layout(input);
 
     let six = |value: f64| significant(value, SIGNIFICANT_DIGITS);
     let step = |label: &str, equation: &str, value: String| {
@@ -1124,6 +1436,11 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
     let mut inputs = vec![
         row("階高 H", format!("{} mm", format_int(input.height))),
         row("壁の幅 W", format!("{} mm", format_int(input.width))),
+        // 釘の縦列の位置は、この間柱ピッチと面材の占有領域で決まる。
+        row(
+            "間柱・根太ピッチ",
+            format!("@{} mm（壁の左端から）", format_dimension(input.stud_pitch)),
+        ),
     ];
     // 面材と釘は面材ごとの入力なので、壁の控えには「全面材で同じかどうか」を
     // 書き、数値は下の面材ごとの表に並べる（混在した壁でも読み違えない）。
@@ -1146,8 +1463,10 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
     inputs.push(row(
         "中間材（間柱等）",
         format!(
-            "{}（せん断座屈の ξ = {}）",
-            if input.has_intermediate_stud {
+            // 「設けるか」は別入力ではなく、間柱ピッチと壁の幅で決まる
+            //（釘は間柱に打っているのに ξ = 1、という食い違いを作らない）。
+            "{}（間柱ピッチと壁の幅による／せん断座屈の ξ = {}）",
+            if input.has_intermediate_stud() {
                 "あり"
             } else {
                 "なし"
@@ -1159,6 +1478,7 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
         "面材の枚数",
         format!("{} 枚", format_int(result.panels.len() as f64)),
     ));
+    inputs.push(row("面材の配置", arrangement.summary.clone()));
 
     // 面材のせん断破壊・せん断座屈の検定で、いちばん余裕の少ない面材。
     let worst = |ratio: fn(&wall::PanelResult) -> f64| {
@@ -1176,11 +1496,103 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
     let worst_shear = worst(|panel| panel.tau_n / panel.spec.sheathing.tau_max);
     let worst_buckling = worst(|panel| panel.tau_n / panel.tau_cr);
 
+    // 判定は、まず「計算した面材の並びが、想定した張り方と合っているか」から
+    // 始める（配置を書いていない壁では、この行そのものが出ない）。そのあとに
+    // 適用範囲と面材の検定が続く。
+    let mut checks: Vec<Value> = Vec::with_capacity(5);
+    checks.push(arrangement.check.clone());
+    checks.extend([
+        Value::obj([
+            ("label", "適用範囲 3.3(1)① 許容せん断耐力の上限".into()),
+            (
+                "value",
+                format!(
+                    "ΔPa = {} kN/m {} {} kN/m",
+                    six(result.delta_pa),
+                    if result.within_limit { "≦" } else { ">" },
+                    six(wall::ALLOWABLE_SHEAR_LIMIT)
+                )
+                .into(),
+            ),
+            ("ok", result.within_limit.into()),
+        ]),
+        Value::obj([
+            ("label", "適用範囲 3.3(1)④ 面材のへりあき".into()),
+            (
+                "value",
+                // 必要なへりあきは面材ごとに選んだ釘で決まるので、
+                // いちばん余裕の少ない面材を名前で示す。
+                format!(
+                    "最小 へりあき {} mm {} {} mm（面材「{}」／ {}）",
+                    format_dimension(worst_edge),
+                    if edge_ok { "≧" } else { "<" },
+                    format_dimension(required_edge),
+                    panel_label(&input.panels[worst_position], worst_position),
+                    edge_basis
+                )
+                .into(),
+            ),
+            ("ok", edge_ok.into()),
+        ]),
+        Value::obj([
+            ("label", "面材のせん断破壊 τN < τmax（3.3.8）".into()),
+            (
+                "value",
+                // どの面材の値かは、上の面材ごとの表で分かる。ここは
+                // いちばん余裕の少ない面材の値だけを短く出す（τmax は
+                // 面材ごとに違うので、比がいちばん大きい面材を採る）。
+                format!(
+                    "最大 τN/τmax の面材で τN = {} {} τmax = {} N/mm²",
+                    six(worst_shear.tau_n),
+                    if result.shear_ok { "<" } else { "≧" },
+                    six(worst_shear.spec.sheathing.tau_max)
+                )
+                .into(),
+            ),
+            ("ok", result.shear_ok.into()),
+        ]),
+        Value::obj([
+            ("label", "面材のせん断座屈 τN < τcr（3.3.8）".into()),
+            (
+                "value",
+                format!(
+                    "最大 τN/τcr の面材で τN = {} {} τcr = {} N/mm²",
+                    six(worst_buckling.tau_n),
+                    if result.buckling_ok { "<" } else { "≧" },
+                    six(worst_buckling.tau_cr)
+                )
+                .into(),
+            ),
+            ("ok", result.buckling_ok.into()),
+        ]),
+    ]);
+
     Ok(Value::obj([
         ("wallId", input.wall_id.clone().into()),
         ("wallName", wall_label(input, index).into()),
         ("panelReports", Value::Arr(panel_reports)),
         ("inputs", Value::Arr(inputs)),
+        // 壁内の面材配列。図（wallDiagram）と、その凡例になる面材の一覧
+        // （layoutColumns / layout）。配置を書いていない壁では図が null・
+        // 一覧が空になり、画面も計算書もこの節ごと出さない。
+        ("wallDiagram", arrangement.diagram),
+        (
+            "layoutColumns",
+            Value::Arr(
+                [
+                    "面材",
+                    "張る面",
+                    "寸法 W × H",
+                    "左下 (X, Y) [mm]",
+                    "面積 Aw [mm²]",
+                    "配置",
+                ]
+                .into_iter()
+                .map(Value::from)
+                .collect(),
+            ),
+        ),
+        ("layout", Value::Arr(arrangement.rows)),
         // 面材ごとの面材と釘（面材ごとに違う仕様を張り分けられるので、どの
         // 面材がどの数値で計算されたのかを壁のページにも残す）。
         (
@@ -1413,74 +1825,7 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
                     .collect(),
             ),
         ),
-        (
-            "checks",
-            Value::Arr(vec![
-                Value::obj([
-                    ("label", "適用範囲 3.3(1)① 許容せん断耐力の上限".into()),
-                    (
-                        "value",
-                        format!(
-                            "ΔPa = {} kN/m {} {} kN/m",
-                            six(result.delta_pa),
-                            if result.within_limit { "≦" } else { ">" },
-                            six(wall::ALLOWABLE_SHEAR_LIMIT)
-                        )
-                        .into(),
-                    ),
-                    ("ok", result.within_limit.into()),
-                ]),
-                Value::obj([
-                    ("label", "適用範囲 3.3(1)④ 面材のへりあき".into()),
-                    (
-                        "value",
-                        // 必要なへりあきは面材ごとに選んだ釘で決まるので、
-                        // いちばん余裕の少ない面材を名前で示す。
-                        format!(
-                            "最小 へりあき {} mm {} {} mm（面材「{}」／ {}）",
-                            format_dimension(worst_edge),
-                            if edge_ok { "≧" } else { "<" },
-                            format_dimension(required_edge),
-                            panel_label(&input.panels[worst_position], worst_position),
-                            edge_basis
-                        )
-                        .into(),
-                    ),
-                    ("ok", edge_ok.into()),
-                ]),
-                Value::obj([
-                    ("label", "面材のせん断破壊 τN < τmax（3.3.8）".into()),
-                    (
-                        "value",
-                        // どの面材の値かは、上の面材ごとの表で分かる。ここは
-                        // いちばん余裕の少ない面材の値だけを短く出す（τmax は
-                        // 面材ごとに違うので、比がいちばん大きい面材を採る）。
-                        format!(
-                            "最大 τN/τmax の面材で τN = {} {} τmax = {} N/mm²",
-                            six(worst_shear.tau_n),
-                            if result.shear_ok { "<" } else { "≧" },
-                            six(worst_shear.spec.sheathing.tau_max)
-                        )
-                        .into(),
-                    ),
-                    ("ok", result.shear_ok.into()),
-                ]),
-                Value::obj([
-                    ("label", "面材のせん断座屈 τN < τcr（3.3.8）".into()),
-                    (
-                        "value",
-                        format!(
-                            "最大 τN/τcr の面材で τN = {} {} τcr = {} N/mm²",
-                            six(worst_buckling.tau_n),
-                            if result.buckling_ok { "<" } else { "≧" },
-                            six(worst_buckling.tau_cr)
-                        )
-                        .into(),
-                    ),
-                    ("ok", result.buckling_ok.into()),
-                ]),
-            ]),
-        ),
+        ("checks", Value::Arr(checks)),
         (
             "result",
             Value::obj([
@@ -1512,9 +1857,9 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
 /// 見えるようにするため。
 fn build_diagram(panel: &PanelInput, nails: &[Nail], result: &nail_array::Constants) -> Value {
     let mut min_x = 0.0_f64;
-    let mut max_x = panel.width;
+    let mut max_x = panel.width();
     let mut min_y = 0.0_f64;
-    let mut max_y = panel.height;
+    let mut max_y = panel.height();
     for nail in nails {
         min_x = min_x.min(nail.x);
         max_x = max_x.max(nail.x);
@@ -1540,8 +1885,8 @@ fn build_diagram(panel: &PanelInput, nails: &[Nail], result: &nail_array::Consta
     let ys: Vec<f64> = nails.iter().map(|nail| nail.y).collect();
 
     Value::obj([
-        ("panelWidth", panel.width.into()),
-        ("panelHeight", panel.height.into()),
+        ("panelWidth", panel.width().into()),
+        ("panelHeight", panel.height().into()),
         ("minX", min_x.into()),
         ("maxX", max_x.into()),
         ("minY", min_y.into()),
@@ -1566,22 +1911,6 @@ fn build_diagram(panel: &PanelInput, nails: &[Nail], result: &nail_array::Consta
     ])
 }
 
-/// 割り付けの型（画面の選択肢）。
-pub fn arrangements() -> Value {
-    Value::Arr(
-        layout::ARRANGEMENTS
-            .iter()
-            .map(|arrangement| {
-                Value::obj([
-                    ("id", arrangement.id().into()),
-                    ("label", arrangement.label().into()),
-                    ("note", arrangement.description().into()),
-                ])
-            })
-            .collect(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1590,6 +1919,11 @@ mod tests {
     /// グレー本 解説の計算例（図 3.2.2）。W 910 × H 610 の横置きで、
     /// へりあき 10 mm を見込んだ配列（本は左下の釘を (0, 0) として書いている）。
     ///
+    /// 本の図は川型（縦線だけ）だが、面材張り大壁は適用範囲 3.3(1)⑤ により
+    /// 四周打ちなので、この形の入力から出てくる釘配列は日型になる。川型・
+    /// 山型・ロ型を含む表 3.2.1 の全 106 通りとの突き合わせは presets.rs に
+    /// あり、割り付け規則そのものはそちらで検証している。
+    ///
     /// 面材と釘は 3.3(3) の計算例と同じ（構造用合板 12mm ＋ 鉄丸釘 N-65）。
     /// 釘配列諸定数（3.2）そのものには効かないが、面材ごとの入力なので
     /// 面材 1 枚を作るたびに付いてくる。
@@ -1597,18 +1931,27 @@ mod tests {
         PanelInput {
             panel_id: "w1-p1".to_string(),
             panel_name: "グレー本の計算例".to_string(),
-            width: 910.0,
-            height: 610.0,
-            mode: "layout".to_string(),
-            arrangement: "kawa".to_string(),
-            stud_pitch: 455.0,
+            side: "front".to_string(),
+            left: 0.0,
+            bottom: 0.0,
+            right: 910.0,
+            top: 610.0,
             nail_pitch: 150.0,
             edge_distance: 10.0,
-            grid_x: String::new(),
-            grid_y: String::new(),
-            coords: String::new(),
             grain: String::new(),
             ..example_spec()
+        }
+    }
+
+    /// 面材 1 枚だけの壁（間柱は尺モジュール @455）。
+    fn example_wall_of(panel: PanelInput) -> WallInput {
+        WallInput {
+            wall_id: "w1".to_string(),
+            wall_name: String::new(),
+            height: 2900.0,
+            width: 910.0,
+            stud_pitch: DEFAULT_STUD_PITCH,
+            panels: vec![panel],
         }
     }
 
@@ -1662,12 +2005,13 @@ mod tests {
     fn keeps_only_known_keys() {
         let data = normalize(
             r#"{"projectName": " 邸 ", "unknown": 1,
-                "walls": [{"height": "2900", "junk": 2, "panels": [{"width": "610"}]}]}"#,
+                "walls": [{"height": "2900", "junk": 2,
+                           "panels": [{"right": "610", "top": "910"}]}]}"#,
         )
         .unwrap();
         assert_eq!(data.project_name, "邸");
         assert_eq!(data.walls[0].height, 2900.0);
-        assert_eq!(data.walls[0].panels[0].width, 610.0);
+        assert_eq!(data.walls[0].panels[0].width(), 610.0);
         assert_eq!(data.to_value().get("unknown"), None);
         assert_eq!(data.to_value().get("patterns"), None);
     }
@@ -1681,15 +2025,44 @@ mod tests {
         assert!(data.walls[0].panels.is_empty());
     }
 
-    /// 面材の既定は「割り付け・日型（四周打ち）・へりあき 10 mm」。
+    /// 面材の既定は「表面・へりあき 10 mm」、壁の既定は間柱 @455。
     #[test]
-    fn a_panel_defaults_to_a_four_sided_layout() {
-        let data = normalize(r#"{"walls": [{"panels": [{"width": 910}]}]}"#).unwrap();
+    fn a_panel_defaults_to_the_front_side_and_ten_millimetres() {
+        let data = normalize(r#"{"walls": [{"panels": [{"right": 910, "top": 1820}]}]}"#).unwrap();
         let panel = &data.walls[0].panels[0];
         assert_eq!(panel.panel_id, "w1-p1");
-        assert_eq!(panel.mode, "layout");
-        assert_eq!(panel.arrangement, "hi");
+        assert_eq!(panel.side, "front");
         assert_eq!(panel.edge_distance, DEFAULT_EDGE_DISTANCE);
+        assert_eq!(data.walls[0].stud_pitch, DEFAULT_STUD_PITCH);
+    }
+
+    /// 面材の寸法は、壁の中で占める領域から決まる（別に入力しない）。
+    #[test]
+    fn the_size_of_a_panel_comes_from_the_area_it_covers() {
+        let data = normalize(
+            r#"{"walls": [{"panels": [
+                 {"left": 0, "bottom": 0, "right": 910, "top": 1820},
+                 {"left": 910, "bottom": 1820, "right": 1820, "top": 2730}
+               ]}]}"#,
+        )
+        .unwrap();
+
+        let panels = &data.walls[0].panels;
+        assert_eq!((panels[0].width(), panels[0].height()), (910.0, 1820.0));
+        assert_eq!(panels[0].panel_area(), 1_656_200.0);
+        assert_eq!((panels[1].width(), panels[1].height()), (910.0, 910.0));
+    }
+
+    /// 領域が矩形になっていない面材は計算できない（配置が必須ということ）。
+    #[test]
+    fn a_panel_without_an_area_cannot_be_calculated() {
+        let panel = PanelInput {
+            right: 0.0,
+            top: 0.0,
+            ..example_panel()
+        };
+        let error = nails_of(&panel, DEFAULT_STUD_PITCH).unwrap_err();
+        assert!(error.contains("壁の中で面材が占める領域"), "{error}");
     }
 
     /// へりあきは面材ごとに変えられる（釘・面材の種類に合わせるため）。
@@ -1755,8 +2128,8 @@ mod tests {
 
     #[test]
     fn rejects_a_non_numeric_dimension() {
-        let error = normalize(r#"{"walls": [{"panels": [{"width": "ろく"}]}]}"#).unwrap_err();
-        assert!(error.contains("面材の幅 W"), "{error}");
+        let error = normalize(r#"{"walls": [{"panels": [{"right": "ろく"}]}]}"#).unwrap_err();
+        assert!(error.contains("面材の右端 X"), "{error}");
     }
 
     #[test]
@@ -1765,44 +2138,18 @@ mod tests {
         let error = normalize(&format!(r#"{{"walls": [{walls}]}}"#)).unwrap_err();
         assert!(error.contains("壁は"), "{error}");
 
-        let panels = vec![r#"{"width": 910}"#; MAX_WALL_PANELS + 1].join(",");
+        let panels = vec![r#"{"right": 910, "top": 910}"#; MAX_WALL_PANELS + 1].join(",");
         let error = normalize(&format!(r#"{{"walls": [{{"panels": [{panels}]}}]}}"#)).unwrap_err();
         assert!(error.contains("面材は"), "{error}");
     }
 
-    #[test]
-    fn parses_number_lists_ignoring_separators_and_junk() {
-        assert_eq!(
-            parse_number_list("0, 445  890\n1200"),
-            vec![0.0, 445.0, 890.0, 1200.0]
-        );
-        assert_eq!(parse_number_list("0, あ, 445"), vec![0.0, 445.0]);
-        assert!(parse_number_list("").is_empty());
-    }
+    // --- 前の版で保存した計算書 PDF の読み込み --------------------------------
 
-    /// 日本語入力のまま打ち込んでも読めること（打ち直させない）。
-    #[test]
-    fn parses_full_width_numbers_and_separators() {
-        assert_eq!(
-            parse_number_list("０、４４５　８９０"),
-            vec![0.0, 445.0, 890.0]
-        );
-        assert_eq!(parse_number_list("−１２．５，３"), vec![-12.5, 3.0]);
-    }
-
-    #[test]
-    fn parses_two_numbers_per_coordinate_line() {
-        let nails = parse_coord_lines("0, 0\n445 295\n\n910\n");
-        assert_eq!(
-            nails,
-            vec![Nail { x: 0.0, y: 0.0 }, Nail { x: 445.0, y: 295.0 }]
-        );
-    }
-
-    // --- 古い形（釘配列パターン）の読み込み ----------------------------------
-
-    /// 前の版で保存した PDF（パターンを別に登録し、壁が patternId で指す形）は、
-    /// 壁が面材そのものを持つ今の形へ移して読む。
+    /// 釘配列パターンを別に登録し、壁が patternId で指していた形。
+    ///
+    /// 面材ごとの寸法は「壁の中で占める領域」へ移し替える（位置が無いので
+    /// 下から順に積む）。釘配列は壁の軸組から作り直すので、当時 格子・座標で
+    /// 入れていた釘そのものは引き継がない。
     #[test]
     fn reads_the_legacy_pattern_form() {
         let data = normalize(
@@ -1817,9 +2164,8 @@ mod tests {
         assert_eq!(data.walls.len(), 1);
         let panel = &data.walls[0].panels[0];
         assert_eq!(panel.panel_name, "南面 下");
-        assert_eq!(panel.width, 910.0);
-        assert_eq!(panel.mode, "grid");
-        assert_eq!(panel.grid_x, "10, 455, 900");
+        assert_eq!((panel.left, panel.bottom), (0.0, 0.0));
+        assert_eq!((panel.right, panel.top), (910.0, 610.0));
         assert_eq!(panel.grain, "width");
         assert_eq!(data.walls[0].wall_name, "南面");
         assert_eq!(data.walls[0].height, 2900.0);
@@ -1839,57 +2185,140 @@ mod tests {
 
         assert_eq!(data.walls.len(), 2);
         assert_eq!(data.walls[0].panels[0].panel_name, "使う");
-        assert_eq!(data.walls[0].panels[0].mode, "coords");
         assert_eq!(data.walls[1].wall_name, "余り");
-        assert_eq!(data.walls[1].panels[0].width, 910.0);
+        assert_eq!(data.walls[1].panels[0].width(), 910.0);
+    }
+
+    /// 面材ごとに寸法を持ち、壁の中の位置を持たなかった版の入力は、
+    /// 張る面ごとに下から順に積んで領域に直す（重ならないように）。
+    #[test]
+    fn panels_without_a_position_are_stacked_from_the_bottom() {
+        let data = normalize(
+            r#"{"walls": [{"height": 3000, "width": 910, "panels": [
+                 {"width": 910, "height": 1820},
+                 {"width": 910, "height": 910},
+                 {"width": 910, "height": 1820, "side": "back"}
+               ]}]}"#,
+        )
+        .unwrap();
+
+        let panels = &data.walls[0].panels;
+        assert_eq!((panels[0].bottom, panels[0].top), (0.0, 1820.0));
+        assert_eq!((panels[1].bottom, panels[1].top), (1820.0, 2730.0));
+        // 裏面は裏面で下から積む（表面の上には乗らない）。
+        assert_eq!((panels[2].bottom, panels[2].top), (0.0, 1820.0));
+        assert_eq!(panels[2].side, "back");
+    }
+
+    /// 左下だけを入れていた版（配置が任意入力だったころ）の入力も読む。
+    #[test]
+    fn panels_with_only_a_lower_left_corner_keep_that_position() {
+        let data = normalize(
+            r#"{"walls": [{"panels": [
+                 {"width": 910, "height": 910, "originX": 455, "originY": 1820}]}]}"#,
+        )
+        .unwrap();
+
+        let panel = &data.walls[0].panels[0];
+        assert_eq!((panel.left, panel.bottom), (455.0, 1820.0));
+        assert_eq!((panel.right, panel.top), (1365.0, 2730.0));
+    }
+
+    /// 間柱ピッチは壁の入力だが、前の版では面材ごとの割り付けの欄にあった。
+    #[test]
+    fn the_stud_pitch_of_an_older_panel_moves_onto_the_wall() {
+        let data = normalize(
+            r#"{"walls": [{"panels": [
+                 {"width": 1820, "height": 910, "studPitch": 910}]}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(data.walls[0].stud_pitch, 910.0);
+        // 壁が自分で持っていれば、そちらが優先される。
+        let data = normalize(
+            r#"{"walls": [{"studPitch": 500, "panels": [
+                 {"width": 1820, "height": 910, "studPitch": 910}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(data.walls[0].stud_pitch, 500.0);
     }
 
     // --- 面材 1 枚の計算（グレー本 3.2） -------------------------------------
 
+    /// 釘配列は、壁の軸組（間柱ピッチ）と面材の占有領域から組み立てる。
+    ///
+    /// 910 × 610 を壁の左下に張り、間柱 @455・釘 @150。四周打ちなので
+    /// 縦線は 0・455・910、横線は上下端。表 3.2.1 の「910×610 横置・日型
+    /// （@455 / 釘 @150）」と同じ配列になる。
     #[test]
-    fn the_reference_example_matches_the_book() {
-        let report = compute_panel(&example_panel(), 0).unwrap();
+    fn the_nail_array_comes_from_the_wall_frame() {
+        let report = compute_panel(&example_panel(), DEFAULT_STUD_PITCH, 0).unwrap();
 
+        assert_eq!(report.get("panelArea").unwrap().as_f64(), Some(555_100.0));
+        // 表 3.2.1 の同じ欄（Ixy 1.56 / Zxy 0.0063 / Cxy 1.23）と合う。
+        let preset = crate::presets::find("910x610-s455-n150-hi").unwrap();
         assert_eq!(
-            labelled(&report, "summary", "key"),
-            vec![
-                ("Ixy".to_string(), "0.888868".to_string()),
-                ("Zxy".to_string(), "0.00358851".to_string()),
-                ("Cxy".to_string(), "1.26155".to_string()),
-            ]
+            report.get("nails").unwrap().as_array().unwrap().len(),
+            preset.nails().len()
         );
-        assert_eq!(report.get("nails").unwrap().as_array().unwrap().len(), 15);
-        assert_eq!(report.get("panelArea").unwrap().as_f64(), Some(555100.0));
+        let ixy = report.get("result").unwrap().get("Ixy").unwrap().as_f64().unwrap();
+        assert!((ixy - 1.56).abs() <= 0.02, "{ixy}");
+    }
 
-        let steps = labelled(&report, "steps", "label");
-        let step = |label: &str| {
-            steps
-                .iter()
-                .find(|(name, _)| name == label)
-                .map(|(_, value)| value.clone())
-                .unwrap()
+    /// 同じ面材でも、壁の中で置く場所が変われば釘の縦列が変わる。
+    #[test]
+    fn moving_a_panel_along_the_wall_changes_its_nail_columns() {
+        // 幅 455 の面材を、間柱と間柱のあいだ（455〜910）に張ると中間の
+        // 縦列が無くなり、壁の左端（0〜455）に張ったときと同じ 2 列になる。
+        let between = PanelInput {
+            left: 455.0,
+            right: 910.0,
+            ..example_panel()
         };
-        // 本は左下の釘を原点にしているので x0 = 445.0。ここはへりあき
-        // 10 mm を見込んで面材の左下を原点にするため、その分だけ動く。
-        assert_eq!(step("X方向 中立軸 x0"), "455.000 mm");
-        assert_eq!(step("二次モーメント Iy"), "1,980,250 mm²");
-        assert_eq!(step("変形割合 αx"), "0.750834");
+        let at_edge = PanelInput {
+            left: 0.0,
+            right: 455.0,
+            ..example_panel()
+        };
+        let columns = |panel: &PanelInput| panel.layout(DEFAULT_STUD_PITCH).stud_positions().len();
+        assert_eq!(columns(&between), 2);
+        assert_eq!(columns(&at_edge), 2);
+
+        // 間柱をまたぐ位置（0〜910）なら 3 列。
+        assert_eq!(columns(&example_panel()), 3);
+    }
+
+    /// 3.3(1)⑧ により、面材の長辺方向に走る間柱の釘列は計算に含めない。
+    #[test]
+    fn a_portrait_panel_drops_the_intermediate_columns() {
+        let portrait = PanelInput {
+            right: 910.0,
+            top: 1820.0,
+            ..example_panel()
+        };
+        assert_eq!(portrait.layout(DEFAULT_STUD_PITCH).stud_positions().len(), 2);
     }
 
     #[test]
     fn the_inputs_section_repeats_what_was_typed() {
-        let report = compute_panel(&example_panel(), 0).unwrap();
+        let report = compute_panel(&example_panel(), DEFAULT_STUD_PITCH, 0).unwrap();
         let inputs = labelled(&report, "inputs", "label");
+
         assert!(inputs.contains(&("面材寸法 W × H".to_string(), "910 × 610 mm".to_string())));
         assert!(inputs.contains(&("面材面積 Aw".to_string(), "555,100 mm²".to_string())));
-        assert!(inputs.contains(&("釘本数 n".to_string(), "15 本".to_string())));
-        // 割り付けの入力は、型・ピッチ・へりあきがそのまま読める形で残す。
+        assert!(inputs.contains(&(
+            "壁内の配置".to_string(),
+            "表面　左下 (0, 0) 〜 右上 (910, 610) mm".to_string()
+        )));
+        // 釘配列は入力ではなく導出なので、何から決まったのかを控えに残す。
         let arrangement = inputs
             .iter()
             .find(|(label, _)| label == "釘配列")
             .map(|(_, value)| value.clone())
             .unwrap();
-        assert!(arrangement.contains("川型"), "{arrangement}");
+        assert!(arrangement.contains("四周打ち"), "{arrangement}");
+        assert!(arrangement.contains("間柱 @455"), "{arrangement}");
+        assert!(arrangement.contains("縦列 3 本"), "{arrangement}");
         assert!(arrangement.contains("釘 @150"), "{arrangement}");
         assert!(arrangement.contains("へりあき 10 mm"), "{arrangement}");
     }
@@ -1898,7 +2327,7 @@ mod tests {
     /// （どの面材がどの仕様で壁の計算に入ったのかが 1 ページで分かる）。
     #[test]
     fn the_inputs_section_carries_the_specification_of_this_panel() {
-        let report = compute_panel(&example_panel(), 0).unwrap();
+        let report = compute_panel(&example_panel(), DEFAULT_STUD_PITCH, 0).unwrap();
         let inputs = labelled(&report, "inputs", "label");
 
         assert!(inputs.contains(&(
@@ -1926,6 +2355,7 @@ mod tests {
                 grade_id: String::new(),
                 ..example_panel()
             },
+            DEFAULT_STUD_PITCH,
             0,
         )
         .unwrap();
@@ -1940,12 +2370,13 @@ mod tests {
     /// へりあきを広げると釘が内側に寄り、諸定数が小さくなる。
     #[test]
     fn a_wider_edge_distance_lowers_the_constants() {
-        let narrow = compute_panel(&example_panel(), 0).unwrap();
+        let narrow = compute_panel(&example_panel(), DEFAULT_STUD_PITCH, 0).unwrap();
         let wide = compute_panel(
             &PanelInput {
                 edge_distance: 30.0,
                 ..example_panel()
             },
+            DEFAULT_STUD_PITCH,
             0,
         )
         .unwrap();
@@ -1953,74 +2384,40 @@ mod tests {
         assert!(ixy(&wide) < ixy(&narrow));
     }
 
-    #[test]
-    fn a_grid_is_every_combination() {
-        let panel = PanelInput {
-            mode: "grid".to_string(),
-            grid_x: "10, 455, 900".to_string(),
-            grid_y: "10, 155, 305, 455, 600".to_string(),
-            ..example_panel()
-        };
-        assert_eq!(nails_of(&panel).unwrap().len(), 15);
-    }
-
-    #[test]
-    fn coordinate_mode_reads_the_text_area() {
-        let panel = PanelInput {
-            mode: "coords".to_string(),
-            coords: "0, 0\n0, 455\n455, 910".to_string(),
-            ..example_panel()
-        };
-        let report = compute_panel(&panel, 0).unwrap();
-        assert_eq!(report.get("nails").unwrap().as_array().unwrap().len(), 3);
-        let inputs = labelled(&report, "inputs", "label");
-        assert!(inputs.contains(&("釘配列".to_string(), "座標を直接入力（3 点）".to_string())));
-    }
-
     /// 桁を間違えた入力で計算とページ描画が止まらないようにする。
     #[test]
     fn rejects_an_absurd_number_of_nails() {
-        // 割り付け: 釘ピッチ 1 mm。
         let dense = PanelInput {
             nail_pitch: 0.5,
             ..example_panel()
         };
-        assert!(nails_of(&dense).unwrap_err().contains("釘の本数が多すぎます"));
+        assert!(nails_of(&dense, DEFAULT_STUD_PITCH)
+            .unwrap_err()
+            .contains("釘の本数が多すぎます"));
 
-        // 格子: 100 × 100 の組合せ。
-        let axis = (0..100).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
-        let grid = PanelInput {
-            mode: "grid".to_string(),
-            grid_x: axis.clone(),
-            grid_y: axis,
-            ..example_panel()
-        };
-        assert!(nails_of(&grid).unwrap_err().contains("釘の本数が多すぎます"));
+        // 間柱ピッチのほうを間違えても、座標を作る前に止める。
+        let studs = nails_of(&example_panel(), 0.01).unwrap_err();
+        assert!(studs.contains("間柱・根太ピッチが小さすぎます"), "{studs}");
     }
 
     /// 計算できない理由は、式の言葉ではなく入力欄の言葉で伝える。
     #[test]
     fn unusable_panels_are_explained_in_the_words_of_the_form() {
-        let coords = |text: &str| PanelInput {
-            mode: "coords".to_string(),
-            coords: text.to_string(),
-            ..example_panel()
-        };
         let cases = [
-            // 釘が無い / 面材の寸法が入っていない。
-            (coords(""), "釘座標が入力されていません"),
             (
                 PanelInput {
-                    width: 0.0,
-                    ..coords("0, 0\n445, 295")
+                    right: 0.0,
+                    ..example_panel()
                 },
-                "面材の幅 W と高さ H に正の数値",
+                "壁の中で面材が占める領域",
             ),
-            // 釘が 1 点に集中している（Ix + Iy = 0）。
-            (coords("100, 200"), "1 点に集中している"),
-            // 釘が 1 直線上に並ぶ（Zx もしくは Zy が 0 → Zxy = 0）。
-            (coords("0, 295\n445, 295"), "1 直線上に並んでいる"),
-            // 割り付けの入力が足りない。
+            (
+                PanelInput {
+                    top: 0.0,
+                    ..example_panel()
+                },
+                "壁の中で面材が占める領域",
+            ),
             (
                 PanelInput {
                     nail_pitch: 0.0,
@@ -2037,7 +2434,7 @@ mod tests {
             ),
         ];
         for (panel, expected) in cases {
-            let error = compute_panel(&panel, 0).unwrap_err();
+            let error = compute_panel(&panel, DEFAULT_STUD_PITCH, 0).unwrap_err();
             assert!(error.contains(expected), "{error} should mention {expected}");
         }
     }
@@ -2046,9 +2443,17 @@ mod tests {
 
     /// グレー本 3.3(3) の計算例（図 3.3.10）を、フォームの入力の形で組み立てる。
     ///
-    /// 面材は表 3.2.1 の配列をそのまま割り付けの欄へ入れ、面材と釘は
-    /// 2 枚とも計算例の組合せにする（本文が計算に使っている数値。表 3.3.1 の
-    /// N-65 / CN65 の入れ替わりについては wall.rs のコメント）。
+    /// 階高 3000・幅 910 の準耐力壁形式の大壁に、下から 910 × 1820、その上に
+    /// 910 × 910 を張る。間柱は 30 × 105 を @455。面材と釘は 2 枚とも計算例の
+    /// 組合せ（本文が計算に使っている数値。表 3.3.1 の N-65 / CN65 の
+    /// 入れ替わりについては wall.rs のコメント）。
+    ///
+    /// **本と 1 か所だけ違う**: 本は上側の 910 × 910 を表 3.2.1 の「ロ型」
+    /// （中間の間柱に釘を打たない配列）として計算している。釘配列を壁の軸組から
+    /// 導くこのツールでは、@455 の間柱が正方形の面材の内側に来るので、その列にも
+    /// 釘が入る（表 3.2.1 の「日型」の欄にあたる）。本より釘が多くなるぶん
+    /// 上側の面材の K0・My・Mu は大きく出る。下側の 910 × 1820 は 3.3(1)⑧ に
+    /// より中間の間柱を含めないので、本とまったく同じ配列になる。
     fn wall_example_form() -> FormData {
         FormData {
             project_name: "グレー本 3.3 の計算例".to_string(),
@@ -2058,33 +2463,35 @@ mod tests {
                 wall_name: "計算例の大壁".to_string(),
                 height: 3000.0,
                 width: 910.0,
-                has_intermediate_stud: true,
+                stud_pitch: 455.0,
                 panels: vec![
-                    example_preset_panel(0, "910x1820-s455-n75-hi"),
-                    example_preset_panel(1, "910x910-s455-n75-ro"),
+                    example_placed_panel(0, "下段", 0.0, 0.0, 910.0, 1820.0),
+                    example_placed_panel(1, "上段", 0.0, 1820.0, 910.0, 2730.0),
                 ],
             }],
         }
     }
 
-    /// 表 3.2.1 の配列に、計算例の面材と釘を組み合わせた面材 1 枚。
-    fn example_preset_panel(index: usize, id: &str) -> PanelInput {
-        let preset = crate::presets::find(id).expect("表 3.2.1 にある配列");
-        let layout = normalize_panel(&preset.to_panel_value(), "w1", index).unwrap();
+    /// 計算例の面材と釘（釘 @75）を、壁の中の領域に置いた面材 1 枚。
+    fn example_placed_panel(
+        index: usize,
+        name: &str,
+        left: f64,
+        bottom: f64,
+        right: f64,
+        top: f64,
+    ) -> PanelInput {
         PanelInput {
-            panel_id: layout.panel_id,
-            panel_name: layout.panel_name,
-            width: layout.width,
-            height: layout.height,
-            mode: layout.mode,
-            arrangement: layout.arrangement,
-            stud_pitch: layout.stud_pitch,
-            nail_pitch: layout.nail_pitch,
-            edge_distance: layout.edge_distance,
-            grid_x: layout.grid_x,
-            grid_y: layout.grid_y,
-            coords: layout.coords,
-            grain: layout.grain,
+            panel_id: format!("w1-p{}", index + 1),
+            panel_name: name.to_string(),
+            side: "front".to_string(),
+            left,
+            bottom,
+            right,
+            top,
+            nail_pitch: 75.0,
+            edge_distance: 10.0,
+            grain: String::new(),
             ..example_spec()
         }
     }
@@ -2094,6 +2501,11 @@ mod tests {
     }
 
     /// 本: Pa = 8.37 kN、ΔPa = 9.20 kN/m（決めているのは K0/150）。
+    ///
+    /// このツールの答えは本より数 % 大きい（Pa +1.2%、K0 +1.2%、My +1.7%、
+    /// Mu +2.8%）。上側の 910 × 910 に、本には無い間柱の釘列が入るため
+    /// （`wall_example_form` のコメント参照）。決めている項（K0/150）も
+    /// 塑性率 μ も本と同じで、違いは釘の本数だけ。
     #[test]
     fn the_wall_example_matches_the_book() {
         let report = only_wall(&wall_example_form());
@@ -2104,12 +2516,35 @@ mod tests {
 
         let result = report.get("result").unwrap();
         let value = |key: &str| result.get(key).unwrap().as_f64().unwrap();
-        assert!((value("Pa") - 8.37).abs() <= 0.03, "{}", value("Pa"));
-        assert!((value("dPa") - 9.20).abs() <= 0.03, "{}", value("dPa"));
-        assert!((value("K0") - 3_765_224.0).abs() <= 12_000.0, "{}", value("K0"));
-        assert!((value("My") - 34_623.0).abs() <= 100.0, "{}", value("My"));
-        assert!((value("Mu") - 41_312.0).abs() <= 100.0, "{}", value("Mu"));
+        // 塑性率 μ は下側の面材（本と同じ配列）で決まるので、本と一致する。
         assert!((value("mu") - 5.25).abs() <= 0.01, "{}", value("mu"));
+        // 残りは本より大きく、その差は 1.5% 以内に収まる。
+        for (key, book) in [
+            ("Pa", 8.37),
+            ("dPa", 9.20),
+            ("K0", 3_765_224.0),
+            ("My", 34_623.0),
+            ("Mu", 41_312.0),
+        ] {
+            let got = value(key);
+            assert!(got > book, "{key}: {got} は本の {book} より大きいはず");
+            assert!(
+                (got - book) / book <= 0.03,
+                "{key}: {got} と本の {book} の差が大きすぎます"
+            );
+        }
+    }
+
+    /// 下側の 910 × 1820 は、本の配列（表 3.2.1 の「1820×910 縦置・日型」）と
+    /// まったく同じ釘配列になる（3.3(1)⑧ で中間の間柱を含めないため）。
+    #[test]
+    fn the_lower_panel_of_the_example_matches_the_book_exactly() {
+        let form = wall_example_form();
+        let panel = &form.walls[0].panels[0];
+        let nails = nails_of(panel, form.walls[0].stud_pitch).unwrap();
+        let preset = crate::presets::find("910x1820-s455-n75-hi").unwrap();
+
+        assert_eq!(nails, preset.nails());
     }
 
     /// 壁の計算には、その根拠である面材ごとの釘配列諸定数が必ず付いてくる。
@@ -2120,10 +2555,7 @@ mod tests {
 
         assert_eq!(panels.len(), 2);
         assert_eq!(panels[0].get("ok"), Some(&Value::Bool(true)));
-        assert_eq!(
-            panels[0].get("panelName").unwrap().as_str(),
-            Some("1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）")
-        );
+        assert_eq!(panels[0].get("panelName").unwrap().as_str(), Some("下段"));
         // 3.2 の途中経過と釘配列図が、そのまま壁の計算の中にある。
         assert_eq!(panels[0].get("steps").unwrap().as_array().unwrap().len(), 14);
         assert_eq!(
@@ -2174,8 +2606,12 @@ mod tests {
             "構造用合板 12mm + 鉄丸釘 N-65（釘の呼び径 φ3.05 mm）".to_string()
         )));
         assert!(inputs.contains(&(
+            "間柱・根太ピッチ".to_string(),
+            "@455 mm（壁の左端から）".to_string()
+        )));
+        assert!(inputs.contains(&(
             "中間材（間柱等）".to_string(),
-            "あり（せん断座屈の ξ = 2）".to_string()
+            "あり（間柱ピッチと壁の幅による／せん断座屈の ξ = 2）".to_string()
         )));
         assert!(inputs.contains(&("面材の枚数".to_string(), "2 枚".to_string())));
     }
@@ -2355,15 +2791,14 @@ mod tests {
         assert!(value.contains("呼び径が分からないため"), "{value}");
     }
 
-    /// へりあきは、割り付け・格子・座標のどの入力方式でも釘の座標から測る。
+    /// へりあきは、実際に置かれた釘の座標から測る。
     #[test]
-    fn the_edge_clearance_is_reported_for_every_input_mode() {
-        let coords = PanelInput {
-            mode: "coords".to_string(),
-            coords: "12, 12\n898, 12\n12, 598\n898, 598".to_string(),
+    fn the_edge_clearance_is_measured_from_the_nails() {
+        let panel = PanelInput {
+            edge_distance: 12.0,
             ..example_panel()
         };
-        let report = compute_panel(&coords, 0).unwrap();
+        let report = compute_panel(&panel, DEFAULT_STUD_PITCH, 0).unwrap();
         let inputs = labelled(&report, "inputs", "label");
         assert!(inputs.contains(&(
             "へりあき（面材の縁から釘まで）".to_string(),
@@ -2372,6 +2807,9 @@ mod tests {
     }
 
     /// 上限を超えたら、検定の行に「超えている」と出す（計算は止めない）。
+    ///
+    /// 壁の幅だけを狭めるので、面材はその壁からはみ出す。配置の判定は
+    /// それを NG にするが、上限の検定はそれとは別に働く。
     #[test]
     fn the_wall_report_flags_a_wall_over_the_upper_limit() {
         let mut data = wall_example_form();
@@ -2379,9 +2817,15 @@ mod tests {
         let report = only_wall(&data);
 
         assert_eq!(report.get("withinLimit"), Some(&Value::Bool(false)));
-        let checks = report.get("checks").unwrap().as_array().unwrap();
-        let limit = &checks[0];
-        assert!(limit.get("label").unwrap().as_str().unwrap().contains("上限"));
+        let limit = report
+            .get("checks")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check.get("label").unwrap().as_str().unwrap().contains("上限"))
+            .unwrap()
+            .clone();
         assert_eq!(limit.get("ok"), Some(&Value::Bool(false)));
         assert!(limit.get("value").unwrap().as_str().unwrap().contains(">"));
     }
@@ -2431,12 +2875,241 @@ mod tests {
         assert!(error.contains("階高 H"), "{error}");
     }
 
-    #[test]
-    fn arrangements_are_offered_as_choices() {
-        let choices = arrangements();
-        let choices = choices.as_array().unwrap();
-        assert_eq!(choices.len(), 4);
-        assert_eq!(choices[0].get("id").unwrap().as_str(), Some("kawa"));
-        assert_eq!(choices[3].get("label").unwrap().as_str(), Some("日型"));
+    // --- 壁内の面材配列（配列図と、配置・計算の突き合わせ） ------------------
+
+    /// グレー本 3.3(3) の計算例を、実際の張り方（下から 1820、その上に 910）
+    /// として配置した壁。
+    fn layout_check(report: &Value) -> (String, bool) {
+        report
+            .get("checks")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| {
+                check
+                    .get("label")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .contains("面材の配置")
+            })
+            .map(|check| {
+                (
+                    check.get("value").unwrap().as_str().unwrap().to_string(),
+                    check.get("ok") == Some(&Value::Bool(true)),
+                )
+            })
+            .expect("配置の判定")
     }
+
+    /// どの壁にも、壁の面材配列図と面材の一覧が付く（配置は必須）。
+    #[test]
+    fn a_wall_carries_the_arrangement_drawing() {
+        let report = only_wall(&wall_example_form());
+
+        let diagram = report.get("wallDiagram").unwrap();
+        assert_eq!(diagram.get("wallWidth").unwrap().as_f64(), Some(910.0));
+        assert_eq!(diagram.get("wallHeight").unwrap().as_f64(), Some(3000.0));
+        // 片面張りなので、描く面は 1 つだけ。
+        let sides = diagram.get("sides").unwrap().as_array().unwrap();
+        assert_eq!(sides.len(), 1);
+        assert_eq!(sides[0].get("label").unwrap().as_str(), Some("表面"));
+        // 範囲は壁そのもの（面材はどれも壁の中に収まっている）。
+        assert_eq!(diagram.get("maxY").unwrap().as_f64(), Some(3000.0));
+
+        let panels = sides[0].get("panels").unwrap().as_array().unwrap();
+        assert_eq!(panels.len(), 2);
+        assert_eq!(panels[1].get("label").unwrap().as_str(), Some("上段"));
+        assert_eq!(panels[1].get("y").unwrap().as_f64(), Some(1820.0));
+        assert_eq!(
+            panels[1].get("sizeLabel").unwrap().as_str(),
+            Some("910 × 910 mm")
+        );
+        assert_eq!(panels[1].get("ok"), Some(&Value::Bool(true)));
+
+        // 図の凡例になる面材の一覧。
+        assert_eq!(
+            report.get("layoutColumns").unwrap().as_array().unwrap().len(),
+            6
+        );
+        let rows = report.get("layout").unwrap().as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        let cells = rows[1].get("cells").unwrap().as_array().unwrap();
+        assert_eq!(cells[0].as_str(), Some("表面"));
+        assert_eq!(cells[2].as_str(), Some("(0, 1,820)"));
+        assert_eq!(cells[4].as_str(), Some("OK"));
+
+        // 控えと判定にも、想定した張り方が出る。
+        assert!(labelled(&report, "inputs", "label").contains(&(
+            "面材の配置".to_string(),
+            "壁の面材配列図のとおり（表面 2 枚）".to_string()
+        )));
+        let (value, ok) = layout_check(&report);
+        assert!(ok, "{value}");
+        assert!(value.contains("はみ出し・重なりなし"), "{value}");
+        // 張り残し（準耐力壁形式なので、上に 270 mm 残る）も読み取れる。
+        assert!(value.contains("2,484,300 mm²（壁面積の 91%）"), "{value}");
+        assert!(value.contains("壁面積 910 × 3,000 = 2,730,000 mm²"), "{value}");
+    }
+
+    /// 面材 1 枚ごとの計算にも、その面材を壁のどこに張るかを残す。
+    #[test]
+    fn every_panel_repeats_where_it_is_placed() {
+        let report = only_wall(&wall_example_form());
+        let panels = report.get("panelReports").unwrap().as_array().unwrap();
+
+        assert!(labelled(&panels[1], "inputs", "label").contains(&(
+            "壁内の配置".to_string(),
+            "表面　左下 (0, 1,820) 〜 右上 (910, 2,730) mm".to_string()
+        )));
+    }
+
+    /// 壁に収まらない面材は、図でも判定でも「はみ出し」として出す。
+    #[test]
+    fn a_panel_outside_the_wall_is_reported() {
+        let mut data = wall_example_form();
+        // 上段を 2500 まで持ち上げる（2500 + 910 > 3000）。
+        data.walls[0].panels[1].bottom = 2500.0;
+        data.walls[0].panels[1].top = 3410.0;
+
+        let report = only_wall(&data);
+
+        let (value, ok) = layout_check(&report);
+        assert!(!ok, "{value}");
+        assert!(
+            value.contains("面材「上段」が壁（910 × 3,000 mm）からはみ出しています"),
+            "{value}"
+        );
+        // 図は切り取らず、はみ出したまま描けるようにする。
+        let diagram = report.get("wallDiagram").unwrap();
+        assert_eq!(diagram.get("maxY").unwrap().as_f64(), Some(3410.0));
+        let side = &diagram.get("sides").unwrap().as_array().unwrap()[0];
+        let panels = side.get("panels").unwrap().as_array().unwrap();
+        assert_eq!(panels[1].get("ok"), Some(&Value::Bool(false)));
+        assert_eq!(panels[1].get("note").unwrap().as_str(), Some("はみ出し"));
+        // 一覧の判定の欄にも同じ言葉が並ぶ。
+        let rows = report.get("layout").unwrap().as_array().unwrap();
+        assert_eq!(
+            rows[1].get("cells").unwrap().as_array().unwrap()[4].as_str(),
+            Some("はみ出し")
+        );
+    }
+
+    /// 同じ面で重なる配置は、枚数を二重に数えている印なので NG にする。
+    #[test]
+    fn panels_overlapping_on_the_same_side_are_reported() {
+        let mut data = wall_example_form();
+        // 上段を下段（0〜1820）に食い込ませる。
+        data.walls[0].panels[1].bottom = 1000.0;
+        data.walls[0].panels[1].top = 1910.0;
+
+        let (value, ok) = layout_check(&only_wall(&data));
+
+        assert!(!ok, "{value}");
+        assert!(
+            value.contains("面材「下段」と「上段」が同じ面で重なっています"),
+            "{value}"
+        );
+    }
+
+    /// 両面張り（表と裏の同じ場所）は重なりではなく、面ごとに描き分ける。
+    #[test]
+    fn both_sides_of_a_wall_are_drawn_separately() {
+        let mut data = wall_example_form();
+        let back: Vec<PanelInput> = data.walls[0]
+            .panels
+            .iter()
+            .enumerate()
+            .map(|(index, panel)| PanelInput {
+                panel_id: format!("w1-b{index}"),
+                panel_name: format!("裏 {}", panel.panel_name),
+                side: "back".to_string(),
+                ..panel.clone()
+            })
+            .collect();
+        data.walls[0].panels.extend(back);
+
+        let report = only_wall(&data);
+
+        let (value, ok) = layout_check(&report);
+        assert!(ok, "{value}");
+        let sides = report
+            .get("wallDiagram")
+            .unwrap()
+            .get("sides")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .to_vec();
+        assert_eq!(sides.len(), 2);
+        assert_eq!(sides[1].get("label").unwrap().as_str(), Some("裏面"));
+        assert_eq!(sides[1].get("count").unwrap().as_f64(), Some(2.0));
+        assert!(labelled(&report, "inputs", "label").contains(&(
+            "面材の配置".to_string(),
+            "壁の面材配列図のとおり（表面 2 枚・裏面 2 枚 ＝ 両面張り）".to_string()
+        )));
+    }
+
+    /// 面材の並びは、配置と 1 対 1 で対応する（図に描けない面材は無い）。
+    #[test]
+    fn every_panel_appears_in_the_arrangement() {
+        let report = only_wall(&wall_example_form());
+
+        let rows = report.get("layout").unwrap().as_array().unwrap();
+        let panels = report.get("panelReports").unwrap().as_array().unwrap();
+        assert_eq!(rows.len(), panels.len());
+        for (row, panel) in rows.iter().zip(panels) {
+            assert_eq!(row.get("label"), panel.get("panelName"));
+        }
+    }
+
+    /// 配置は保存する入力にそのまま残る。
+    #[test]
+    fn the_area_a_panel_covers_is_stored_as_typed() {
+        let data = normalize(
+            r#"{"walls": [{"studPitch": 455, "panels": [
+                 {"side": "back", "left": 0, "bottom": "1820", "right": 910, "top": 2730}
+               ]}]}"#,
+        )
+        .unwrap();
+
+        let panel = &data.walls[0].panels[0];
+        assert_eq!((panel.left, panel.bottom), (0.0, 1820.0));
+        assert_eq!((panel.right, panel.top), (910.0, 2730.0));
+        assert_eq!(panel.side, "back");
+
+        let stored = panel.to_value();
+        assert_eq!(stored.get("bottom").unwrap().as_f64(), Some(1820.0));
+        assert_eq!(stored.get("side").unwrap().as_str(), Some("back"));
+        // 壁の間柱ピッチも、保存する入力に残る。
+        assert_eq!(
+            data.walls[0].to_value().get("studPitch").unwrap().as_f64(),
+            Some(455.0)
+        );
+    }
+
+    #[test]
+    fn a_non_numeric_position_is_refused() {
+        let error = normalize(r#"{"walls": [{"panels": [{"top": "上のほう"}]}]}"#).unwrap_err();
+        assert!(error.contains("面材の上端 Y"), "{error}");
+    }
+
+    /// 中間材の有無（せん断座屈の ξ）は、間柱ピッチと壁の幅から決まる。
+    #[test]
+    fn the_intermediate_stud_follows_the_stud_pitch() {
+        let wall = |width: f64, stud_pitch: f64| WallInput {
+            width,
+            stud_pitch,
+            ..wall_example_form().walls.remove(0)
+        };
+        // 幅 910 に @455 なら、455 の位置に間柱が 1 本立つ。
+        assert!(wall(910.0, 455.0).has_intermediate_stud());
+        // 幅が間柱ピッチ以下なら、壁の中に間柱は入らない。
+        assert!(!wall(455.0, 455.0).has_intermediate_stud());
+        assert!(!wall(910.0, 0.0).has_intermediate_stud());
+    }
+
+
+
 }

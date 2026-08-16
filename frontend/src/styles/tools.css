@@ -371,7 +371,8 @@
 }
 
 .diagram-box svg,
-.panel-result svg {
+.panel-result svg,
+.wall-layout-diagram {
   display: block;
   margin: 0 auto;
   max-width: 100%;
@@ -379,6 +380,12 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
+}
+
+/* 壁の面材配列図。釘配列図と同じ扱いだが、面材ごとの入力欄の中ではなく
+   壁の計算結果の側に出る。 */
+.wall-layout-diagram {
+  margin-top: var(--s-3);
 }
 
 /* --- 小規模木造建築物 必要壁量 計算ツール --------------------------------- */

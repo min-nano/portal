@@ -129,6 +129,13 @@ pub struct Layout {
     pub height: f64,
     /// 間柱・根太ピッチ [mm]（面材の幅方向に並ぶ）。
     pub stud_pitch: f64,
+    /// 壁の中でのこの面材の左端 [mm]。
+    ///
+    /// 間柱は**壁**の左端から等間隔に立つので、面材のどこに来るかは面材が
+    /// 壁のどこに張られるかで決まる。壁の中の位置から釘座標を作るときは
+    /// その位置を入れる。表 3.2.1 の配列のように面材そのものが割り付けの
+    /// 起点である場合は 0（面材の左端に柱がある）。
+    pub stud_origin: f64,
     /// 釘ピッチ [mm]。
     pub nail_pitch: f64,
     /// へりあき [mm]。
@@ -153,22 +160,26 @@ impl Layout {
             && self.stud_pitch > 0.0
     }
 
-    /// 縦線（釘を打つ間柱・面材の左右の端）の X 座標。
+    /// 縦線（釘を打つ間柱・面材の左右の端）の X 座標（面材の左下が原点）。
+    ///
+    /// 中間の間柱は壁の左端から等間隔に立つ（`stud_origin`）ので、この面材に
+    /// かかるものだけを面材の座標へ直して拾う。面材の縁と重なる間柱は、縁の
+    /// 釘列がすでにあるので足さない。
     pub fn stud_positions(&self) -> Vec<f64> {
         let left = self.edge_distance;
         let right = self.width - self.edge_distance;
         let mut positions = vec![left];
         if self.uses_intermediate_studs() {
-            let mut index = 1;
-            loop {
-                let x = self.stud_pitch * index as f64;
+            // 面材より左にある間柱を数え上げずに済むよう、最初の 1 本を直に出す。
+            let first = (self.stud_origin / self.stud_pitch).floor().max(0.0) as u64 + 1;
+            for index in first.. {
+                let x = self.stud_pitch * index as f64 - self.stud_origin;
                 if x >= right {
                     break;
                 }
                 if x > left {
                     positions.push(x);
                 }
-                index += 1;
             }
         }
         if right > left {
@@ -325,6 +336,8 @@ mod tests {
             width: 910.0,
             height: 610.0,
             stud_pitch: 455.0,
+            // 表 3.2.1 の配列は、面材の左端に柱がある前提で描かれている。
+            stud_origin: 0.0,
             nail_pitch: 150.0,
             edge_distance: DEFAULT_EDGE_DISTANCE,
             arrangement,
@@ -418,6 +431,57 @@ mod tests {
             ..layout(Arrangement::Kawa)
         };
         assert_eq!(tall.stud_positions(), vec![10.0, 900.0]);
+    }
+
+    /// 間柱は壁の左端から割り付けるので、面材が壁のどこに来るかで
+    /// 釘の縦列の位置が変わる。
+    #[test]
+    fn stud_positions_follow_the_wall_not_the_panel() {
+        let wide = Layout {
+            width: 1820.0,
+            height: 910.0,
+            ..layout(Arrangement::Hi)
+        };
+        // 壁の左端に張った面材（0〜1820）には、間柱 455・910・1365 がかかる。
+        assert_eq!(
+            wide.stud_positions(),
+            vec![10.0, 455.0, 910.0, 1365.0, 1810.0]
+        );
+        // 同じ面材を半ピッチ（227.5）ずらすと、面材から見た間柱の位置も
+        // そのぶんずれる（壁座標の 455・910・1365・1820 が面材の
+        // 227.5・682.5・1137.5・1592.5 に来る）。
+        let shifted = Layout {
+            stud_origin: 227.5,
+            ..wide
+        };
+        assert_eq!(
+            shifted.stud_positions(),
+            vec![10.0, 227.5, 682.5, 1137.5, 1592.5, 1810.0]
+        );
+    }
+
+    /// 間柱と間柱のあいだに収まる面材には、中間の縦線が入らない。
+    #[test]
+    fn a_panel_between_two_studs_has_no_intermediate_column() {
+        let narrow = Layout {
+            width: 455.0,
+            height: 910.0,
+            stud_origin: 455.0,
+            ..layout(Arrangement::Hi)
+        };
+        assert_eq!(narrow.stud_positions(), vec![10.0, 445.0]);
+    }
+
+    /// 面材より左にある間柱を 1 本ずつ数えなくても、正しい位置から始まる。
+    #[test]
+    fn a_panel_far_from_the_wall_edge_starts_at_the_right_stud() {
+        let far = Layout {
+            width: 910.0,
+            height: 910.0,
+            stud_origin: 9100.0, // 間柱 20 本ぶん右
+            ..layout(Arrangement::Hi)
+        };
+        assert_eq!(far.stud_positions(), vec![10.0, 455.0, 900.0]);
     }
 
     /// ロ型は中間の間柱を設けない。
@@ -523,6 +587,7 @@ mod tests {
                     width,
                     height,
                     stud_pitch,
+                    stud_origin: 0.0,
                     nail_pitch,
                     edge_distance: edge,
                     arrangement,

@@ -19,7 +19,16 @@ REPORTS_URL = f"{BASE}/reports"
 PARSE_URL = f"{BASE}/reports/parse"
 PARSE_DRIVE_URL = f"{BASE}/reports/parse-drive"
 
-EXAMPLE_PANEL = dict(panel_shear.EXAMPLE_PANEL, panelId="w1-p1")
+EXAMPLE_PANEL = {
+    "panelId": "w1-p1",
+    "panelName": "グレー本の計算例",
+    "left": 0,
+    "bottom": 0,
+    "right": 910,
+    "top": 610,
+    "nailPitch": 150,
+    "edgeDistance": 10,
+}
 
 # 新規保存の保存先は、そのつど画面の Picker で選ばれたフォルダが送られてくる。
 NEW_SAVE = {"mode": "new", "folderId": "out-folder"}
@@ -362,7 +371,7 @@ def test_parse_drive_report_returns_the_overwrite_target(client, drive):
     assert resp.status_code == 200
     body = resp.json()
     assert body["file"] == {"id": "pdf-1", "name": "釘配列諸定数計算書.pdf"}
-    assert body["walls"][0]["panels"][0]["arrangement"] == "kawa"
+    assert body["walls"][0]["panels"][0]["right"] == 910
     # 読み込みは読み取り専用の代理で足りる。
     assert drive.delegated_emails == [TEST_EMAIL]
     assert drive.write_emails == []
