@@ -2,6 +2,8 @@ import { resolve } from 'node:path';
 import { defineConfig, loadEnv } from 'vite';
 import { clerkFrontendApiHost } from './src/clerk-frontend-api.js';
 import { escapeHtml, resolvePortalTitle } from './src/portal-title.js';
+import tools from './tools.config.js';
+import { portalToolsPlugin, stageTools } from './tools-plugin.js';
 
 // HTML 内の %PORTAL_TITLE% を、環境変数 VITE_PORTAL_TITLE の値（未設定なら
 // 既定値）で置き換える。Vite 標準の %VITE_XXX% 置換は未設定だとプレース
@@ -47,8 +49,15 @@ function clerkPreconnectPlugin(publishableKey) {
   };
 }
 
-// ポータルはツールごとにページを持つマルチページ構成。ツールを追加するときは
-// tools/<ツール名>/index.html を作り、ここの input に追記する。
+// ポータルはツールごとにページを持つマルチページ構成。ページそのものは、
+// 載せるツール（tools.config.js）が名乗ったマニフェストから組み立てる
+// （tools-plugin.js）。ツールを追加するときに触るのは tools.config.js だけで、
+// ここにツールの名前は出てこない（docs/plugin-architecture.md §4.1）。
+//
+// 組み立ては設定を作るこの時点で行う。マルチページビルドの入口は実在する
+// ファイルである必要があるため。
+const staged = stageTools(tools, import.meta.dirname);
+
 // デザインシステムの見本ページ（/design/）を、このビルドに含めるかどうか。
 //
 // 本番では配らない（社内向けの読み物であって、ツールではないため）。
@@ -70,6 +79,7 @@ export default defineConfig(({ mode }) => {
     plugins: [
       portalTitlePlugin(resolvePortalTitle(env.VITE_PORTAL_TITLE)),
       clerkPreconnectPlugin(env.VITE_CLERK_PUBLISHABLE_KEY),
+      portalToolsPlugin(tools, import.meta.dirname),
     ],
     build: {
       rollupOptions: {
@@ -80,22 +90,8 @@ export default defineConfig(({ mode }) => {
           ...(designPage
             ? { design: resolve(import.meta.dirname, 'design/index.html') }
             : {}),
-          'excel-report-formatter': resolve(
-            import.meta.dirname,
-            'tools/excel-report-formatter/index.html'
-          ),
-          'structural-cert-formatter': resolve(
-            import.meta.dirname,
-            'tools/structural-cert-formatter/index.html'
-          ),
-          'timber-panel-shear-calculator': resolve(
-            import.meta.dirname,
-            'tools/timber-panel-shear-calculator/index.html'
-          ),
-          'wall-quantity-calculator': resolve(
-            import.meta.dirname,
-            'tools/wall-quantity-calculator/index.html'
-          ),
+          // ツールのページ（/tools/<id>/）。組み立て済みのものを入口にする。
+          ...staged.inputs,
         },
       },
     },
@@ -116,7 +112,11 @@ export default defineConfig(({ mode }) => {
         // テスト中に読み込まれたファイルだけでなく src/ 全体を対象にする。
         // 画面の入口（main.js・auth.js など）は単体テストが読み込まないので、
         // 指定しないと「測っていないファイル」が表から消えて率が高く見える。
-        include: ['src/**/*.js'],
+        //
+        // ツールを組み込む受け口（tools-plugin.js）も測る。ここが壊れると
+        // 「ページは出来上がるが中身が違う」という気付きにくい壊れ方をする
+        // ので、覆われていることを表で見えるようにしておく。
+        include: ['src/**/*.js', 'tools-plugin.js', 'tools.config.js'],
         // text は CI のログ用、cobertura は PR のカバレッジコメント用
         // （.github/scripts/coverage.py がこれを読む）。
         reporter: ['text', 'cobertura'],

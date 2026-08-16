@@ -33,6 +33,7 @@ import jwt
 from jwt import PyJWKClient
 
 from . import config
+from .errors import PortalError
 
 # JWT の検証時刻に許容するずれ（秒）。Clerk のトークンは短命（約 60 秒）で、
 # サーバー間のわずかな時計ずれで nbf 検証に失敗しやすいため少し許容する。
@@ -43,12 +44,11 @@ _jwk_clients: dict[str, PyJWKClient] = {}
 _jwk_lock = threading.Lock()
 
 
-class AuthError(Exception):
+class AuthError(PortalError):
     """認証・認可の失敗。status は HTTP ステータスコード。"""
 
     def __init__(self, message: str, status: int = 401):
-        super().__init__(message)
-        self.status = status
+        super().__init__(message, status)
 
 
 @dataclass(frozen=True)

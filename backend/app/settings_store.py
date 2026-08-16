@@ -23,6 +23,7 @@ import threading
 from google.cloud import firestore
 
 from . import config
+from .errors import PortalError
 
 # チャンネルの下に置くコレクション。環境ごとに変わらないためアプリ側で持つ。
 _COLLECTION = "tool_settings"
@@ -31,12 +32,11 @@ _client_instance = None
 _client_lock = threading.Lock()
 
 
-class SettingsError(Exception):
+class SettingsError(PortalError):
     """共有設定の読み書きの失敗。message は利用者に表示できる日本語文。"""
 
     def __init__(self, message: str, status: int = 500):
-        super().__init__(message)
-        self.status = status
+        super().__init__(message, status)
 
 
 def _client():

@@ -9,6 +9,10 @@
 //      出る「結果へ飛ぶ」ボタンが、判定の升目から決まることを見せる
 
 import '../styles.css';
+// 載っている全ツールの CSS（tools-plugin.js が組み立てたもの）。見本ページが
+// 実物とずれないのは、見本のための複製ではなく実物をそのまま読むため。
+// ツールが別リポジトリへ移っても、束ねる中身が変わるだけでここは変わらない。
+import '../../tools/tools.css';
 import './page.css';
 import '../components/index.js';
 

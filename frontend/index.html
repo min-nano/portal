@@ -18,55 +18,11 @@
 
   <div id="app" class="container" hidden>
     <h2>ツール一覧</h2>
-    <ul class="tool-list">
-      <li>
-        <a class="tool-card" href="/tools/excel-report-formatter/">
-          <span class="name">現況検査レポート作成ツール</span>
-          <p class="desc">
-            傾斜測定の計測値を入力して、Excel の報告書（社外秘フォーマット）を生成します。
-            雛形は Google Drive 上の最新ファイルを自動で参照します。
-          </p>
-        </a>
-      </li>
-      <li>
-        <a class="tool-card" href="/tools/structural-cert-formatter/">
-          <span class="name">構造計算安全証明書 作成ツール</span>
-          <p class="desc">
-            「構造計算によって建築物の安全性を確かめた旨の証明書」（第四号書式）を
-            作成し、Google Drive に PDF で保存します。雛形は Google ドキュメントを
-            参照し、該当する選択肢には自動で印（番号は ○、□ はレ点）を付けます。
-            作成済みの PDF を読み込んで編集し、上書き（版履歴あり）または別名で
-            保存もできます。
-          </p>
-        </a>
-      </li>
-      <li>
-        <a class="tool-card" href="/tools/timber-panel-shear-calculator/">
-          <span class="name">面材張り大壁 計算ツール</span>
-          <p class="desc">
-            グレー本『木造軸組工法住宅の許容応力度設計』3.3・3.2 節に沿って、
-            面材張り大壁の面内せん断剛性 K と許容せん断耐力 Pa を算定し、
-            面材のせん断破壊・せん断座屈を検定します。壁を構成する面材ごとに
-            寸法・釘の間隔・へりあきを決めると、その釘配列諸定数
-            Ixy・Zxy・Cxy が壁の計算の一部として求まります。
-            計算の途中経過と釘配列図を添えた計算書を PDF で Google Drive に保存し、
-            入力内容は PDF に埋め込まれるので、保存したファイルを開き直して
-            続きを編集できます。
-          </p>
-        </a>
-      </li>
-      <li>
-        <a class="tool-card" href="/tools/wall-quantity-calculator/">
-          <span class="name">小規模木造建築物 必要壁量 計算ツール</span>
-          <p class="desc">
-            日本住宅・木材技術センターが配布している「壁量等の基準(令和7年施行)に
-            対応した表計算ツール（多機能版）」に、フォームの入力をそのまま書き込んだ
-            Excel ファイルを作ります。提出を求められるのは配布物そのものなので、
-            様式は一切変えず、Excel 形式のままダウンロードします。
-          </p>
-        </a>
-      </li>
-    </ul>
+    <!-- 中身はビルド時に組み立てる（tools-plugin.js）。並ぶのは
+         tools.config.js に載っているツールで、名前も説明も各ツールが
+         自分で名乗ったマニフェストから来る。ツールを増やしてもこのページは
+         変わらない（docs/plugin-architecture.md §4.1）。 -->
+    <ul class="tool-list"><!--PORTAL_TOOL_LIST--></ul>
   </div>
 
   <script type="module" src="/src/portal.js"></script>

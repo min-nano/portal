@@ -26,6 +26,7 @@
 // 切り替えて編集する。
 
 import '../styles.css';
+import './tool.css';
 import '../components/index.js';
 import { startPage } from '../page-start.js';
 import { apiGet, apiGetBytes, apiPostFile, apiSendJson } from '../api.js';

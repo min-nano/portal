@@ -239,6 +239,21 @@ select {
   background-size: 12px 12px;
 }
 
+/* 入力欄 1 つ（ラベル + 欄 + 単位 + 補足）を包む枠。名前が 2 通りあるのは
+   出てきた順の名残で、どちらも同じ部品（デザインシステム側の持ちもの）。
+
+   桝目の中に置かれるので、既定の min-width: auto を外して縮められるように
+   する。これが無いと、中身の長い欄が列の幅を押し広げて桝目が崩れる。 */
+.cert-field,
+.wq-field {
+  min-width: 0;
+}
+
+.wq-field .field-row select,
+.wq-field .field-row input {
+  margin: 0;
+}
+
 /* 入力欄と単位。単位は欄の右にくっつけて 1 つの部品に見せる
    （「mm の欄はどこまでか」が分かるようにする）。 */
 .field-row {
@@ -337,11 +352,14 @@ select {
   padding-left: 4.5em;
 }
 
-/* 前提を満たしていない欄（その選択肢を選んだときだけ入力できる欄など）。 */
+/* 前提を満たしていない欄（その選択肢を選んだときだけ入力できる欄など）と、
+   その節そのもの。読めるが「今は入れられない」ことが分かる濃さにする。 */
 .cert-field.disabled label,
 .cert-field.disabled .unit,
 .cert-choices.disabled legend,
-.cert-choices.disabled .choice-option {
+.cert-choices.disabled .choice-option,
+.cert-section.disabled h3,
+.cert-section.disabled .hint {
   color: var(--text-muted);
 }
 

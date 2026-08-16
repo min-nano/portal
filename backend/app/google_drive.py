@@ -33,6 +33,7 @@ from google.auth.transport.requests import AuthorizedSession, Request
 from google.oauth2 import service_account
 
 from . import config
+from .errors import PortalError
 
 DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
@@ -48,12 +49,11 @@ FOLDER_MIME = "application/vnd.google-apps.folder"
 PDF_MIME = "application/pdf"
 
 
-class DriveError(Exception):
+class DriveError(PortalError):
     """Drive 操作の失敗。message は利用者に表示できる日本語文。"""
 
     def __init__(self, message: str, status: int = 500):
-        super().__init__(message)
-        self.status = status
+        super().__init__(message, status)
 
 
 def _credentials(scopes: list[str], subject: str) -> service_account.Credentials:

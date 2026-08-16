@@ -1,0 +1,173 @@
+/* 現況検査レポート作成ツール にしか出てこない形。
+ *
+ * 骨組み（styles/layout.css）と部品（styles/components.css）で足りるものは
+ * ここには書かない。色・余白・字送りは必ず styles/tokens.css の変数を使う
+ * （生の値を書かない）。これが「全ツールの見た目がそろっている」ことを
+ * 保証している。 */
+/* 部屋ブロック。見出しの行には部屋名と階数・部屋名の欄を残すので、
+   閉じたままでも見分けと修正ができる。 */
+.room {
+  background: var(--surface-sunken);
+}
+
+/* 計測値の表を追いながらでも部屋の見出しが見えるよう、開閉の行ごと貼り付ける
+   （画面上部のヘッダーの下に付ける）。 */
+.room::part(head) {
+  position: sticky;
+  top: calc(var(--header-h) - 1px);
+  z-index: 10;
+  background: var(--surface-sunken);
+  padding: var(--s-2) 0;
+  margin-bottom: var(--s-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.room-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.room-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+
+.room-title-row h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room .remove {
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
+}
+
+/* 階数・部屋名は 1 行に収める。狭い画面では折り返さずに部屋名の欄を縮める
+   （見出しの行なので、2 行に増えると表の前置きが厚くなってしまう）。 */
+.room-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: nowrap;
+}
+
+.room-meta label {
+  display: inline;
+  margin: 0;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.room-meta input {
+  width: auto;
+  min-height: 36px;
+  padding: var(--s-1) var(--s-2);
+}
+
+.room-meta input[data-room-field='floor'] {
+  width: 4.5em;
+  flex: none;
+  text-align: center;
+}
+
+.room-meta input[data-room-field='room_name'] {
+  width: 8em;
+  flex: 0 1 8em;
+  min-width: 3em;
+}
+
+/* 計測値は選択と数値しか入れないので、表形式で縦に詰めてラベルはヘッダー列で
+   代表する。行が細いぶん、今どの行にいるかを下地の色で示す。 */
+.measure-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin-top: var(--s-3);
+  table-layout: fixed;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.measure-table th,
+.measure-table td {
+  border-bottom: 1px solid var(--divider);
+  padding: var(--s-1);
+  text-align: center;
+}
+
+.measure-table tr:last-child td {
+  border-bottom: none;
+}
+
+.measure-table thead th {
+  background: var(--surface-sunken);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  padding: var(--s-2) var(--s-1);
+  border-bottom: 1px solid var(--border);
+}
+
+/* 計測点の名前と選択肢に幅を回し、数値の 3 列は「1820」が入る幅で足りる。
+   選択肢が途中で切れると、狭い画面で選び間違えるため。 */
+.measure-table col.col-point {
+  width: 22%;
+}
+
+.measure-table colgroup col:nth-child(2) {
+  width: 25%;
+}
+
+.measure-table td.point-cell {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--text-2);
+  background: var(--surface-sunken);
+  text-align: left;
+  padding-left: var(--s-2);
+  white-space: nowrap;
+}
+
+.measure-table tr.group-row td {
+  background: var(--brand-50);
+  color: var(--text-brand);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-align: left;
+  padding: var(--s-1) var(--s-2);
+}
+
+/* 入力中の行を丸ごと色づける。狭い画面で 5 列を横目に追うとき、
+   「今どの計測点を入れているか」を取り違えないための目印。 */
+.measure-table tr:focus-within td {
+  background: var(--focus-row);
+}
+
+.measure-table tr:focus-within td.point-cell {
+  color: var(--text-brand);
+}
+
+.measure-table select,
+.measure-table input {
+  width: 100%;
+  min-height: 38px;
+  padding: var(--s-1) var(--s-1);
+  margin: 0;
+  border-radius: var(--r-sm);
+  text-align: center;
+  /* 画面内へ送るとき、貼り付いた部屋の見出しに隠れないようにする。 */
+  scroll-margin-top: calc(var(--header-h) + 72px);
+}
+
+.measure-table select {
+  padding-right: var(--s-4);
+  background-position: right 2px center;
+  background-size: 10px 10px;
+}

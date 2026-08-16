@@ -1,0 +1,205 @@
+/* 面材張り大壁 計算ツール にしか出てこない形。
+ *
+ * 骨組み（styles/layout.css）と部品（styles/components.css）で足りるものは
+ * ここには書かない。色・余白・字送りは必ず styles/tokens.css の変数を使う
+ * （生の値を書かない）。これが「全ツールの見た目がそろっている」ことを
+ * 保証している。 */
+/* 1 物件の中の複数の壁を、ページ送りで切り替える。切り替えの帯は
+   画面上部に貼り付けて、どの壁を編集しているかを見失わないようにする。 */
+.pattern-bar {
+  position: sticky;
+  top: calc(var(--header-h) - 1px);
+  z-index: var(--z-dock);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+/* 2 列になる広さでは、この帯は入力（左）の列の幅までにする。全幅のまま
+   貼り付けると、右の列に貼り付いた結果の見出しを覆い隠してしまうため
+   （帯が受け持つのは左の列の中身＝どの壁を編集しているか、でもある）。 */
+@media (min-width: 1080px) {
+  .pattern-bar {
+    margin-right: calc(var(--dock-w) + var(--s-6));
+  }
+}
+
+.pattern-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  font-size: var(--fs-sm);
+}
+
+.pattern-nav button {
+  min-height: 36px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
+}
+
+/* 前後の壁へ送るボタンは、記号だけなので正方形にそろえる。 */
+#wallPrevBtn,
+#wallNextBtn {
+  width: 36px;
+  padding: 0;
+  font-size: var(--fs-md);
+}
+
+#wallPosition {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+/* 送りの 3 つ（‹ 壁 n / N ›）はひとかたまりに、壁の追加・削除は右端に置く。 */
+#wallNextBtn {
+  margin-right: auto;
+}
+
+.pattern-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}
+
+.pattern-tabs .tab {
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+}
+
+.pattern-tabs .tab:hover {
+  background: var(--surface-hover);
+  color: var(--text-brand);
+  border-color: var(--brand-300);
+}
+
+.pattern-tabs .tab.current {
+  background: var(--brand-700);
+  color: var(--text-inverse);
+  border-color: transparent;
+}
+
+/* 面材寸法（幅・高さ）と、その場で掛けた面積の目安。数値の欄なので、
+   広い画面でも 1 つずつが伸びきらないように auto-fill で桝を作る。 */
+.panel-size {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 10rem), 1fr));
+  gap: var(--s-3);
+  align-items: end;
+  margin-top: var(--s-3);
+}
+
+.panel-size label {
+  margin: 0;
+}
+
+/* 掛け算しただけの目安。結果ではないので、結果の枠とは別の見た目にする。 */
+.panel-size .area {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding-bottom: var(--s-2);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+.panel-size .area .label {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* 壁を構成する面材。1 枚ごとに面材と釘の仕様・寸法・割り付け・へりあきを
+   決め、その場で釘配列諸定数（グレー本 3.2）と釘配列図が出る。 */
+.wall-panels {
+  display: flex;
+  flex-direction: column;
+}
+
+.wall-panel {
+  background: var(--surface);
+}
+
+/* 見出しの行（面材名と削除ボタン）は、折り畳んでも残る。 */
+.wall-panel > [slot='title'] {
+  font-size: var(--fs-md);
+  font-weight: 700;
+  color: var(--text-brand);
+}
+
+.wall-panel > [slot='actions'] {
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
+}
+
+/* 面材の中の小見出し（「面材と釘」「面材の配置と釘配列」）。 */
+.panel-group {
+  margin-top: var(--s-4);
+}
+
+.panel-group h4 {
+  margin: 0;
+  padding-bottom: var(--s-1);
+  font-size: var(--fs-sm);
+  color: var(--text-brand);
+  border-bottom: 1px solid var(--divider);
+}
+
+/* 面材 1 枚ごとの計算結果。入力の続きに見えないよう、白い箱に入れる。 */
+.panel-result {
+  margin-top: var(--s-4);
+  padding: var(--s-3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.panel-result:empty {
+  display: none;
+}
+
+/* 壁の計算結果の中の、表ごとの小見出し。 */
+.result-heading {
+  margin: var(--s-4) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+/* 面材名の欄が 1 文字ずつ縦に積まれないだけの幅を持たせる（表は横スクロール
+   するので、狭い画面でも読める幅を優先する）。 */
+.table-scroll .steps-table .step-label {
+  min-width: 9em;
+}
+
+/* 釘配列図。狭い画面でも縮めて収める。 */
+.diagram-box,
+.panel-result svg {
+  margin-top: var(--s-3);
+  overflow-x: auto;
+}
+
+.diagram-box svg,
+.panel-result svg,
+.wall-layout-diagram {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+/* 壁の面材配列図。釘配列図と同じ扱いだが、面材ごとの入力欄の中ではなく
+   壁の計算結果の側に出る。 */
+.wall-layout-diagram {
+  margin-top: var(--s-3);
+}

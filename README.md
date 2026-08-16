@@ -200,6 +200,8 @@ GAS 版の機能をそのまま移植しています。
 
 色・余白・文字の値は `src/styles/tokens.css` の**役割の名前**（`--surface`・`--text-2`・`--ng-600` など）だけを使い、画面側の CSS には生の値を書きません。明暗テーマは `light-dark()` でこのファイルの中だけにまとまっていて、部品側の CSS は 1 行も分岐しません（端末の設定に従い、`<html data-theme="light|dark">` で固定もできます）。新しい色を足したくなったら、まず既にある役割で言い表せないかを考えてください。
 
+**`src/styles/` にあるのは、どのツールにも同じように効くものだけです。** そのツールにしか出てこない形（計測値の表・釘配列図・配布物にそろえた出力欄など）は、そのツールの `tool.css` にあり、ツールの `main.js` が `styles.css` の**後に**読み込みます。ここでも生の値は書かず、必ず `tokens.css` の変数を使います——これが「全ツールの見た目がそろっている」ことを構造として保証しています。見本ページ（`/design/`）は、載っている全ツールの `tool.css` も束ねて読み込むので、実物とずれません。
+
 指で押すものの高さは `--tap`（44px）以上、入力欄の文字は 16px（iOS Safari が勝手に拡大しないため）、焦点は必ず見えるようにする、の 3 つは部品側で担保しています。
 
 **太い罫（アクセント）は、角を丸めた箱では左右そろえて括弧にします**（注意書き・結果の値）。片側だけに引くなら、その側の角は落とします（見本ページの傍注）。角丸の箱に片側だけの太い罫を引くと、括弧が欠けたように見えるためです。
@@ -258,27 +260,47 @@ GAS 版の機能をそのまま移植しています。
 **ツールの準備（2 段目）**
 
 * **バックエンドを先に起こしておく。** 2 段目は「`/config` → wasm」という直列の並びで、その先頭が **Cloud Run のインスタンス起動待ち**を丸ごと被ります（常時起動のインスタンスは置いていません）。そこで `startPage()` は、サインインの確認を始めるのと同時に、認証の要らない `/api/healthz` を投げます（`api.js` の `warmUpApi()`）。Clerk とやり取りしているあいだに起動が済むので、その分が待ち時間から消えます。失敗しても構いません（起きていなければ、続く `/config` が普通に起こします）。
-* **計算実装（wasm）を gzip で配る。** 直列の並びの最後にある取得で、そのままだと 221 kB あります。受け取れる相手には gzip で送って **85 kB**（39%）にします。縮めたものは起動時に 1 度だけ作って持っておき、リクエストごとに縮め直しません（`backend/app/nail_core.py` の `wasm_gzip()` と `main.py` の `_core_wasm_response()`）。URL に中身のハッシュが付いているので、2 回目からはブラウザのキャッシュから読まれます。
+* **計算実装（wasm）を gzip で配る。** 直列の並びの最後にある取得で、そのままだと 221 kB あります。受け取れる相手には gzip で送って **85 kB**（39%）にします。縮めたものは起動時に 1 度だけ作って持っておき、リクエストごとに縮め直しません（`backend/app/nail_core.py` の `wasm_gzip()` と `portal_sdk.py` の `wasm_response()`）。URL に中身のハッシュが付いているので、2 回目からはブラウザのキャッシュから読まれます。
 
 > それでも足りない場合、次の一手は Cloud Run の最小インスタンス数を 1 にすること（起動待ちが完全に消える代わりに、常時課金になります）です。
+
+## 🧩 土台とツール（プラグイン構成）
+
+このポータルは **「土台（portal）＋ ツール」** という作りになっています。
+土台が持つのは「どのツールにも同じように効くもの」——デザインシステム、画面共通の部品、
+サインイン、代理アクセス、共有設定、PDF の保存先の決め方、CI/CD——だけで、
+**ツールの名前は 1 つも出てきません**。ツールは自分で自分を名乗り、土台がそれを読んで組み立てます。
+
+| | 名乗る場所 | 土台が読む場所 |
+| --- | --- | --- |
+| 画面 | `frontend/src/<id>/tool.js`（id・名前・説明・ページ・入口・CSS） | `frontend/tools.config.js` → `tools-plugin.js` がページとツール一覧を組み立てる |
+| API | `backend/app/tools/<id>.py` の `TOOL = Tool(...)`（id・名前・ルーター） | `backend/app/tools/__init__.py` → `main.py` が `/api/tools/<id>` へ載せる |
+
+ツールを増やす・減らすときに触るのは、この 2 つの一覧だけです。`vite.config.js` にも
+`index.html` にも `main.py` にもツールの名前は出てきません。
+
+**この構成は、ツールを 1 つずつ別リポジトリへ出すための下ごしらえです。**
+分割の全体像（3 層の分け方・版の固定・更新の流れ・移行の順序）は
+**[docs/plugin-architecture.md](docs/plugin-architecture.md)** にまとめてあります。
 
 ## 📁 リポジトリ構成
 
 ```
+docs/
+  plugin-architecture.md      # ツールを別リポジトリへ分ける設計（土台とツールの契約）
 frontend/                     # Firebase Hosting に載せる SPA (Vite)
-  index.html                  # ポータルトップ（ツール一覧）
-  tools/excel-report-formatter/index.html
-  tools/structural-cert-formatter/index.html
-  tools/timber-panel-shear-calculator/index.html
-  tools/wall-quantity-calculator/index.html
+  index.html                  # ポータルトップ（ツール一覧はビルド時に組み立てる）
+  tools.config.js             # 載せるツールの一覧（ここだけがツールを知っている）
+  tools-plugin.js             # マニフェスト → ページ・ツール一覧を組み立てる Vite プラグイン
+  tool-frame.html             # ツールのページの外枠（全ツール共通。土台が持つ）
+  tools/                      # 組み立てたツールのページ（/tools/<id>/。生成物・コミットしない）
   design/index.html           # デザインシステムの見本（/design/。本番では配らない）
-  src/styles.css              # 画面共通スタイルの入口（下の 5 つを読み込むだけ）
-  src/styles/                 # デザインシステム
+  src/styles.css              # 画面共通スタイルの入口（下の 4 つを読み込むだけ）
+  src/styles/                 # デザインシステム（どのツールにも同じように効くものだけ）
     tokens.css                # 色・余白・字送りの原器（明暗テーマもここだけ）
     base.css                  # 素の要素（body・見出し・焦点）の土台
     layout.css                # 骨組み（ヘッダー・ページ幅・入力と結果の 2 列）
     components.css            # 部品（ボタン・入力欄・節・結果・判定）
-    tools.css                 # ツールごとの上乗せ（計測値の表・釘配列図・出力欄）
   src/design-system/          # 見本ページ（/design/）の入口と、そこだけで使う CSS
   src/components/             # 画面共通の部品（Web Components）
     index.js                  # 部品の読み込み口と、部品を足すときの約束事
@@ -296,12 +318,18 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   src/google-picker.js        # 公式 Google Picker（Drive のファイル選択）
   src/pdf-file-ops.js         # PDF ツール共通のファイル操作（保存の判断・文言）
   src/save-dialogs.js         # PDF ツール共通の保存 / 未保存確認ダイアログ
+                              # ツール（1 つにつき 1 ディレクトリ。tool.js が名乗り、
+                              # page.html が中身、tool.css がそのツールにしか出てこない形）
   src/excel-report-formatter/ # フォーム本体（GAS 版 index.html の移植）
   src/structural-cert-formatter/  # 構造計算安全証明書のフォーム・編集画面
   src/timber-panel-shear-calculator/  # 大壁と面材（釘配列）の入力・結果表示・釘配列図
   src/wall-quantity-calculator/   # 必要壁量 表計算ツールの入力フォームと出力結果
 backend/                      # Cloud Run サービス (FastAPI)
-  app/main.py                 # API ルート
+  app/main.py                 # 組み立て（土台のルート・失敗の返し方・ツールの取り付け）
+  app/portal_sdk.py           # 土台がツールへ貸し出すもの（将来の portal-sdk パッケージ）
+  app/errors.py               # 利用者に見せられる失敗の共通の形（PortalError）
+  app/tools/__init__.py       # 載せるツールの一覧（ここだけがツールを知っている）
+  app/tools/<ツール名>.py      # ツールごとの API ルーター（/api/tools/<id>/**）
   app/clerk_auth.py           # Clerk JWT 検証
   app/google_drive.py         # 代理トークン・Drive API
   app/google_docs.py          # Docs API（雛形のプレースホルダー置換）
@@ -1065,6 +1093,10 @@ open("計算書.pdf", "wb").write(panel_shear.build_pdf(data, panel_shear.valida
     （グレー本 3.4〜3.6）と、面材・釘・枠材のマスタからの選択
     （GAS 版 ROADMAP のフェーズ 1・3）。
   - 小規模木造建築物 必要壁量 計算ツール（配布物の表計算ツールへの記入）は完了。
+  - **ツールを 1 つずつ別リポジトリへ分ける**（[docs/plugin-architecture.md](docs/plugin-architecture.md)）。
+    portal 側の受け口（ツールが自分を名乗り、ビルドと API がそれを読む形）は完了。
+    続きは土台のパッケージ化（`portal-ui` / `portal-sdk` / `portal-core`）と、
+    依存の少ないツールからの切り出し。
 - [ ] **Phase 3: AI（Gemini API）連携による自動化**
   - 手書き図面の画像から計測値を抽出し、フォームに初期値を自動設定。
 - [ ] **Phase 4: 実運用向けチューニング**

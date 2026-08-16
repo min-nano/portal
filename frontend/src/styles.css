@@ -7,7 +7,11 @@
  *   base        素の要素（body・見出し・リンク・焦点）の土台
  *   layout      骨組み（ヘッダー・ページ幅・入力と結果の 2 列）
  *   components  部品（ボタン・入力欄・節・結果・判定）
- *   tools       ツールごとの上乗せ（計測値の表・釘配列図・出力欄）
+ *
+ * ここにあるのは **どのツールにも同じように効くもの** だけ。ツールにしか
+ * 出てこない形（計測値の表・釘配列図・配布物にそろえた出力欄など）は、
+ * そのツールの tool.css にあり、ツールの main.js がこの後に読み込む
+ * （docs/plugin-architecture.md）。
  *
  * 設計の考え方と、部品の一覧は design/index.html（/design/）に置いてある。
  */
@@ -16,4 +20,3 @@
 @import './styles/base.css';
 @import './styles/layout.css';
 @import './styles/components.css';
-@import './styles/tools.css';

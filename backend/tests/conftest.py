@@ -7,14 +7,18 @@ Drive・共有設定・認証を偽物に差し替え、ルートハンドラの
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main
+from app import google_docs, google_drive, main, settings_store
 from app.clerk_auth import User
 from app.google_drive import DriveError
 from tests.util import make_template_bytes
 
 TEST_EMAIL = "tester@example.co.jp"
-TOOL = main.TOOL_EXCEL_REPORT
-CERT_TOOL = main.TOOL_STRUCTURAL_CERT
+
+# ツールの id は URL（/api/tools/<id>）と共有設定のキーそのもの。土台から
+# 見える契約なので、ツールの実装を辿らずここに書く（ツールが別リポジトリへ
+# 移っても、このテストの前提は変わらない）。
+TOOL = "excel-report-formatter"
+CERT_TOOL = "structural-cert-formatter"
 
 GOOGLE_DOC_MIME = "application/vnd.google-apps.document"
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -95,18 +99,18 @@ def drive(monkeypatch):
         fake.delegated_emails.append(email)
         return ("delegated", email)
 
-    monkeypatch.setattr(main.google_drive, "delegated_session", delegated_session)
+    monkeypatch.setattr(google_drive, "delegated_session", delegated_session)
 
     def delegated_access_token(email):
         fake.token_emails.append(email)
         return fake.access_token
 
     monkeypatch.setattr(
-        main.google_drive, "delegated_access_token", delegated_access_token
+        google_drive, "delegated_access_token", delegated_access_token
     )
 
     monkeypatch.setattr(
-        main.settings_store,
+        settings_store,
         "get_tool_settings",
         lambda tool: fake.settings.get(tool, {}),
     )
@@ -115,7 +119,7 @@ def drive(monkeypatch):
         fake.settings[tool] = values
         fake.saved.append((tool, values))
 
-    monkeypatch.setattr(main.settings_store, "set_tool_settings", set_tool_settings)
+    monkeypatch.setattr(settings_store, "set_tool_settings", set_tool_settings)
 
     def fetch_latest_template(session, folder_id, file_name):
         fake.fetch_calls.append((folder_id, file_name))
@@ -126,7 +130,7 @@ def drive(monkeypatch):
         return fake.template_bytes
 
     monkeypatch.setattr(
-        main.google_drive, "fetch_latest_template", fetch_latest_template
+        google_drive, "fetch_latest_template", fetch_latest_template
     )
 
     def get_file_metadata(session, file_id):
@@ -134,7 +138,7 @@ def drive(monkeypatch):
             raise DriveError("ファイル情報の取得に失敗しました（ファイルが見つかりません）。", 404)
         return fake.metadata[file_id]
 
-    monkeypatch.setattr(main.google_drive, "get_file_metadata", get_file_metadata)
+    monkeypatch.setattr(google_drive, "get_file_metadata", get_file_metadata)
 
     # --- 構造計算安全証明書ツールが使う Drive / Docs 操作 -------------------
 
@@ -143,7 +147,7 @@ def drive(monkeypatch):
         return ("write", email)
 
     monkeypatch.setattr(
-        main.google_drive, "delegated_write_session", delegated_write_session
+        google_drive, "delegated_write_session", delegated_write_session
     )
 
     def find_latest_file(session, folder_id, file_name):
@@ -154,23 +158,23 @@ def drive(monkeypatch):
             )
         return fake.doc_template
 
-    monkeypatch.setattr(main.google_drive, "find_latest_file", find_latest_file)
+    monkeypatch.setattr(google_drive, "find_latest_file", find_latest_file)
 
     def copy_file(session, file_id, name):
         fake.copies.append((file_id, name))
         return {"id": f"copy-of-{file_id}", "name": name}
 
-    monkeypatch.setattr(main.google_drive, "copy_file", copy_file)
+    monkeypatch.setattr(google_drive, "copy_file", copy_file)
     monkeypatch.setattr(
-        main.google_drive, "export_file", lambda session, fid, mime: fake.export_bytes
+        google_drive, "export_file", lambda session, fid, mime: fake.export_bytes
     )
     monkeypatch.setattr(
-        main.google_drive,
+        google_drive,
         "download_file",
         lambda session, fid, context="ファイルのダウンロード": fake.download_bytes,
     )
     monkeypatch.setattr(
-        main.google_drive,
+        google_drive,
         "delete_file",
         lambda session, fid: fake.deleted.append(fid),
     )
@@ -183,7 +187,7 @@ def drive(monkeypatch):
             "webViewLink": "https://drive.example/new-file",
         }
 
-    monkeypatch.setattr(main.google_drive, "create_file", create_file)
+    monkeypatch.setattr(google_drive, "create_file", create_file)
 
     def update_file_content(session, file_id, content, mime_type):
         fake.updated.append((file_id, content, mime_type))
@@ -193,7 +197,7 @@ def drive(monkeypatch):
             "webViewLink": f"https://drive.example/{file_id}",
         }
 
-    monkeypatch.setattr(main.google_drive, "update_file_content", update_file_content)
+    monkeypatch.setattr(google_drive, "update_file_content", update_file_content)
 
     def replace_all_text(session, document_id, replacements):
         fake.replaced.append(replacements)
@@ -201,7 +205,7 @@ def drive(monkeypatch):
             return fake.replace_counts
         return {placeholder: 1 for placeholder in replacements}
 
-    monkeypatch.setattr(main.google_docs, "replace_all_text", replace_all_text)
+    monkeypatch.setattr(google_docs, "replace_all_text", replace_all_text)
     return fake
 
 
