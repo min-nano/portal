@@ -9,6 +9,7 @@ import {
   makePanel,
   makeWall,
   mergeFormData,
+  nextPlacement,
   minimumEdgeDistance,
   nailNote,
   raiseEdgeDistance,
@@ -49,6 +50,13 @@ describe('emptyFormData / makeWall / makePanel', () => {
     expect(panel.edgeDistance).toBe(10);
     expect(panel.nailPitch).toBeGreaterThan(0);
     expect(panel.studPitch).toBeGreaterThan(0);
+  });
+
+  it('壁内の位置は空から始める（配置を書かない壁は、枚数だけで計算する）', () => {
+    const panel = makePanel();
+
+    expect(panel.side).toBe('front');
+    expect([panel.originX, panel.originY]).toEqual(['', '']);
   });
 
   it('面材と釘の数値は面材ごとに、空から始める（確かめないまま計算させない）', () => {
@@ -158,6 +166,9 @@ describe('mergeFormData', () => {
               nailPitch: 75,
               edgeDistance: 15,
               grain: 'width',
+              side: 'back',
+              originX: 0,
+              originY: 1820,
               junk: 2,
             },
           ],
@@ -185,6 +196,9 @@ describe('mergeFormData', () => {
       nailPitch: 75,
       edgeDistance: 15,
       grain: 'width',
+      side: 'back',
+      originX: 0,
+      originY: 1820,
     });
     expect(data.walls[0].panels[0].junk).toBeUndefined();
     expect(data.walls[0].panels[0].junk).toBeUndefined();
@@ -212,6 +226,53 @@ describe('mergeFormData', () => {
 
   it('面材を 1 枚も持たない壁は、そのまま 0 枚で読む', () => {
     expect(mergeFormData({ walls: [{ panels: [] }] }).walls[0].panels).toEqual([]);
+  });
+
+  it('書いていない壁内の位置は、空欄のまま読む（0 と区別する）', () => {
+    const data = mergeFormData({
+      walls: [{ panels: [{ originX: null, originY: 0, side: 'なにか' }] }],
+    });
+
+    const panel = data.walls[0].panels[0];
+    expect(panel.originX).toBe('');
+    // 0 は「壁の下端に張る」という入力なので、そのまま残る。
+    expect(panel.originY).toBe(0);
+    expect(panel.side).toBe('front');
+  });
+});
+
+describe('nextPlacement', () => {
+  it('直前の面材の真上に置く（壁は下から段を重ねて張る）', () => {
+    const previous = makePanel({ originX: 0, originY: 0, height: 1820 });
+
+    expect(nextPlacement(previous)).toEqual({
+      side: 'front',
+      originX: 0,
+      originY: 1820,
+    });
+  });
+
+  it('張る面は引き継ぐ（両面張りの、同じ面を続けて張る）', () => {
+    const previous = makePanel({ side: 'back', originX: 455, originY: 910, height: 910 });
+
+    expect(nextPlacement(previous)).toEqual({
+      side: 'back',
+      originX: 455,
+      originY: 1820,
+    });
+  });
+
+  it('直前の面材に位置が無ければ、こちらも空欄のままにする', () => {
+    expect(nextPlacement(makePanel())).toEqual({
+      side: 'front',
+      originX: '',
+      originY: '',
+    });
+    expect(nextPlacement(undefined)).toEqual({
+      side: 'front',
+      originX: '',
+      originY: '',
+    });
   });
 });
 

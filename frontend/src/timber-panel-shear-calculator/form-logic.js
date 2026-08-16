@@ -94,6 +94,11 @@ export function makePanel(overrides) {
     gridY: '',
     coords: '',
     grain: '',
+    // 壁内の位置は任意入力。空のままなら今までどおり枚数だけで計算する
+    //（壁の面材配列図も、配置の判定も出さない）。
+    side: 'front',
+    originX: '',
+    originY: '',
     ...(overrides || {}),
   };
 }
@@ -142,6 +147,26 @@ export function specOf(panel) {
     spec[key] = (panel || {})[key] === undefined ? '' : panel[key];
   });
   return spec;
+}
+
+/**
+ * 面材を足すときの、壁内の位置の初期値。
+ *
+ * 直前の面材に位置が入っていれば、その**真上**（同じ面・同じ X・Y は上端）に
+ * 置く。壁は下から段を重ねて張ることが多いので、そのまま使えることが多く、
+ * 違えばその面材の欄で動かせる。直前の面材に位置が無ければ、こちらも空欄に
+ * しておく（配置を書いていない壁に、勝手な配置を作らない）。
+ */
+export function nextPlacement(previous) {
+  const side = (previous || {}).side === 'back' ? 'back' : 'front';
+  const x = optionalNumber((previous || {}).originX);
+  const y = optionalNumber((previous || {}).originY);
+  if (x === '' && y === '') return { side, originX: '', originY: '' };
+  return {
+    side,
+    originX: x === '' ? 0 : x,
+    originY: (y === '' ? 0 : y) + (Number((previous || {}).height) || 0),
+  };
 }
 
 /**
@@ -293,6 +318,11 @@ export function mergeFormData(parsed) {
           gridY: String(panel.gridY || ''),
           coords: String(panel.coords || ''),
           grain: String(panel.grain || ''),
+          side: panel.side === 'back' ? 'back' : 'front',
+          // 壁内の位置は「書いていない」を空欄のまま持ち帰る（0 は壁の端を
+          // 指す正しい入力なので、未入力と一緒にしない）。
+          originX: optionalNumber(panel.originX),
+          originY: optionalNumber(panel.originY),
         })
       ),
     })
@@ -303,6 +333,17 @@ export function mergeFormData(parsed) {
     issuedOn: String((parsed && parsed.issuedOn) || '') || todayIso(),
     walls: merged.length > 0 ? merged : [makeWall()],
   };
+}
+
+/**
+ * 任意の数値欄を読む。未入力（欠落・null・空文字）は空欄のまま返す。
+ *
+ * 0 を入れたのか何も書いていないのかを区別する欄（壁内の位置）で使う。
+ */
+export function optionalNumber(value) {
+  if (value === undefined || value === null || value === '') return '';
+  const number = Number(value);
+  return Number.isFinite(number) ? number : '';
 }
 
 /** 釘配列の入力方式（知らない値は割り付けに寄せる）。 */

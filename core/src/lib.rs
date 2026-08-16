@@ -40,6 +40,7 @@ pub mod nail_array;
 pub mod presets;
 pub mod report;
 pub mod wall;
+pub mod wall_layout;
 pub mod wall_quantity;
 
 use json::Value;

@@ -39,6 +39,11 @@ const MARKUP = `
       <div id="wallPanels"></div>
       <div id="wallError" hidden></div>
       <div id="wallSummary"></div>
+      <div id="wallLayout" hidden>
+        <svg id="wallLayoutDiagram" hidden></svg>
+        <p id="wallLayoutNote" hidden></p>
+        <table><thead id="wallLayoutHead"></thead><tbody id="wallLayoutBody"></tbody></table>
+      </div>
       <table><thead id="wallSpecHead"></thead><tbody id="wallSpecBody"></tbody></table>
       <table><thead id="wallPanelHead"></thead><tbody id="wallPanelBody"></tbody></table>
       <table><tbody id="wallStepsBody"></tbody></table>
@@ -138,6 +143,10 @@ const PANEL = {
   gridY: '',
   coords: '',
   grain: '',
+  // 壁内の位置は任意入力。この面材は壁の左下に張る。
+  side: 'front',
+  originX: 0,
+  originY: 0,
 };
 
 const WALL = {
@@ -148,7 +157,15 @@ const WALL = {
   hasIntermediateStud: true,
   panels: [
     { ...PANEL },
-    { ...PANEL, panelId: 'pn2', panelName: '上段', mode: 'coords', coords: '10, 10\n455, 305', grain: 'width' },
+    {
+      ...PANEL,
+      panelId: 'pn2',
+      panelName: '上段',
+      mode: 'coords',
+      coords: '10, 10\n455, 305',
+      grain: 'width',
+      originY: 610,
+    },
   ],
 };
 
@@ -226,6 +243,39 @@ const WALL_REPORT = {
     { label: 'Pa を決めた項', value: '変形角 1/150 時のモーメント K0/150', ok: true },
     { label: '適用範囲 3.3(1)①', value: 'ΔPa = 9.21715 kN/m ≦ 13.7200 kN/m', ok: true },
   ],
+  // 壁内の面材配列（位置を入れた壁にだけ付く）。
+  wallDiagram: {
+    wallWidth: 910,
+    wallHeight: 3000,
+    minX: 0,
+    minY: 0,
+    maxX: 910,
+    maxY: 3000,
+    sides: [
+      {
+        id: 'front',
+        label: '表面',
+        count: 2,
+        area: 1_110_200,
+        panels: [
+          {
+            label: '下段', x: 0, y: 0, width: 910, height: 610,
+            sizeLabel: '910 × 610 mm', note: '', ok: true,
+          },
+          {
+            label: '上段', x: 0, y: 610, width: 910, height: 610,
+            sizeLabel: '910 × 610 mm', note: '', ok: true,
+          },
+        ],
+      },
+    ],
+    unplaced: [],
+  },
+  layoutColumns: ['面材', '張る面', '寸法 W × H', '左下 (X, Y) [mm]', '面積 Aw [mm²]', '配置'],
+  layout: [
+    { label: '下段', ok: true, cells: ['表面', '910 × 610 mm', '(0, 0)', '555,100', 'OK'] },
+    { label: '上段', ok: true, cells: ['表面', '910 × 610 mm', '(0, 610)', '555,100', 'OK'] },
+  ],
 };
 
 beforeEach(() => {
@@ -261,6 +311,20 @@ describe('applyWall / readWall', () => {
     expect(panel.k).toBe('');
     expect(panel.deltaPv).toBe('');
     expect(panel.thickness).toBe(12);
+  });
+
+  it('壁内の位置は、書いていなければ空のまま読み戻す（0 と区別する）', () => {
+    applyWall(
+      document,
+      { ...WALL, panels: [{ ...PANEL, side: 'back', originX: 0, originY: '' }] },
+      OPTIONS
+    );
+
+    const panel = readWall(document).panels[0];
+    expect(panel.side).toBe('back');
+    // 0 は「壁の左端に張る」という入力なので、そのまま残る。
+    expect(panel.originX).toBe(0);
+    expect(panel.originY).toBe('');
   });
 });
 
@@ -573,6 +637,63 @@ describe('renderWallResult', () => {
     const first = document.querySelectorAll('[data-panel-index]')[0];
     expect(first.querySelectorAll('.result-box')).toHaveLength(3);
     expect(first.querySelector('[data-panel-diagram]').hasAttribute('hidden')).toBe(false);
+  });
+
+  it('壁内の位置を入れた壁には、面材配列図と面材の一覧を出す', () => {
+    renderWallPanels(document, WALL.panels, OPTIONS);
+    renderWallResult(document, WALL_REPORT);
+
+    expect(document.getElementById('wallLayout').hidden).toBe(false);
+    const diagram = document.getElementById('wallLayoutDiagram');
+    expect(diagram.hasAttribute('hidden')).toBe(false);
+    // 壁の枠（面ごとに、塗りと線で 2 回）と、面材の枠。
+    expect(diagram.querySelectorAll('rect')).toHaveLength(4);
+    expect([...diagram.querySelectorAll('text')].map((t) => t.textContent))
+      .toContain('表面（2 枚）');
+    // 一覧は、壁の他の表と同じ組み方（見出し ＋ 面材ごとの行）。
+    expect(
+      [...document.querySelectorAll('#wallLayoutHead th')].map((th) => th.textContent)
+    ).toEqual(WALL_REPORT.layoutColumns);
+    expect(document.querySelectorAll('#wallLayoutBody tr')).toHaveLength(2);
+    expect(document.getElementById('wallLayoutNote').hidden).toBe(true);
+  });
+
+  it('図に描けない面材があれば、その名前を添える', () => {
+    const wallDiagram = { ...WALL_REPORT.wallDiagram, unplaced: ['上段'] };
+    renderWallResult(document, { ...WALL_REPORT, wallDiagram });
+
+    const note = document.getElementById('wallLayoutNote');
+    expect(note.hidden).toBe(false);
+    expect(note.textContent).toContain('上段');
+  });
+
+  it('壁内の位置を入れていない壁では、面材配列図の節ごと出さない', () => {
+    renderWallResult(document, { ...WALL_REPORT, wallDiagram: null, layout: [] });
+
+    expect(document.getElementById('wallLayout').hidden).toBe(true);
+    expect(document.getElementById('wallLayoutDiagram').hasAttribute('hidden')).toBe(true);
+    expect(document.querySelectorAll('#wallLayoutBody tr')).toHaveLength(0);
+  });
+
+  it('はみ出した面材は、図の中で印を付けて出す', () => {
+    const side = WALL_REPORT.wallDiagram.sides[0];
+    const wallDiagram = {
+      ...WALL_REPORT.wallDiagram,
+      sides: [
+        {
+          ...side,
+          panels: [{ ...side.panels[0], note: 'はみ出し', ok: false }],
+        },
+      ],
+    };
+    renderWallResult(document, { ...WALL_REPORT, wallDiagram });
+
+    const labels = [...document.querySelectorAll('#wallLayoutDiagram text')]
+      .map((text) => text.textContent);
+    expect(labels).toContain('※ 下段');
+    expect(
+      document.querySelector('#wallLayoutDiagram title').textContent
+    ).toContain('はみ出し');
   });
 
   it('適用範囲を外れた壁は NG と出す', () => {

@@ -609,6 +609,131 @@ def test_pdf_prints_the_wall_calculation():
     assert text.count("OK") >= 3
 
 
+# --- 壁の面材配列図（壁内での面材の配置） -----------------------------------
+
+
+def placed_example() -> dict:
+    """グレー本 3.3(3) の計算例を、実際の張り方として配置した入力。
+
+    幅 910・階高 3000 の壁に、下から 910×1820、その上に 910×910 を張る
+    （上に 270 mm の張り残しが出る、準耐力壁形式の大壁）。
+    """
+    data = panel_shear.example_wall_data()
+    panels = data["walls"][0]["panels"]
+    panels[0]["panelName"] = "下段"
+    panels[0]["originX"], panels[0]["originY"] = 0, 0
+    panels[1]["panelName"] = "上段"
+    panels[1]["originX"], panels[1]["originY"] = 0, 1820
+    return panel_shear.normalize_data(data)
+
+
+def test_pdf_puts_the_arrangement_drawing_in_front_of_the_wall():
+    """配置を入れた壁は、面材のページの前に壁の面材配列図が 1 ページ入る。"""
+    data = placed_example()
+    pdf_bytes = panel_shear.build_pdf(data, panel_shear.validate(data))
+
+    pages = extract_text(io.BytesIO(pdf_bytes)).split("\x0c")[:-1]
+
+    # 配列図 1 ＋ 面材 2 ＋ 壁 1。
+    assert len(pages) == 4
+    assert panel_shear._LAYOUT_TITLE in pages[0]
+    assert all(panel_shear._TITLE in page for page in pages[1:3])
+    assert panel_shear._WALL_TITLE in pages[3]
+    # 通しのページ番号も、配列図を含めて数える。
+    assert "4 / 4" in pages[3]
+
+
+def test_the_arrangement_page_shows_where_every_panel_goes():
+    data = placed_example()
+    reports = panel_shear.validate(data)
+
+    text = extract_text(io.BytesIO(panel_shear.build_pdf(data, reports))).split("\x0c")[0]
+
+    assert "表面（2 枚）" in text
+    assert "W = 910 mm" in text
+    assert "H = 3,000 mm" in text
+    # 面材の一覧（張る面・寸法・左下の位置・面積）。
+    assert "左下 (X, Y) [mm]" in text
+    assert "(0, 1,820)" in text
+    assert "910 × 1,820 mm" in text
+    # 配置の確認。張り残し（準耐力壁形式なので上に 270 mm 残る）は NG にしない。
+    assert "はみ出し・重なりなし" in text
+    assert "2,484,300 mm²" in text
+    assert panel_shear._layout_check(reports["walls"][0])["ok"] is True
+
+
+def test_the_wall_without_positions_has_no_arrangement_page():
+    """配置を書かない壁は、今までどおり枚数だけで計算する（図も出ない）。"""
+    data = panel_shear.example_wall_data()
+    reports = panel_shear.validate(data)
+
+    pages = extract_text(
+        io.BytesIO(panel_shear.build_pdf(data, reports))
+    ).split("\x0c")[:-1]
+
+    assert reports["walls"][0]["wallDiagram"] is None
+    assert len(pages) == 3
+    assert panel_shear._LAYOUT_TITLE not in "".join(pages)
+    labels = [check["label"] for check in reports["walls"][0]["checks"]]
+    assert not any(label.startswith("面材の配置") for label in labels)
+
+
+def test_the_arrangement_page_marks_a_panel_that_does_not_fit():
+    """壁からはみ出す配置は、計算に入れた枚数と張り方の食い違い。"""
+    data = placed_example()
+    data["walls"][0]["panels"][1]["originY"] = 2500  # 2500 + 910 > 3000
+    reports = panel_shear.validate(data)
+
+    text = extract_text(
+        io.BytesIO(panel_shear.build_pdf(data, reports))
+    ).split("\x0c")[0]
+
+    assert "※ 上段（はみ出し）" in text
+    assert "面材「上段」が壁（910 × 3,000 mm）からはみ出しています" in text
+    assert "NG" in text
+
+
+def test_the_arrangement_page_draws_both_sides_of_a_wall():
+    """両面張りは、表と裏を並べて描く（同じ場所に来ても重なりではない）。"""
+    data = placed_example()
+    panels = data["walls"][0]["panels"]
+    data["walls"][0]["panels"] = panels + [
+        {**panel, "panelId": f"w1-b{index}", "panelName": f"裏 {panel['panelName']}",
+         "side": "back"}
+        for index, panel in enumerate(panels)
+    ]
+    data = panel_shear.normalize_data(data)
+    reports = panel_shear.validate(data)
+
+    text = extract_text(
+        io.BytesIO(panel_shear.build_pdf(data, reports))
+    ).split("\x0c")[0]
+
+    assert "表面（2 枚）" in text
+    assert "裏面（2 枚）" in text
+    assert "はみ出し・重なりなし" in text
+
+
+def test_the_position_of_a_panel_travels_with_the_saved_pdf():
+    data = placed_example()
+    pdf_bytes = panel_shear.build_pdf(data, panel_shear.validate(data))
+
+    parsed = panel_shear.parse_pdf(pdf_bytes)
+
+    assert parsed == data
+    panel = parsed["walls"][0]["panels"][1]
+    assert (panel["originX"], panel["originY"]) == (0, 1820)
+    assert panel["side"] == "front"
+    # 書いていない位置は null のまま戻る（0 と混ざらない）。
+    untouched = panel_shear.parse_pdf(
+        panel_shear.build_pdf(
+            panel_shear.example_wall_data(),
+            panel_shear.validate(panel_shear.example_wall_data()),
+        )
+    )
+    assert untouched["walls"][0]["panels"][0]["originX"] is None
+
+
 def test_pdf_marks_a_wall_over_the_upper_limit_as_ng():
     data = panel_shear.example_wall_data()
     data["walls"][0]["width"] = 300

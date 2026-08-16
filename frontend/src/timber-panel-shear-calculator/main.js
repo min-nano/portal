@@ -61,6 +61,7 @@ import {
   mergeFormData,
   minimumEdgeDistance,
   nailNote,
+  nextPlacement,
   panelFieldsFromGrade,
   panelFieldsFromMaterial,
   raiseEdgeDistance,
@@ -189,16 +190,22 @@ function removeWall() {
  * 面材と釘の仕様は面材ごとに決められるが、実際には壁の中で同じ仕様を使う
  * ことのほうが多いので、直前の面材の仕様を初期値として引き継ぐ（違う仕様に
  * するときは、その面材の欄で選び直す）。
+ *
+ * 壁内の位置も同じ考え方で、直前の面材に位置が入っていればその真上へ置く
+ * （壁は下から段を重ねて張ることが多い）。位置を使っていない壁では、
+ * こちらも空欄のままにする。
  */
 function addWallPanel() {
   const wall = currentWall();
   if (!wall) return;
   captureCurrentWall();
-  const spec = specOf(wall.panels[wall.panels.length - 1]);
+  const previous = wall.panels[wall.panels.length - 1];
+  const spec = specOf(previous);
   // へりあきの初期値は、引き継いだ釘で決まる最小値（3.3(1)④）。
   wall.panels.push(
     makePanel({
       ...spec,
+      ...nextPlacement(previous),
       edgeDistance: minimumEdgeDistance(materials, spec.materialId),
     })
   );

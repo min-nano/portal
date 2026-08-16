@@ -11,7 +11,7 @@
 
 // 面材 1 枚ぶんの入力欄は、折り畳めるセクション（<portal-section>）で作る。
 import '../components/collapsible-section.js';
-import { buildDiagram } from './diagram.js';
+import { buildDiagram, buildWallDiagram } from './diagram.js';
 import { panelLabel, panelMode, wallLabel } from './form-logic.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -27,6 +27,12 @@ const GRAIN_CHOICES = [
 const DEFAULT_NAIL_NOTE =
   '表にない組合せは、グレー本 4.5 の試験で求めた k・ΔPv・δv・δu を' +
   '直接入力してください。読み込んだあとに編集できます。';
+
+/** 面材を張る面（両面張りの壁を、配列図で描き分けるための選択）。 */
+const SIDE_CHOICES = [
+  { value: 'front', text: '表面' },
+  { value: 'back', text: '裏面' },
+];
 
 /** 釘配列の入力方式。 */
 const MODE_CHOICES = [
@@ -100,6 +106,11 @@ export function readPanels(root) {
       gridY: field(node, 'gridY').value.trim(),
       coords: field(node, 'coords').value.trim(),
       grain: field(node, 'grain').value,
+      side: field(node, 'side').value,
+      // 壁内の位置は任意入力。0（壁の端）と「書いていない」を取り違えない
+      // よう、未入力は空文字のまま持ち帰る。
+      originX: optionalNumberOf(field(node, 'originX')),
+      originY: optionalNumberOf(field(node, 'originY')),
     };
   });
 }
@@ -336,6 +347,45 @@ function buildPanelSpec(document_, panel, index, options) {
 }
 
 /**
+ * 面材 1 枚分の「壁のどこに張るか」の入力欄を組み立てる。
+ *
+ * 剛性・許容せん断耐力（3.3）は面材ごとの値の和なので、ここに入れる位置は
+ * 計算そのものを変えない。計算書に「どう張る前提の計算か」を図で残し、
+ * 配置と計算の食い違い（はみ出し・重なり・配置漏れ）を判定で拾うための欄。
+ *
+ * 任意入力なので、空のままなら今までどおり枚数だけで計算する（配列図も
+ * 判定の行も出ない）。
+ */
+function buildPanelPlacement(document_, panel) {
+  const group = subheading(
+    document_,
+    '壁内の位置（壁の面材配列図）',
+    '壁の左下を原点として、この面材の左下の位置を入れます。' +
+      '入れると計算書に壁の面材配列図が付き、はみ出し・重なり・書き忘れを判定します。' +
+      '空のままなら、今までどおり枚数だけで計算します（図は出ません）。'
+  );
+  const line = document_.createElement('div');
+  line.className = 'panel-size';
+  line.append(
+    labelled(document_, '張る面', select(document_, 'side', panel.side || 'front', SIDE_CHOICES)),
+    labelled(document_, '左下の位置 X [mm]', input(document_, 'originX', panel.originX, {
+      type: 'number',
+      inputmode: 'numeric',
+      step: 'any',
+      placeholder: '未指定',
+    })),
+    labelled(document_, '左下の位置 Y [mm]', input(document_, 'originY', panel.originY, {
+      type: 'number',
+      inputmode: 'numeric',
+      step: 'any',
+      placeholder: '未指定',
+    }))
+  );
+  group.appendChild(line);
+  return group;
+}
+
+/**
  * 面材 1 枚分の入力欄と、その面材の計算結果の器を組み立てる。
  *
  * 1 枚の面材は「面材と釘の仕様 → 面材の配置と釘配列 → その面材の釘配列
@@ -404,6 +454,8 @@ function buildPanelEditor(document_, panel, index, options) {
   area.append(areaLabel, areaValue);
   size.appendChild(area);
   box.appendChild(size);
+
+  box.appendChild(buildPanelPlacement(document_, panel));
 
   // 釘配列の入力方式（割り付け / 格子 / 座標）。
   const choices = document_.createElement('fieldset');
@@ -655,6 +707,11 @@ export function renderPanelResults(root, reports) {
 export function renderWallResult(root, report) {
   const errorBox = element(root, 'wallError');
   const summary = element(root, 'wallSummary');
+  const layoutBox = element(root, 'wallLayout');
+  const layoutDiagram = element(root, 'wallLayoutDiagram');
+  const layoutNote = element(root, 'wallLayoutNote');
+  const layoutHead = element(root, 'wallLayoutHead');
+  const layoutBody = element(root, 'wallLayoutBody');
   const specHead = element(root, 'wallSpecHead');
   const specBody = element(root, 'wallSpecBody');
   const head = element(root, 'wallPanelHead');
@@ -668,7 +725,8 @@ export function renderWallResult(root, report) {
   // 面材ごとの釘配列諸定数は、壁の計算の一部として一緒に返る。
   renderPanelResults(root, report && report.panelReports);
 
-  [summary, specHead, specBody, head, body, steps, bucklingHead, bucklingBody, checks]
+  [summary, layoutHead, layoutBody, specHead, specBody, head, body, steps,
+   bucklingHead, bucklingBody, checks]
     .forEach((node) => {
       node.innerHTML = '';
     });
@@ -676,6 +734,8 @@ export function renderWallResult(root, report) {
   if (!report || !report.ok) {
     errorBox.hidden = !report;
     errorBox.textContent = report ? report.error : '';
+    layoutBox.hidden = true;
+    renderWallDiagram(layoutDiagram, null);
     return;
   }
   errorBox.hidden = true;
@@ -699,6 +759,21 @@ export function renderWallResult(root, report) {
       ]);
     });
   };
+
+  // 壁内の面材配列。位置を入れていない壁では節ごと出さない（枚数だけで
+  // 計算した、という今までどおりの計算書になる）。
+  const wallDiagram = buildWallDiagram(report.wallDiagram);
+  layoutBox.hidden = !wallDiagram;
+  renderWallDiagram(layoutDiagram, wallDiagram);
+  layoutNote.textContent =
+    wallDiagram && wallDiagram.unplaced.length
+      ? `壁内の位置を入れていない面材（${wallDiagram.unplaced.join('、')}）は、` +
+        'この図に描けません。計算には枚数として入っています。'
+      : '';
+  layoutNote.hidden = !layoutNote.textContent;
+  if (wallDiagram) {
+    appendTable(layoutHead, layoutBody, report.layoutColumns, report.layout);
+  }
 
   // 面材と釘は面材ごとの入力なので、どの面材がどの数値で計算されたのかを
   // 壁の結果にも並べる（張り分けた壁でも根拠がその場でそろう）。
@@ -742,6 +817,88 @@ function svgText(document_, x, y, text, attributes) {
   const node = svgNode(document_, 'text', { x, y, 'font-size': 10, ...attributes });
   node.textContent = text;
   return node;
+}
+
+/**
+ * 壁の面材配列図を SVG へ描く（diagram が null なら空にする）。
+ *
+ * 壁の枠の中に、面材を張る位置どおりに並べる。はみ出している面材・同じ面で
+ * 重なっている面材は、線を太くして名前に ※ を付ける（計算書 PDF は白黒で
+ * 刷られるので、画面もそれと同じ見分け方にしておく）。
+ */
+export function renderWallDiagram(svg, diagram) {
+  const document_ = svg.ownerDocument;
+  svg.innerHTML = '';
+  if (!diagram) {
+    svg.setAttribute('hidden', '');
+    return;
+  }
+  svg.removeAttribute('hidden');
+  svg.setAttribute('viewBox', `0 0 ${diagram.svgWidth} ${diagram.svgHeight}`);
+  svg.setAttribute('width', diagram.svgWidth);
+  svg.setAttribute('height', diagram.svgHeight);
+
+  diagram.sides.forEach((side) => {
+    svg.appendChild(
+      svgText(document_, side.captionX, 12, side.label, {
+        'text-anchor': 'middle', fill: '#475569', 'font-size': 11,
+      })
+    );
+    // 壁の枠。面材はこの中に納まっているのが正しい。
+    const frame = (fill) =>
+      svgNode(document_, 'rect', {
+        x: side.frame.x, y: side.frame.y,
+        width: side.frame.width, height: side.frame.height,
+        fill, stroke: '#475569', 'stroke-width': 1.5,
+      });
+    svg.appendChild(frame('#f8fafc'));
+
+    side.panels.forEach((panel) => {
+      const rect = svgNode(document_, 'rect', {
+        x: panel.x, y: panel.y, width: panel.width, height: panel.height,
+        fill: panel.ok ? '#e2e8f0' : '#fee2e2',
+        stroke: panel.ok ? '#94a3b8' : '#b91c1c',
+        'stroke-width': panel.ok ? 1 : 2,
+      });
+      const title = document_.createElementNS(SVG_NS, 'title');
+      title.textContent = panel.ok
+        ? `${panel.label}（${panel.sizeLabel}）`
+        : `${panel.label}（${panel.sizeLabel}）: ${panel.note}`;
+      rect.appendChild(title);
+      svg.appendChild(rect);
+
+      const centerX = panel.x + panel.width / 2;
+      const centerY = panel.y + panel.height / 2;
+      svg.appendChild(
+        svgText(document_, centerX, centerY - 1,
+          panel.ok ? panel.label : `※ ${panel.label}`, {
+            'text-anchor': 'middle', 'font-size': 10,
+            fill: panel.ok ? '#0f172a' : '#b91c1c',
+          })
+      );
+      svg.appendChild(
+        svgText(document_, centerX, centerY + 11, panel.sizeLabel, {
+          'text-anchor': 'middle', fill: '#64748b', 'font-size': 9,
+        })
+      );
+    });
+
+    // 壁の枠をもう一度、線だけ描く。はみ出した面材が壁の縁を塗り隠すと、
+    // どこまでが壁なのかが分からなくなるため。
+    svg.appendChild(frame('none'));
+
+    // 壁の寸法（図の下と左に、数字だけを添える）。
+    svg.appendChild(
+      svgText(document_, side.frame.x + side.frame.width / 2,
+        side.frame.y + side.frame.height + 14, side.widthLabel, {
+          'text-anchor': 'middle', fill: '#94a3b8', 'font-size': 9,
+        })
+    );
+    svg.appendChild(
+      svgText(document_, side.frame.x - 6, side.frame.y + side.frame.height / 2,
+        side.heightLabel, { 'text-anchor': 'end', fill: '#94a3b8', 'font-size': 9 })
+    );
+  });
 }
 
 /** 釘配列図を SVG へ描く（diagram が null なら空にする）。 */

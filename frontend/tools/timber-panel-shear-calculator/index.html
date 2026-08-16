@@ -115,6 +115,22 @@
           <h3 slot="title">壁の計算結果（グレー本 3.3）</h3>
           <div id="wallError" class="result-error" hidden></div>
           <div id="wallSummary" class="result-summary"></div>
+
+          <!-- 壁内の面材配列。面材に壁内の位置を入れたときだけ出る（計算は
+               面材ごとの値の和なので、配置そのものは数値に影響しない）。 -->
+          <div id="wallLayout" hidden>
+            <h4 class="result-heading">壁の面材配列図</h4>
+            <svg id="wallLayoutDiagram" class="wall-layout-diagram" role="img"
+                 aria-label="壁の面材配列図" hidden></svg>
+            <p class="hint" id="wallLayoutNote" hidden></p>
+            <div class="table-scroll">
+              <table class="steps-table">
+                <thead id="wallLayoutHead"></thead>
+                <tbody id="wallLayoutBody"></tbody>
+              </table>
+            </div>
+          </div>
+
           <h4 class="result-heading">面材ごとの面材と釘</h4>
           <div class="table-scroll">
             <table class="steps-table">

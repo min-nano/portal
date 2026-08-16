@@ -231,6 +231,59 @@ describe('計算実装（wasm）', () => {
     expect(walls[0].specs.map((spec) => spec.cells[0])).toEqual(['12', '12']);
   });
 
+  it('壁内の位置を入れると、壁の面材配列図と配置の判定が付いてくる', async () => {
+    // 計算（3.3）は面材ごとの値の和なので、配置そのものは数値を変えない。
+    // 図と判定が付くこと・食い違いをその場で拾えることを確かめる。
+    const loaded = await core();
+    const wallOf = (positions) => {
+      const panels = ['910x1820-s455-n75-hi', '910x910-s455-n75-ro'].map((id, index) => ({
+        ...loaded.preset(id),
+        thickness: 12,
+        shearModulus: 0.4,
+        k: 0.483,
+        deltaV: 2.3,
+        deltaU: 17,
+        deltaPv: 1.13,
+        tauMax: 3.6,
+        e1: 3500,
+        e2: 5500,
+        ...positions[index],
+      }));
+      return loaded.computeAll({
+        walls: [
+          { wallId: 'w1', height: 3000, width: 910, hasIntermediateStud: true, panels },
+        ],
+      }).walls[0];
+    };
+    const placementCheck = (wall) =>
+      wall.checks.find((check) => check.label.startsWith('面材の配置'));
+
+    // 下から 910×1820、その上に 910×910（本の計算例そのままの張り方）。
+    const stacked = wallOf([
+      { originX: 0, originY: 0 },
+      { originX: 0, originY: 1820 },
+    ]);
+    expect(stacked.wallDiagram.sides[0].label).toBe('表面');
+    expect(stacked.wallDiagram.sides[0].panels).toHaveLength(2);
+    expect(stacked.layout).toHaveLength(2);
+    expect(placementCheck(stacked).ok).toBe(true);
+
+    // 同じ計算に、重なる配置を書くと食い違いとして出る（Pa は変わらない）。
+    const overlapping = wallOf([
+      { originX: 0, originY: 0 },
+      { originX: 0, originY: 1000 },
+    ]);
+    expect(overlapping.result.Pa).toBeCloseTo(stacked.result.Pa, 9);
+    expect(placementCheck(overlapping).ok).toBe(false);
+    expect(placementCheck(overlapping).value).toContain('重なっています');
+
+    // 位置を書かない壁は、今までどおり図も判定の行も出ない。
+    const counted = wallOf([{}, {}]);
+    expect(counted.wallDiagram).toBeNull();
+    expect(placementCheck(counted)).toBeUndefined();
+    expect(counted.result.Pa).toBeCloseTo(stacked.result.Pa, 9);
+  });
+
   it('1 枚の壁でも、面材ごとに違う面材と釘を使える', async () => {
     const loaded = await core();
     const spec = (id) => {

@@ -22,6 +22,7 @@ use crate::json::Value;
 use crate::layout::{self, Arrangement, Layout, DEFAULT_EDGE_DISTANCE};
 use crate::nail_array::{self, Nail};
 use crate::wall;
+use crate::wall_layout::{self, Piece, Side};
 
 /// 面材 1 枚あたりの釘の上限。実務の面材 1 枚では 100 本程度なので十分に
 /// 余裕がある。桁を間違えた入力（釘ピッチに 1 mm と書くなど）で計算と
@@ -91,6 +92,16 @@ pub struct PanelInput {
     pub coords: String,
     /// 面材の繊維方向（"" は長辺方向）。せん断座屈の a・b の取り方を決める。
     pub grain: String,
+    /// この面材を張る面（"front" 表面 / "back" 裏面）。両面張りの壁を
+    /// 配列図で描き分け、重なりの判定も同じ面の中だけで行うために持つ。
+    pub side: String,
+    /// 壁の中でのこの面材の位置（壁の左下を原点とした、面材の左下）[mm]。
+    ///
+    /// 計算（3.3）は面材ごとの値の和なので、位置は数値に影響しない。
+    /// 「どう張る前提の計算か」を計算書に残し、配置と計算の食い違い
+    /// （はみ出し・重なり・配置漏れ）を拾うための任意入力で、未入力は None。
+    pub origin_x: Option<f64>,
+    pub origin_y: Option<f64>,
 }
 
 /// 壁 1 枚分の入力（グレー本 3.3 の面材張り大壁）。
@@ -147,6 +158,33 @@ impl PanelInput {
         }
     }
 
+    /// この面材を張る面（表面 / 裏面）。
+    pub fn side(&self) -> Side {
+        Side::from_id(&self.side)
+    }
+
+    /// 壁の中でのこの面材の左下の位置 [mm]（配置を書いていなければ None）。
+    ///
+    /// X と Y の片方だけを入れたときは、もう一方を 0 とみなす（壁の左端・
+    /// 下端に寄せた面材は、その側の欄が 0 になるため）。
+    pub fn origin(&self) -> Option<(f64, f64)> {
+        match (self.origin_x, self.origin_y) {
+            (None, None) => None,
+            (x, y) => Some((x.unwrap_or(0.0), y.unwrap_or(0.0))),
+        }
+    }
+
+    /// 配列図に並べる 1 枚として見た、この面材。
+    pub fn piece(&self, label: String) -> Piece {
+        Piece {
+            label,
+            width: self.width,
+            height: self.height,
+            side: self.side(),
+            origin: self.origin(),
+        }
+    }
+
     /// この面材を留める釘 1 本あたりの一面せん断。
     pub fn nail(&self) -> wall::NailShear {
         wall::NailShear {
@@ -183,6 +221,10 @@ impl PanelInput {
             ("gridY", self.grid_y.clone().into()),
             ("coords", self.coords.clone().into()),
             ("grain", self.grain.clone().into()),
+            ("side", self.side.clone().into()),
+            // 未入力は null で返す（0 と「書いていない」を取り違えないため）。
+            ("originX", optional_value(self.origin_x)),
+            ("originY", optional_value(self.origin_y)),
         ])
     }
 }
@@ -378,6 +420,9 @@ pub fn normalize_panel(panel: &Value, wall_id: &str, index: usize) -> Result<Pan
         grain: wall::Grain::from_id(&text_of(panel.get("grain")))
             .id()
             .to_string(),
+        side: Side::from_id(&text_of(panel.get("side"))).id().to_string(),
+        origin_x: optional_float_of(panel.get("originX"), "壁内の位置 X")?,
+        origin_y: optional_float_of(panel.get("originY"), "壁内の位置 Y")?,
     })
 }
 
@@ -499,6 +544,21 @@ fn text_of(value: Option<&Value>) -> String {
 /// 数値として読む。未入力（欠落・null・空文字）は 0 とみなす。
 fn float_of(value: Option<&Value>, label: &str) -> Result<f64, String> {
     float_or(value, label, 0.0)
+}
+
+/// 数値として読む。未入力（欠落・null・空文字）は「書いていない」として返す。
+///
+/// 0 を入れたのか何も書いていないのかを区別する入力欄（壁内の位置）で使う。
+fn optional_float_of(value: Option<&Value>, label: &str) -> Result<Option<f64>, String> {
+    if is_blank(value) {
+        return Ok(None);
+    }
+    float_of(value, label).map(Some)
+}
+
+/// 「書いていない」を null として書き出す。
+fn optional_value(value: Option<f64>) -> Value {
+    value.map_or(Value::Null, Value::from)
 }
 
 /// 数値として読む。未入力（欠落・null・空文字）は default とみなす。
@@ -805,6 +865,24 @@ fn nail_arrangement_text(panel: &PanelInput, nails: &[Nail]) -> String {
     }
 }
 
+/// 面材 1 枚の「壁のどこに張るか」を、そのまま読める 1 行にする。
+///
+/// 位置は任意入力なので、書いていなければ「書いていない」とはっきり出す
+/// （0 と取り違えられないように）。裏面に張ることだけを決めてある面材は、
+/// 位置が無くてもその面を残す（両面張りかどうかは読む人に要る情報）。
+fn placement_text(panel: &PanelInput) -> String {
+    match panel.origin() {
+        Some((x, y)) => format!(
+            "{}　左下 (X, Y) = ({}, {}) mm",
+            panel.side().label(),
+            format_dimension(x),
+            format_dimension(y)
+        ),
+        None if panel.side() == Side::Front => "未指定（面材の枚数で計算）".to_string(),
+        None => format!("{}（壁内の位置は未指定）", panel.side().label()),
+    }
+}
+
 /// 壁を構成する面材が、どれも同じ面材と釘の仕様か。
 ///
 /// 同じなら壁の控えに 1 行で書けるし、違えば「面材ごとに異なる」と書いて
@@ -886,6 +964,288 @@ fn spec_rows(panel: &PanelInput) -> Vec<Value> {
     rows
 }
 
+// --- 壁内の面材配列（配列図と、配置・計算の突き合わせ） ----------------------
+
+/// 壁内の面材配列としてまとめたもの（画面・計算書がそのまま並べられる形）。
+struct WallLayoutReport {
+    /// 壁の入力の控えに出す 1 行。
+    summary: String,
+    /// 壁の面材配列図（配置が 1 枚も無ければ Null）。
+    diagram: Value,
+    /// 面材の一覧（面材・張る面・寸法・位置・面積）。配置が無ければ空。
+    rows: Vec<Value>,
+    /// 判定の 1 行（配置が 1 枚も無ければ None ＝ 判定に出さない）。
+    check: Option<Value>,
+}
+
+/// 壁内の面材配列を組み立てる。
+///
+/// 配置は面材ごとの任意入力なので、**1 枚も入っていない壁は今までどおり**
+/// 枚数だけで計算する（配列図も判定の行も出さない）。1 枚でも入っていれば、
+/// 「この壁をどう張る前提の計算か」を図と表で残し、配置と計算の食い違い
+/// （はみ出し・重なり・配置漏れ）を判定に出す。
+fn build_wall_layout(input: &WallInput) -> WallLayoutReport {
+    let pieces: Vec<Piece> = input
+        .panels
+        .iter()
+        .enumerate()
+        .map(|(position, panel)| panel.piece(panel_label(panel, position)))
+        .collect();
+    let inspection = wall_layout::inspect(input.width, input.height, &pieces);
+
+    if inspection.placed == 0 {
+        return WallLayoutReport {
+            summary: "未指定（面材の枚数で計算）".to_string(),
+            diagram: Value::Null,
+            rows: Vec::new(),
+            check: None,
+        };
+    }
+
+    let placement: Vec<String> = inspection
+        .sides
+        .iter()
+        .map(|(side, count, _)| format!("{} {} 枚", side.label(), count))
+        .collect();
+    let mut summary = format!(
+        "壁の面材配列図のとおり（{}{}）",
+        placement.join("・"),
+        if inspection.sides.len() > 1 {
+            " ＝ 両面張り"
+        } else {
+            ""
+        }
+    );
+    if !inspection.unplaced.is_empty() {
+        summary.push_str(&format!(
+            "　※ 位置を書いていない面材が {} 枚あります",
+            inspection.unplaced.len()
+        ));
+    }
+
+    WallLayoutReport {
+        summary,
+        diagram: layout_diagram(input, &pieces, &inspection),
+        rows: layout_rows(&pieces, &inspection),
+        check: Some(Value::obj([
+            ("label", "面材の配置（壁の面材配列図との整合）".into()),
+            ("value", layout_check_text(input, &pieces, &inspection).into()),
+            ("ok", inspection.ok.into()),
+        ])),
+    }
+}
+
+/// 壁の面材配列図に要る幾何（描画範囲と、面ごとの面材の矩形）。
+///
+/// 縮尺は画面（SVG）と計算書 PDF がそれぞれ決めるが、「どこからどこまでを
+/// 描くか」「どの面材に注意の印を付けるか」はここで決めた 1 つを両方が読む。
+///
+/// 描画範囲は表面・裏面をまとめた 1 つにする。両面張りの壁は面ごとに枠を
+/// 描き分けるが、範囲（＝縮尺）が面ごとに違うと、同じ寸法の面材が表と裏で
+/// 違う大きさに見えてしまうため。
+fn layout_diagram(
+    input: &WallInput,
+    pieces: &[Piece],
+    inspection: &wall_layout::Inspection,
+) -> Value {
+    let placed: Vec<Piece> = pieces
+        .iter()
+        .filter(|piece| piece.origin.is_some())
+        .cloned()
+        .collect();
+    let (min_x, min_y, max_x, max_y) = wall_layout::bounds(input.width, input.height, &placed);
+
+    let sides: Vec<Value> = inspection
+        .sides
+        .iter()
+        .map(|(side, count, area)| {
+            let on_side: Vec<(usize, &Piece)> = pieces
+                .iter()
+                .enumerate()
+                .filter(|(_, piece)| piece.side == *side && piece.origin.is_some())
+                .collect();
+            Value::obj([
+                ("id", side.id().into()),
+                ("label", side.label().into()),
+                ("count", (*count as f64).into()),
+                ("area", (*area).into()),
+                (
+                    "panels",
+                    Value::Arr(
+                        on_side
+                            .iter()
+                            .map(|(index, piece)| {
+                                let (x, y) = piece.origin.expect("配置のある面材だけを並べる");
+                                Value::obj([
+                                    ("label", piece.label.clone().into()),
+                                    ("x", x.into()),
+                                    ("y", y.into()),
+                                    ("width", piece.width.into()),
+                                    ("height", piece.height.into()),
+                                    ("sizeLabel", size_text(piece).into()),
+                                    ("note", placement_note(inspection, *index).into()),
+                                    (
+                                        "ok",
+                                        (!inspection.outside[*index]
+                                            && !inspection.overlapping[*index])
+                                            .into(),
+                                    ),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ])
+        })
+        .collect();
+
+    Value::obj([
+        ("wallWidth", input.width.into()),
+        ("wallHeight", input.height.into()),
+        // 壁枠と、置いた全ての面材の外接矩形。はみ出した面材も切り取らず、
+        // はみ出していることが図で見えるようにする。
+        ("minX", min_x.into()),
+        ("minY", min_y.into()),
+        ("maxX", max_x.into()),
+        ("maxY", max_y.into()),
+        ("sides", Value::Arr(sides)),
+        (
+            "unplaced",
+            Value::Arr(
+                inspection
+                    .unplaced
+                    .iter()
+                    .map(|label| label.clone().into())
+                    .collect(),
+            ),
+        ),
+    ])
+}
+
+/// 面材の寸法の見出し（「910 × 1,820 mm」）。
+fn size_text(piece: &Piece) -> String {
+    format!(
+        "{} × {} mm",
+        format_int(piece.width),
+        format_int(piece.height)
+    )
+}
+
+/// この面材の配置に付ける注意（無ければ空文字）。
+fn placement_note(inspection: &wall_layout::Inspection, index: usize) -> String {
+    match (inspection.outside[index], inspection.overlapping[index]) {
+        (true, true) => "はみ出し・重なり".to_string(),
+        (true, false) => "はみ出し".to_string(),
+        (false, true) => "重なり".to_string(),
+        (false, false) => String::new(),
+    }
+}
+
+/// 面材の一覧（面材・張る面・寸法・左下の位置・面積・配置の判定）。
+///
+/// 配置を書いていない面材も 1 行として並べる。図に描けない面材が計算には
+/// 入っている、という食い違いが表の上でも見えるようにするため。
+fn layout_rows(pieces: &[Piece], inspection: &wall_layout::Inspection) -> Vec<Value> {
+    pieces
+        .iter()
+        .enumerate()
+        .map(|(index, piece)| {
+            let note = placement_note(inspection, index);
+            let (position, verdict) = match piece.origin {
+                Some((x, y)) => (
+                    format!("({}, {})", format_dimension(x), format_dimension(y)),
+                    if note.is_empty() { "OK".to_string() } else { note },
+                ),
+                None => ("-".to_string(), "未指定".to_string()),
+            };
+            Value::obj([
+                ("label", piece.label.clone().into()),
+                ("ok", (piece.origin.is_some() && verdict == "OK").into()),
+                (
+                    "cells",
+                    Value::Arr(
+                        [
+                            piece.side.label().to_string(),
+                            size_text(piece),
+                            position,
+                            format_int(piece.area()),
+                            verdict,
+                        ]
+                        .into_iter()
+                        .map(Value::from)
+                        .collect(),
+                    ),
+                ),
+            ])
+        })
+        .collect()
+}
+
+/// 配置と計算の食い違いを、そのまま読める文にする。
+fn layout_check_text(
+    input: &WallInput,
+    pieces: &[Piece],
+    inspection: &wall_layout::Inspection,
+) -> String {
+    let names = |labels: &[String]| {
+        labels
+            .iter()
+            .map(|label| format!("「{label}」"))
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    let mut problems: Vec<String> = Vec::new();
+    let outside: Vec<String> = inspection
+        .outside
+        .iter()
+        .enumerate()
+        .filter(|(_, flag)| **flag)
+        .map(|(index, _)| pieces[index].label.clone())
+        .collect();
+    if !outside.is_empty() {
+        problems.push(format!(
+            "面材{}が壁（{} × {} mm）からはみ出しています",
+            names(&outside),
+            format_int(input.width),
+            format_int(input.height)
+        ));
+    }
+    for (left, right) in &inspection.overlaps {
+        problems.push(format!("面材「{left}」と「{right}」が同じ面で重なっています"));
+    }
+    if !inspection.unplaced.is_empty() {
+        problems.push(format!(
+            "面材{}の壁内の位置が未指定です（配列図に描けません）",
+            names(&inspection.unplaced)
+        ));
+    }
+    if !problems.is_empty() {
+        return problems.join("／");
+    }
+
+    let wall_area = input.width * input.height;
+    let covered: Vec<String> = inspection
+        .sides
+        .iter()
+        .map(|(side, _, area)| {
+            format!(
+                "{} {} mm²（壁面積の {}%）",
+                side.label(),
+                format_int(*area),
+                format_int(area / wall_area * 100.0)
+            )
+        })
+        .collect();
+    format!(
+        "はみ出し・重なりなし　張った面積 {}　壁面積 {} × {} = {} mm²",
+        covered.join("・"),
+        format_int(input.width),
+        format_int(input.height),
+        format_int(wall_area)
+    )
+}
+
 /// 計算できると分かっている面材の結果を組み立てる。
 fn build_panel_report(panel: &PanelInput, nails: &[Nail], index: usize) -> Result<Value, String> {
     let area = panel.panel_area();
@@ -918,6 +1278,10 @@ fn build_panel_report(panel: &PanelInput, nails: &[Nail], index: usize) -> Resul
         Value::obj([
             ("label", "面材面積 Aw".into()),
             ("value", format!("{} mm²", format_int(area)).into()),
+        ]),
+        Value::obj([
+            ("label", "壁内の配置".into()),
+            ("value", placement_text(panel).into()),
         ]),
         Value::obj([
             ("label", "釘配列".into()),
@@ -1069,6 +1433,11 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
     })
     .map_err(|error| error.0)?;
 
+    // 壁内の面材配列（配列図・面材の一覧・配置と計算の突き合わせ）。計算その
+    // ものには効かないが、「どう張る前提の計算か」を計算書に残し、配置と
+    // 計算の食い違いをその場で拾う。
+    let arrangement = build_wall_layout(input);
+
     let six = |value: f64| significant(value, SIGNIFICANT_DIGITS);
     let step = |label: &str, equation: &str, value: String| {
         Value::obj([
@@ -1159,6 +1528,7 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
         "面材の枚数",
         format!("{} 枚", format_int(result.panels.len() as f64)),
     ));
+    inputs.push(row("面材の配置", arrangement.summary.clone()));
 
     // 面材のせん断破壊・せん断座屈の検定で、いちばん余裕の少ない面材。
     let worst = |ratio: fn(&wall::PanelResult) -> f64| {
@@ -1176,11 +1546,103 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
     let worst_shear = worst(|panel| panel.tau_n / panel.spec.sheathing.tau_max);
     let worst_buckling = worst(|panel| panel.tau_n / panel.tau_cr);
 
+    // 判定は、まず「計算した面材の並びが、想定した張り方と合っているか」から
+    // 始める（配置を書いていない壁では、この行そのものが出ない）。そのあとに
+    // 適用範囲と面材の検定が続く。
+    let mut checks: Vec<Value> = Vec::with_capacity(5);
+    checks.extend(arrangement.check.clone());
+    checks.extend([
+        Value::obj([
+            ("label", "適用範囲 3.3(1)① 許容せん断耐力の上限".into()),
+            (
+                "value",
+                format!(
+                    "ΔPa = {} kN/m {} {} kN/m",
+                    six(result.delta_pa),
+                    if result.within_limit { "≦" } else { ">" },
+                    six(wall::ALLOWABLE_SHEAR_LIMIT)
+                )
+                .into(),
+            ),
+            ("ok", result.within_limit.into()),
+        ]),
+        Value::obj([
+            ("label", "適用範囲 3.3(1)④ 面材のへりあき".into()),
+            (
+                "value",
+                // 必要なへりあきは面材ごとに選んだ釘で決まるので、
+                // いちばん余裕の少ない面材を名前で示す。
+                format!(
+                    "最小 へりあき {} mm {} {} mm（面材「{}」／ {}）",
+                    format_dimension(worst_edge),
+                    if edge_ok { "≧" } else { "<" },
+                    format_dimension(required_edge),
+                    panel_label(&input.panels[worst_position], worst_position),
+                    edge_basis
+                )
+                .into(),
+            ),
+            ("ok", edge_ok.into()),
+        ]),
+        Value::obj([
+            ("label", "面材のせん断破壊 τN < τmax（3.3.8）".into()),
+            (
+                "value",
+                // どの面材の値かは、上の面材ごとの表で分かる。ここは
+                // いちばん余裕の少ない面材の値だけを短く出す（τmax は
+                // 面材ごとに違うので、比がいちばん大きい面材を採る）。
+                format!(
+                    "最大 τN/τmax の面材で τN = {} {} τmax = {} N/mm²",
+                    six(worst_shear.tau_n),
+                    if result.shear_ok { "<" } else { "≧" },
+                    six(worst_shear.spec.sheathing.tau_max)
+                )
+                .into(),
+            ),
+            ("ok", result.shear_ok.into()),
+        ]),
+        Value::obj([
+            ("label", "面材のせん断座屈 τN < τcr（3.3.8）".into()),
+            (
+                "value",
+                format!(
+                    "最大 τN/τcr の面材で τN = {} {} τcr = {} N/mm²",
+                    six(worst_buckling.tau_n),
+                    if result.buckling_ok { "<" } else { "≧" },
+                    six(worst_buckling.tau_cr)
+                )
+                .into(),
+            ),
+            ("ok", result.buckling_ok.into()),
+        ]),
+    ]);
+
     Ok(Value::obj([
         ("wallId", input.wall_id.clone().into()),
         ("wallName", wall_label(input, index).into()),
         ("panelReports", Value::Arr(panel_reports)),
         ("inputs", Value::Arr(inputs)),
+        // 壁内の面材配列。図（wallDiagram）と、その凡例になる面材の一覧
+        // （layoutColumns / layout）。配置を書いていない壁では図が null・
+        // 一覧が空になり、画面も計算書もこの節ごと出さない。
+        ("wallDiagram", arrangement.diagram),
+        (
+            "layoutColumns",
+            Value::Arr(
+                [
+                    "面材",
+                    "張る面",
+                    "寸法 W × H",
+                    "左下 (X, Y) [mm]",
+                    "面積 Aw [mm²]",
+                    "配置",
+                ]
+                .into_iter()
+                .map(Value::from)
+                .collect(),
+            ),
+        ),
+        ("layout", Value::Arr(arrangement.rows)),
         // 面材ごとの面材と釘（面材ごとに違う仕様を張り分けられるので、どの
         // 面材がどの数値で計算されたのかを壁のページにも残す）。
         (
@@ -1413,74 +1875,7 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
                     .collect(),
             ),
         ),
-        (
-            "checks",
-            Value::Arr(vec![
-                Value::obj([
-                    ("label", "適用範囲 3.3(1)① 許容せん断耐力の上限".into()),
-                    (
-                        "value",
-                        format!(
-                            "ΔPa = {} kN/m {} {} kN/m",
-                            six(result.delta_pa),
-                            if result.within_limit { "≦" } else { ">" },
-                            six(wall::ALLOWABLE_SHEAR_LIMIT)
-                        )
-                        .into(),
-                    ),
-                    ("ok", result.within_limit.into()),
-                ]),
-                Value::obj([
-                    ("label", "適用範囲 3.3(1)④ 面材のへりあき".into()),
-                    (
-                        "value",
-                        // 必要なへりあきは面材ごとに選んだ釘で決まるので、
-                        // いちばん余裕の少ない面材を名前で示す。
-                        format!(
-                            "最小 へりあき {} mm {} {} mm（面材「{}」／ {}）",
-                            format_dimension(worst_edge),
-                            if edge_ok { "≧" } else { "<" },
-                            format_dimension(required_edge),
-                            panel_label(&input.panels[worst_position], worst_position),
-                            edge_basis
-                        )
-                        .into(),
-                    ),
-                    ("ok", edge_ok.into()),
-                ]),
-                Value::obj([
-                    ("label", "面材のせん断破壊 τN < τmax（3.3.8）".into()),
-                    (
-                        "value",
-                        // どの面材の値かは、上の面材ごとの表で分かる。ここは
-                        // いちばん余裕の少ない面材の値だけを短く出す（τmax は
-                        // 面材ごとに違うので、比がいちばん大きい面材を採る）。
-                        format!(
-                            "最大 τN/τmax の面材で τN = {} {} τmax = {} N/mm²",
-                            six(worst_shear.tau_n),
-                            if result.shear_ok { "<" } else { "≧" },
-                            six(worst_shear.spec.sheathing.tau_max)
-                        )
-                        .into(),
-                    ),
-                    ("ok", result.shear_ok.into()),
-                ]),
-                Value::obj([
-                    ("label", "面材のせん断座屈 τN < τcr（3.3.8）".into()),
-                    (
-                        "value",
-                        format!(
-                            "最大 τN/τcr の面材で τN = {} {} τcr = {} N/mm²",
-                            six(worst_buckling.tau_n),
-                            if result.buckling_ok { "<" } else { "≧" },
-                            six(worst_buckling.tau_cr)
-                        )
-                        .into(),
-                    ),
-                    ("ok", result.buckling_ok.into()),
-                ]),
-            ]),
-        ),
+        ("checks", Value::Arr(checks)),
         (
             "result",
             Value::obj([
@@ -2429,6 +2824,279 @@ mod tests {
         let error = validate_walls(&data).unwrap_err();
         assert!(error.contains("「壁1」を計算できません"), "{error}");
         assert!(error.contains("階高 H"), "{error}");
+    }
+
+    // --- 壁内の面材配列（配列図と、配置・計算の突き合わせ） ------------------
+
+    /// グレー本 3.3(3) の計算例を、実際の張り方（下から 1820、その上に 910）
+    /// として配置した壁。
+    fn placed_wall_example() -> FormData {
+        let mut data = wall_example_form();
+        {
+            let panels = &mut data.walls[0].panels;
+            panels[0].panel_name = "下段".to_string();
+            panels[0].origin_x = Some(0.0);
+            panels[0].origin_y = Some(0.0);
+            panels[1].panel_name = "上段".to_string();
+            panels[1].origin_x = Some(0.0);
+            panels[1].origin_y = Some(1820.0);
+        }
+        data
+    }
+
+    fn layout_check(report: &Value) -> (String, bool) {
+        report
+            .get("checks")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| {
+                check
+                    .get("label")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .contains("面材の配置")
+            })
+            .map(|check| {
+                (
+                    check.get("value").unwrap().as_str().unwrap().to_string(),
+                    check.get("ok") == Some(&Value::Bool(true)),
+                )
+            })
+            .expect("配置の判定")
+    }
+
+    /// 配置を書かない壁は、今までどおり枚数だけで計算する（図も判定も出ない）。
+    #[test]
+    fn a_wall_without_positions_keeps_counting_panels_only() {
+        let report = only_wall(&wall_example_form());
+
+        assert_eq!(report.get("wallDiagram"), Some(&Value::Null));
+        assert!(report.get("layout").unwrap().as_array().unwrap().is_empty());
+        assert!(!labelled(&report, "checks", "label")
+            .iter()
+            .any(|(label, _)| label.contains("面材の配置")));
+        // 控えには「書いていない」ことをはっきり出す。
+        assert!(labelled(&report, "inputs", "label").contains(&(
+            "面材の配置".to_string(),
+            "未指定（面材の枚数で計算）".to_string()
+        )));
+    }
+
+    /// 配置を書いた壁には、壁の面材配列図と面材の一覧が付く。
+    #[test]
+    fn a_placed_wall_carries_the_arrangement_drawing() {
+        let report = only_wall(&placed_wall_example());
+
+        let diagram = report.get("wallDiagram").unwrap();
+        assert_eq!(diagram.get("wallWidth").unwrap().as_f64(), Some(910.0));
+        assert_eq!(diagram.get("wallHeight").unwrap().as_f64(), Some(3000.0));
+        // 片面張りなので、描く面は 1 つだけ。
+        let sides = diagram.get("sides").unwrap().as_array().unwrap();
+        assert_eq!(sides.len(), 1);
+        assert_eq!(sides[0].get("label").unwrap().as_str(), Some("表面"));
+        // 範囲は壁そのもの（面材はどれも壁の中に収まっている）。
+        assert_eq!(diagram.get("maxY").unwrap().as_f64(), Some(3000.0));
+
+        let panels = sides[0].get("panels").unwrap().as_array().unwrap();
+        assert_eq!(panels.len(), 2);
+        assert_eq!(panels[1].get("label").unwrap().as_str(), Some("上段"));
+        assert_eq!(panels[1].get("y").unwrap().as_f64(), Some(1820.0));
+        assert_eq!(
+            panels[1].get("sizeLabel").unwrap().as_str(),
+            Some("910 × 910 mm")
+        );
+        assert_eq!(panels[1].get("ok"), Some(&Value::Bool(true)));
+
+        // 図の凡例になる面材の一覧。
+        assert_eq!(
+            report.get("layoutColumns").unwrap().as_array().unwrap().len(),
+            6
+        );
+        let rows = report.get("layout").unwrap().as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        let cells = rows[1].get("cells").unwrap().as_array().unwrap();
+        assert_eq!(cells[0].as_str(), Some("表面"));
+        assert_eq!(cells[2].as_str(), Some("(0, 1,820)"));
+        assert_eq!(cells[4].as_str(), Some("OK"));
+
+        // 控えと判定にも、想定した張り方が出る。
+        assert!(labelled(&report, "inputs", "label").contains(&(
+            "面材の配置".to_string(),
+            "壁の面材配列図のとおり（表面 2 枚）".to_string()
+        )));
+        let (value, ok) = layout_check(&report);
+        assert!(ok, "{value}");
+        assert!(value.contains("はみ出し・重なりなし"), "{value}");
+        // 張り残し（準耐力壁形式なので、上に 270 mm 残る）も読み取れる。
+        assert!(value.contains("2,484,300 mm²（壁面積の 91%）"), "{value}");
+        assert!(value.contains("壁面積 910 × 3,000 = 2,730,000 mm²"), "{value}");
+    }
+
+    /// 面材 1 枚ごとの計算にも、その面材を壁のどこに張るかを残す。
+    #[test]
+    fn every_panel_repeats_where_it_is_placed() {
+        let report = only_wall(&placed_wall_example());
+        let panels = report.get("panelReports").unwrap().as_array().unwrap();
+
+        assert!(labelled(&panels[1], "inputs", "label").contains(&(
+            "壁内の配置".to_string(),
+            "表面　左下 (X, Y) = (0, 1,820) mm".to_string()
+        )));
+    }
+
+    /// 壁に収まらない面材は、図でも判定でも「はみ出し」として出す。
+    #[test]
+    fn a_panel_outside_the_wall_is_reported() {
+        let mut data = placed_wall_example();
+        data.walls[0].panels[1].origin_y = Some(2500.0); // 2500 + 910 > 3000
+
+        let report = only_wall(&data);
+
+        let (value, ok) = layout_check(&report);
+        assert!(!ok, "{value}");
+        assert!(
+            value.contains("面材「上段」が壁（910 × 3,000 mm）からはみ出しています"),
+            "{value}"
+        );
+        // 図は切り取らず、はみ出したまま描けるようにする。
+        let diagram = report.get("wallDiagram").unwrap();
+        assert_eq!(diagram.get("maxY").unwrap().as_f64(), Some(3410.0));
+        let side = &diagram.get("sides").unwrap().as_array().unwrap()[0];
+        let panels = side.get("panels").unwrap().as_array().unwrap();
+        assert_eq!(panels[1].get("ok"), Some(&Value::Bool(false)));
+        assert_eq!(panels[1].get("note").unwrap().as_str(), Some("はみ出し"));
+        // 一覧の判定の欄にも同じ言葉が並ぶ。
+        let rows = report.get("layout").unwrap().as_array().unwrap();
+        assert_eq!(
+            rows[1].get("cells").unwrap().as_array().unwrap()[4].as_str(),
+            Some("はみ出し")
+        );
+    }
+
+    /// 同じ面で重なる配置は、枚数を二重に数えている印なので NG にする。
+    #[test]
+    fn panels_overlapping_on_the_same_side_are_reported() {
+        let mut data = placed_wall_example();
+        data.walls[0].panels[1].origin_y = Some(1000.0);
+
+        let (value, ok) = layout_check(&only_wall(&data));
+
+        assert!(!ok, "{value}");
+        assert!(
+            value.contains("面材「下段」と「上段」が同じ面で重なっています"),
+            "{value}"
+        );
+    }
+
+    /// 両面張り（表と裏の同じ場所）は重なりではなく、面ごとに描き分ける。
+    #[test]
+    fn both_sides_of_a_wall_are_drawn_separately() {
+        let mut data = placed_wall_example();
+        let back: Vec<PanelInput> = data.walls[0]
+            .panels
+            .iter()
+            .enumerate()
+            .map(|(index, panel)| PanelInput {
+                panel_id: format!("w1-b{index}"),
+                panel_name: format!("裏 {}", panel.panel_name),
+                side: "back".to_string(),
+                ..panel.clone()
+            })
+            .collect();
+        data.walls[0].panels.extend(back);
+
+        let report = only_wall(&data);
+
+        let (value, ok) = layout_check(&report);
+        assert!(ok, "{value}");
+        let sides = report
+            .get("wallDiagram")
+            .unwrap()
+            .get("sides")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .to_vec();
+        assert_eq!(sides.len(), 2);
+        assert_eq!(sides[1].get("label").unwrap().as_str(), Some("裏面"));
+        assert_eq!(sides[1].get("count").unwrap().as_f64(), Some(2.0));
+        assert!(labelled(&report, "inputs", "label").contains(&(
+            "面材の配置".to_string(),
+            "壁の面材配列図のとおり（表面 2 枚・裏面 2 枚 ＝ 両面張り）".to_string()
+        )));
+    }
+
+    /// 配置を書いた面材と書いていない面材が混ざると、図が計算より少なくなる。
+    #[test]
+    fn a_panel_left_out_of_the_arrangement_is_reported() {
+        let mut data = placed_wall_example();
+        data.walls[0].panels[1].origin_x = None;
+        data.walls[0].panels[1].origin_y = None;
+
+        let report = only_wall(&data);
+
+        let (value, ok) = layout_check(&report);
+        assert!(!ok, "{value}");
+        assert!(value.contains("面材「上段」の壁内の位置が未指定です"), "{value}");
+        // 一覧には、図に描けない面材も 1 行として残る。
+        let rows = report.get("layout").unwrap().as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        let cells = rows[1].get("cells").unwrap().as_array().unwrap();
+        assert_eq!(cells[2].as_str(), Some("-"));
+        assert_eq!(cells[4].as_str(), Some("未指定"));
+        assert!(labelled(&report, "inputs", "label").iter().any(
+            |(label, value)| label == "面材の配置" && value.contains("位置を書いていない面材が 1 枚")
+        ));
+    }
+
+    /// X と Y の片方だけを入れたら、もう一方は壁の端（0）とみなす。
+    #[test]
+    fn a_single_coordinate_places_the_panel_against_the_edge() {
+        let mut data = placed_wall_example();
+        data.walls[0].panels[1].origin_x = None;
+
+        let report = only_wall(&data);
+
+        let (value, ok) = layout_check(&report);
+        assert!(ok, "{value}");
+        let rows = report.get("layout").unwrap().as_array().unwrap();
+        assert_eq!(
+            rows[1].get("cells").unwrap().as_array().unwrap()[2].as_str(),
+            Some("(0, 1,820)")
+        );
+    }
+
+    /// 配置は保存する入力にそのまま残る（0 と「書いていない」を混ぜない）。
+    #[test]
+    fn the_position_is_stored_as_typed() {
+        let data = normalize(
+            r#"{"walls": [{"panels": [
+                 {"side": "back", "originX": 0, "originY": "1820"},
+                 {"originX": "", "originY": null}
+               ]}]}"#,
+        )
+        .unwrap();
+
+        let panels = &data.walls[0].panels;
+        assert_eq!(panels[0].origin(), Some((0.0, 1820.0)));
+        assert_eq!(panels[0].side, "back");
+        assert_eq!(panels[1].origin(), None);
+        assert_eq!(panels[1].side, "front");
+
+        let stored = panels[0].to_value();
+        assert_eq!(stored.get("originX").unwrap().as_f64(), Some(0.0));
+        assert_eq!(stored.get("side").unwrap().as_str(), Some("back"));
+        // 書いていない欄は null のまま（読み戻しても 0 にならない）。
+        assert_eq!(panels[1].to_value().get("originX"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn a_non_numeric_position_is_refused() {
+        let error = normalize(r#"{"walls": [{"panels": [{"originY": "上のほう"}]}]}"#).unwrap_err();
+        assert!(error.contains("壁内の位置 Y"), "{error}");
     }
 
     #[test]
