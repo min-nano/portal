@@ -2,6 +2,10 @@
 node_modules/
 frontend/dist/
 
+# ツールのページ（/tools/<id>/）。ツールが名乗ったマニフェストから、ビルドの
+# たびに組み立てる（frontend/tools-plugin.js）。成果物なのでコミットしない。
+frontend/tools/
+
 # Rust（計算実装）とそのビルド結果。.wasm はコミットせず、テストとデプロイの
 # たびに core/build.sh で作り直す（リポジトリに古い実装が残らないように）。
 # 手元で動かすときも、最初に 1 度 core/build.sh を実行すること。

@@ -13,18 +13,19 @@ import unicodedata
 
 from openpyxl import load_workbook
 
+from .errors import PortalError
+
 _MAPPING_PATH = os.path.join(os.path.dirname(__file__), "mapping.json")
 _MAPPING = None
 
 REPORT_FILE_NAME = "傾斜測定報告書.xlsx"
 
 
-class ReportError(Exception):
+class ReportError(PortalError):
     """入力起因の生成エラー。message は利用者に表示できる日本語文。"""
 
     def __init__(self, message: str, status: int = 400):
-        super().__init__(message)
-        self.status = status
+        super().__init__(message, status)
 
 
 def load_mapping() -> dict:

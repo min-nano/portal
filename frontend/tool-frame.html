@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<!--
+  ツールのページの外枠。ポータル（土台）が持ち、全ツールに同じものが被さる。
+
+  ヘッダー・読み込み中の表示・サインインゲートは、並び順と id にまで意味が
+  ある（src/page-start.js のコメント参照）。これをツールごとのページへ写して
+  回ると必ずずれるので、ツールには書かせず、ビルドのときにここへ挟み込む
+  （tools-plugin.js）。ツールが書くのは <div id="app"> の中身（page.html）と、
+  必要なら保存ダイアログのような重ね物（overlay.html）だけ。
+
+  差し込む場所は下の 3 つ。tools-plugin.js が組み立てる前に置き換えるので、
+  Vite の %VITE_XXX% 置換とはぶつからない。ページの中には 1 つずつしか
+  置けない（2 つあると、どちらに入るかが書いた順で決まってしまう）:
+
+    %TOOL_TITLE%    ツールの名前（マニフェストの title）
+    %TOOL_PAGE%     ツールの page.html
+    %TOOL_OVERLAY%  ツールの overlay.html（無ければ空）
+
+  入口は組み立て先に置かれる entry.js（マニフェストの entry を読み込むだけ）。
+
+  この覚え書きは配らない。組み立てるとき、下の <html> から先だけを取る。
+  だからここに目印を書き写しても、組み立てには影響しない。
+-->
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>%TOOL_TITLE%</title>
+</head>
+<body>
+  <!-- ヘッダーとサインインゲートは全ページ共通の部品（src/components/）。
+       id・class・hidden は、部品が読み込まれる前の描画のために HTML に置く。 -->
+  <portal-header class="portal-header" portal-name="%PORTAL_TITLE%" home></portal-header>
+
+  <!-- 読み込み中の表示。サインインの確認が終わるまで（数秒かかることがある）
+       出しておく。輪は CSS だけで回るので、JS を 1 行も読む前から出る。 -->
+  <portal-loading id="pageLoading" class="page-loading">サインインを確認しています…</portal-loading>
+
+  <portal-auth-gate id="authGate" class="auth-gate" hidden></portal-auth-gate>
+
+  <div id="app" class="container" hidden>
+%TOOL_PAGE%
+  </div>
+
+%TOOL_OVERLAY%
+
+  <script type="module" src="./entry.js"></script>
+</body>
+</html>

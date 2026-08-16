@@ -7,6 +7,7 @@
 //     （mapping.json が単一の情報源になり、手動同期が不要になった）
 
 import '../styles.css';
+import './tool.css';
 import '../components/index.js';
 import { startPage } from '../page-start.js';
 import { apiGet, apiPostForBlob, apiSendJson } from '../api.js';

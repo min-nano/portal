@@ -12,6 +12,7 @@
 // 保存のときはサーバーも同じ .wasm で計算し、画面の値と突き合わせる。
 
 import '../styles.css';
+import './tool.css';
 import '../components/index.js';
 import { startPage } from '../page-start.js';
 import { apiGet, apiGetBytes, apiPostForBlob } from '../api.js';

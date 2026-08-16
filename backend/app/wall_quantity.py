@@ -33,6 +33,7 @@ import os
 import unicodedata
 
 from . import nail_core, xlsx_fill
+from .errors import PortalError
 from .nail_core import CoreError
 from .xlsx_fill import XlsxError, XlsxTemplate
 
@@ -47,12 +48,11 @@ _TEMPLATE_BYTES = None
 MAX_REPORTED_DIFFERENCES = 20
 
 
-class WallQuantityError(Exception):
+class WallQuantityError(PortalError):
     """入力起因の生成エラー。message は利用者に表示できる日本語文。"""
 
     def __init__(self, message: str, status: int = 400):
-        super().__init__(message)
-        self.status = status
+        super().__init__(message, status)
 
 
 def load_mapping() -> dict:

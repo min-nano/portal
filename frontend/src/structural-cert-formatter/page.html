@@ -1,0 +1,35 @@
+<!-- 雛形は滅多に変えないので、タイトル横に小さく置く（画面の幅が足りない
+     ときは折り返して次の行の右端に来る）。 -->
+<div class="page-head">
+  <h2>構造計算によって建築物の安全性を確かめた旨の証明書</h2>
+  <div class="template-chip">
+    <span class="label">雛形:</span>
+    <span id="templateName" class="name">確認中...</span>
+    <button type="button" id="templateBtn"
+            title="証明書の雛形（Google ドキュメント）を Drive から選びます。">
+      設定
+    </button>
+  </div>
+</div>
+
+<!-- 開いているファイルと、その切り替え操作。通常のアプリの「新規作成 /
+     開く」と同じ並びにする。 -->
+<portal-edit-bar class="edit-bar"></portal-edit-bar>
+
+<!-- 節は折り畳める。記入する箇所を探しやすいよう、まとめて開閉もできる。 -->
+<portal-section-controls class="section-controls" for="sections"></portal-section-controls>
+
+<form id="certForm" onsubmit="return false;">
+  <div id="sections"></div>
+
+  <!-- 保存先は「編集中のファイル」そのもの。ファイル名と保存する場所は、
+       新規保存・別名保存のときだけ下の保存ダイアログで指定する。
+       雛形の設定が済むまでは押せない状態から始める。 -->
+  <portal-save-bar class="save-bar" disabled></portal-save-bar>
+</form>
+
+<div id="message"></div>
+<div id="result" hidden>
+  <a id="resultLink" target="_blank" rel="noopener"></a>
+</div>
+<ul id="warnings" class="warnings" hidden></ul>

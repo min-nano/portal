@@ -1,0 +1,109 @@
+/* 小規模木造建築物 必要壁量 計算ツール にしか出てこない形。
+ *
+ * 骨組み（styles/layout.css）と部品（styles/components.css）で足りるものは
+ * ここには書かない。色・余白・字送りは必ず styles/tokens.css の変数を使う
+ * （生の値を書かない）。これが「全ツールの見た目がそろっている」ことを
+ * 保証している。 */
+.wq-block {
+  margin-top: var(--s-4);
+}
+
+.wq-block h4 {
+  margin: 0;
+  padding-bottom: var(--s-1);
+  font-size: var(--fs-sm);
+  color: var(--text-brand);
+  border-bottom: 1px solid var(--divider);
+}
+
+/* 柱材（JAS 規格 → 樹種等 → 等級等）の表。狭い画面では横スクロールさせる。 */
+.wq-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin-top: var(--s-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.wq-table th,
+.wq-table td {
+  border-bottom: 1px solid var(--divider);
+  padding: var(--s-1) var(--s-2);
+  vertical-align: middle;
+}
+
+.wq-table tr:last-child th,
+.wq-table tr:last-child td {
+  border-bottom: none;
+}
+
+.wq-table thead th {
+  background: var(--surface-sunken);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+}
+
+.wq-table th.row-head {
+  background: var(--surface-sunken);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  width: 3em;
+  text-align: center;
+}
+
+.wq-table .wq-field {
+  margin-top: 0;
+}
+
+.wq-table select {
+  min-width: 7em;
+}
+
+.wq-table tr:focus-within td {
+  background: var(--focus-row);
+}
+
+/* 出力結果。配布物では入力欄が緑・結果がオレンジの枠なので、同じ配色にする
+   （画面と配布物を見比べるときに、同じ升目だと分かるようにするため）。 */
+.wq-result-section + .wq-result-section {
+  margin-top: var(--s-5);
+}
+
+.wq-result-section h4 {
+  margin: 0 0 var(--s-1);
+  font-size: var(--fs-sm);
+  color: var(--text-brand);
+}
+
+.wq-result-section h5 {
+  margin: var(--s-3) 0 var(--s-1);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.wq-result-table {
+  overflow-x: auto;
+}
+
+.wq-result-cell {
+  background: var(--out-50);
+  color: var(--out-700);
+  text-align: right;
+  font-family: var(--font-num);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wq-result-cell.empty {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  text-align: center;
+  font-weight: 400;
+}

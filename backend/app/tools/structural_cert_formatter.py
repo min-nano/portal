@@ -1,0 +1,214 @@
+"""構造計算安全証明書 作成ツールの API（/api/tools/structural-cert-formatter/**）。
+
+雛形（Google ドキュメント）と保存先フォルダを Drive から選び、設定を
+Firestore に保存する点は excel-report-formatter と同じ。生成は雛形を
+複製 → プレースホルダー置換 → PDF 書き出し → 選択肢へ ○ を描き込み →
+Drive へ保存、という流れで、すべて実行ユーザー本人の代理権限で行う。
+
+保存先の確かめ方（上書き先が PDF か・保存先がフォルダか）は計算書ツールと
+同じなので、土台（portal_sdk.resolve_pdf_destination / save_pdf）にある。
+"""
+
+from fastapi import Depends, File, Request, UploadFile
+
+from .. import google_docs, google_drive, portal_sdk, structural_cert
+from ..clerk_auth import User
+from ..google_drive import DriveError
+from ..portal_sdk import Tool, require_user
+from ..structural_cert import CertificateError
+
+TOOL_ID = "structural-cert-formatter"
+
+router = portal_sdk.tool_router(TOOL_ID)
+
+
+def _settings() -> dict:
+    return portal_sdk.get_settings(TOOL_ID)
+
+
+@router.get("/config")
+async def get_certificate_config(user: User = Depends(require_user)):
+    """フォーム定義（記入欄・選択肢・並び順）をマッピングから配信する。"""
+    return structural_cert.form_config()
+
+
+@router.get("/settings")
+async def get_certificate_settings(user: User = Depends(require_user)):
+    """雛形の設定状態を返す。UI の初期表示で使う。
+
+    保存先はここでは持たない。証明書の保存先は「編集中のファイル」そのもの
+    （上書き保存）か、新規保存のたびに Picker で選ぶフォルダで、共有設定と
+    して固定するものではないため。
+    """
+    settings = _settings()
+    template_name = settings.get("template_file_name", "")
+    return {
+        "template": {
+            "configured": bool(settings.get("template_folder_id") and template_name),
+            "fileName": template_name,
+        },
+    }
+
+
+@router.put("/template")
+async def save_certificate_template(
+    request: Request, user: User = Depends(require_user)
+):
+    """雛形の Google ドキュメントを選択し、親フォルダとファイル名を保存する。
+
+    excel-report-formatter と同じく「フォルダ + ファイル名」で覚えるので、
+    同じフォルダに同名で差し替えれば自動的に最新版が使われる。雛形は滅多に
+    変わらないため、画面ではタイトル横の小さな設定ボタンから設定する。
+    """
+    file_id = (await portal_sdk.json_body(request)).get("fileId")
+    if not file_id or not isinstance(file_id, str):
+        raise CertificateError("ファイルが選択されていません。")
+
+    meta = google_drive.get_file_metadata(
+        portal_sdk.delegated_session(user.email), file_id
+    )
+    if meta.get("trashed"):
+        raise CertificateError(
+            "選択したファイルはゴミ箱に入っています。別のファイルを選択してください。"
+        )
+    if meta.get("mimeType") != google_drive.GOOGLE_DOC_MIME:
+        raise CertificateError(
+            "雛形は Google ドキュメントである必要があります。"
+            "Word 形式などをアップロードしている場合は、Google ドキュメント形式へ変換してください。"
+        )
+    parents = meta.get("parents") or []
+    if not parents:
+        raise CertificateError(
+            "選択したファイルの親フォルダを特定できませんでした。"
+            "マイドライブ直下ではなくフォルダ内に雛形を置いてください。"
+        )
+
+    portal_sdk.set_settings(
+        TOOL_ID,
+        {"template_folder_id": parents[0], "template_file_name": meta.get("name", "")},
+    )
+    return {"fileName": meta.get("name", ""), "folderId": parents[0]}
+
+
+def _require_template(settings: dict) -> tuple[str, str]:
+    folder_id = settings.get("template_folder_id", "")
+    file_name = settings.get("template_file_name", "")
+    if not folder_id or not file_name:
+        raise CertificateError(
+            "雛形が未設定です。画面の「雛形を設定」から、Google Drive 上の"
+            "証明書の雛形（Google ドキュメント）を選択してください。",
+            409,
+        )
+    return folder_id, file_name
+
+
+def _render(session, data: dict, settings: dict) -> tuple[bytes, list]:
+    """雛形からフォーム入力を差し込んだ PDF を作る。
+
+    雛形そのものは触らず、複製に対して置換 → PDF 書き出し → 複製を削除。
+    最後に該当する選択肢へ ○ を描き込み、再編集用にフォーム入力を
+    文書情報として埋め込む。
+    """
+    folder_id, file_name = _require_template(settings)
+    template = google_drive.find_latest_file(session, folder_id, file_name)
+    copy = google_drive.copy_file(session, template["id"], f"[一時] {file_name}")
+    try:
+        counts = google_docs.replace_all_text(
+            session, copy["id"], structural_cert.build_replacements(data)
+        )
+        exported = google_drive.export_file(session, copy["id"], google_drive.PDF_MIME)
+    finally:
+        try:
+            google_drive.delete_file(session, copy["id"])
+        except DriveError:
+            # 後片付けの失敗で生成そのものを失敗させない。一時ファイルが
+            # 残るだけで証明書は正しく作れているうえ、finally の中で
+            # 送出すると本来のエラー（置換・書き出しの失敗）を覆い隠して
+            # しまうため、ここで握りつぶす。
+            pass
+
+    warnings = structural_cert.missing_placeholder_warnings(counts, data)
+    return structural_cert.finalize_pdf(exported, data), warnings
+
+
+@router.post("/certificates")
+async def create_certificate(request: Request, user: User = Depends(require_user)):
+    """フォームデータから証明書 PDF を作り、Drive へ保存する。
+
+    保存方法は body.save.mode で切り替える。一般的なアプリの「保存」／
+    「別名で保存」と同じ考え方で、保存先はそのつど決まる:
+      overwrite … 編集中のファイルの内容を差し替える（Drive の版履歴が残る）
+      new       … save.folderId（画面の Picker で選ばれたフォルダ）に
+                   新しいファイルとして作る
+    """
+    body = await portal_sdk.json_body(request)
+    data = structural_cert.normalize_data(body)
+    structural_cert.validate(data)
+
+    # 設定は 1 リクエストにつき 1 回だけ読む。
+    settings = _settings()
+    _require_template(settings)
+
+    session = portal_sdk.delegated_write_session(user.email)
+
+    # 保存先の確認は生成の前に済ませる。保存できない指定のために雛形を複製・
+    # 書き出しするのは無駄なうえ、後片付けの機会も増えるため。
+    destination = portal_sdk.resolve_pdf_destination(
+        session,
+        body.get("save"),
+        CertificateError,
+        structural_cert.ensure_pdf_extension,
+        lambda: structural_cert.default_file_name(data),
+    )
+
+    pdf_bytes, warnings = _render(session, data, settings)
+    mode, saved = portal_sdk.save_pdf(session, destination, pdf_bytes)
+
+    return {
+        "mode": mode,
+        "fileId": saved.get("id", ""),
+        "fileName": saved.get("name", ""),
+        "webViewLink": saved.get("webViewLink", ""),
+        "warnings": warnings,
+    }
+
+
+@router.post("/certificates/parse")
+async def parse_uploaded_certificate(
+    file: UploadFile = File(...), user: User = Depends(require_user)
+):
+    """アップロードされた証明書 PDF を解析してフォームデータへ変換する。"""
+    content = await portal_sdk.read_upload(file, CertificateError)
+    parsed = structural_cert.parse_pdf(content)
+    return {
+        **parsed,
+        # アップロードした PDF は Drive 上のファイルではないので上書き先にできない。
+        "file": {"id": "", "name": file.filename or ""},
+        "suggestedFileName": file.filename or structural_cert.default_file_name(parsed),
+    }
+
+
+@router.post("/certificates/parse-drive")
+async def parse_drive_certificate(
+    request: Request, user: User = Depends(require_user)
+):
+    """Drive 上の証明書 PDF を解析してフォームデータへ変換する。
+
+    ここで返す file.id が、そのまま「上書き保存」の対象になる。
+    """
+    file_id = (await portal_sdk.json_body(request)).get("fileId")
+    session = portal_sdk.delegated_session(user.email)
+    content, meta = portal_sdk.open_drive_pdf(session, file_id, CertificateError)
+    parsed = structural_cert.parse_pdf(content)
+    return {
+        **parsed,
+        "file": {"id": file_id, "name": meta.get("name", "")},
+        "suggestedFileName": meta.get("name", ""),
+    }
+
+
+TOOL = Tool(
+    id=TOOL_ID,
+    name="構造計算安全証明書 作成ツール",
+    router=router,
+)

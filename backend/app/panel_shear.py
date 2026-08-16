@@ -20,6 +20,7 @@ import json
 import re
 
 from . import nail_core, pdf_tools, pdf_write
+from .errors import PortalError
 from .nail_core import CoreError
 
 # 文書情報に入れる独自キー（このツールが作った PDF の目印にもなる）。
@@ -81,12 +82,11 @@ EXAMPLE_WALL_PANELS = (
 )
 
 
-class PanelShearError(Exception):
+class PanelShearError(PortalError):
     """入力・生成・解析の失敗。message は利用者に表示できる日本語文。"""
 
     def __init__(self, message: str, status: int = 400):
-        super().__init__(message)
-        self.status = status
+        super().__init__(message, status)
 
 
 # --- 計算（唯一の実装である wasm へ委譲する） -------------------------------

@@ -23,6 +23,7 @@ import os
 import re
 
 from . import pdf_tools
+from .errors import PortalError
 from .pdf_tools import Box
 
 _MAPPING_PATH = os.path.join(os.path.dirname(__file__), "structural_cert_mapping.json")
@@ -34,12 +35,11 @@ _UNSAFE_FILE_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 DEFAULT_FILE_NAME = "構造計算安全証明書.pdf"
 
 
-class CertificateError(Exception):
+class CertificateError(PortalError):
     """証明書の生成・解析の失敗。message は利用者に表示できる日本語文。"""
 
     def __init__(self, message: str, status: int = 400):
-        super().__init__(message)
-        self.status = status
+        super().__init__(message, status)
 
 
 def load_mapping() -> dict:
