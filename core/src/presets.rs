@@ -5,9 +5,16 @@
 //! **その表に載っている配列そのもの**を組み立てる規則を置き、画面から
 //! 「呼び出せる配列」として一覧できるようにする。
 //!
-//! 呼び出した配列は、壁を構成する面材 1 枚の**割り付けの入力欄**（面材寸法・
-//! 型・間柱ピッチ・釘ピッチ・へりあき）へそのまま入る。表の配列を出発点に
-//! して、面材の配置や釘の間隔を実際の設計に合わせて動かせるようにするため。
+//! この表には 2 つの役目がある。
+//!
+//! 1. **計算実装の検証**。表に載っている 106 通り（寸法・ピッチ × 型）の
+//!    Ixy・Zxy・Cxy と、釘の割り付け規則（layout.rs）から計算した値を
+//!    突き合わせる。`all()` が返すのはこの 106 通りで、テストが使う。
+//! 2. **画面から呼び出せる標準の組み合わせ**。呼び出すと、**壁の間柱ピッチ**と
+//!    **面材の釘ピッチ・大きさ**が入る。釘の配列の型は面材が壁のどこに来るかで
+//!    決まる（設計者が選ぶものではない）ので、画面に並べるのは寸法・間柱
+//!    ピッチ・釘ピッチの 33 通り。これを返すのが `catalogue()`。
+//!
 //! 釘座標の作り方そのものは layout.rs にある。
 
 use crate::json::Value;
@@ -111,6 +118,19 @@ pub fn all() -> Vec<Preset> {
     presets
 }
 
+/// 画面の一覧に並べる組み合わせ（面材寸法・間柱ピッチ・釘ピッチの 33 通り）。
+///
+/// 釘の配列の型は、面材が壁のどこに来るか（＝どの間柱にかかるか）で決まる
+/// ので、選ぶものではない。一覧に載せるのは、型を除いた組み合わせだけ。
+/// 面材張り大壁は四周打ち（適用範囲 3.3(1)⑤）なので、代表として日型の行を
+/// 使う。
+pub fn catalogue() -> Vec<Preset> {
+    all()
+        .into_iter()
+        .filter(|preset| preset.arrangement == Arrangement::Hi)
+        .collect()
+}
+
 /// id から配列を引く（知らない id なら None）。
 pub fn find(id: &str) -> Option<Preset> {
     all().into_iter().find(|preset| preset.id() == id)
@@ -130,11 +150,15 @@ impl Preset {
     }
 
     /// この配列の割り付け（へりあきは表が前提とする 10 mm）。
+    ///
+    /// 表 3.2.1 の図は、面材の左端に柱があり、そこから間柱ピッチで割り付けた
+    /// 配列を描いている（stud_origin = 0）。
     pub fn layout(&self) -> Layout {
         Layout {
             width: self.width,
             height: self.height,
             stud_pitch: self.stud_pitch,
+            stud_origin: 0.0,
             nail_pitch: self.nail_pitch,
             edge_distance: EDGE_DISTANCE,
             arrangement: self.arrangement,
@@ -169,7 +193,7 @@ impl Preset {
         format!("{}×{}", number(long), number(short))
     }
 
-    /// 一覧に出す名前。
+    /// 表 3.2.1 の 1 行としての名前（型まで含む。検証と一覧の見出しに使う）。
     pub fn label(&self) -> String {
         format!(
             "{} {}・{}（間柱・根太 @{} / 釘 @{}）",
@@ -181,18 +205,31 @@ impl Preset {
         )
     }
 
-    /// この配列を、壁を構成する面材 1 枚ぶんの入力として書き出す。
+    /// 画面の一覧に出す名前（型は面材の位置で決まるので入れない）。
+    pub fn catalogue_label(&self) -> String {
+        format!(
+            "{} {}（間柱・根太 @{} / 釘 @{}）",
+            self.size_label(),
+            self.orientation_label(),
+            number(self.stud_pitch),
+            number(self.nail_pitch)
+        )
+    }
+
+    /// この組み合わせを読み込むときに、**壁**へ入る値。
+    pub fn to_wall_value(&self) -> Value {
+        Value::obj([("studPitch", self.stud_pitch.into())])
+    }
+
+    /// この組み合わせを読み込むときに、**面材 1 枚**へ入る値。
     ///
-    /// 割り付けの欄（寸法・型・ピッチ・へりあき）へそのまま入るので、
-    /// 読み込んだあとに面材の配置や釘の間隔を動かせる。
+    /// 面材は壁の中で占める領域そのものなので、大きさは「左下をそのままに
+    /// 右上をどこへ動かすか」として渡す（画面がその面材の左下に足す）。
     pub fn to_panel_value(&self) -> Value {
         Value::obj([
-            ("panelName", self.label().into()),
+            ("panelName", self.catalogue_label().into()),
             ("width", self.width.into()),
             ("height", self.height.into()),
-            ("mode", "layout".into()),
-            ("arrangement", self.arrangement.id().into()),
-            ("studPitch", self.stud_pitch.into()),
             ("nailPitch", self.nail_pitch.into()),
             ("edgeDistance", EDGE_DISTANCE.into()),
         ])
@@ -202,17 +239,15 @@ impl Preset {
     pub fn to_value(&self) -> Value {
         Value::obj([
             ("id", self.id().into()),
-            ("label", self.label().into()),
+            ("label", self.catalogue_label().into()),
             ("sizeLabel", self.size_label().into()),
             ("orientation", self.orientation_label().into()),
-            ("arrangement", self.arrangement.id().into()),
-            ("arrangementLabel", self.arrangement.label().into()),
-            ("arrangementNote", self.arrangement.description().into()),
             ("width", self.width.into()),
             ("height", self.height.into()),
             ("studPitch", self.stud_pitch.into()),
             ("nailPitch", self.nail_pitch.into()),
             ("edgeDistance", EDGE_DISTANCE.into()),
+            // 壁の左端に張ったときの釘の本数（目安として一覧に出す）。
             ("nailCount", self.nails().len().into()),
         ])
     }
@@ -284,30 +319,60 @@ mod tests {
         );
     }
 
-    /// 呼び出した配列は、割り付けの入力欄をそのまま埋める。
+    /// 一覧から読み込んだ組み合わせは、壁の左下へ張った面材としてそのまま
+    /// 計算でき、表 3.2.1 の日型の欄と同じ釘配列になる。
+    ///
+    /// 釘配列の型は面材が壁のどこに来るかで決まるので、読み込みの検証も
+    /// 「壁の左端に張る」という置き方で行う。
     #[test]
-    fn a_preset_fills_the_layout_fields_of_a_panel() {
-        let panel = preset("910x610-s455-n150-kawa").to_panel_value();
-        assert_eq!(panel.get("mode").unwrap().as_str(), Some("layout"));
-        assert_eq!(panel.get("width").unwrap().as_f64(), Some(910.0));
-        assert_eq!(panel.get("height").unwrap().as_f64(), Some(610.0));
-        assert_eq!(panel.get("arrangement").unwrap().as_str(), Some("kawa"));
-        assert_eq!(panel.get("studPitch").unwrap().as_f64(), Some(455.0));
-        assert_eq!(panel.get("nailPitch").unwrap().as_f64(), Some(150.0));
-        assert_eq!(panel.get("edgeDistance").unwrap().as_f64(), Some(10.0));
-    }
-
-    /// 書き出した入力は、面材 1 枚としてそのまま計算できる。
-    #[test]
-    fn every_preset_can_be_calculated_as_a_wall_panel() {
-        for preset in all() {
-            let panel = report::normalize_panel(&preset.to_panel_value(), "w1", 0).unwrap();
-            let nails = report::nails_of(&panel).unwrap_or_else(|error| {
+    fn every_catalogue_entry_can_be_calculated_as_a_wall_panel() {
+        for preset in catalogue() {
+            let loaded = preset.to_panel_value();
+            let placed = crate::json::Value::obj([
+                ("panelName", loaded.get("panelName").unwrap().clone()),
+                ("left", 0.0.into()),
+                ("bottom", 0.0.into()),
+                ("right", preset.width.into()),
+                ("top", preset.height.into()),
+                ("nailPitch", loaded.get("nailPitch").unwrap().clone()),
+                ("edgeDistance", loaded.get("edgeDistance").unwrap().clone()),
+            ]);
+            let panel = report::normalize_panel(&placed, "w1", 0).unwrap();
+            let nails = report::nails_of(&panel, preset.stud_pitch).unwrap_or_else(|error| {
                 panic!("{} を計算できません: {error}", preset.id());
             });
             assert_eq!(nails.len(), preset.nails().len(), "{}", preset.id());
             assert!(nail_array::compute(&nails, panel.panel_area()).is_ok());
         }
+    }
+
+    /// 画面の一覧は、型を除いた 33 通り（寸法 × 間柱ピッチ × 釘ピッチ）。
+    #[test]
+    fn the_catalogue_drops_the_arrangement_from_the_choices() {
+        let catalogue = catalogue();
+        assert_eq!(catalogue.len(), 33);
+        assert!(catalogue
+            .iter()
+            .all(|preset| preset.arrangement == Arrangement::Hi));
+        assert_eq!(
+            catalogue[0].catalogue_label(),
+            "3030×910 縦置（間柱・根太 @455 / 釘 @150）"
+        );
+    }
+
+    /// 読み込むと、壁には間柱ピッチが、面材には釘ピッチと大きさが入る。
+    #[test]
+    fn a_catalogue_entry_loads_into_the_wall_and_the_panel() {
+        let preset = preset("910x1820-s455-n75-hi");
+
+        let wall = preset.to_wall_value();
+        assert_eq!(wall.get("studPitch").unwrap().as_f64(), Some(455.0));
+
+        let panel = preset.to_panel_value();
+        assert_eq!(panel.get("width").unwrap().as_f64(), Some(910.0));
+        assert_eq!(panel.get("height").unwrap().as_f64(), Some(1820.0));
+        assert_eq!(panel.get("nailPitch").unwrap().as_f64(), Some(75.0));
+        assert_eq!(panel.get("edgeDistance").unwrap().as_f64(), Some(10.0));
     }
 
     // --- 2. グレー本 表 3.2.1 との突き合わせ ---------------------------------

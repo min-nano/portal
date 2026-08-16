@@ -41,22 +41,20 @@ describe('emptyFormData / makeWall / makePanel', () => {
     expect(data.issuedOn).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
-  it('面材の既定は割り付け・日型（適用範囲 3.3(1)⑤ の四周打ち）', () => {
-    const panel = makePanel();
-
-    expect(panel.mode).toBe('layout');
-    expect(panel.arrangement).toBe('hi');
-    // へりあきは面材ごとに調整できる（既定は表 3.2.1 が前提とする 10 mm）。
-    expect(panel.edgeDistance).toBe(10);
-    expect(panel.nailPitch).toBeGreaterThan(0);
-    expect(panel.studPitch).toBeGreaterThan(0);
-  });
-
-  it('壁内の位置は空から始める（配置を書かない壁は、枚数だけで計算する）', () => {
+  it('面材の既定は、壁の左下に置いた 3×6 板 1 枚', () => {
     const panel = makePanel();
 
     expect(panel.side).toBe('front');
-    expect([panel.originX, panel.originY]).toEqual(['', '']);
+    expect([panel.left, panel.bottom]).toEqual([0, 0]);
+    expect(panel.right - panel.left).toBe(910);
+    expect(panel.top - panel.bottom).toBe(1820);
+    // へりあきは面材ごとに調整できる（既定は表 3.2.1 が前提とする 10 mm）。
+    expect(panel.edgeDistance).toBe(10);
+    expect(panel.nailPitch).toBeGreaterThan(0);
+    // 寸法も配列の型も、面材の入力欄には無い（配置と壁の軸組から決まる）。
+    expect(panel.width).toBeUndefined();
+    expect(panel.arrangement).toBeUndefined();
+    expect(panel.studPitch).toBeUndefined();
   });
 
   it('面材と釘の数値は面材ごとに、空から始める（確かめないまま計算させない）', () => {
@@ -67,14 +65,15 @@ describe('emptyFormData / makeWall / makePanel', () => {
     expect([panel.materialId, panel.gradeId]).toEqual(['', '']);
   });
 
-  it('壁が持つのは階高・幅と中間材の有無だけ（面材と釘は面材ごと）', () => {
+  it('壁が持つのは軸組（階高・幅・間柱ピッチ）だけ（面材と釘は面材ごと）', () => {
     const wall = makeWall();
 
-    // 適用範囲 3.3(1)⑦ は中間材（間柱等）を求めているので、既定は「あり」。
-    expect(wall.hasIntermediateStud).toBe(true);
-    // 階高と壁の幅だけは、よくある寸法を入れておく。
+    // 階高・壁の幅・間柱ピッチは、よくある寸法を入れておく。
     expect(wall.height).toBeGreaterThan(0);
     expect(wall.width).toBeGreaterThan(0);
+    expect(wall.studPitch).toBe(455);
+    // 中間材の有無は入力しない（間柱ピッチと壁の幅から決まる）。
+    expect(wall.hasIntermediateStud).toBeUndefined();
     expect(wall.materialId).toBeUndefined();
     expect(wall.thickness).toBeUndefined();
   });
@@ -140,7 +139,7 @@ describe('mergeFormData', () => {
           wallName: '南面',
           height: '3000',
           width: 910,
-          hasIntermediateStud: false,
+          studPitch: 500,
           junk: 1,
           panels: [
             {
@@ -158,17 +157,14 @@ describe('mergeFormData', () => {
               tauMax: 3.6,
               e1: 3500,
               e2: 5500,
-              width: 910,
-              height: 1820,
-              mode: 'layout',
-              arrangement: 'hi',
-              studPitch: 455,
+              side: 'back',
+              left: 0,
+              bottom: 1820,
+              right: 910,
+              top: 2730,
               nailPitch: 75,
               edgeDistance: 15,
               grain: 'width',
-              side: 'back',
-              originX: 0,
-              originY: 1820,
               junk: 2,
             },
           ],
@@ -180,7 +176,7 @@ describe('mergeFormData', () => {
     expect(data.issuedOn).toBe('2026-08-11');
     expect(data.walls[0].junk).toBeUndefined();
     expect(data.walls[0].height).toBe(3000);
-    expect(data.walls[0].hasIntermediateStud).toBe(false);
+    expect(data.walls[0].studPitch).toBe(500);
     expect(data.walls[0].panels[0]).toMatchObject({
       panelId: 'pn1',
       panelName: '下段',
@@ -189,16 +185,14 @@ describe('mergeFormData', () => {
       k: 0.483,
       gradeId: 'plywood-jas1',
       tauMax: 3.6,
-      width: 910,
-      height: 1820,
-      mode: 'layout',
-      arrangement: 'hi',
+      side: 'back',
+      left: 0,
+      bottom: 1820,
+      right: 910,
+      top: 2730,
       nailPitch: 75,
       edgeDistance: 15,
       grain: 'width',
-      side: 'back',
-      originX: 0,
-      originY: 1820,
     });
     expect(data.walls[0].panels[0].junk).toBeUndefined();
     expect(data.walls[0].panels[0].junk).toBeUndefined();
@@ -211,10 +205,16 @@ describe('mergeFormData', () => {
     expect(data.issuedOn).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
-  it('知らない入力方式は割り付けとして扱う', () => {
-    const data = mergeFormData({ walls: [{ panels: [{ mode: 'なにか' }] }] });
+  it('知らない張る面は表面として扱う', () => {
+    const data = mergeFormData({ walls: [{ panels: [{ side: 'なにか' }] }] });
 
-    expect(data.walls[0].panels[0].mode).toBe('layout');
+    expect(data.walls[0].panels[0].side).toBe('front');
+  });
+
+  it('間柱ピッチが無ければ、尺モジュールの既定を入れる', () => {
+    const data = mergeFormData({ walls: [{ panels: [{}] }] });
+
+    expect(data.walls[0].studPitch).toBe(455);
   });
 
   it('名前が空なら通し番号で補う', () => {
@@ -228,50 +228,46 @@ describe('mergeFormData', () => {
     expect(mergeFormData({ walls: [{ panels: [] }] }).walls[0].panels).toEqual([]);
   });
 
-  it('書いていない壁内の位置は、空欄のまま読む（0 と区別する）', () => {
-    const data = mergeFormData({
-      walls: [{ panels: [{ originX: null, originY: 0, side: 'なにか' }] }],
-    });
-
-    const panel = data.walls[0].panels[0];
-    expect(panel.originX).toBe('');
-    // 0 は「壁の下端に張る」という入力なので、そのまま残る。
-    expect(panel.originY).toBe(0);
-    expect(panel.side).toBe('front');
-  });
 });
 
 describe('nextPlacement', () => {
-  it('直前の面材の真上に置く（壁は下から段を重ねて張る）', () => {
-    const previous = makePanel({ originX: 0, originY: 0, height: 1820 });
+  it('直前の面材と同じ大きさのものを、その真上に置く', () => {
+    const previous = makePanel({ left: 0, bottom: 0, right: 910, top: 1820 });
 
     expect(nextPlacement(previous)).toEqual({
       side: 'front',
-      originX: 0,
-      originY: 1820,
+      left: 0,
+      bottom: 1820,
+      right: 910,
+      top: 3640,
     });
   });
 
-  it('張る面は引き継ぐ（両面張りの、同じ面を続けて張る）', () => {
-    const previous = makePanel({ side: 'back', originX: 455, originY: 910, height: 910 });
+  it('張る面と左右の位置は引き継ぐ（同じ通りを上へ重ねる）', () => {
+    const previous = makePanel({
+      side: 'back',
+      left: 455,
+      bottom: 0,
+      right: 1365,
+      top: 910,
+    });
 
     expect(nextPlacement(previous)).toEqual({
       side: 'back',
-      originX: 455,
-      originY: 1820,
+      left: 455,
+      bottom: 910,
+      right: 1365,
+      top: 1820,
     });
   });
 
-  it('直前の面材に位置が無ければ、こちらも空欄のままにする', () => {
-    expect(nextPlacement(makePanel())).toEqual({
-      side: 'front',
-      originX: '',
-      originY: '',
-    });
+  it('直前の面材が無ければ、壁の左下に 3×6 板を 1 枚置く', () => {
     expect(nextPlacement(undefined)).toEqual({
       side: 'front',
-      originX: '',
-      originY: '',
+      left: 0,
+      bottom: 0,
+      right: 910,
+      top: 1820,
     });
   });
 });

@@ -37,25 +37,24 @@ async function wasmBytes() {
   }
 }
 
-// グレー本 3.2【解説】の計算例（図 3.2.2）。W 910 × H 610 の横置きで、
-// へりあき 10 mm を見込んだ配列（本は左下の釘を (0, 0) として書いている）。
-//
-// 釘配列諸定数は壁を構成する面材ごとの計算なので、壁 1 枚の中に置いて呼ぶ。
+// 壁の左下に張った 910 × 610 の面材（間柱 @455・釘 @150・へりあき 10 mm）。
+// 面材は「壁の中で占める領域」なので、寸法も釘配列もこの領域と壁の間柱
+// ピッチから決まる。表 3.2.1 の「910×610 横置・日型（@455 / 釘 @150）」に
+// あたる配列になる。
 const EXAMPLE_PANEL = {
   panelId: 'pn1',
-  panelName: 'グレー本の計算例',
-  width: 910,
-  height: 610,
-  mode: 'layout',
-  arrangement: 'kawa',
-  studPitch: 455,
+  panelName: '下段',
+  left: 0,
+  bottom: 0,
+  right: 910,
+  top: 610,
   nailPitch: 150,
   edgeDistance: 10,
 };
 
 /** 面材を並べただけの壁（面材と釘の数値は入れない）。 */
 function wallOf(...panels) {
-  return { walls: [{ wallId: 'w1', panels }] };
+  return { walls: [{ wallId: 'w1', width: 910, height: 2900, studPitch: 455, panels }] };
 }
 
 async function core() {
@@ -72,19 +71,21 @@ describe('計算実装（wasm）', () => {
     expect((await core()).version).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  it('グレー本の計算例を、計算書と同じ桁で返す', async () => {
+  it('壁の軸組と面材の領域から、釘配列諸定数を計算書と同じ桁で返す', async () => {
     const { walls } = (await core()).computeAll(wallOf(EXAMPLE_PANEL));
     const report = panelReport(walls);
 
     expect(report.ok).toBe(true);
-    expect(Object.fromEntries(report.summary.map((s) => [s.key, s.value]))).toEqual({
-      Ixy: '0.888868',
-      Zxy: '0.00358851',
-      Cxy: '1.26155',
-    });
-    expect(report.nails).toHaveLength(15);
+    // 表 3.2.1 の「910×610 横置・日型（@455 / 釘 @150）」の欄
+    //（本の値は Ixy 1.56 / Zxy 0.0063 / Cxy 1.23）。
+    expect(report.result.Ixy).toBeCloseTo(1.56, 1);
+    expect(report.nails).toHaveLength(23);
     expect(report.result.x0).toBe(455);
     expect(report.result.y0).toBe(305);
+    // 寸法も面積も、領域から決まる。
+    expect(report.width).toBe(910);
+    expect(report.height).toBe(610);
+    expect(report.panelArea).toBe(555100);
   });
 
   it('へりあきを変えると釘の位置が動く（面材・釘に合わせて調整できる）', async () => {
@@ -105,44 +106,45 @@ describe('計算実装（wasm）', () => {
 
     expect(report.diagram.panelWidth).toBe(910);
     expect(report.diagram.maxX).toBe(910);
-    expect(report.diagram.xTicks.map((t) => t.label)).toEqual(['10', '455', '900']);
+    // 四周打ちなので、横線の釘が 10〜900 に @150 で並ぶ。
+    expect(report.diagram.xTicks.map((t) => t.label)).toEqual([
+      '10', '155', '305', '455', '605', '755', '900',
+    ]);
     expect(report.diagram.axis.xLabel).toBe('x0 = 455.0');
   });
 
-  it('グレー本 表 3.2.1 の釘配列を一覧して、そのまま割り付けへ読み込める', async () => {
+  it('表 3.2.1 の標準的な組み合わせを一覧し、壁と面材へ読み込める', async () => {
     const loaded = await core();
     const presets = loaded.presets();
 
-    expect(presets).toHaveLength(106);
-    const kawa = presets.find((p) => p.id === '910x610-s455-n150-kawa');
-    expect(kawa.label).toBe('910×610 横置・川型（間柱・根太 @455 / 釘 @150）');
+    // 配列の型は面材が壁のどこに来るかで決まるので、選択肢は型を除いた
+    // 33 通り（寸法 × 間柱ピッチ × 釘ピッチ）。
+    expect(presets).toHaveLength(33);
+    const entry = presets.find((p) => p.id === '910x610-s455-n150-hi');
+    expect(entry.label).toBe('910×610 横置（間柱・根太 @455 / 釘 @150）');
 
-    // 表 3.2.1 の「910×610 横置・川型」は、解説の計算例そのもの。
-    const panel = loaded.preset(kawa.id);
+    const { wall, panel } = loaded.preset(entry.id);
+    expect(wall).toEqual({ studPitch: 455 });
     expect(panel).toMatchObject({
       width: 910,
       height: 610,
-      mode: 'layout',
-      arrangement: 'kawa',
-      studPitch: 455,
       nailPitch: 150,
       edgeDistance: 10,
     });
 
-    const report = panelReport(loaded.computeAll(wallOf(panel)).walls);
-    expect(Object.fromEntries(report.summary.map((s) => [s.key, s.value]))).toEqual({
-      Ixy: '0.888868',
-      Zxy: '0.00358851',
-      Cxy: '1.26155',
-    });
-  });
-
-  it('割り付けの型（川型・山型・ロ型・日型）を一覧する', async () => {
-    const arrangements = (await core()).arrangements();
-
-    expect(arrangements.map((a) => a.id)).toEqual(['kawa', 'yama', 'ro', 'hi']);
-    expect(arrangements[3].label).toBe('日型');
-    expect(arrangements[3].note).toContain('上下端');
+    // 読み込んだ大きさを壁の左下へ置くと、表 3.2.1 の日型の欄と同じになる。
+    const report = panelReport(
+      loaded.computeAll(
+        wallOf({
+          ...EXAMPLE_PANEL,
+          right: panel.width,
+          top: panel.height,
+          nailPitch: panel.nailPitch,
+          edgeDistance: panel.edgeDistance,
+        })
+      ).walls
+    );
+    expect(report.nails).toHaveLength(entry.nailCount);
   });
 
   it('グレー本 表 3.3.1 の面材と釘の組合せを一覧する', async () => {
@@ -179,13 +181,22 @@ describe('計算実装（wasm）', () => {
     expect(grades[1]).toMatchObject({ tauMax: 2.4, e1: 3500, e2: 5500 });
   });
 
-  it('グレー本 3.3 の計算例（図 3.3.10）を、本と同じ答えで返す', async () => {
-    // 面材は表 3.2.1 の配列をそのまま壁の中へ置く。釘 1 本あたりの数値は、
-    // 本文が計算に使っているものを面材ごとに入れる（面材と釘の仕様は面材
-    // ごとの入力で、この計算例は 2 枚とも同じ組合せ）。
+  it('グレー本 3.3 の計算例（図 3.3.10）を、本とほぼ同じ答えで返す', async () => {
+    // 下から 910 × 1820、その上に 910 × 910 を張った壁（間柱 @455・釘 @75）。
+    // 釘 1 本あたりの数値は、本文が計算に使っているものを面材ごとに入れる
+    // （面材と釘の仕様は面材ごとの入力で、この計算例は 2 枚とも同じ組合せ）。
+    //
+    // 本は上側の 910 × 910 を「ロ型」（中間の間柱に釘を打たない配列）として
+    // 計算している。釘配列を壁の軸組から導くこのツールでは @455 の間柱が
+    // 正方形の面材の内側に来るので、本より釘が多く、答えも 1〜3% 大きく出る。
     const loaded = await core();
-    const panels = ['910x1820-s455-n75-hi', '910x910-s455-n75-ro'].map((id) => ({
-      ...loaded.preset(id),
+    const panels = [
+      { panelName: '下段', left: 0, bottom: 0, right: 910, top: 1820 },
+      { panelName: '上段', left: 0, bottom: 1820, right: 910, top: 2730 },
+    ].map((panel) => ({
+      ...panel,
+      nailPitch: 75,
+      edgeDistance: 10,
       thickness: 12,
       shearModulus: 0.4,
       k: 0.483,
@@ -204,7 +215,7 @@ describe('計算実装（wasm）', () => {
           wallName: 'グレー本 3.3 の計算例',
           height: 3000,
           width: 910,
-          hasIntermediateStud: true,
+          studPitch: 455,
           panels,
         },
       ],
@@ -213,15 +224,14 @@ describe('計算実装（wasm）', () => {
     expect(walls[0].ok).toBe(true);
     // 本の答えは Pa = 8.37 kN、ΔPa = 9.20 kN/m（決めているのは K0/150）。
     expect(walls[0].governing).toBe('drift');
-    expect(walls[0].result.Pa).toBeCloseTo(8.37, 1);
-    expect(walls[0].result.dPa).toBeCloseTo(9.2, 1);
+    expect(walls[0].result.Pa).toBeGreaterThan(8.37);
+    expect((walls[0].result.Pa - 8.37) / 8.37).toBeLessThan(0.02);
+    expect(walls[0].result.dPa).toBeGreaterThan(9.2);
     expect(walls[0].withinLimit).toBe(true);
-    expect(walls[0].panels.map((panel) => panel.label)).toEqual([
-      '1820×910 縦置・日型（間柱・根太 @455 / 釘 @75）',
-      '910×910 縦置・ロ型（間柱・根太 @455 / 釘 @75）',
-    ]);
+    expect(walls[0].panels.map((panel) => panel.label)).toEqual(['下段', '上段']);
     // 壁の計算には、その根拠になる面材ごとの釘配列諸定数が付いてくる。
     expect(walls[0].panelReports).toHaveLength(2);
+    // 下側の 910 × 1820 は、3.3(1)⑧ により本とまったく同じ配列になる。
     expect(walls[0].panelReports[0].result.Ixy).toBeCloseTo(4.99, 1);
     // 面材のせん断破壊・せん断座屈（式 3.3.8〜3.3.11）も、どちらも通る。
     expect(walls[0].shearOk).toBe(true);
@@ -231,57 +241,66 @@ describe('計算実装（wasm）', () => {
     expect(walls[0].specs.map((spec) => spec.cells[0])).toEqual(['12', '12']);
   });
 
-  it('壁内の位置を入れると、壁の面材配列図と配置の判定が付いてくる', async () => {
-    // 計算（3.3）は面材ごとの値の和なので、配置そのものは数値を変えない。
-    // 図と判定が付くこと・食い違いをその場で拾えることを確かめる。
+  it('壁の面材配列図と配置の判定が、どの壁にも付いてくる', async () => {
+    // 面材を動かしても計算（3.3）は面材ごとの値の和のままだが、釘配列は
+    // 壁の軸組との位置関係で変わる。食い違う配置はその場で拾う。
     const loaded = await core();
-    const wallOf = (positions) => {
-      const panels = ['910x1820-s455-n75-hi', '910x910-s455-n75-ro'].map((id, index) => ({
-        ...loaded.preset(id),
-        thickness: 12,
-        shearModulus: 0.4,
-        k: 0.483,
-        deltaV: 2.3,
-        deltaU: 17,
-        deltaPv: 1.13,
-        tauMax: 3.6,
-        e1: 3500,
-        e2: 5500,
-        ...positions[index],
-      }));
-      return loaded.computeAll({
+    const wallWith = (...panels) =>
+      loaded.computeAll({
         walls: [
-          { wallId: 'w1', height: 3000, width: 910, hasIntermediateStud: true, panels },
+          {
+            wallId: 'w1',
+            height: 3000,
+            width: 910,
+            studPitch: 455,
+            panels: panels.map((panel) => ({
+              nailPitch: 75,
+              edgeDistance: 10,
+              thickness: 12,
+              shearModulus: 0.4,
+              k: 0.483,
+              deltaV: 2.3,
+              deltaU: 17,
+              deltaPv: 1.13,
+              tauMax: 3.6,
+              e1: 3500,
+              e2: 5500,
+              ...panel,
+            })),
+          },
         ],
       }).walls[0];
-    };
     const placementCheck = (wall) =>
       wall.checks.find((check) => check.label.startsWith('面材の配置'));
 
-    // 下から 910×1820、その上に 910×910（本の計算例そのままの張り方）。
-    const stacked = wallOf([
-      { originX: 0, originY: 0 },
-      { originX: 0, originY: 1820 },
-    ]);
+    // 下から 910×1820、その上に 910×910。
+    const stacked = wallWith(
+      { panelName: '下段', left: 0, bottom: 0, right: 910, top: 1820 },
+      { panelName: '上段', left: 0, bottom: 1820, right: 910, top: 2730 }
+    );
     expect(stacked.wallDiagram.sides[0].label).toBe('表面');
     expect(stacked.wallDiagram.sides[0].panels).toHaveLength(2);
     expect(stacked.layout).toHaveLength(2);
     expect(placementCheck(stacked).ok).toBe(true);
 
-    // 同じ計算に、重なる配置を書くと食い違いとして出る（Pa は変わらない）。
-    const overlapping = wallOf([
-      { originX: 0, originY: 0 },
-      { originX: 0, originY: 1000 },
-    ]);
-    expect(overlapping.result.Pa).toBeCloseTo(stacked.result.Pa, 9);
+    // 重なる配置は、枚数を二重に数えている印として拾う。
+    const overlapping = wallWith(
+      { panelName: '下段', left: 0, bottom: 0, right: 910, top: 1820 },
+      { panelName: '上段', left: 0, bottom: 1000, right: 910, top: 1910 }
+    );
     expect(placementCheck(overlapping).ok).toBe(false);
     expect(placementCheck(overlapping).value).toContain('重なっています');
 
-    // 位置を書かない壁は、今までどおり図も判定の行も出ない。
-    const counted = wallOf([{}, {}]);
-    expect(counted.wallDiagram).toBeNull();
-    expect(placementCheck(counted)).toBeUndefined();
-    expect(counted.result.Pa).toBeCloseTo(stacked.result.Pa, 9);
+    // 壁からはみ出す配置も同じく拾う。
+    const overhanging = wallWith({
+      panelName: '下段',
+      left: 0,
+      bottom: 0,
+      right: 1820,
+      top: 1820,
+    });
+    expect(placementCheck(overhanging).ok).toBe(false);
+    expect(placementCheck(overhanging).value).toContain('はみ出しています');
   });
 
   it('1 枚の壁でも、面材ごとに違う面材と釘を使える', async () => {
@@ -300,16 +319,20 @@ describe('計算実装（wasm）', () => {
         e2: material.e2,
       };
     };
+    const placed = [
+      { panelName: '下段', left: 0, bottom: 0, right: 910, top: 1820 },
+      { panelName: '上段', left: 0, bottom: 1820, right: 910, top: 2730 },
+    ].map((panel) => ({ ...panel, nailPitch: 75, edgeDistance: 10 }));
     const wallOfSpecs = (lower, upper) => ({
       walls: [
         {
           wallId: 'w1',
           height: 3000,
           width: 910,
-          hasIntermediateStud: true,
+          studPitch: 455,
           panels: [
-            { ...loaded.preset('910x1820-s455-n75-hi'), ...spec(lower) },
-            { ...loaded.preset('910x910-s455-n75-ro'), ...spec(upper) },
+            { ...placed[0], ...spec(lower) },
+            { ...placed[1], ...spec(upper) },
           ],
         },
       ],
@@ -345,18 +368,19 @@ describe('計算実装（wasm）', () => {
   });
 
   it('計算できない面材は、理由を添えて ok: false で返る', async () => {
+    // 領域が矩形になっていない（配置が入っていない）面材。
     const { walls } = (await core()).computeAll(
-      wallOf({ ...EXAMPLE_PANEL, mode: 'coords', coords: '' })
+      wallOf({ ...EXAMPLE_PANEL, right: 0, top: 0 })
     );
 
     expect(panelReport(walls).ok).toBe(false);
-    expect(panelReport(walls).error).toContain('釘座標が入力されていません');
+    expect(panelReport(walls).error).toContain('壁の中で面材が占める領域');
   });
 
   it('入力全体が壊れていれば、日本語の文面で投げる', async () => {
     const loaded = await core();
 
-    expect(() => loaded.computeAll(wallOf({ width: 'ろく' }))).toThrow(/面材の幅 W/);
+    expect(() => loaded.computeAll(wallOf({ right: 'ろく' }))).toThrow(/面材の右端 X/);
   });
 
   it('何度呼んでも結果が変わらない（メモリの受け渡しが漏れない）', async () => {
@@ -369,13 +393,24 @@ describe('計算実装（wasm）', () => {
   });
 
   it('メモリが広がる大きさの入力でも壊れない', async () => {
-    const axis = Array.from({ length: 40 }, (_, index) => index * 10).join(', ');
+    // 3640 × 2730 の壁いっぱいに、間柱 @455・釘 @75 で 1 枚張る。
+    const { walls } = (await core()).computeAll({
+      walls: [
+        {
+          wallId: 'w1',
+          width: 3640,
+          height: 2730,
+          studPitch: 455,
+          panels: [
+            { ...EXAMPLE_PANEL, right: 3640, top: 2730, nailPitch: 75 },
+          ],
+        },
+      ],
+    });
 
-    const { walls } = (await core()).computeAll(
-      wallOf({ ...EXAMPLE_PANEL, mode: 'grid', gridX: axis, gridY: axis })
-    );
-
-    expect(panelReport(walls).nails).toHaveLength(1600);
+    // 縦線 9 本 × 37 本 ＋ 横線 2 本 × 49 本 − 重なり。
+    expect(panelReport(walls).nails.length).toBeGreaterThan(400);
+    expect(panelReport(walls).result.Ixy).toBeGreaterThan(0);
   });
 });
 

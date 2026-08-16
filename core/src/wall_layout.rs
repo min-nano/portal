@@ -11,10 +11,9 @@
 //!
 //!   - 面材が壁からはみ出している（壁の寸法か面材の寸法のどちらかが違う）
 //!   - 同じ面に張った面材どうしが重なっている（枚数を二重に数えている）
-//!   - 配置を入れた面材と入れていない面材が混ざっている（図が計算より少ない）
 //!
-//! 配置は面材ごとの任意入力で、1 枚も入っていない壁は今までどおり枚数だけで
-//! 計算する（配列図も配置の検定も出さない）。
+//! 面材は「壁の中で占める領域」そのものなので、配置の無い面材は存在しない
+//! （寸法も釘配列も、この領域から決まる）。
 //!
 //! 座標系は壁の左下を原点とし、x は右・y は上・単位は mm。面材の位置は
 //! **その面材の左下**で表す（釘座標が面材の左下を原点にしているのと同じ
@@ -74,15 +73,15 @@ pub struct Piece {
     /// 面材の高さ H [mm]。
     pub height: f64,
     pub side: Side,
-    /// 壁の左下を原点とした、この面材の左下の位置 [mm]。未入力なら None。
-    pub origin: Option<(f64, f64)>,
+    /// 壁の左下を原点とした、この面材の左下の位置 [mm]。
+    pub origin: (f64, f64),
 }
 
 impl Piece {
-    /// 壁の中で占める矩形（左, 下, 右, 上）。配置が無ければ None。
-    fn rect(&self) -> Option<(f64, f64, f64, f64)> {
-        let (x, y) = self.origin?;
-        Some((x, y, x + self.width, y + self.height))
+    /// 壁の中で占める矩形（左, 下, 右, 上）。
+    fn rect(&self) -> (f64, f64, f64, f64) {
+        let (x, y) = self.origin;
+        (x, y, x + self.width, y + self.height)
     }
 
     pub fn area(&self) -> f64 {
@@ -97,18 +96,14 @@ pub struct Inspection {
     pub outside: Vec<bool>,
     /// この面材が、同じ面の別の面材と重なっているか。
     pub overlapping: Vec<bool>,
-    /// 壁内の位置を入れていない面材の名前。
-    pub unplaced: Vec<String>,
     /// 重なっている面材の組（名前の対）。
     pub overlaps: Vec<(String, String)>,
-    /// 壁内の位置を入れた面材の枚数。
-    pub placed: usize,
-    /// 面ごとの、張った面材の枚数と面積の和 [mm²]（配置した面材だけ）。
+    /// 面ごとの、張った面材の枚数と面積の和 [mm²]。
     ///
     /// 重なっていれば面積を二重に数えるが、そのときは重なりのほうが先に
     /// NG になるので、この値だけを見て判断することはない。
     pub sides: Vec<(Side, usize, f64)>,
-    /// はみ出し・重なり・配置漏れのどれも無いか。
+    /// はみ出しも重なりも無いか。
     pub ok: bool,
 }
 
@@ -121,14 +116,15 @@ pub fn inspect(wall_width: f64, wall_height: f64, pieces: &[Piece]) -> Inspectio
 
     let outside: Vec<bool> = pieces
         .iter()
-        .map(|piece| match piece.rect() {
-            Some((left, bottom, right, top)) if known_wall => {
-                left < -TOLERANCE
-                    || bottom < -TOLERANCE
-                    || right > wall_width + TOLERANCE
-                    || top > wall_height + TOLERANCE
+        .map(|piece| {
+            if !known_wall {
+                return false;
             }
-            _ => false,
+            let (left, bottom, right, top) = piece.rect();
+            left < -TOLERANCE
+                || bottom < -TOLERANCE
+                || right > wall_width + TOLERANCE
+                || top > wall_height + TOLERANCE
         })
         .collect();
 
@@ -139,10 +135,7 @@ pub fn inspect(wall_width: f64, wall_height: f64, pieces: &[Piece]) -> Inspectio
             if piece.side != other.side {
                 continue;
             }
-            let (Some(left), Some(right)) = (piece.rect(), other.rect()) else {
-                continue;
-            };
-            if !overlaps_rect(left, right) {
+            if !overlaps_rect(piece.rect(), other.rect()) {
                 continue;
             }
             overlapping[index] = true;
@@ -151,40 +144,25 @@ pub fn inspect(wall_width: f64, wall_height: f64, pieces: &[Piece]) -> Inspectio
         }
     }
 
-    let placed = pieces.iter().filter(|piece| piece.origin.is_some()).count();
-    let unplaced: Vec<String> = pieces
-        .iter()
-        .filter(|piece| piece.origin.is_none())
-        .map(|piece| piece.label.clone())
-        .collect();
-
     // 面ごとのまとめは、実際に使われている面だけを SIDES の並びで返す
     //（片面張りの壁に、空の「裏面」を出さない）。
     let sides: Vec<(Side, usize, f64)> = SIDES
         .iter()
         .filter_map(|side| {
-            let placed: Vec<&Piece> = pieces
-                .iter()
-                .filter(|piece| piece.side == *side && piece.origin.is_some())
-                .collect();
-            if placed.is_empty() {
+            let on_side: Vec<&Piece> = pieces.iter().filter(|piece| piece.side == *side).collect();
+            if on_side.is_empty() {
                 return None;
             }
-            let area = placed.iter().map(|piece| piece.area()).sum();
-            Some((*side, placed.len(), area))
+            let area = on_side.iter().map(|piece| piece.area()).sum();
+            Some((*side, on_side.len(), area))
         })
         .collect();
 
     Inspection {
-        ok: placed > 0
-            && unplaced.is_empty()
-            && overlaps.is_empty()
-            && !outside.iter().any(|flag| *flag),
+        ok: overlaps.is_empty() && !outside.iter().any(|flag| *flag),
         outside,
         overlapping,
-        unplaced,
         overlaps,
-        placed,
         sides,
     }
 }
@@ -206,12 +184,11 @@ pub fn bounds(wall_width: f64, wall_height: f64, pieces: &[Piece]) -> (f64, f64,
     let mut max_x = wall_width;
     let mut max_y = wall_height;
     for piece in pieces {
-        if let Some((left, bottom, right, top)) = piece.rect() {
-            min_x = min_x.min(left);
-            min_y = min_y.min(bottom);
-            max_x = max_x.max(right);
-            max_y = max_y.max(top);
-        }
+        let (left, bottom, right, top) = piece.rect();
+        min_x = min_x.min(left);
+        min_y = min_y.min(bottom);
+        max_x = max_x.max(right);
+        max_y = max_y.max(top);
     }
     (min_x, min_y, max_x, max_y)
 }
@@ -220,7 +197,7 @@ pub fn bounds(wall_width: f64, wall_height: f64, pieces: &[Piece]) -> (f64, f64,
 mod tests {
     use super::*;
 
-    fn piece(label: &str, width: f64, height: f64, origin: Option<(f64, f64)>) -> Piece {
+    fn piece(label: &str, width: f64, height: f64, origin: (f64, f64)) -> Piece {
         Piece {
             label: label.to_string(),
             width,
@@ -234,8 +211,8 @@ mod tests {
     /// 幅 910・階高 3000 の壁に、下から 910×1820、その上に 910×910。
     fn example() -> Vec<Piece> {
         vec![
-            piece("下段", 910.0, 1820.0, Some((0.0, 0.0))),
-            piece("上段", 910.0, 910.0, Some((0.0, 1820.0))),
+            piece("下段", 910.0, 1820.0, (0.0, 0.0)),
+            piece("上段", 910.0, 910.0, (0.0, 1820.0)),
         ]
     }
 
@@ -244,9 +221,7 @@ mod tests {
         let inspection = inspect(910.0, 3000.0, &example());
 
         assert!(inspection.ok);
-        assert_eq!(inspection.placed, 2);
         assert!(inspection.overlaps.is_empty());
-        assert!(inspection.unplaced.is_empty());
         assert_eq!(inspection.outside, vec![false, false]);
         // 面ごとのまとめは、使っている面だけ（片面張りなので 1 つ）。
         assert_eq!(
@@ -258,7 +233,7 @@ mod tests {
     #[test]
     fn a_panel_taller_than_the_wall_sticks_out() {
         let mut pieces = example();
-        pieces[1].origin = Some((0.0, 2500.0)); // 2500 + 910 > 3000
+        pieces[1].origin = (0.0, 2500.0); // 2500 + 910 > 3000
 
         let inspection = inspect(910.0, 3000.0, &pieces);
 
@@ -268,14 +243,14 @@ mod tests {
 
     #[test]
     fn a_panel_wider_than_the_wall_sticks_out() {
-        let inspection = inspect(910.0, 3000.0, &[piece("下段", 1820.0, 910.0, Some((0.0, 0.0)))]);
+        let inspection = inspect(910.0, 3000.0, &[piece("下段", 1820.0, 910.0, (0.0, 0.0))]);
 
         assert_eq!(inspection.outside, vec![true]);
     }
 
     #[test]
     fn a_negative_position_sticks_out() {
-        let inspection = inspect(910.0, 3000.0, &[piece("下段", 910.0, 910.0, Some((-10.0, 0.0)))]);
+        let inspection = inspect(910.0, 3000.0, &[piece("下段", 910.0, 910.0, (-10.0, 0.0))]);
 
         assert_eq!(inspection.outside, vec![true]);
     }
@@ -283,7 +258,7 @@ mod tests {
     #[test]
     fn panels_on_the_same_side_must_not_overlap() {
         let mut pieces = example();
-        pieces[1].origin = Some((0.0, 1000.0)); // 下段（0〜1820）に食い込む
+        pieces[1].origin = (0.0, 1000.0); // 下段（0〜1820）に食い込む
 
         let inspection = inspect(910.0, 3000.0, &pieces);
 
@@ -301,7 +276,7 @@ mod tests {
         let mut pieces = example();
         pieces.push(Piece {
             side: Side::Back,
-            ..piece("裏 下段", 910.0, 1820.0, Some((0.0, 0.0)))
+            ..piece("裏 下段", 910.0, 1820.0, (0.0, 0.0))
         });
 
         let inspection = inspect(910.0, 3000.0, &pieces);
@@ -317,30 +292,6 @@ mod tests {
         );
     }
 
-    /// 配置を入れた面材と入れていない面材が混ざると、図が計算より少なくなる。
-    #[test]
-    fn a_panel_without_a_position_is_reported() {
-        let mut pieces = example();
-        pieces.push(piece("忘れた面材", 910.0, 910.0, None));
-
-        let inspection = inspect(910.0, 3000.0, &pieces);
-
-        assert!(!inspection.ok);
-        assert_eq!(inspection.placed, 2);
-        assert_eq!(inspection.unplaced, vec!["忘れた面材".to_string()]);
-    }
-
-    /// 1 枚も配置が入っていない壁は「配置を書いていない」だけ（NG にしない
-    /// 側の判断は呼ぶ側が持つが、ok は立たない）。
-    #[test]
-    fn a_wall_without_any_position_has_nothing_placed() {
-        let inspection = inspect(910.0, 3000.0, &[piece("面材1", 910.0, 910.0, None)]);
-
-        assert_eq!(inspection.placed, 0);
-        assert!(!inspection.ok);
-        assert!(inspection.sides.is_empty());
-    }
-
     /// 壁の寸法が未入力のうちは、はみ出しを判定しない。
     #[test]
     fn an_unknown_wall_size_does_not_report_an_overhang() {
@@ -352,7 +303,7 @@ mod tests {
     #[test]
     fn the_drawing_range_covers_the_wall_and_every_panel() {
         let mut pieces = example();
-        pieces[1].origin = Some((-100.0, 2500.0));
+        pieces[1].origin = (-100.0, 2500.0);
 
         assert_eq!(bounds(910.0, 3000.0, &pieces), (-100.0, 0.0, 910.0, 3410.0));
         // 壁の中に収まっていれば、範囲は壁そのもの。

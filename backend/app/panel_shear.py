@@ -10,10 +10,10 @@ GAS 版（gas-timber-panel-shear-calculator）はスプレッドシートへ「�
 画面もまったく同じ .wasm を動かすので、実装は 1 つしかない。このモジュールが
 受け持つのは、その結果を PDF に組む仕事と、保存時の突き合わせ（verify）。
 
-1 PDF = 1 物件。ページは壁 1 枚ごとに、面材の配置を入力していれば「壁の面材
-配列図を 1 ページ」置き、続けて「その壁を構成する面材の釘配列諸定数（グレー本
-3.2）を 1 枚 1 ページ」並べ、最後に「壁の剛性と許容せん断耐力（同 3.3）を
-1 ページ」置く。釘配列諸定数は壁の計算の一部として扱う。
+1 PDF = 1 物件。ページは壁 1 枚ごとに「壁の面材配列図を 1 ページ」置き、続けて
+「その壁を構成する面材の釘配列諸定数（グレー本 3.2）を 1 枚 1 ページ」並べ、
+最後に「壁の剛性と許容せん断耐力（同 3.3）を 1 ページ」置く。釘配列諸定数は
+壁の計算の一部として扱う。
 """
 
 import json
@@ -41,31 +41,12 @@ VERIFY_RELATIVE_TOLERANCE = 1e-9
 # 突き合わせの結果に並べる差の上限（全項目が違うときに応答が膨れないように）。
 MAX_REPORTED_DIFFERENCES = 20
 
-# グレー本 解説の計算例（図 3.2.2）。テストと README の例で使う基準の配列。
-#
-# 面材は W 910 × H 610（横置き。長辺が横で、間柱は 455 ピッチ）。本は左下の
-# 釘を (0, 0) として 890 × 590 の広がりで書いているが、ここではへりあき
-# 10 mm を見込んで面材の左下を原点にする。平行移動なので Ixy・Zxy・Cxy は
-# 本と同じで、弾性中立軸だけが x0 = 455、y0 = 305 になる。この配列は
-# 表 3.2.1 の「910×610 横置・川型（@455 / 釘 @150）」そのものなので、画面では
-# 標準的な釘配列の一覧から呼び出せる（計算例だけを読み込む操作は置いていない）。
-EXAMPLE_PANEL = {
-    "panelName": "グレー本の計算例",
-    "width": 910,
-    "height": 610,
-    "mode": "layout",
-    "arrangement": "kawa",
-    "studPitch": 455,
-    "nailPitch": 150,
-    "edgeDistance": 10,
-}
-
 # グレー本 3.3(3)「面材張り大壁の許容せん断耐力の計算例」（図 3.3.10）。
 #
-# 階高 3000・幅 910 の準耐力壁形式の大壁で、下側に 1820 × 910、上側に
-# 910 × 910 の構造用合板 12mm を @75 で四周打ちしたもの。面材の割り付けは
-# 表 3.2.1 の配列（EXAMPLE_WALL_PRESETS）をそのまま使い、面材と釘の数値は
-# 表 3.3.1 の組合せ（EXAMPLE_WALL_MATERIAL）から読み込む。
+# 階高 3000・幅 910 の準耐力壁形式の大壁で、下から 910 × 1820、その上に
+# 910 × 910 の構造用合板 12mm を @75 で四周打ちしたもの。間柱は 30 × 105 を
+# @455。面材と釘の数値は表 3.3.1 の組合せ（EXAMPLE_WALL_MATERIAL）から
+# 読み込む。
 #
 # 本文は釘を「CN65」としているが、印刷された表 3.3.1 は構造用合板 12mm の
 # N-65 と CN65 が入れ替わっており（正誤表による訂正あり）、本文が計算に使って
@@ -75,15 +56,29 @@ EXAMPLE_PANEL = {
 # 呼び径 φ3.05 なので、3.3(1)④ の「10mm 以上かつ接合具径 d ×5 以上」は
 # 15.25mm を要求する。本の計算例をそのまま再現するとこの検定は NG になる
 # （画面では、面材と釘を選んだ時点でへりあきが必要な値まで引き上げられる）。
-EXAMPLE_WALL_PRESETS = ("910x1820-s455-n75-hi", "910x910-s455-n75-ro")
+#
+# 本と 1 か所だけ違う: 本は上側の 910 × 910 を表 3.2.1 の「ロ型」（中間の
+# 間柱に釘を打たない配列）として計算している。釘配列を壁の軸組から導く本
+# ツールでは @455 の間柱が正方形の面材の内側に来るので、その列にも釘が入り、
+# 上側の面材の K0・My・Mu は本より大きく出る（Pa で +1.2% ほど）。下側の
+# 910 × 1820 は 3.3(1)⑧ により中間の間柱を含めないので、本と同じ配列になる。
 EXAMPLE_WALL_MATERIAL = "plywood12-n65"
 EXAMPLE_WALL = {
     "wallName": "グレー本 3.3 の計算例",
     "height": 3000,
     "width": 910,
-    # 間柱 30 × 105 を @455 で入れている（図 3.3.10）。
-    "hasIntermediateStud": True,
+    # 間柱 30 × 105 を @455 で入れている（図 3.3.10）。釘の縦列の位置も、
+    # せん断座屈の ξ（中間材の有無）も、このピッチから決まる。
+    "studPitch": 455,
 }
+
+# 計算例の面材 2 枚（壁の中で占める領域と、釘ピッチ・へりあき）。
+EXAMPLE_WALL_PANELS = (
+    {"panelName": "下段", "left": 0, "bottom": 0, "right": 910, "top": 1820,
+     "nailPitch": 75, "edgeDistance": 10},
+    {"panelName": "上段", "left": 0, "bottom": 1820, "right": 910, "top": 2730,
+     "nailPitch": 75, "edgeDistance": 10},
+)
 
 
 class PanelShearError(Exception):
@@ -133,12 +128,17 @@ def validate(data: dict) -> dict:
     return {"walls": _core("validate", data)["walls"]}
 
 
-def preset_panel(preset_id: str) -> dict:
-    """グレー本 表 3.2.1 の配列を、面材 1 枚分の割り付けにして返す。"""
+def preset(preset_id: str) -> dict:
+    """グレー本 表 3.2.1 の組み合わせを、壁と面材へ入る形で返す。
+
+    釘配列の型は面材が壁のどこに来るかで決まるので、読み込むのは壁の
+    間柱ピッチと、面材の釘ピッチ・へりあき・大きさだけ。
+    """
     try:
-        return nail_core.call({"op": "preset", "data": {"id": preset_id}})["panel"]
+        loaded = nail_core.call({"op": "preset", "data": {"id": preset_id}})
     except CoreError as error:
         raise PanelShearError(str(error)) from error
+    return {"wall": loaded["wall"], "panel": loaded["panel"]}
 
 
 def material(material_id: str) -> dict:
@@ -178,10 +178,7 @@ def example_wall_data() -> dict:
             "walls": [
                 {
                     **EXAMPLE_WALL,
-                    "panels": [
-                        {**spec, **preset_panel(preset_id)}
-                        for preset_id in EXAMPLE_WALL_PRESETS
-                    ],
+                    "panels": [{**spec, **panel} for panel in EXAMPLE_WALL_PANELS],
                 }
             ],
         }
@@ -316,12 +313,12 @@ _FOOTNOTE = (
 
 _LAYOUT_TITLE = "面材張り大壁 壁の面材配列図"
 _LAYOUT_SUBTITLE = (
-    "壁を構成する面材を、壁のどこに張るかを示す図（設計者が入力した配置）。"
-    "剛性・許容せん断耐力（3.3）は面材ごとの値の和なので、配置そのものは数値に影響しない"
+    "壁を構成する面材を、壁のどこに張るかを示す図。面材の寸法も釘配列も、"
+    "この配置と壁の軸組（間柱ピッチ）から決まる"
 )
 _LAYOUT_FOOTNOTE = (
-    "この図は、計算に入れた面材と、想定している張り方が食い違っていないかを確かめるためのもの。"
-    "壁からはみ出している面材・同じ面で重なっている面材・壁内の位置を書いていない面材があれば、"
+    "面材は「壁の中で占める領域」として入力する。面材の寸法も釘配列も、この領域と壁の軸組"
+    "（間柱ピッチ）から決まる。壁からはみ出している面材・同じ面で重なっている面材があれば、"
     "「配置の確認」を NG にして印（※）を付ける。面材の面積の和が壁の見付面積に満たない"
     "（張り残しがある）ことは、準耐力壁形式などで通常起こるため NG としない。"
 )
@@ -555,7 +552,7 @@ def _draw_wall_layout_page(page: pdf_write.Page, data: dict, report: dict,
     # 下から積む高さを先に押さえ、残りをすべて図に使う（面材の枚数が増えても
     # 表と判定が図に食われない）。
     check = _layout_check(report)
-    check_lines = _wrap_to_fit(page, check["value"], 8.5, right - left - 260) if check else []
+    check_lines = _wrap_to_fit(page, check["value"], 8.5, right - left - 260)
     reserved = (
         20 + 15 + 13 * len(report["layout"]) + 8  # 面材の一覧
         + 20 + 11 * max(1, len(check_lines)) + 8  # 配置の確認
@@ -574,24 +571,23 @@ def _draw_wall_layout_page(page: pdf_write.Page, data: dict, report: dict,
     cursor = _draw_panel_table(page, left, right, cursor, report, "layoutColumns", "layout")
 
     # --- 3. 配置の確認 ---
-    if check:
-        _draw_section(page, left, right, cursor, "3. 配置の確認")
-        cursor -= 20
-        page.text(left + 8, cursor, check["label"], 8.5, gray=0.45)
-        page.text(right - 8, cursor, "OK" if check["ok"] else "NG", 9, align="right")
-        for line in check_lines:
-            page.text(left + 230, cursor, line, 8.5)
-            cursor -= 11
+    _draw_section(page, left, right, cursor, "3. 配置の確認")
+    cursor -= 20
+    page.text(left + 8, cursor, check["label"], 8.5, gray=0.45)
+    page.text(right - 8, cursor, "OK" if check["ok"] else "NG", 9, align="right")
+    for line in check_lines:
+        page.text(left + 230, cursor, line, 8.5)
+        cursor -= 11
 
     _draw_footnote(page, left, right, _LAYOUT_FOOTNOTE, page_number, page_total)
 
 
-def _layout_check(report: dict) -> dict | None:
-    """判定のうち「面材の配置」の行を取り出す（配置を書いていなければ None）。"""
+def _layout_check(report: dict) -> dict:
+    """判定のうち「面材の配置」の行を取り出す。"""
     for check in report["checks"]:
         if check["label"].startswith("面材の配置"):
             return check
-    return None
+    raise PanelShearError("計算結果に面材の配置の判定がありません。", status=500)
 
 
 def _draw_panel_page(page: pdf_write.Page, data: dict, wall: dict, report: dict,
@@ -863,11 +859,11 @@ def _draw_footnote(page: pdf_write.Page, left: float, right: float, note: str,
 def build_pdf(data: dict, reports: dict) -> bytes:
     """計算書 PDF を組み立てる。
 
-    ページは壁 1 枚につき、面材の配置を入力していれば「壁の面材配列図」を
-    先頭に置き、続けて「その壁を構成する面材 1 枚ごとの釘配列諸定数」
-    （グレー本 3.2）を並べ、そのあとに「壁の剛性と許容せん断耐力」
-    （同 3.3）を置く。配列図がこの壁の張り方を示し、壁の計算の根拠になる
-    釘配列諸定数が、必ずその壁のページの直前にそろう。
+    ページは壁 1 枚につき「壁の面材配列図」を先頭に置き、続けて「その壁を
+    構成する面材 1 枚ごとの釘配列諸定数」（グレー本 3.2）を並べ、そのあとに
+    「壁の剛性と許容せん断耐力」（同 3.3）を置く。配列図がこの壁の張り方を
+    示し、壁の計算の根拠になる釘配列諸定数が、必ずその壁のページの直前に
+    そろう。
 
     再編集のため、フォーム入力そのものを文書情報へ埋め込む
     （構造計算安全証明書と同じ仕組み）。ensure_ascii のままにして
@@ -875,18 +871,14 @@ def build_pdf(data: dict, reports: dict) -> bytes:
     """
     document = pdf_write.Document()
     walls = reports["walls"]
-    page_total = sum(
-        len(wall["panelReports"]) + 1 + (1 if wall.get("wallDiagram") else 0)
-        for wall in walls
-    )
+    page_total = sum(len(wall["panelReports"]) + 2 for wall in walls)
 
     page_number = 0
     for index, wall in enumerate(walls, start=1):
         panels = wall["panelReports"]
-        if wall.get("wallDiagram"):
-            page_number += 1
-            _draw_wall_layout_page(document.add_page(), data, wall, index, len(walls),
-                                   page_number, page_total)
+        page_number += 1
+        _draw_wall_layout_page(document.add_page(), data, wall, index, len(walls),
+                               page_number, page_total)
         for panel_index, panel in enumerate(panels, start=1):
             page_number += 1
             _draw_panel_page(
@@ -952,6 +944,7 @@ def form_config(core_path: str) -> dict:
         "max_walls": nail_core.config()["maxWalls"],
         "max_wall_panels": nail_core.config()["maxWallPanels"],
         "default_edge_distance": nail_core.config()["defaultEdgeDistance"],
+        "default_stud_pitch": nail_core.config()["defaultStudPitch"],
         "core": {
             "url": f"{core_path}?v={digest[:16]}",
             "version": nail_core.version(),

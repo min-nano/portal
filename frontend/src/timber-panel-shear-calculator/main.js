@@ -47,7 +47,6 @@ import {
   renderWallResult,
   showNailNotes,
   showPanelArea,
-  syncNailModeVisibility,
 } from './form-dom.js';
 import {
   canRemoveWall,
@@ -64,6 +63,7 @@ import {
   nextPlacement,
   panelFieldsFromGrade,
   panelFieldsFromMaterial,
+  panelFieldsFromPreset,
   raiseEdgeDistance,
   specOf,
   toRequestBody,
@@ -89,7 +89,7 @@ let reports = { walls: [] }; // 壁ごとの計算結果（面材ごとの結果
 let materials = []; // グレー本 表 3.3.1 の面材と釘の組合せ
 let grades = []; // グレー本 表 3.3.2 の面材の規格
 // 面材の入力欄が使う一覧（釘配列・割り付けの型・面材と釘・面材の規格）。
-let panelOptions = { presets: [], arrangements: [], materials: [], grades: [] };
+let panelOptions = { presets: [], materials: [], grades: [] };
 let calculateTimer = null;
 
 let sourceFile = null; // 開いているファイル（Drive 上の PDF）。{ id, name }
@@ -221,21 +221,26 @@ function removeWallPanel(index) {
 }
 
 /**
- * グレー本 表 3.2.1 の標準的な釘配列を、その面材の割り付けへ読み込む。
+ * グレー本 表 3.2.1 の標準的な組み合わせを読み込む。
  *
- * 面材寸法・配列の型・間柱ピッチ・釘ピッチ・へりあきが入るので、読み込んだ
- * あとに実際の設計へ合わせて動かせる。釘座標そのものは計算実装（wasm）が
- * この割り付けから組み立てる。
+ * 壁には間柱ピッチが、面材には釘ピッチ・へりあきと大きさ（左下はそのままに
+ * 右上を動かす）が入る。読み込んだあとに実際の設計へ合わせて動かせる。
+ * 釘座標そのものは、この軸組と面材の領域から計算実装（wasm）が組み立てる。
  */
 function loadPreset(index, id) {
   if (!id || !core) return;
+  const wall = currentWall();
   const panel = captureCurrentWall(index);
-  if (!panel) return;
-  Object.assign(panel, core.preset(id));
+  if (!panel || !wall) return;
+  const loaded = core.preset(id);
+  wall.studPitch = loaded.wall.studPitch;
+  Object.assign(panel, panelFieldsFromPreset(panel, loaded.panel));
   // 表 3.2.1 の配列はへりあき 10 mm が前提なので、この面材の釘で必要な値に
   // 足りなければ引き上げる（適用範囲 3.3(1)④）。
   raiseEdgeDistance([panel], minimumEdgeDistance(materials, panel.materialId));
-  redrawPanels();
+  applyWall(document, wall, panelOptions);
+  showPanelNotes();
+  scheduleCalculate();
 }
 
 /**
@@ -307,17 +312,11 @@ function calculate() {
 function watchInputs() {
   const form = document.getElementById('calcForm');
   form.addEventListener('input', (event) => {
-    if (event.target.hasAttribute && event.target.hasAttribute('data-panel-mode')) {
-      syncNailModeVisibility(document);
-    }
     showPanelArea(document);
     scheduleCalculate();
   });
   form.addEventListener('change', (event) => {
     const target = event.target;
-    if (target.hasAttribute && target.hasAttribute('data-panel-mode')) {
-      syncNailModeVisibility(document);
-    }
     const presetIndex = target.getAttribute
       ? target.getAttribute('data-panel-preset')
       : null;
@@ -591,17 +590,11 @@ async function prepare() {
   // URL に中身のハッシュが付いているので、版が変われば必ず取り直される。
   core = await loadCore(config.core.url, apiGetBytes);
 
-  // 呼び出せる釘配列（グレー本 表 3.2.1）・割り付けの型・面材と釘の組合せ
+  // 呼び出せる標準の組み合わせ（グレー本 表 3.2.1）・面材と釘の組合せ
   //（同 表 3.3.1）・面材の規格（同 表 3.3.2）は、どれも計算実装が持っている。
-  // どれも面材 1 枚ぶんの入力欄が使う（面材と釘は面材ごとに選べる）。
   materials = core.materials();
   grades = core.grades();
-  panelOptions = {
-    presets: core.presets(),
-    arrangements: core.arrangements(),
-    materials,
-    grades,
-  };
+  panelOptions = { presets: core.presets(), materials, grades };
 
   data = emptyFormData();
   setSourceFile(null);

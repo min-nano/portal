@@ -70,21 +70,21 @@ class Core {
   }
 
   /**
-   * グレー本 表 3.2.1「標準的なサイズの面材の釘配列諸定数」の配列一覧。
-   * 選ぶための情報だけで、釘座標は preset() で組み立てる。
+   * グレー本 表 3.2.1「標準的なサイズの面材の釘配列諸定数」の組み合わせ一覧
+   * （面材寸法・間柱ピッチ・釘ピッチ）。配列の型は面材が壁のどこに来るかで
+   * 決まるので、選択肢には入らない。
    */
   presets() {
     return this.call({ op: 'presets' }).presets;
   }
 
-  /** 一覧の id を、そのまま面材 1 枚の割り付けとして入れられる形にする。 */
+  /**
+   * 一覧の id を、壁（間柱ピッチ）と面材（釘ピッチ・へりあき・大きさ）へ
+   * 入れられる形にする。
+   */
   preset(id) {
-    return this.call({ op: 'preset', data: { id } }).panel;
-  }
-
-  /** 割り付けの型（川型・山型・ロ型・日型）の一覧。 */
-  arrangements() {
-    return this.call({ op: 'arrangements' }).arrangements;
+    const { wall, panel } = this.call({ op: 'preset', data: { id } });
+    return { wall, panel };
   }
 
   /**
