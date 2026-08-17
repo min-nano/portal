@@ -281,6 +281,10 @@ def test_settings_are_normalised_before_they_are_stored():
                 "taxRounding": "とんでもない値",
                 "personnelUnitPrice": "-100",
                 "technicalFeeRate": "abc",
+                # float() は "nan" / "inf" も受け付けるので、ここで止める
+                # （通すと、以降の見積書の税額がすべて NaN になる）。
+                "reducedTaxRate": "nan",
+                "overheadMultiplier": "inf",
             },
             "somethingElse": 1,
         }

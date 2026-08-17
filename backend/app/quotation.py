@@ -20,6 +20,7 @@
 """
 
 import json
+import math
 import re
 
 from . import nail_core, pdf_tools, pdf_write
@@ -226,11 +227,17 @@ def _clean_multiline(value) -> str:
 
 
 def _clean_rate(value, fallback: float) -> float:
+    """率・倍数の欄を読む。読めない値・負の値は既定へ倒す。
+
+    float() は "nan" や "inf" という文字列も受け付けてしまう（画面から届く
+    のは文字列）。そのまま設定に入ると税額が NaN になるので、有限の値だけを
+    通す。
+    """
     try:
         number = float(value)
     except (TypeError, ValueError):
         return fallback
-    if number != number or number in (float("inf"), float("-inf")) or number < 0:
+    if not math.isfinite(number) or number < 0:
         return fallback
     return number
 
