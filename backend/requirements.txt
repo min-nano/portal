@@ -4,7 +4,7 @@ openpyxl==3.1.5
 # 構造計算安全証明書（PDF）の読み書き。pdfminer.six は文字の座標取得（○ を
 # 付ける位置の特定と、既存 PDF の解析）に、pypdf は ○ の重ね合わせと文書情報の
 # 読み書きに使う。python-multipart は PDF アップロードの受け取りに必要。
-pypdf>=6.6.1,<7
+pypdf>=6.16.0,<7
 pdfminer.six>=20250506
 python-multipart>=0.0.20,<1
 # 釘配列諸定数の計算は Rust で書いた唯一の実装（core/）を wasm として動かす。
