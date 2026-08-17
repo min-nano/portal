@@ -32,7 +32,7 @@ import math
 import os
 import unicodedata
 
-from . import nail_core, xlsx_fill
+from . import nail_core, portal_sdk, xlsx_fill
 from .errors import PortalError
 from .nail_core import CoreError
 from .xlsx_fill import XlsxError, XlsxTemplate
@@ -466,19 +466,20 @@ def verify(result: dict, claim) -> dict:
 
 
 def file_name(data: dict) -> str:
-    """ダウンロードするファイル名。物件名があれば添える。"""
+    """ダウンロードするファイル名。物件名があれば添える。
+
+    使えない文字の落とし方・拡張子の付け方は土台の規則（PDF を返す他の
+    ツールと同じもの）。このツールが決めるのは組み立て方だけ。
+    """
     naming = load_mapping()["file_name"]
     building = _building(data["building"])
     name = f"{naming['prefix']}（{building['label']}）"
-    property_name = _sanitize(data.get("property_name", ""))
+    property_name = portal_sdk.sanitize_file_name(data.get("property_name", ""))
     if property_name:
         name = f"{name}_{property_name}"
-    return name + naming["extension"]
-
-
-def _sanitize(text: str) -> str:
-    """ファイル名に使えない文字を落とす。"""
-    return "".join(ch for ch in text if ch not in '\\/:*?"<>|').strip()
+    return portal_sdk.ensure_file_name(
+        name, naming["prefix"] + naming["extension"], naming["extension"]
+    )
 
 
 __all__ = [

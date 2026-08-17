@@ -19,7 +19,7 @@ GAS 版（gas-timber-panel-shear-calculator）はスプレッドシートへ「�
 import json
 import re
 
-from . import nail_core, pdf_tools, pdf_write
+from . import nail_core, pdf_tools, pdf_write, portal_sdk
 from .errors import PortalError
 from .nail_core import CoreError
 
@@ -28,9 +28,6 @@ METADATA_KEY = "/PortalTimberPanelShear"
 
 DEFAULT_FILE_NAME = "釘配列諸定数計算書.pdf"
 FILE_NAME_TEMPLATE = "釘配列諸定数計算書_{projectName}.pdf"
-
-# ファイル名に使えない文字（Drive 上でも扱いづらいもの）。
-_UNSAFE_FILE_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 # 画面の計算結果とサーバの計算結果を「同じ」とみなす相対差。
 #
@@ -286,16 +283,16 @@ def verify(reports: dict, claim) -> dict:
 
 def default_file_name(data: dict) -> str:
     """物件名から既定のファイル名を組み立てる。"""
-    project = data.get("projectName") or ""
-    name = FILE_NAME_TEMPLATE.format(projectName=project) if project else DEFAULT_FILE_NAME
-    return ensure_pdf_extension(name)
+    return portal_sdk.build_file_name(
+        FILE_NAME_TEMPLATE,
+        {"projectName": data.get("projectName") or ""},
+        DEFAULT_FILE_NAME,
+    )
 
 
 def ensure_pdf_extension(name: str) -> str:
-    name = _UNSAFE_FILE_NAME_CHARS.sub("", (name or "").strip()).strip().strip(".")
-    if not name:
-        return DEFAULT_FILE_NAME
-    return name if name.lower().endswith(".pdf") else name + ".pdf"
+    """整えたうえで .pdf を付ける（名前の規則は土台に 1 つある）。"""
+    return portal_sdk.ensure_file_name(name, DEFAULT_FILE_NAME)
 
 
 # --- 計算書 PDF の組み立て ---------------------------------------------------

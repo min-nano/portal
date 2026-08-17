@@ -8,7 +8,7 @@
 // 「保存 / 別名で保存 / 未保存の確認」といったファイル操作の判断と文言は、
 // PDF を成果物とする他のツールと共通なので ../pdf-file-ops.js にある。
 
-import { sanitizeFileName } from '../pdf-file-ops.js';
+import { buildFileName } from '../pdf-file-ops.js';
 
 /** すべてのキーを空文字で持つフォームデータを作る。 */
 export function emptyFormData(config) {
@@ -199,14 +199,10 @@ export function formatCertificateDate(fields) {
 /**
  * 入力内容から既定のファイル名を組み立てる。
  * template は /config が配る "構造計算安全証明書_{building_name}.pdf" のような文字列。
+ * 差し込みと整形の規則そのものは、サーバと共通のものが土台にある。
  */
 export function suggestedFileName(template, data, fallback) {
-  const filled = String(template || '').replace(/\{([a-z_]+)\}/g, (whole, key) => {
-    const value = data.fields[key];
-    return value == null ? '' : String(value);
-  });
-  const name = sanitizeFileName(filled).replace('_.pdf', '.pdf');
-  return name || fallback;
+  return buildFileName(template, data.fields, fallback);
 }
 
 /**

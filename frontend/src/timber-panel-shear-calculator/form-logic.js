@@ -16,7 +16,7 @@
 // 「保存 / 別名で保存 / 未保存の確認」といったファイル操作の判断と文言は、
 // 構造計算安全証明書 作成ツールと共通なので ../pdf-file-ops.js にある。
 
-import { sanitizeFileName } from '../pdf-file-ops.js';
+import { buildFileName } from '../pdf-file-ops.js';
 
 /** 面材の既定寸法 [mm]（3×6 板を縦に使う一般的な面材）。 */
 const DEFAULT_PANEL_WIDTH = 910;
@@ -422,12 +422,11 @@ export function verificationWarning(verification) {
  * template は /config が配る "釘配列諸定数計算書_{projectName}.pdf" のような文字列。
  */
 export function suggestedFileName(template, data, fallback) {
-  const project = String(data.projectName || '').trim();
-  if (!project) return fallback;
-  const filled = String(template || '').replace(/\{(\w+)\}/g, (whole, key) =>
-    key === 'projectName' ? project : ''
+  return buildFileName(
+    template,
+    { projectName: String(data.projectName || '').trim() },
+    fallback
   );
-  return sanitizeFileName(filled) || fallback;
 }
 
 /**

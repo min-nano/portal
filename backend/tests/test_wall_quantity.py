@@ -313,6 +313,18 @@ def test_file_name_drops_characters_that_cannot_be_used():
     assert wq.file_name(data) == "必要壁量 表計算ツール（平屋建て）_ABC.xlsx"
 
 
+def test_file_name_follows_the_same_rule_as_the_pdf_tools():
+    """整形は土台の規則 1 つ（docs/shared-logic.md §2.2）。
+
+    このツールだけ制御文字と前後のドットが残っていたが、PDF を返すツールと
+    同じ規則に揃えた。
+    """
+    data = wq.normalize_data(
+        one_story_body(values={"property_name": "見本邸" + chr(0x1F) + "."})
+    )
+    assert wq.file_name(data) == "必要壁量 表計算ツール（平屋建て）_見本邸.xlsx"
+
+
 # --- フォーム定義 ------------------------------------------------------------
 
 

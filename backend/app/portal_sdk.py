@@ -19,6 +19,7 @@
   raise ToolError("…")         →   利用者に見せる日本語 + HTTP ステータス
 """
 
+import re
 from dataclasses import dataclass, field
 
 from fastapi import APIRouter, Header, Request, Response
@@ -100,6 +101,60 @@ def get_settings(tool_id: str) -> dict:
 def set_settings(tool_id: str, values: dict) -> None:
     """そのツールの共有設定を書く。"""
     settings_store.set_tool_settings(tool_id, values)
+
+
+# --- ファイル名 --------------------------------------------------------------
+#
+# 生成物に付ける名前の規則は、成果物が PDF でも xlsx でも同じ:
+#
+#   1. ファイル名に使えない文字を落とす
+#   2. 拡張子を付ける
+#   3. 空になったら既定値へ倒す
+#
+# ツールが渡すのは雛形（名前の作り方）と既定値だけ。
+#
+# 同じ規則は画面側（frontend/src/pdf-file-ops.js）にもある。wasm と違って
+# 1 つの実装を共有できないので、**同じ入力に同じ答えを返すこと**を
+# tests/file_name_cases.json で縛る（サーバと画面のテストが同じ表を読む）。
+
+# ファイル名に使えない文字（Drive 上でも扱いづらいもの）。
+_UNSAFE_FILE_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+# 差し込む値が空だったときに残る区切り（「証明書_.pdf」の「_」）。
+_DANGLING_SEPARATOR = re.compile(r"_+(?=\.[^.]*$)|_+$")
+
+
+def sanitize_file_name(name) -> str:
+    """ファイル名に使えない文字と、前後の空白・ドットを落とす。"""
+    return _UNSAFE_FILE_NAME_CHARS.sub("", str(name or "")).strip().strip(".").strip()
+
+
+def ensure_file_name(name, default: str, extension: str = ".pdf") -> str:
+    """整えたうえで拡張子を付ける。何も残らなければ既定値。"""
+    cleaned = sanitize_file_name(name)
+    if not cleaned:
+        return default
+    if cleaned.lower().endswith(extension.lower()):
+        return cleaned
+    return cleaned + extension
+
+
+def build_file_name(
+    template: str, values: dict, default: str, extension: str = ".pdf"
+) -> str:
+    """雛形に値を差し込んでファイル名を作る。
+
+    差し込む値が空だと「証明書_.pdf」のように区切りだけが残るので、それも
+    落とす（結果として、材料が無いときは既定値と同じ名前になる）。雛形が
+    求める値が無いとき（KeyError）も既定値へ倒す。
+    """
+    try:
+        name = template.format(**values)
+    except (KeyError, IndexError):
+        return default
+    return ensure_file_name(
+        _DANGLING_SEPARATOR.sub("", sanitize_file_name(name)), default, extension
+    )
 
 
 # --- 雛形の設定（Drive の「フォルダ + ファイル名」） --------------------------

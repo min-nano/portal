@@ -39,6 +39,7 @@
 | 失敗の返し方 | `app/errors.py` の `PortalError` | 全ツールが同じ形（`message` + `status`）。`main.py` のハンドラは 1 つ |
 | 認証・代理アクセス・共有設定 | `app/portal_sdk.py` | `require_user` / `delegated_session` / `get_settings` |
 | 雛形の設定（Drive の「フォルダ + ファイル名」） | `app/portal_sdk.py` の `Template` | 状態（`status`）・保存（`save`）・未設定の 409（`require`）。ツールが渡すのは**許す種類と文言だけ** |
+| ファイル名の規則 | `app/portal_sdk.py` ＋ `src/pdf-file-ops.js` | 「使えない文字を落とす・拡張子を付ける・空なら既定値」。サーバと画面が同じ答えを返すことは `backend/tests/file_name_cases.json` を両方のテストが読んで縛る |
 | PDF の保存先と保存 | `app/portal_sdk.py` | `resolve_pdf_destination` / `save_pdf` / `open_drive_pdf` / `read_upload` |
 | wasm の配り方 | `app/portal_sdk.py` | `wasm_response`（gzip・ETag・キャッシュ） |
 | ツールの名乗り | `Tool` / `tool_router` / `tools/__init__.py` | `main.py` にツールの名前は出てこない |
@@ -87,7 +88,14 @@ Picker で選ばれた `fileId` を受け取り、**ゴミ箱・種類・親フ�
 > **同じものを違う名前・違う形で**出しています。寄せるときに `GET /template`
 > の側へ揃えるので、安全証明書の画面が 1 か所変わります。
 
-### 2.2 ファイル名の組み立て
+### 2.2 ファイル名の組み立て〔第 2 段 · 済〕
+
+> **済**: `portal_sdk` の `sanitize_file_name` / `ensure_file_name` /
+> `build_file_name` と、画面側 `pdf-file-ops.js` の同じ 3 つに寄せました
+> （下の記述は寄せる前の状況です）。画面にも 2 つあった「雛形から既定の
+> ファイル名を作る」（`suggestedFileName`）も 1 つになっています。
+> サーバと画面がずれていないことは `backend/tests/file_name_cases.json`
+> を両方のテストが読んで確かめます。
 
 同じ規則が **4 か所**にあります。
 
@@ -243,7 +251,7 @@ Picker で選ばれた `fileId` を受け取り、**ゴミ箱・種類・親フ�
 | | やること | 触るもの | 合否 |
 | --- | --- | --- | --- |
 | **第 1 段** ✅ | **雛形の設定を 1 つにする**（2.1）。`GET /settings` → `GET /template` の形寄せを含む | `portal_sdk` ＋ ツール 2 つ ＋ 証明書の画面 1 か所 | 雛形設定の既存テストが落ちないこと |
-| 第 2 段 | **ファイル名の規則を 1 つにする**（2.2）。画面とサーバが同じ規則であることをテストで縛る | `portal_sdk` ＋ ツール 3 つ ＋ `pdf-file-ops.js` | 既存テスト ＋ 新しい突き合わせのテスト |
+| 第 2 段 ✅ | **ファイル名の規則を 1 つにする**（2.2）。画面とサーバが同じ規則であることをテストで縛る | `portal_sdk` ＋ ツール 3 つ ＋ `pdf-file-ops.js` | 既存テスト ＋ 新しい突き合わせのテスト |
 | 第 3 段 | **突き合わせの外枠を 1 つにする**（2.3） | `portal_sdk` ＋ ツール 2 つ | 既存の verify のテストが落ちないこと |
 | 第 4 段 | **生成物の引き渡しを 1 つにする**（2.5） | `portal_sdk` ＋ ツール 4 つ | URL も応答の形も変わらないこと |
 | 第 5 段 | **入力欄を部品にし、デザインシステムからツール固有のクラス名を追い出す**（3.1・3.2） | `src/components/` ＋ `src/styles/components.css` ＋ 画面 3 つ | 既存の画面テスト ＋ デザインシステムのテスト |
