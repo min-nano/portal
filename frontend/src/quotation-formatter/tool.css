@@ -1,0 +1,127 @@
+/* 見積書 作成ツール にしか出てこない形。
+ *
+ * 骨組み（styles/layout.css）と部品（styles/components.css）で足りるものは
+ * ここには書かない。色・余白・字送りは必ず styles/tokens.css の変数を使う
+ * （生の値を書かない）。これが「全ツールの見た目がそろっている」ことを
+ * 保証している。 */
+
+/* 節の中身は桝目（layout.css）なので、欄ではないものは 1 行を使い切らせる。
+   明細の並びも、金額の表も、欄と横に並んでよいものではない。 */
+.cert-section > .quote-items,
+.cert-section > .add-room,
+.cert-section > .quote-total,
+.cert-section > .steps-table,
+.cert-section > .warnings {
+  grid-column: 1 / -1;
+}
+
+/* --- 明細 ---------------------------------------------------------------- */
+
+.quote-items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+/* 1 行ぶんの入力。見出しと削除ボタンを同じ行に置き、どこまでが 1 行なのかを
+   見た目で切る（枠そのものは .wall-panel と共通）。 */
+.quote-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+
+.quote-item-head h4 {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.quote-item-head button {
+  width: auto;
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
+}
+
+/* 金額はその行の結論なので、入力欄の下に太字で置く。 */
+.quote-amount {
+  margin-top: var(--s-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* --- 告示第670号による参考額 ---------------------------------------------
+ * 明細の中に入る「計算して、単価に入れる」ための区画。入力欄そのものとは
+ * 別のものだと分かるように、地の色を落として囲う。 */
+
+.seismic-estimate {
+  margin: var(--s-3) 0;
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-sunken);
+}
+
+.seismic-estimate h4 {
+  margin: 0 0 var(--s-2);
+  font-size: var(--fs-sm);
+}
+
+.seismic-estimate .steps-table {
+  margin-top: var(--s-2);
+}
+
+.seismic-estimate button {
+  margin-top: var(--s-3);
+}
+
+/* --- 御見積金額（右の列） -------------------------------------------------
+ * 面積や業務を動かしながら金額を見られるようにするのが、この列の役目。
+ * 数字は貼り付いたまま、いつでも読める大きさで置く。 */
+
+.quote-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: var(--s-1);
+  padding: var(--s-2) 0 var(--s-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.quote-total .value {
+  font-size: var(--fs-2xl);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.quote-total .unit {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+/* --- 設定のダイアログ -----------------------------------------------------
+ * 入力する項目が多いので、画面に収まらない分はダイアログの中だけを送る
+ * （背後のページが動くと、どこを設定していたのか見失う）。 */
+
+.settings-dialog {
+  max-width: 46rem;
+  max-height: 86vh;
+  overflow: auto;
+}
+
+.settings-dialog h4 {
+  margin: var(--s-4) 0 var(--s-1);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+
+.settings-dialog h4:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}

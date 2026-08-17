@@ -1,0 +1,65 @@
+<!-- 未保存の入力があるまま新規作成・読み込みへ移るときの確認と、
+     新規保存・別名保存のときの「名前を付けて保存」。 -->
+<portal-save-dialogs name-placeholder="見積書.pdf"></portal-save-dialogs>
+
+<!-- 事務所の情報・定型文・単価。全員で共有する設定なので、見積書 1 通ごとの
+     入力とは別のダイアログに置く。ここに入るのは**事務所が決めたものだけ**で、
+     告示の別表や倍数は計算実装（リポジトリ）が持っている。 -->
+<dialog id="settingsDialog" class="app-dialog settings-dialog">
+  <h3>見積書の設定</h3>
+  <p class="hint">
+    全員で共有する設定です。ここに入れた値は<strong>新規作成の初期値</strong>として
+    使われ、作成済みの見積書には影響しません。
+  </p>
+
+  <h4>事務所（発行元）</h4>
+  <label for="setOfficeName">名称</label>
+  <input type="text" id="setOfficeName">
+  <label for="setOfficePostalCode">郵便番号</label>
+  <input type="text" id="setOfficePostalCode">
+  <label for="setOfficeAddress">所在地</label>
+  <input type="text" id="setOfficeAddress">
+  <label for="setOfficeTel">電話番号</label>
+  <input type="text" id="setOfficeTel">
+  <label for="setOfficePersonName">担当者名</label>
+  <input type="text" id="setOfficePersonName">
+
+  <h4>定型文</h4>
+  <p class="hint">
+    摘要の末尾に足す但し書きです（1 行 1 文）。業務の系統ごとに持ちます。
+    <strong>この文言はリポジトリには入っていません</strong>——事務所が決めるものだからです。
+  </p>
+  <label for="setTermsDesign">設計・計算の業務に足す文</label>
+  <textarea id="setTermsDesign" rows="4"></textarea>
+  <label for="setTermsSeismic">耐震診断・耐震補強設計に足す文</label>
+  <textarea id="setTermsSeismic" rows="4"></textarea>
+  <label for="setRemarks">備考の既定</label>
+  <textarea id="setRemarks" rows="3"></textarea>
+
+  <h4>消費税</h4>
+  <label for="setTaxRate">消費税率 [%]</label>
+  <input type="number" id="setTaxRate" inputmode="decimal" step="0.1">
+  <label for="setReducedTaxRate">軽減税率 [%]</label>
+  <input type="number" id="setReducedTaxRate" inputmode="decimal" step="0.1">
+  <label for="setTaxRounding">端数処理</label>
+  <select id="setTaxRounding"></select>
+
+  <h4>耐震診断・耐震補強設計の報酬算定（告示第670号）</h4>
+  <p class="hint">
+    告示が定めるのは<strong>標準業務人・時間数と費目の構成</strong>までで、
+    人件費単価と技術料等経費率に定めはありません（事務所が決める値です）。
+    直接経費＋間接経費の倍数は、告示第670号 第四 ロ の標準が 1.0 です。
+  </p>
+  <label for="setPersonnelUnitPrice">一人・一時間当たりの人件費 [円]</label>
+  <input type="number" id="setPersonnelUnitPrice" inputmode="numeric">
+  <label for="setTechnicalFeeRate">技術料等経費率 [%]（直接人件費に対して）</label>
+  <input type="number" id="setTechnicalFeeRate" inputmode="decimal" step="0.1">
+  <label for="setOverheadMultiplier">直接経費＋間接経費の倍数</label>
+  <input type="number" id="setOverheadMultiplier" inputmode="decimal" step="0.1">
+
+  <p id="settingsMessage" class="hint"></p>
+  <div class="dialog-actions">
+    <button type="button" id="settingsSaveBtn">保存</button>
+    <button type="button" id="settingsCancelBtn" class="secondary">キャンセル</button>
+  </div>
+</dialog>

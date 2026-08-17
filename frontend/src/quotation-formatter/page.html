@@ -1,0 +1,170 @@
+<!-- 発行元は滅多に変えないので、タイトル横に小さく置く（雛形の設定と同じ扱い）。 -->
+<div class="page-head">
+  <h2>見積書の作成</h2>
+  <div class="template-chip">
+    <span class="label">発行元:</span>
+    <span id="officeChip" class="unset">未設定</span>
+    <button type="button" id="settingsBtn"
+            title="事務所の情報・定型文・単価を設定します（全員で共有します）。">
+      設定
+    </button>
+  </div>
+</div>
+<p class="hint">
+  設計等業務の見積書（御見積書）を作り、Google Drive に PDF で保存します。
+  金額は入力のたびに計算し、耐震診断・耐震補強設計は
+  <strong>平成27年国土交通省告示第670号</strong>の標準業務人・時間数から参考額を出せます。
+  入力内容は PDF に埋め込まれるので、保存したファイルを開き直せば続きを編集できます
+  （枝番の見積書も、元の PDF を開いて番号と金額を直すだけで作れます）。
+</p>
+
+<!-- 開いているファイルと、その切り替え操作。通常のアプリの「新規作成 /
+     開く」と同じ並びにする。 -->
+<portal-edit-bar class="edit-bar"></portal-edit-bar>
+
+<portal-section-controls class="section-controls" for="quotationForm"></portal-section-controls>
+
+<form id="quotationForm" onsubmit="return false;">
+  <!-- has-dock: 広い画面では入力（左）と金額（右）の 2 列になる。
+       狭い画面ではそのまま縦に流れる（並び順は変わらない）。 -->
+  <div class="has-dock">
+    <portal-section class="cert-section">
+      <h3 slot="title">1. 見積書</h3>
+      <div class="cert-field">
+        <label for="quoteNumber">見積書番号</label>
+        <input type="text" id="quoteNumber" placeholder="20260099">
+      </div>
+      <div class="cert-field">
+        <label for="issuedOn">発行日</label>
+        <input type="date" id="issuedOn">
+      </div>
+      <div class="cert-field">
+        <label for="expiresOn">有効期限</label>
+        <div class="field-row">
+          <input type="date" id="expiresOn">
+          <button type="button" id="expiryBtn" class="secondary">翌月末</button>
+        </div>
+      </div>
+      <div class="cert-field field-span">
+        <label for="subject">件名</label>
+        <input type="text" id="subject" placeholder="○○邸 構造設計業務">
+      </div>
+    </portal-section>
+
+    <portal-section class="cert-section">
+      <h3 slot="title">2. 宛先</h3>
+      <div class="cert-field">
+        <label for="clientName">名称</label>
+        <input type="text" id="clientName" placeholder="○○建築設計事務所">
+      </div>
+      <div class="cert-field field-narrow">
+        <label for="clientHonorific">敬称</label>
+        <select id="clientHonorific">
+          <option value="御中">御中</option>
+          <option value="様">様</option>
+          <option value="">（付けない）</option>
+        </select>
+      </div>
+      <div class="cert-field field-narrow">
+        <label for="clientPostalCode">郵便番号</label>
+        <input type="text" id="clientPostalCode" placeholder="252-0156">
+      </div>
+      <div class="cert-field field-span">
+        <label for="clientAddress">所在地</label>
+        <input type="text" id="clientAddress">
+      </div>
+      <div class="cert-field">
+        <label for="clientDepartment">部署・役職</label>
+        <input type="text" id="clientDepartment" placeholder="代表取締役">
+      </div>
+      <div class="cert-field">
+        <label for="clientContactName">担当者名</label>
+        <input type="text" id="clientContactName">
+      </div>
+      <div class="cert-field field-narrow">
+        <label for="clientContactHonorific">担当者の敬称</label>
+        <select id="clientContactHonorific">
+          <option value="様">様</option>
+          <option value="">（付けない）</option>
+        </select>
+      </div>
+    </portal-section>
+
+    <portal-section class="cert-section">
+      <h3 slot="title">3. 発行元</h3>
+      <p class="hint field-span" id="issuerHint" hidden></p>
+      <div class="cert-field">
+        <label for="issuerName">事務所の名称</label>
+        <input type="text" id="issuerName">
+      </div>
+      <div class="cert-field field-narrow">
+        <label for="issuerPostalCode">郵便番号</label>
+        <input type="text" id="issuerPostalCode">
+      </div>
+      <div class="cert-field field-span">
+        <label for="issuerAddress">所在地</label>
+        <input type="text" id="issuerAddress">
+      </div>
+      <div class="cert-field">
+        <label for="issuerTel">電話番号</label>
+        <input type="text" id="issuerTel">
+      </div>
+      <div class="cert-field">
+        <label for="issuerPersonName">担当者名</label>
+        <input type="text" id="issuerPersonName">
+      </div>
+      <p class="hint field-span">
+        ここに入れた値がそのまま印字されます（設定は新規作成時の初期値です）。
+        <button type="button" id="loadOfficeBtn" class="secondary">設定から読み込む</button>
+      </p>
+    </portal-section>
+
+    <portal-section class="cert-section">
+      <h3 slot="title">4. 明細</h3>
+      <div id="items" class="quote-items"></div>
+      <button type="button" id="addItemBtn" class="add-room">＋ 明細を追加</button>
+    </portal-section>
+
+    <portal-section class="cert-section">
+      <h3 slot="title">5. 消費税と備考</h3>
+      <div class="cert-field field-narrow">
+        <label for="taxRate">消費税率 [%]</label>
+        <input type="number" id="taxRate" inputmode="decimal" step="0.1">
+      </div>
+      <div class="cert-field field-narrow">
+        <label for="reducedTaxRate">軽減税率 [%]</label>
+        <input type="number" id="reducedTaxRate" inputmode="decimal" step="0.1">
+      </div>
+      <div class="cert-field field-narrow">
+        <label for="taxRounding">端数処理</label>
+        <select id="taxRounding"></select>
+      </div>
+      <div class="cert-field field-span">
+        <label for="remarks">備考</label>
+        <textarea id="remarks" rows="3"></textarea>
+      </div>
+    </portal-section>
+
+    <!-- 金額。入力のたびに出す（面積や業務を動かしながら金額を見られる）。 -->
+    <portal-section class="cert-section result-dock">
+      <h3 slot="title">御見積金額</h3>
+      <div id="quoteTotal" class="quote-total">
+        <span class="value">0</span><span class="unit">円</span>
+      </div>
+      <table class="steps-table" id="quoteBreakdown">
+        <tbody></tbody>
+      </table>
+      <ul class="warnings" id="quoteWarnings" hidden></ul>
+    </portal-section>
+  </div>
+
+  <!-- 保存先は「編集中のファイル」そのもの。ファイル名と保存する場所は、
+       新規保存・別名保存のときだけ下の保存ダイアログで指定する。 -->
+  <portal-save-bar class="save-bar"></portal-save-bar>
+</form>
+
+<div id="message"></div>
+<div id="result" hidden>
+  <a id="resultLink" target="_blank" rel="noopener"></a>
+</div>
+<ul id="warnings" class="warnings" hidden></ul>
