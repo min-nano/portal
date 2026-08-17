@@ -9,12 +9,14 @@
 """
 
 from .excel_report_formatter import TOOL as excel_report_formatter
+from .quotation_formatter import TOOL as quotation_formatter
 from .structural_cert_formatter import TOOL as structural_cert_formatter
 from .timber_panel_shear_calculator import TOOL as timber_panel_shear_calculator
 from .wall_quantity_calculator import TOOL as wall_quantity_calculator
 
 TOOLS = (
     excel_report_formatter,
+    quotation_formatter,
     structural_cert_formatter,
     timber_panel_shear_calculator,
     wall_quantity_calculator,

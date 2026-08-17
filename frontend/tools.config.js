@@ -10,12 +10,14 @@
 //
 
 import excelReportFormatter from './src/excel-report-formatter/tool.js';
+import quotationFormatter from './src/quotation-formatter/tool.js';
 import structuralCertFormatter from './src/structural-cert-formatter/tool.js';
 import timberPanelShearCalculator from './src/timber-panel-shear-calculator/tool.js';
 import wallQuantityCalculator from './src/wall-quantity-calculator/tool.js';
 
 export default [
   excelReportFormatter,
+  quotationFormatter,
   structuralCertFormatter,
   timberPanelShearCalculator,
   wallQuantityCalculator,

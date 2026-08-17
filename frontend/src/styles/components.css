@@ -79,7 +79,8 @@ button.secondary:disabled {
    「他と違うもの」だと分かるようにする。 */
 .room .remove,
 #removeWallBtn,
-button[data-remove-wall-panel] {
+button[data-remove-wall-panel],
+button[data-remove-item] {
   background: var(--surface);
   color: var(--ng-600);
   border-color: color-mix(in srgb, var(--ng-500) 45%, var(--border));
@@ -88,7 +89,8 @@ button[data-remove-wall-panel] {
 
 .room .remove:hover,
 #removeWallBtn:hover,
-button[data-remove-wall-panel]:hover {
+button[data-remove-wall-panel]:hover,
+button[data-remove-item]:hover {
   background: var(--ng-50);
   border-color: var(--ng-500);
 }

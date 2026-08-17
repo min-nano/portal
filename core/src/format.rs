@@ -58,6 +58,14 @@ pub fn format_dimension(value: f64) -> String {
     group_digits(&format!("{value}"))
 }
 
+/// 金額（円）を 3 桁区切りで整形する。
+///
+/// 金額は円の整数で確定しており、浮動小数点を経由させない（見積書の合計が
+/// 環境によって 1 円ずれる、ということが起きないようにするため）。
+pub fn format_yen(value: i64) -> String {
+    group_digits(&value.to_string())
+}
+
 /// "-1234567.89" を "-1,234,567.89" にする。
 fn group_digits(text: &str) -> String {
     let (sign, digits) = match text.strip_prefix('-') {
@@ -149,5 +157,15 @@ mod tests {
         assert_eq!(format_int(0.5), "0");
         assert_eq!(format_int(1.5), "2");
         assert_eq!(format_int(2.5), "2");
+    }
+
+    /// 金額は整数のまま整形する（浮動小数点を経由しない）。
+    #[test]
+    fn formats_amounts_of_money_from_integers() {
+        assert_eq!(format_yen(312_400), "312,400");
+        assert_eq!(format_yen(0), "0");
+        assert_eq!(format_yen(-183_750), "-183,750");
+        // f64 の仮数では表せない桁でも、そのまま出る。
+        assert_eq!(format_yen(9_007_199_254_740_993), "9,007,199,254,740,993");
     }
 }

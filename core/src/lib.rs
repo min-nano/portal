@@ -22,6 +22,14 @@
 //! {"op": "wallQuantity",       "data": {...}} → {"ok": true, "result": {...}}
 //! {"op": "wallQuantityInputs", "data": {...}} → {"ok": true, "inputKeys": [...], ...}
 //!
+//! 見積書（明細の金額・消費税・合計、摘要の組み立て、告示第670号の参考額）
+//! {"op": "quotation",         "data": {...}} → {"ok": true, "items": [...], "totals": {...}, ...}
+//! {"op": "quotationNormalize","data": {...}} → {"ok": true, "data": {...}}
+//! {"op": "quotationValidate", "data": {...}} → {"ok": true, "data": {...}}
+//! {"op": "quotationSuggest",  "data": {...}} → {"ok": true, "suggestions": [...]}
+//! {"op": "quotationForm"}                    → {"ok": true, "templates": [...], ...}
+//! {"op": "seismicFee",        "data": {...}} → {"ok": true, "applicable": true, "rows": [...]}
+//!
 //! {"op": "config"}                     → {"ok": true,  "version": "1.0.0", ...}
 //! 失敗                                  → {"ok": false, "error": "利用者に見せる日本語"}
 //! ```
@@ -35,9 +43,11 @@ pub mod abi;
 pub mod column_strength;
 pub mod format;
 pub mod json;
+pub mod kokuji670;
 pub mod layout;
 pub mod nail_array;
 pub mod presets;
+pub mod quotation;
 pub mod report;
 pub mod wall;
 pub mod wall_layout;
@@ -215,6 +225,55 @@ fn dispatch(request: &str) -> Result<Value, String> {
                 ),
             ]))
         }
+        // 見積書（明細の金額・消費税・合計と、業務ごとの摘要の組み立て）。
+        // 画面が入力のたびに出す金額と、PDF に刷られる金額を同じ実装から出す。
+        "quotation" => {
+            let form = quotation::normalize(data())?;
+            Ok(quotation::compute(&form))
+        }
+        "quotationNormalize" => {
+            let form = quotation::normalize(data())?;
+            Ok(Value::obj([("data", form.to_value())]))
+        }
+        // 保存できる状態かを確かめる（欠けていれば PDF を作らせない）。
+        "quotationValidate" => {
+            let form = quotation::normalize(data())?;
+            quotation::validate(&form)?;
+            Ok(Value::obj([("data", form.to_value())]))
+        }
+        // 品名と摘要の候補。入力を動かすたびに組み立て直す。
+        "quotationSuggest" => {
+            let form = quotation::normalize(data())?;
+            // 但し書きは業務の系統（設計／耐震）ごとに違う。設定がそのまま
+            // { "design": "…", "seismic": "…" } の形で渡ってくる。
+            let empty = Value::Null;
+            let terms = data().get("terms").unwrap_or(&empty);
+            Ok(Value::obj([(
+                "suggestions",
+                Value::Arr(
+                    form.items
+                        .iter()
+                        .map(|item| {
+                            Value::obj([
+                                ("title", quotation::suggested_title(item).into()),
+                                (
+                                    "body",
+                                    quotation::suggested_body(
+                                        item,
+                                        quotation::terms_for(terms, item),
+                                    )
+                                    .into(),
+                                ),
+                            ])
+                        })
+                        .collect(),
+                ),
+            )]))
+        }
+        // 業務のテンプレートと選択肢（画面の入力欄の単一の情報源）。
+        "quotationForm" => Ok(quotation::form_definition()),
+        // 平成27年国土交通省告示第670号による、耐震診断・耐震補強設計の参考額。
+        "seismicFee" => Ok(quotation::seismic_fee(data())),
         "config" => Ok(Value::obj([
             ("version", VERSION.into()),
             ("maxNails", report::MAX_NAILS.into()),
