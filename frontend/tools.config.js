@@ -8,13 +8,6 @@
 //
 // 並び順がそのままトップページの並び順になる。
 //
-// ツールを別リポジトリへ出したあとは、この import が
-//
-//   import wallQuantity from '@min-nano/tool-wall-quantity-calculator';
-//
-// のようなパッケージ参照に変わり、どの版を載せるかは tools.json が決める
-// （docs/plugin-architecture.md §5）。マニフェストの形は変わらないので、
-// このファイル以外に手は入らない。
 
 import excelReportFormatter from './src/excel-report-formatter/tool.js';
 import structuralCertFormatter from './src/structural-cert-formatter/tool.js';
