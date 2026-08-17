@@ -1,5 +1,5 @@
 fastapi>=0.141.1,<1
-uvicorn[standard]>=0.52.1,<1
+uvicorn[standard]>=0.52.3,<1
 openpyxl==3.1.5
 # 構造計算安全証明書（PDF）の読み書き。pdfminer.six は文字の座標取得（○ を
 # 付ける位置の特定と、既存 PDF の解析）に、pypdf は ○ の重ね合わせと文書情報の
