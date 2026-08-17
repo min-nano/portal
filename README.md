@@ -279,15 +279,17 @@ GAS 版の機能をそのまま移植しています。
 ツールを増やす・減らすときに触るのは、この 2 つの一覧だけです。`vite.config.js` にも
 `index.html` にも `main.py` にもツールの名前は出てきません。
 
-**この構成は、ツールを 1 つずつ別リポジトリへ出すための下ごしらえです。**
-分割の全体像（3 層の分け方・版の固定・更新の流れ・移行の順序）は
-**[docs/plugin-architecture.md](docs/plugin-architecture.md)** にまとめてあります。
+**ツールは別リポジトリへは分けません。** 以前は 1 つずつ別リポジトリへ出す
+設計を置いていましたが、土台を直すたびに追従の PR が要る・横断的な変更が
+リポジトリを跨ぐ、という費用に見合わないため取り下げました。代わりに
+**同じことを別々のツールが書いている箇所を、土台へ寄せていきます**。
+その洗い出しと順序は **[docs/shared-logic.md](docs/shared-logic.md)** にあります。
 
 ## 📁 リポジトリ構成
 
 ```
 docs/
-  plugin-architecture.md      # ツールを別リポジトリへ分ける設計（土台とツールの契約）
+  shared-logic.md             # 共通のロジックを土台へ寄せる洗い出しと順序
 frontend/                     # Firebase Hosting に載せる SPA (Vite)
   index.html                  # ポータルトップ（ツール一覧はビルド時に組み立てる）
   tools.config.js             # 載せるツールの一覧（ここだけがツールを知っている）
@@ -326,7 +328,7 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   src/wall-quantity-calculator/   # 必要壁量 表計算ツールの入力フォームと出力結果
 backend/                      # Cloud Run サービス (FastAPI)
   app/main.py                 # 組み立て（土台のルート・失敗の返し方・ツールの取り付け）
-  app/portal_sdk.py           # 土台がツールへ貸し出すもの（将来の portal-sdk パッケージ）
+  app/portal_sdk.py           # 土台がツールへ貸し出すもの（認証・代理・共有設定・保存・wasm）
   app/errors.py               # 利用者に見せられる失敗の共通の形（PortalError）
   app/tools/__init__.py       # 載せるツールの一覧（ここだけがツールを知っている）
   app/tools/<ツール名>.py      # ツールごとの API ルーター（/api/tools/<id>/**）
@@ -1093,10 +1095,11 @@ open("計算書.pdf", "wb").write(panel_shear.build_pdf(data, panel_shear.valida
     （グレー本 3.4〜3.6）と、面材・釘・枠材のマスタからの選択
     （GAS 版 ROADMAP のフェーズ 1・3）。
   - 小規模木造建築物 必要壁量 計算ツール（配布物の表計算ツールへの記入）は完了。
-  - **ツールを 1 つずつ別リポジトリへ分ける**（[docs/plugin-architecture.md](docs/plugin-architecture.md)）。
-    portal 側の受け口（ツールが自分を名乗り、ビルドと API がそれを読む形）は完了。
-    続きは土台のパッケージ化（`portal-ui` / `portal-sdk` / `portal-core`）と、
-    依存の少ないツールからの切り出し。
+  - **共通のロジックを土台へ寄せる**（[docs/shared-logic.md](docs/shared-logic.md)）。
+    ツールが自分を名乗り、土台がそれを読んで組み立てる形は完了。続きは、
+    複数のツールが同じことを書いている箇所——雛形の設定・ファイル名の規則・
+    画面とサーバの突き合わせ・生成物の引き渡し・入力欄の組み立て——を
+    1 つずつ土台へ寄せる（別リポジトリへの分割は取り下げ）。
 - [ ] **Phase 3: AI（Gemini API）連携による自動化**
   - 手書き図面の画像から計測値を抽出し、フォームに初期値を自動設定。
 - [ ] **Phase 4: 実運用向けチューニング**

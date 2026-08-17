@@ -52,7 +52,7 @@ function clerkPreconnectPlugin(publishableKey) {
 // ポータルはツールごとにページを持つマルチページ構成。ページそのものは、
 // 載せるツール（tools.config.js）が名乗ったマニフェストから組み立てる
 // （tools-plugin.js）。ツールを追加するときに触るのは tools.config.js だけで、
-// ここにツールの名前は出てこない（docs/plugin-architecture.md §4.1）。
+// ここにツールの名前は出てこない（README の「🧩 土台とツール」）。
 //
 // 組み立ては設定を作るこの時点で行う。マルチページビルドの入口は実在する
 // ファイルである必要があるため。

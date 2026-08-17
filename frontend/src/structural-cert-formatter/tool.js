@@ -1,5 +1,5 @@
 // 構造計算安全証明書 作成ツールの名乗り（マニフェスト）。
-// 書き方は docs/plugin-architecture.md §4.1 と、
+// 書き方は README の「🧩 土台とツール」と、
 // src/excel-report-formatter/tool.js のコメントを参照。
 
 import { fileURLToPath } from 'node:url';

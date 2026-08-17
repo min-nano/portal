@@ -16,7 +16,7 @@
 // 並び順と id にまで意味があり、ツールごとのページへ写して回ると必ずずれる。
 // ツールが増えても外枠が 1 つであることを、構造として守るため。
 //
-// 詳細は docs/plugin-architecture.md §4.1。
+// 詳細は README の「🧩 土台とツール」。
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
