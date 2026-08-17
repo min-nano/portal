@@ -11,13 +11,19 @@ Drive へ保存、という流れで、すべて実行ユーザー本人の代�
 
 from fastapi import Depends, File, Request, UploadFile
 
-from .. import google_docs, google_drive, portal_sdk, structural_cert
+from .. import google_docs, google_drive, portal_sdk, structural_cert, template_fulfiller
 from ..clerk_auth import User
 from ..google_drive import DriveError
 from ..portal_sdk import Tool, require_user
 from ..structural_cert import CertificateError
 
 TOOL_ID = "structural-cert-formatter"
+
+# 雛形が未設定のときの案内。指すものがツールによって違うのでここに置く。
+TEMPLATE_REQUIRED = (
+    "雛形が未設定です。画面の「雛形を設定」から、Google Drive 上の"
+    "証明書の雛形（Google ドキュメント）を選択してください。"
+)
 
 router = portal_sdk.tool_router(TOOL_ID)
 
@@ -40,14 +46,7 @@ async def get_certificate_settings(user: User = Depends(require_user)):
     （上書き保存）か、新規保存のたびに Picker で選ぶフォルダで、共有設定と
     して固定するものではないため。
     """
-    settings = _settings()
-    template_name = settings.get("template_file_name", "")
-    return {
-        "template": {
-            "configured": bool(settings.get("template_folder_id") and template_name),
-            "fileName": template_name,
-        },
-    }
+    return {"template": template_fulfiller.template_status(TOOL_ID)}
 
 
 @router.put("/template")
@@ -61,45 +60,15 @@ async def save_certificate_template(
     変わらないため、画面ではタイトル横の小さな設定ボタンから設定する。
     """
     file_id = (await portal_sdk.json_body(request)).get("fileId")
-    if not file_id or not isinstance(file_id, str):
-        raise CertificateError("ファイルが選択されていません。")
-
-    meta = google_drive.get_file_metadata(
-        portal_sdk.delegated_session(user.email), file_id
+    return template_fulfiller.save_template(
+        TOOL_ID, template_fulfiller.GOOGLE_DOC, file_id, user.email, CertificateError
     )
-    if meta.get("trashed"):
-        raise CertificateError(
-            "選択したファイルはゴミ箱に入っています。別のファイルを選択してください。"
-        )
-    if meta.get("mimeType") != google_drive.GOOGLE_DOC_MIME:
-        raise CertificateError(
-            "雛形は Google ドキュメントである必要があります。"
-            "Word 形式などをアップロードしている場合は、Google ドキュメント形式へ変換してください。"
-        )
-    parents = meta.get("parents") or []
-    if not parents:
-        raise CertificateError(
-            "選択したファイルの親フォルダを特定できませんでした。"
-            "マイドライブ直下ではなくフォルダ内に雛形を置いてください。"
-        )
-
-    portal_sdk.set_settings(
-        TOOL_ID,
-        {"template_folder_id": parents[0], "template_file_name": meta.get("name", "")},
-    )
-    return {"fileName": meta.get("name", ""), "folderId": parents[0]}
 
 
 def _require_template(settings: dict) -> tuple[str, str]:
-    folder_id = settings.get("template_folder_id", "")
-    file_name = settings.get("template_file_name", "")
-    if not folder_id or not file_name:
-        raise CertificateError(
-            "雛形が未設定です。画面の「雛形を設定」から、Google Drive 上の"
-            "証明書の雛形（Google ドキュメント）を選択してください。",
-            409,
-        )
-    return folder_id, file_name
+    return template_fulfiller.require_template(
+        settings, TEMPLATE_REQUIRED, CertificateError
+    )
 
 
 def _render(session, data: dict, settings: dict) -> tuple[bytes, list]:
