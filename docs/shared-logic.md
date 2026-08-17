@@ -41,6 +41,7 @@
 | 雛形の設定（Drive の「フォルダ + ファイル名」） | `app/portal_sdk.py` の `Template` | 状態（`status`）・保存（`save`）・未設定の 409（`require`）。ツールが渡すのは**許す種類と文言だけ** |
 | ファイル名の規則 | `app/portal_sdk.py` ＋ `src/pdf-file-ops.js` | 「使えない文字を落とす・拡張子を付ける・空なら既定値」。サーバと画面が同じ答えを返すことは `backend/tests/file_name_cases.json` を両方のテストが読んで縛る |
 | 画面とサーバの突き合わせの外枠 | `app/portal_sdk.py` の `verify_claim` | 材料が届かないときの扱い・版の並記・差の打ち切り。ツールが渡すのは**差の作り方だけ** |
+| 生成物の引き渡し | `app/portal_sdk.py` | ダウンロード（`download_response`）・Drive へ保存した応答（`save_pdf`）・PDF の読み戻しのルート（`pdf_parse_routes`） |
 | PDF の保存先と保存 | `app/portal_sdk.py` | `resolve_pdf_destination` / `save_pdf` / `open_drive_pdf` / `read_upload` |
 | wasm の配り方 | `app/portal_sdk.py` | `wasm_response`（gzip・ETag・キャッシュ） |
 | ツールの名乗り | `Tool` / `tool_router` / `tools/__init__.py` | `main.py` にツールの名前は出てこない |
@@ -159,7 +160,13 @@ Picker で選ばれた `fileId` を受け取り、**ゴミ箱・種類・親フ�
 （wasm のように 1 つの実装を共有はできないので、**同じ入力に同じ答えを返すことを
 テストで縛る**のが現実的な線です）。
 
-### 2.5 生成物の引き渡し
+### 2.5 生成物の引き渡し〔第 4 段 · 済〕
+
+> **済**: ダウンロードの応答を `portal_sdk.download_response`、Drive へ保存した
+> ときの応答を `portal_sdk.save_pdf`（保存と応答の組み立てを 1 つにした）、
+> `/parse` 系を `portal_sdk.pdf_parse_routes`（ルートごと生やす）に寄せました。
+> URL も応答の形も変わっていません（下の記述は寄せる前の状況です）。
+
 
 | | 今 |
 | --- | --- |
@@ -259,7 +266,7 @@ Picker で選ばれた `fileId` を受け取り、**ゴミ箱・種類・親フ�
 | **第 1 段** ✅ | **雛形の設定を 1 つにする**（2.1）。`GET /settings` → `GET /template` の形寄せを含む | `portal_sdk` ＋ ツール 2 つ ＋ 証明書の画面 1 か所 | 雛形設定の既存テストが落ちないこと |
 | 第 2 段 ✅ | **ファイル名の規則を 1 つにする**（2.2）。画面とサーバが同じ規則であることをテストで縛る | `portal_sdk` ＋ ツール 3 つ ＋ `pdf-file-ops.js` | 既存テスト ＋ 新しい突き合わせのテスト |
 | 第 3 段 ✅ | **突き合わせの外枠を 1 つにする**（2.3） | `portal_sdk` ＋ ツール 2 つ | 既存の verify のテストが落ちないこと |
-| 第 4 段 | **生成物の引き渡しを 1 つにする**（2.5） | `portal_sdk` ＋ ツール 4 つ | URL も応答の形も変わらないこと |
+| 第 4 段 ✅ | **生成物の引き渡しを 1 つにする**（2.5） | `portal_sdk` ＋ ツール 4 つ | URL も応答の形も変わらないこと |
 | 第 5 段 | **入力欄を部品にし、デザインシステムからツール固有のクラス名を追い出す**（3.1・3.2） | `src/components/` ＋ `src/styles/components.css` ＋ 画面 3 つ | 既存の画面テスト ＋ デザインシステムのテスト |
 | 第 6 段 | **雛形を設定する画面を部品にする**（3.3） | `src/components/` ＋ 画面 2 つ | 既存の画面テスト |
 | 第 7 段 | **条件の語彙を 1 つにする**（2.4） | mapping 2 つ ＋ `portal_sdk` ＋ 画面 2 つ | 既存テスト（mapping の書き換えを伴うので最後） |

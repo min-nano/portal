@@ -10,7 +10,7 @@ Drive へ保存、という流れで、すべて実行ユーザー本人の代�
 他のツールと同じものなので土台にある。
 """
 
-from fastapi import Depends, File, Request, UploadFile
+from fastapi import Depends, Request
 
 from .. import google_docs, google_drive, portal_sdk, structural_cert
 from ..clerk_auth import User
@@ -130,49 +130,17 @@ async def create_certificate(request: Request, user: User = Depends(require_user
     )
 
     pdf_bytes, warnings = _render(session, data, settings)
-    mode, saved = portal_sdk.save_pdf(session, destination, pdf_bytes)
-
-    return {
-        "mode": mode,
-        "fileId": saved.get("id", ""),
-        "fileName": saved.get("name", ""),
-        "webViewLink": saved.get("webViewLink", ""),
-        "warnings": warnings,
-    }
+    return portal_sdk.save_pdf(session, destination, pdf_bytes, warnings=warnings)
 
 
-@router.post("/certificates/parse")
-async def parse_uploaded_certificate(
-    file: UploadFile = File(...), user: User = Depends(require_user)
-):
-    """アップロードされた証明書 PDF を解析してフォームデータへ変換する。"""
-    content = await portal_sdk.read_upload(file, CertificateError)
-    parsed = structural_cert.parse_pdf(content)
-    return {
-        **parsed,
-        # アップロードした PDF は Drive 上のファイルではないので上書き先にできない。
-        "file": {"id": "", "name": file.filename or ""},
-        "suggestedFileName": file.filename or structural_cert.default_file_name(parsed),
-    }
-
-
-@router.post("/certificates/parse-drive")
-async def parse_drive_certificate(
-    request: Request, user: User = Depends(require_user)
-):
-    """Drive 上の証明書 PDF を解析してフォームデータへ変換する。
-
-    ここで返す file.id が、そのまま「上書き保存」の対象になる。
-    """
-    file_id = (await portal_sdk.json_body(request)).get("fileId")
-    session = portal_sdk.delegated_session(user.email)
-    content, meta = portal_sdk.open_drive_pdf(session, file_id, CertificateError)
-    parsed = structural_cert.parse_pdf(content)
-    return {
-        **parsed,
-        "file": {"id": file_id, "name": meta.get("name", "")},
-        "suggestedFileName": meta.get("name", ""),
-    }
+# 証明書 PDF の読み戻し（アップロード / Drive）。段取りは計算書ツールと同じ。
+portal_sdk.pdf_parse_routes(
+    router,
+    "/certificates",
+    parse=structural_cert.parse_pdf,
+    error=CertificateError,
+    default_name=structural_cert.default_file_name,
+)
 
 
 TOOL = Tool(

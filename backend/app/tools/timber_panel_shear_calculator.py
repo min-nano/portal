@@ -11,7 +11,7 @@ GAS 版はスプレッドシートへ現在値と履歴を書き出していた�
 サーバが計算するのは保存のときだけで、そこで画面の値と突き合わせる。
 """
 
-from fastapi import Depends, File, Request, UploadFile
+from fastapi import Depends, Request
 
 from .. import panel_shear, portal_sdk
 from ..clerk_auth import User
@@ -59,46 +59,21 @@ async def create_report(request: Request, user: User = Depends(require_user)):
         lambda: panel_shear.default_file_name(data),
     )
 
-    mode, saved = portal_sdk.save_pdf(
-        session, destination, panel_shear.build_pdf(data, reports)
+    return portal_sdk.save_pdf(
+        session,
+        destination,
+        panel_shear.build_pdf(data, reports),
+        verification=verification,
     )
-    return {
-        "mode": mode,
-        "fileId": saved.get("id", ""),
-        "fileName": saved.get("name", ""),
-        "webViewLink": saved.get("webViewLink", ""),
-        "verification": verification,
-    }
 
 
-@router.post("/reports/parse")
-async def parse_uploaded_report(
-    file: UploadFile = File(...), user: User = Depends(require_user)
-):
-    """アップロードされた計算書 PDF を読み、フォームデータへ戻す。"""
-    content = await portal_sdk.read_upload(file, PanelShearError)
-    return {
-        **panel_shear.parse_pdf(content),
-        # アップロードした PDF は Drive 上のファイルではないので上書き先にできない。
-        "file": {"id": "", "name": file.filename or ""},
-        "suggestedFileName": file.filename or "",
-    }
-
-
-@router.post("/reports/parse-drive")
-async def parse_drive_report(request: Request, user: User = Depends(require_user)):
-    """Drive 上の計算書 PDF を読み、フォームデータへ戻す。
-
-    ここで返す file.id が、そのまま「上書き保存」の対象になる。
-    """
-    file_id = (await portal_sdk.json_body(request)).get("fileId")
-    session = portal_sdk.delegated_session(user.email)
-    content, meta = portal_sdk.open_drive_pdf(session, file_id, PanelShearError)
-    return {
-        **panel_shear.parse_pdf(content),
-        "file": {"id": file_id, "name": meta.get("name", "")},
-        "suggestedFileName": meta.get("name", ""),
-    }
+# 計算書 PDF の読み戻し（アップロード / Drive）。段取りは証明書ツールと同じ。
+portal_sdk.pdf_parse_routes(
+    router,
+    "/reports",
+    parse=panel_shear.parse_pdf,
+    error=PanelShearError,
+)
 
 
 TOOL = Tool(

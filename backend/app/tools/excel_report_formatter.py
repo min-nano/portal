@@ -8,9 +8,7 @@
 portal_sdk にある。
 """
 
-from urllib.parse import quote
-
-from fastapi import Depends, Request, Response
+from fastapi import Depends, Request
 
 from .. import excel_report, google_drive, portal_sdk
 from ..clerk_auth import User
@@ -83,14 +81,8 @@ async def create_report(request: Request, user: User = Depends(require_user)):
         template_bytes, body.get("property_name"), body.get("rooms")
     )
 
-    return Response(
-        content=xlsx_bytes,
-        media_type=XLSX_MIME,
-        headers={
-            "Content-Disposition": (
-                f"attachment; filename*=UTF-8''{quote(excel_report.REPORT_FILE_NAME)}"
-            )
-        },
+    return portal_sdk.download_response(
+        xlsx_bytes, excel_report.REPORT_FILE_NAME, XLSX_MIME
     )
 
 

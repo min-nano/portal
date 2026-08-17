@@ -21,8 +21,9 @@
 
 import re
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
-from fastapi import APIRouter, Header, Request, Response
+from fastapi import APIRouter, Depends, File, Header, Request, Response, UploadFile
 
 from . import clerk_auth, google_drive, nail_core, settings_store
 from .clerk_auth import User
@@ -309,8 +310,11 @@ def resolve_pdf_destination(
     }
 
 
-def save_pdf(session, destination: dict, pdf_bytes: bytes) -> tuple[str, dict]:
-    """PDF を保存し、(保存方法, Drive のファイル情報) を返す。"""
+def save_pdf(session, destination: dict, pdf_bytes: bytes, **extra) -> dict:
+    """PDF を保存し、画面へ返す形（保存方法と保存されたファイル）にして返す。
+
+    extra はツールが添えるもの（証明書の warnings、計算書の verification）。
+    """
     if destination["mode"] == "overwrite":
         saved = google_drive.update_file_content(
             session, destination["fileId"], pdf_bytes, google_drive.PDF_MIME
@@ -323,7 +327,13 @@ def save_pdf(session, destination: dict, pdf_bytes: bytes) -> tuple[str, dict]:
             pdf_bytes,
             google_drive.PDF_MIME,
         )
-    return destination["mode"], saved
+    return {
+        "mode": destination["mode"],
+        "fileId": saved.get("id", ""),
+        "fileName": saved.get("name", ""),
+        "webViewLink": saved.get("webViewLink", ""),
+        **extra,
+    }
 
 
 def open_drive_pdf(session, file_id, error=ToolError) -> tuple[bytes, dict]:
@@ -342,6 +352,77 @@ def open_drive_pdf(session, file_id, error=ToolError) -> tuple[bytes, dict]:
 
     content = google_drive.download_file(session, file_id, context="PDF のダウンロード")
     return content, meta
+
+
+def pdf_parse_routes(
+    router: APIRouter,
+    path: str,
+    parse,
+    error=ToolError,
+    default_name=lambda parsed: "",
+) -> None:
+    """成果物の PDF を読み戻す 2 本のルートを、そのツールの下に生やす。
+
+    PDF そのものが保存形式になっているツール（証明書・計算書）は、どちらも
+    「手元のファイルをアップロードする」と「Drive のファイルを開く」の
+    2 経路で読み戻す。段取りはどちらも同じ——PDF を読み、解析し、開いている
+    ファイルと次の保存に使う名前を添える——なので、ツールが渡すのは解析関数と、
+    名前が分からないときの既定だけ。
+
+      pdf_parse_routes(router, "/certificates", parse=…, error=…)
+        →  POST <prefix>/certificates/parse        （アップロード）
+           POST <prefix>/certificates/parse-drive  （Drive）
+    """
+
+    @router.post(f"{path}/parse")
+    async def parse_uploaded(
+        file: UploadFile = File(...), user: User = Depends(require_user)
+    ):
+        """アップロードされた PDF を解析してフォームデータへ変換する。"""
+        parsed = parse(await read_upload(file, error))
+        return {
+            **parsed,
+            # アップロードした PDF は Drive 上のファイルではないので上書き先にできない。
+            "file": {"id": "", "name": file.filename or ""},
+            "suggestedFileName": file.filename or default_name(parsed),
+        }
+
+    @router.post(f"{path}/parse-drive")
+    async def parse_from_drive(request: Request, user: User = Depends(require_user)):
+        """Drive 上の PDF を解析してフォームデータへ変換する。
+
+        ここで返す file.id が、そのまま「上書き保存」の対象になる。
+        """
+        file_id = (await json_body(request)).get("fileId")
+        session = delegated_session(user.email)
+        content, meta = open_drive_pdf(session, file_id, error)
+        return {
+            **parse(content),
+            "file": {"id": file_id, "name": meta.get("name", "")},
+            "suggestedFileName": meta.get("name", ""),
+        }
+
+
+# --- 生成物をそのまま返す（ダウンロード） ------------------------------------
+
+
+def download_response(
+    content: bytes, file_name: str, media_type: str, headers: dict | None = None
+) -> Response:
+    """生成物をダウンロードさせる応答。
+
+    ファイル名には日本語が入るので、RFC 5987 の filename* で渡す（素の
+    filename= には非 ASCII を置けない）。headers は本文に入れられない
+    情報を載せるツールのため（必要壁量ツールの突き合わせの結果）。
+    """
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(file_name)}",
+            **(headers or {}),
+        },
+    )
 
 
 # --- 画面とサーバの突き合わせ ------------------------------------------------
