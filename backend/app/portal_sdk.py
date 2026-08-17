@@ -14,6 +14,7 @@
   TOOL = Tool(id=…, router=…)  →   main.py が /api/tools/<id> に載せる
   Depends(require_user)        →   Clerk JWT を検証して確定した本人
   delegated_session(email)     →   本人の代理で Drive を触るセッション
+  TEMPLATE = Template(…)       →   Drive の雛形の設定（確認・保存・読み出し）
   resolve_pdf_destination(…)   →   「保存 / 別名で保存」の保存先の確認
   raise ToolError("…")         →   利用者に見せる日本語 + HTTP ステータス
 """
@@ -99,6 +100,96 @@ def get_settings(tool_id: str) -> dict:
 def set_settings(tool_id: str, values: dict) -> None:
     """そのツールの共有設定を書く。"""
     settings_store.set_tool_settings(tool_id, values)
+
+
+# --- 雛形の設定（Drive の「フォルダ + ファイル名」） --------------------------
+#
+# 雛形を Drive に置くツールは、ファイルの ID ではなく「親フォルダの ID +
+# ファイル名」で覚える。同じフォルダへ同名で置き直せば、それが自動的に最新版に
+# なるため。Picker から届くのはファイル ID だけなので、ゴミ箱・種類・親フォルダ
+# の確認は必ず実行ユーザーの代理セッションから行う（本人に閲覧権限の無いファイル
+# ID を送りつけても設定できない）。
+#
+# この段取りはツールによらず同じで、違うのは「許す種類」と、違うものが選ばれた
+# ときの文言だけなので、それだけをツールが渡す。
+
+
+@dataclass(frozen=True)
+class Template:
+    """Drive 上の雛形の設定。ツールは種類と文言だけを決める。
+
+    ツールの側には、これを 1 つ作って 3 つのルートから呼ぶだけが残る。
+
+      TEMPLATE = Template(tool_id=TOOL_ID, mime_type=…, error=…, …)
+
+      GET  /template  →  TEMPLATE.status()
+      PUT  /template  →  TEMPLATE.save(session, file_id)
+      生成のとき      →  TEMPLATE.require(settings)
+
+    settings を引数で受け取れるのは、1 リクエストの中で共有設定を 2 度読まない
+    ため（読んだものをそのまま渡す）。省略すればここで読む。
+    """
+
+    tool_id: str
+    #: 雛形として許すファイルの種類（.xlsx / Google ドキュメント）。
+    mime_type: str
+    #: このツールの失敗の型（利用者に見せる文言 + HTTP ステータス）。
+    error: type = ToolError
+    #: 違う種類のファイルが選ばれたときの文言。
+    wrong_type_message: str = "選択できない種類のファイルです。"
+    #: 雛形が未設定のまま生成しようとしたときの文言（409 で返す）。
+    unconfigured_message: str = (
+        "雛形が未設定です。画面の「雛形を設定」から、"
+        "Google Drive 上の雛形ファイルを選択してください。"
+    )
+
+    def settings(self) -> dict:
+        """このツールの共有設定を読む。"""
+        return get_settings(self.tool_id)
+
+    def status(self, settings: dict | None = None) -> dict:
+        """設定の状態（GET /template の応答）。未設定でも失敗にはしない。"""
+        settings = self.settings() if settings is None else settings
+        file_name = settings.get("template_file_name", "")
+        return {
+            "configured": bool(settings.get("template_folder_id") and file_name),
+            "fileName": file_name,
+        }
+
+    def require(self, settings: dict | None = None) -> tuple[str, str]:
+        """雛形の置き場所を返す。未設定なら 409 で止める。"""
+        settings = self.settings() if settings is None else settings
+        folder_id = settings.get("template_folder_id", "")
+        file_name = settings.get("template_file_name", "")
+        if not folder_id or not file_name:
+            raise self.error(self.unconfigured_message, 409)
+        return folder_id, file_name
+
+    def save(self, session, file_id) -> dict:
+        """Picker で選ばれたファイルを確かめ、共有設定へ書く（PUT /template）。"""
+        if not file_id or not isinstance(file_id, str):
+            raise self.error("ファイルが選択されていません。")
+
+        meta = google_drive.get_file_metadata(session, file_id)
+        if meta.get("trashed"):
+            raise self.error(
+                "選択したファイルはゴミ箱に入っています。別のファイルを選択してください。"
+            )
+        if meta.get("mimeType") != self.mime_type:
+            raise self.error(self.wrong_type_message)
+        parents = meta.get("parents") or []
+        if not parents:
+            raise self.error(
+                "選択したファイルの親フォルダを特定できませんでした。"
+                "マイドライブ直下ではなくフォルダ内に雛形を置いてください。"
+            )
+
+        name = meta.get("name", "")
+        set_settings(
+            self.tool_id,
+            {"template_folder_id": parents[0], "template_file_name": name},
+        )
+        return {"fileName": name, "folderId": parents[0]}
 
 
 # --- 代理アクセス（Drive / Docs） --------------------------------------------

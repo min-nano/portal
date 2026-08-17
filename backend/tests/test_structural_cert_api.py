@@ -18,7 +18,6 @@ from tests.pdf_util import SAMPLE_FIELDS, make_certificate_pdf
 
 BASE = "/api/tools/structural-cert-formatter"
 CONFIG_URL = f"{BASE}/config"
-SETTINGS_URL = f"{BASE}/settings"
 TEMPLATE_URL = f"{BASE}/template"
 CERTIFICATES_URL = f"{BASE}/certificates"
 PARSE_URL = f"{BASE}/certificates/parse"
@@ -68,20 +67,20 @@ def test_config_requires_auth(anon_client):
 
 # --- 設定の状態 -------------------------------------------------------------
 
-def test_settings_unconfigured(client, drive):
-    resp = client.get(SETTINGS_URL)
+def test_template_status_unconfigured(client, drive):
+    resp = client.get(TEMPLATE_URL)
 
     assert resp.status_code == 200
     # 設定として持つのは雛形だけ（保存先は保存のたびに決まる）。
-    assert resp.json() == {"template": {"configured": False, "fileName": ""}}
+    assert resp.json() == {"configured": False, "fileName": ""}
 
 
-def test_settings_configured(client, drive):
+def test_template_status_configured(client, drive):
     drive.configure_certificate(file_name="安全証明書 雛形")
 
-    body = client.get(SETTINGS_URL).json()
+    body = client.get(TEMPLATE_URL).json()
 
-    assert body["template"] == {"configured": True, "fileName": "安全証明書 雛形"}
+    assert body == {"configured": True, "fileName": "安全証明書 雛形"}
 
 
 # --- 雛形の選択 -------------------------------------------------------------

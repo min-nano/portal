@@ -38,6 +38,7 @@
 | --- | --- | --- |
 | 失敗の返し方 | `app/errors.py` の `PortalError` | 全ツールが同じ形（`message` + `status`）。`main.py` のハンドラは 1 つ |
 | 認証・代理アクセス・共有設定 | `app/portal_sdk.py` | `require_user` / `delegated_session` / `get_settings` |
+| 雛形の設定（Drive の「フォルダ + ファイル名」） | `app/portal_sdk.py` の `Template` | 状態（`status`）・保存（`save`）・未設定の 409（`require`）。ツールが渡すのは**許す種類と文言だけ** |
 | PDF の保存先と保存 | `app/portal_sdk.py` | `resolve_pdf_destination` / `save_pdf` / `open_drive_pdf` / `read_upload` |
 | wasm の配り方 | `app/portal_sdk.py` | `wasm_response`（gzip・ETag・キャッシュ） |
 | ツールの名乗り | `Tool` / `tool_router` / `tools/__init__.py` | `main.py` にツールの名前は出てこない |
@@ -52,7 +53,11 @@
 
 ## 2. 洗い出し — API 側
 
-### 2.1 雛形の設定（Drive の「フォルダ + ファイル名」）
+### 2.1 雛形の設定（Drive の「フォルダ + ファイル名」）〔第 1 段 · 済〕
+
+> **済**: `portal_sdk.Template` に寄せました（下の記述は寄せる前の状況です）。
+> ツールに残るのは `Template(...)` の宣言（種類と文言）と、それを呼ぶだけの
+> ルート 2 本です。安全証明書の `GET /settings` は `GET /template` へ揃えました。
 
 現況検査レポートと構造計算安全証明書は、どちらも雛形を Drive に置き、
 **ファイルの ID ではなく「親フォルダの ID + ファイル名」**で覚えています
@@ -237,7 +242,7 @@ Picker で選ばれた `fileId` を受け取り、**ゴミ箱・種類・親フ�
 
 | | やること | 触るもの | 合否 |
 | --- | --- | --- | --- |
-| **第 1 段** | **雛形の設定を 1 つにする**（2.1）。`GET /settings` → `GET /template` の形寄せを含む | `portal_sdk` ＋ ツール 2 つ ＋ 証明書の画面 1 か所 | 雛形設定の既存テストが落ちないこと |
+| **第 1 段** ✅ | **雛形の設定を 1 つにする**（2.1）。`GET /settings` → `GET /template` の形寄せを含む | `portal_sdk` ＋ ツール 2 つ ＋ 証明書の画面 1 か所 | 雛形設定の既存テストが落ちないこと |
 | 第 2 段 | **ファイル名の規則を 1 つにする**（2.2）。画面とサーバが同じ規則であることをテストで縛る | `portal_sdk` ＋ ツール 3 つ ＋ `pdf-file-ops.js` | 既存テスト ＋ 新しい突き合わせのテスト |
 | 第 3 段 | **突き合わせの外枠を 1 つにする**（2.3） | `portal_sdk` ＋ ツール 2 つ | 既存の verify のテストが落ちないこと |
 | 第 4 段 | **生成物の引き渡しを 1 つにする**（2.5） | `portal_sdk` ＋ ツール 4 つ | URL も応答の形も変わらないこと |
