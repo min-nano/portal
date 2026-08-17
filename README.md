@@ -4,7 +4,9 @@
 
 最初のツールとして、[gas-addon-excel-report-formatter](https://github.com/h-ikeda/gas-addon-excel-report-formatter) と同等の **現況検査レポート作成ツール**（傾斜測定 報告フォーム → Excel 出力）を実装しています。続いて **構造計算安全証明書 作成ツール**（第四号書式の証明書 → PDF を Drive へ保存 / 既存 PDF の編集）、[gas-timber-panel-shear-calculator](https://github.com/min-nano/gas-timber-panel-shear-calculator) から移植した **面材張り大壁 計算ツール**（グレー本 3.3・3.2 の計算 → 計算書 PDF）、**小規模木造建築物 必要壁量 計算ツール**（フォーム入力 → 日本住宅・木材技術センターの表計算ツールに記入した Excel を出力）を追加しました。
 
-次に作るのは **設計等業務委託契約書 作成ツール**（`contract-formatter`）です。改正建築士法により、遅くとも 2027 年 7 月 31 日までに**すべての設計・工事監理の受託契約**で法定記載事項を満たした書面が要ります。**設計とロードマップは [docs/contract-formatter.md](docs/contract-formatter.md) にあります（実装はこれから）。**
+次に作るのは **見積書・契約書等 作成ツール**（`contract-formatter`）です。改正建築士法により、遅くとも 2027 年 7 月 31 日までに**すべての設計・工事監理の受託契約**で法定記載事項を満たした書面が要ります。**設計とロードマップは [docs/contract-formatter.md](docs/contract-formatter.md) にあります（実装はこれから）。**
+
+**このリポジトリは公開なので、二層に分けます。** 告示・法令に書いてあること（別表・難易度係数・法定記載事項）は**リポジトリに置き、原文と突き合わせるテストで固定**します。**事務所が独自に決めた係数・積算のロジック・書類の書式と文言**は、**Drive の設定フォルダで管理し、検証して「発行」したものを土台に重ねます**（コードの変更もデプロイも要りません）。**仕組みは [docs/external-resources.md](docs/external-resources.md) にあります（土台の機能。実装はこれから）。**
 
 ## 🏗 システム構成
 
@@ -14,7 +16,7 @@
 | 認証 | **Clerk**（Google ログインのみ有効化） | サインインとセッション JWT の発行 |
 | バックエンド | **Cloud Run**（FastAPI / Python） | Clerk JWT の検証、Excel 生成（openpyxl）、PDF 生成・解析（Docs API + pypdf / pdfminer.six）、Drive アクセス |
 | 計算 | **Rust → wasm**（`core/`） | 面材張り大壁と釘配列諸定数、必要壁量と柱の小径の計算・入力の解釈・表示の桁揃え。**同じ .wasm を画面とバックエンドの両方が動かす**（「計算の一元管理（Rust → wasm）」参照） |
-| データ保存 | **Google Workspace の Drive** / Firestore / リポジトリ同梱 | Drive: Excel 雛形（社外秘フォーマット）・証明書の雛形（Google ドキュメント）・生成した PDF。Firestore: 全利用者共通の設定。同梱: 一般に配布されている必要壁量の表計算ツール（`backend/app/templates/`。誰でも同じものを配布ページから入手できるので、Drive に置かず版を固定して持つ） |
+| データ保存 | **Google Workspace の Drive** / Firestore / リポジトリ同梱 | Drive: Excel 雛形（社外秘フォーマット）・証明書の雛形（Google ドキュメント）・生成した PDF・**事務所オリジナルの係数とロジックの定義**（[docs/external-resources.md](docs/external-resources.md)）。Firestore: 全利用者共通の設定と、**発行済みの定義**。同梱: 一般に配布されている必要壁量の表計算ツール（`backend/app/templates/`。誰でも同じものを配布ページから入手できるので、Drive に置かず版を固定して持つ） |
 
 ### セキュリティ / 権限モデル（GAS 版との対応）
 
@@ -292,7 +294,8 @@ GAS 版の機能をそのまま移植しています。
 ```
 docs/
   shared-logic.md             # 共通のロジックを土台へ寄せる洗い出しと順序
-  contract-formatter.md       # 設計等業務委託契約書 作成ツールの設計（未実装。ロードマップ含む）
+  external-resources.md       # 事務所オリジナルの係数とロジックを Drive から差し込む仕組み（未実装）
+  contract-formatter.md       # 見積書・契約書等 作成ツールの設計（未実装。ロードマップ含む）
 frontend/                     # Firebase Hosting に載せる SPA (Vite)
   index.html                  # ポータルトップ（ツール一覧はビルド時に組み立てる）
   tools.config.js             # 載せるツールの一覧（ここだけがツールを知っている）
@@ -517,6 +520,8 @@ preview-channels/pr-29/tool_settings/excel-report-formatter
 | `excel-report-formatter` | `template_folder_id` / `template_file_name` |
 | `structural-cert-formatter` | `template_folder_id` / `template_file_name`（Google ドキュメントの雛形） |
 | `timber-panel-shear-calculator` | （なし。雛形を使わないので共有設定を持たない） |
+
+> **これから足すもの**: 事務所オリジナルの係数やロジックをリポジトリの外で管理するツールのために、同じチャンネルの下に **`tool_resources/<ツール名>`**（発行済みの定義と、その版）を置きます。`tool_settings` が「人が画面で編集する値」なのに対し、`tool_resources` は「Drive の内容を検証して発行した結果」で、人が直接編集しません。設計は [docs/external-resources.md](docs/external-resources.md) にあります。
 
 **未設定のときは development** を指し、本番を指すのは `SETTINGS_CHANNEL_PATH=static-channels/production` を明示的に設定した Cloud Run サービスだけです。環境変数の設定漏れ・ローカル開発・壊れたワークフローのいずれからも本番データに到達できないため、設定ミスの症状は必ず「設定が空に見える」であり、「本番を汚す」は起こりません。
 
