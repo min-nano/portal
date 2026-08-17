@@ -69,8 +69,6 @@ def test_the_web_manifest_declares_the_same_id(tool):
 
     この 2 つがずれると、画面は /tools/<A>/ に出るのに API は
     /api/tools/<B>/ にある、という組み合わせが黙って出来上がる。
-    ツールを別リポジトリへ出したあとは、1 つのパッケージが両方を持つので
-    ずれようがなくなる（それまでの繋ぎとして、ここで突き合わせておく）。
     """
     manifest = FRONTEND_SRC / tool.id / "tool.js"
     assert manifest.exists(), f"{tool.id} の画面側マニフェストが無い"

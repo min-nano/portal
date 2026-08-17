@@ -2,16 +2,10 @@
 
 **バックエンドがツールを知っている唯一の場所**がここ。main.py は並んだ
 ツールを順に載せるだけで、ツールごとの分岐もツール名の定数も持たない。
-画面側の tools.config.js に対応する（docs/plugin-architecture.md §4.2）。
+画面側の tools.config.js に対応する（README の「🧩 土台とツール」）。
 
 並び順は API の動きに影響しない（それぞれ別の接頭辞を持つため）が、
 画面側と同じ順に並べておく。
-
-ツールを別リポジトリへ出したあとは、この import が
-
-    from portal_tool_wall_quantity import TOOL as wall_quantity_calculator
-
-のようなパッケージ参照に変わり、どの版を載せるかは tools.json が決める。
 """
 
 from .excel_report_formatter import TOOL as excel_report_formatter

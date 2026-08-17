@@ -15,8 +15,7 @@ from tests.util import make_template_bytes
 TEST_EMAIL = "tester@example.co.jp"
 
 # ツールの id は URL（/api/tools/<id>）と共有設定のキーそのもの。土台から
-# 見える契約なので、ツールの実装を辿らずここに書く（ツールが別リポジトリへ
-# 移っても、このテストの前提は変わらない）。
+# 見える契約なので、ツールの実装を辿らずここに書く。
 TOOL = "excel-report-formatter"
 CERT_TOOL = "structural-cert-formatter"
 

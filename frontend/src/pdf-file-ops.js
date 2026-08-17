@@ -6,7 +6,7 @@
 // 無いときだけ保存ダイアログで名前と場所を尋ねる。
 //
 // その判断と文言はツールに依らず同じなので、ここに集約する（バックエンド側も
-// main.py の _resolve_pdf_destination で同じ規則を共有している）。
+// portal_sdk.resolve_pdf_destination で同じ規則を共有している）。
 
 /** ファイル名に使えない文字を落とす。バックエンドの整形と同じ規則。 */
 export function sanitizeFileName(name) {

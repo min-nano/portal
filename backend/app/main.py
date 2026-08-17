@@ -13,7 +13,7 @@
   - 失敗の返し方（PortalError なら status と日本語、それ以外は 500）
   - 載せるツール（app/tools/）のルーターを /api/tools/<id> へ載せる
 
-ツールが増えても、ここは変わらない（docs/plugin-architecture.md §4.2）。
+ツールが増えても、ここは変わらない（README の「🧩 土台とツール」）。
 土台としてツールへ貸し出すもの（認証・代理アクセス・共有設定・PDF の保存先・
 wasm）は portal_sdk にある。
 """
