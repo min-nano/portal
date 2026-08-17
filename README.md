@@ -285,10 +285,10 @@ GAS 版の機能をそのまま移植しています。
 
 そのうえで、現況検査レポート・構造計算安全証明書・必要壁量の 3 つは、どれも
 **「雛形を編集して生成物を得る」という同じ流れ**をしています。この 3 つは
-1 つずつ別リポジトリへ出すのではなく、**流れを 1 つのユニットにまとめ、
-3 つのツールはそこへ渡す記述（レシピ）として portal に置きます**。
-その設計は **[docs/template-fulfiller.md](docs/template-fulfiller.md)** に
-まとめてあります。
+分ける前に、**まず portal の中で 1 つの実装にまとめます**（3 つのツールは、
+そこへ渡す記述＝レシピになります）。別リポジトリへ出すかどうかは、そのあと
+判断します。その設計は
+**[docs/template-fulfiller.md](docs/template-fulfiller.md)** にまとめてあります。
 
 ## 📁 リポジトリ構成
 
@@ -1104,9 +1104,10 @@ open("計算書.pdf", "wb").write(panel_shear.build_pdf(data, panel_shear.valida
   - **ツールを別リポジトリへ分ける**（[docs/plugin-architecture.md](docs/plugin-architecture.md)）。
     portal 側の受け口（ツールが自分を名乗り、ビルドと API がそれを読む形）は完了。
     続きは土台のパッケージ化（`portal-ui` / `portal-sdk` / `portal-core`）と、
-    雛形記入型の 3 ツールを 1 ユニットにまとめる作業
-    （[docs/template-fulfiller.md](docs/template-fulfiller.md)。設計は確定、
-    第 1 段＝portal の中でレシピの語彙を通すところから）。
+    雛形記入型の 3 ツールの統一
+    （[docs/template-fulfiller.md](docs/template-fulfiller.md)。portal の中で
+    1 つの実装にまとめる。1 ツールずつ載せ替え、現況検査レポートから）。
+    このユニットを別リポジトリへ出すかどうかは、語彙が落ち着いてから判断する。
 - [ ] **Phase 3: AI（Gemini API）連携による自動化**
   - 手書き図面の画像から計測値を抽出し、フォームに初期値を自動設定。
 - [ ] **Phase 4: 実運用向けチューニング**
