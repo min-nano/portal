@@ -45,7 +45,8 @@ _SOURCE = None
 _TEMPLATE_BYTES = None
 
 # 突き合わせの結果に並べる食い違いの上限（全部ずれていても応答が膨れないように）。
-MAX_REPORTED_DIFFERENCES = 20
+# 打ち切りそのものは土台がやる。ここにあるのは、テストと画面から参照するため。
+MAX_REPORTED_DIFFERENCES = portal_sdk.MAX_REPORTED_DIFFERENCES
 
 
 class WallQuantityError(PortalError):
@@ -431,35 +432,28 @@ def verify(result: dict, claim) -> dict:
 
     突き合わせるのは表示文字列。利用者が画面で見たものそのものなので、
     「値は同じだが桁の丸めが違う」も食い違いとして拾える。
+
+    外枠（材料が届かないときの扱い・版の並記・差の打ち切り）は面材張り大壁と
+    同じなので土台にある。ここが決めるのは差の作り方だけ。
     """
-    if not isinstance(claim, dict):
-        # 画面が突き合わせの材料を送ってこない（＝この仕組みより前の版）。
-        return {"checked": False, "ok": True, "differences": []}
 
-    client_version = str(claim.get("coreVersion") or "")
-    server_version = nail_core.version()
-    claimed = claim.get("cells")
-    claimed = claimed if isinstance(claimed, dict) else {}
+    def differences(claim: dict) -> list:
+        claimed = claim.get("cells")
+        claimed = claimed if isinstance(claimed, dict) else {}
+        found = []
+        for key, server_text in result_cells(result).items():
+            client_text = claimed.get(key)
+            if client_text is None or str(client_text) != server_text:
+                found.append(
+                    {
+                        "key": key,
+                        "client": "-" if client_text is None else str(client_text),
+                        "server": server_text,
+                    }
+                )
+        return found
 
-    differences = []
-    for key, server_text in result_cells(result).items():
-        client_text = claimed.get(key)
-        if client_text is None or str(client_text) != server_text:
-            differences.append(
-                {
-                    "key": key,
-                    "client": "-" if client_text is None else str(client_text),
-                    "server": server_text,
-                }
-            )
-
-    return {
-        "checked": True,
-        "ok": not differences and client_version == server_version,
-        "coreVersion": {"client": client_version, "server": server_version},
-        "differences": differences[:MAX_REPORTED_DIFFERENCES],
-        "omittedDifferences": max(0, len(differences) - MAX_REPORTED_DIFFERENCES),
-    }
+    return portal_sdk.verify_claim(claim, differences)
 
 
 # --- ファイル名 --------------------------------------------------------------

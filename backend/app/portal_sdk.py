@@ -344,6 +344,43 @@ def open_drive_pdf(session, file_id, error=ToolError) -> tuple[bytes, dict]:
     return content, meta
 
 
+# --- 画面とサーバの突き合わせ ------------------------------------------------
+#
+# 編集中の計算は画面（wasm）が行い、保存のときはサーバも同じ wasm で計算して
+# 突き合わせる。この外枠——材料が届かないときの扱い・版の並記・差の打ち切り——
+# はツールによらず同じで、違うのは**差の作り方**だけ。
+
+# 突き合わせの結果に並べる差の上限（全項目が違うときに応答が膨れないように）。
+MAX_REPORTED_DIFFERENCES = 20
+
+
+def verify_claim(claim, differences) -> dict:
+    """画面が出した値と、サーバが同じ wasm で出した値を突き合わせる。
+
+    differences は「画面が送ってきた材料」を受け取って差の一覧を返す関数で、
+    ツールが渡すのはこれだけ。材料が届かないとき（この仕組みより前の画面）に
+    呼ばれないのは、無駄に計算しないため。
+
+    ずれていても保存は止めない（成果物に入るのはサーバの値なので壊れない）。
+    画面には警告として返し、利用者が気付けるようにする。
+    """
+    if not isinstance(claim, dict):
+        # 画面が突き合わせの材料を送ってこない（＝この仕組みより前の版）。
+        return {"checked": False, "ok": True, "differences": []}
+
+    client_version = str(claim.get("coreVersion") or "")
+    server_version = nail_core.version()
+    found = list(differences(claim))
+
+    return {
+        "checked": True,
+        "ok": not found and client_version == server_version,
+        "coreVersion": {"client": client_version, "server": server_version},
+        "differences": found[:MAX_REPORTED_DIFFERENCES],
+        "omittedDifferences": max(0, len(found) - MAX_REPORTED_DIFFERENCES),
+    }
+
+
 # --- 計算実装（wasm） --------------------------------------------------------
 
 

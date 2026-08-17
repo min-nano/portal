@@ -37,7 +37,8 @@ FILE_NAME_TEMPLATE = "釘配列諸定数計算書_{projectName}.pdf"
 VERIFY_RELATIVE_TOLERANCE = 1e-9
 
 # 突き合わせの結果に並べる差の上限（全項目が違うときに応答が膨れないように）。
-MAX_REPORTED_DIFFERENCES = 20
+# 打ち切りそのものは土台がやる。ここにあるのは、テストと画面から参照するため。
+MAX_REPORTED_DIFFERENCES = portal_sdk.MAX_REPORTED_DIFFERENCES
 
 # グレー本 3.3(3)「面材張り大壁の許容せん断耐力の計算例」（図 3.3.10）。
 #
@@ -249,33 +250,25 @@ def verify(reports: dict, claim) -> dict:
 
     ずれていても保存は止めない（計算書に載るのはサーバの値なので、成果物が
     壊れることはない）。画面には警告として返し、利用者が気付けるようにする。
+
+    外枠（材料が届かないときの扱い・版の並記・差の打ち切り）は必要壁量と
+    同じなので土台にある。ここが決めるのは差の作り方だけ。
     """
-    if not isinstance(claim, dict):
-        # 画面が突き合わせの材料を送ってこない（＝この仕組みより前の版）。
-        return {"checked": False, "ok": True, "differences": []}
 
-    client_version = str(claim.get("coreVersion") or "")
-    server_version = nail_core.version()
+    def differences(claim: dict) -> list:
+        return _differences(
+            reports["walls"],
+            _claimed_results(claim, "walls", "wallId"),
+            "wallId",
+            "wallName",
+        ) + _differences(
+            panel_reports(reports),
+            _claimed_results(claim, "panels", "panelId"),
+            "panelId",
+            "panelName",
+        )
 
-    differences = _differences(
-        reports["walls"],
-        _claimed_results(claim, "walls", "wallId"),
-        "wallId",
-        "wallName",
-    ) + _differences(
-        panel_reports(reports),
-        _claimed_results(claim, "panels", "panelId"),
-        "panelId",
-        "panelName",
-    )
-
-    return {
-        "checked": True,
-        "ok": not differences and client_version == server_version,
-        "coreVersion": {"client": client_version, "server": server_version},
-        "differences": differences[:MAX_REPORTED_DIFFERENCES],
-        "omittedDifferences": max(0, len(differences) - MAX_REPORTED_DIFFERENCES),
-    }
+    return portal_sdk.verify_claim(claim, differences)
 
 
 # --- ファイル名 --------------------------------------------------------------
