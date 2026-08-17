@@ -279,15 +279,23 @@ GAS 版の機能をそのまま移植しています。
 ツールを増やす・減らすときに触るのは、この 2 つの一覧だけです。`vite.config.js` にも
 `index.html` にも `main.py` にもツールの名前は出てきません。
 
-**この構成は、ツールを 1 つずつ別リポジトリへ出すための下ごしらえです。**
+**この構成は、ツールを別リポジトリへ出すための下ごしらえです。**
 分割の全体像（3 層の分け方・版の固定・更新の流れ・移行の順序）は
 **[docs/plugin-architecture.md](docs/plugin-architecture.md)** にまとめてあります。
+
+そのうえで、現況検査レポート・構造計算安全証明書・必要壁量の 3 つは、どれも
+**「雛形を編集して生成物を得る」という同じ流れ**をしています。この 3 つは
+1 つずつ別リポジトリへ出すのではなく、**流れを 1 つのユニットにまとめ、
+3 つのツールはそこへ渡す記述（レシピ）として portal に置きます**。
+その設計は **[docs/template-fulfiller.md](docs/template-fulfiller.md)** に
+まとめてあります。
 
 ## 📁 リポジトリ構成
 
 ```
 docs/
   plugin-architecture.md      # ツールを別リポジトリへ分ける設計（土台とツールの契約）
+  template-fulfiller.md       # 雛形記入型の 3 ツールを 1 ユニットにまとめる設計（レシピの語彙）
 frontend/                     # Firebase Hosting に載せる SPA (Vite)
   index.html                  # ポータルトップ（ツール一覧はビルド時に組み立てる）
   tools.config.js             # 載せるツールの一覧（ここだけがツールを知っている）
@@ -1093,10 +1101,12 @@ open("計算書.pdf", "wb").write(panel_shear.build_pdf(data, panel_shear.valida
     （グレー本 3.4〜3.6）と、面材・釘・枠材のマスタからの選択
     （GAS 版 ROADMAP のフェーズ 1・3）。
   - 小規模木造建築物 必要壁量 計算ツール（配布物の表計算ツールへの記入）は完了。
-  - **ツールを 1 つずつ別リポジトリへ分ける**（[docs/plugin-architecture.md](docs/plugin-architecture.md)）。
+  - **ツールを別リポジトリへ分ける**（[docs/plugin-architecture.md](docs/plugin-architecture.md)）。
     portal 側の受け口（ツールが自分を名乗り、ビルドと API がそれを読む形）は完了。
     続きは土台のパッケージ化（`portal-ui` / `portal-sdk` / `portal-core`）と、
-    依存の少ないツールからの切り出し。
+    雛形記入型の 3 ツールを 1 ユニットにまとめる作業
+    （[docs/template-fulfiller.md](docs/template-fulfiller.md)。設計は確定、
+    第 1 段＝portal の中でレシピの語彙を通すところから）。
 - [ ] **Phase 3: AI（Gemini API）連携による自動化**
   - 手書き図面の画像から計測値を抽出し、フォームに初期値を自動設定。
 - [ ] **Phase 4: 実運用向けチューニング**
