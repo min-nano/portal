@@ -190,6 +190,12 @@ const PANEL_REPORT = {
       { value: 600, label: '600' },
     ],
     axis: { x0: 455, y0: 305, xLabel: 'x0 = 455.0', yLabel: 'y0 = 305.0' },
+    // この面材にかかる軸組材（面材の左下が原点）。釘との位置関係を図に出す。
+    members: [
+      { label: '柱', direction: 'vertical', x: -52.5, y: 0, width: 105, height: 610 },
+      { label: '間柱', direction: 'vertical', x: 432.5, y: 0, width: 45, height: 610 },
+      { label: '横架材', direction: 'horizontal', x: 0, y: -52.5, width: 910, height: 105 },
+    ],
   },
   summary: [
     { key: 'Ixy', unit: 'mm²/mm²', value: '0.888868' },
@@ -244,6 +250,11 @@ const WALL_REPORT = {
   wallDiagram: {
     wallWidth: 910,
     wallHeight: 3000,
+    // 壁の軸組材（壁の左下が原点）。面材に重ねて描く。
+    members: [
+      { label: '柱', direction: 'vertical', x: -52.5, y: 0, width: 105, height: 3000 },
+      { label: '横架材', direction: 'horizontal', x: 0, y: -52.5, width: 910, height: 105 },
+    ],
     minX: 0,
     minY: 0,
     maxX: 910,
@@ -643,7 +654,20 @@ describe('renderWallResult', () => {
 
     const first = document.querySelectorAll('[data-panel-index]')[0];
     expect(first.querySelectorAll('.result-box')).toHaveLength(3);
-    expect(first.querySelector('[data-panel-diagram]').hasAttribute('hidden')).toBe(false);
+    const diagram = first.querySelector('[data-panel-diagram]');
+    expect(diagram.hasAttribute('hidden')).toBe(false);
+    // 釘配列図にも、その面材にかかる軸組材を破線で重ねる（釘との位置関係で
+    // へりあきと軸材の縁端距離が図の上で見える）。
+    const members = [...diagram.querySelectorAll('rect')].filter((rect) =>
+      rect.getAttribute('stroke-dasharray')
+    );
+    expect(members.map((rect) => rect.querySelector('title').textContent)).toEqual([
+      '柱',
+      '間柱',
+      '横架材',
+    ]);
+    expect(members[0].getAttribute('fill')).toBe('none');
+    expect(diagram.querySelectorAll('circle')).toHaveLength(3);
   });
 
   it('壁内の位置を入れた壁には、面材配列図と面材の一覧を出す', () => {
@@ -653,8 +677,18 @@ describe('renderWallResult', () => {
     expect(document.getElementById('wallLayout').hidden).toBe(false);
     const diagram = document.getElementById('wallLayoutDiagram');
     expect(diagram.hasAttribute('hidden')).toBe(false);
-    // 壁の枠（面ごとに、塗りと線で 2 回）と、面材の枠。
-    expect(diagram.querySelectorAll('rect')).toHaveLength(4);
+    // 壁の枠（面ごとに、塗りと線で 2 回）・面材の枠・軸組材の枠。
+    expect(diagram.querySelectorAll('rect')).toHaveLength(6);
+    // 軸組材は、面材の裏に隠れているものなので塗らずに破線で描く。
+    const members = [...diagram.querySelectorAll('rect')].filter((rect) =>
+      rect.getAttribute('stroke-dasharray')
+    );
+    expect(members).toHaveLength(2);
+    expect(members[0].getAttribute('fill')).toBe('none');
+    expect(members.map((rect) => rect.querySelector('title').textContent)).toEqual([
+      '柱',
+      '横架材',
+    ]);
     expect([...diagram.querySelectorAll('text')].map((t) => t.textContent))
       .toContain('表面（2 枚）');
     // 一覧は、壁の他の表と同じ組み方（見出し ＋ 面材ごとの行）。

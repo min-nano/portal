@@ -402,6 +402,20 @@ def _draw_diagram(page: pdf_write.Page, box: tuple[float, float, float, float],
         line_width=0.8, gray=0.45, fill_gray=0.97,
     )
 
+    # 軸組材（この面材にかかる柱・間柱・横架材・受け材）。面材の裏に隠れて
+    # いるものなので、塗らずに破線で描く。釘がどの材のどこに刺さるのかが
+    # 図の上で分かる（へりあきと軸材の縁端距離）。
+    for member in diagram.get("members", []):
+        page.rect(
+            to_x(member["x"]),
+            to_y(member["y"]),
+            member["width"] * scale,
+            member["height"] * scale,
+            line_width=0.5,
+            gray=0.6,
+            dash=(2.5, 2.0),
+        )
+
     # 弾性中立軸 x0 / y0（破線）。
     axis = diagram["axis"]
     axis_x, axis_y = to_x(axis["x0"]), to_y(axis["y0"])

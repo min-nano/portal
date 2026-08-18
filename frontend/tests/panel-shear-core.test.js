@@ -200,7 +200,17 @@ describe('計算実装（wasm）', () => {
     const report = panelReport((await core()).computeAll(wallOf(EXAMPLE_PANEL)).walls);
 
     expect(report.diagram.panelWidth).toBe(910);
-    expect(report.diagram.maxX).toBe(910);
+    // 描く範囲には、この面材にかかる軸組材（右端の柱は材心が X = 910 の
+    // 105 なので、半分が面材の外へ出る）まで入る。
+    expect(report.diagram.maxX).toBe(962.5);
+    // その軸組材も、図に描くために面材の座標で返る。
+    expect(report.diagram.members.map((member) => member.label)).toEqual([
+      '柱',
+      '間柱',
+      '柱',
+      '横架材',
+      '受け材',
+    ]);
     // 四周打ちなので、横線の釘が 10〜900 に @150 で並ぶ。
     expect(report.diagram.xTicks.map((t) => t.label)).toEqual([
       '10', '155', '305', '455', '605', '755', '900',

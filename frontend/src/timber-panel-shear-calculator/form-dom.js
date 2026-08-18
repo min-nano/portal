@@ -921,6 +921,21 @@ export function renderDiagram(svg, diagram) {
     })
   );
 
+  // 軸組材（この面材にかかる柱・間柱・横架材・受け材）。面材の裏に隠れて
+  // いるものなので、塗らずに破線で描く。釘がどの材のどこに刺さるのかが
+  // 図の上で分かる（へりあきと軸材の縁端距離）。
+  (diagram.members || []).forEach((member) => {
+    const rect = svgNode(document_, 'rect', {
+      x: member.x, y: member.y, width: member.width, height: member.height,
+      fill: 'none', stroke: '#a8a29e', 'stroke-width': 1,
+      'stroke-dasharray': '5 3',
+    });
+    const title = document_.createElementNS(SVG_NS, 'title');
+    title.textContent = member.label;
+    rect.appendChild(title);
+    svg.appendChild(rect);
+  });
+
   // 弾性中立軸 x0 / y0。
   if (diagram.axes) {
     const dash = { 'stroke-dasharray': '5 3', 'stroke-width': 1 };

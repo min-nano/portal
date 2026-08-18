@@ -1101,7 +1101,18 @@ fn layout_diagram(
     pieces: &[Piece],
     inspection: &wall_layout::Inspection,
 ) -> Value {
-    let (min_x, min_y, max_x, max_y) = wall_layout::bounds(input.width, input.height, pieces);
+    // 軸組材も図に描くので、描く範囲に入れる（壁の両端の柱・上下の横架材は
+    // 見付け幅の半分が壁の外へ出る）。
+    let members = member_shapes(input);
+    let (min_x, min_y, max_x, max_y) = wall_layout::bounds(
+        input.width,
+        input.height,
+        pieces,
+        &members
+            .iter()
+            .map(|(_, rect)| *rect)
+            .collect::<Vec<(f64, f64, f64, f64)>>(),
+    );
 
     let sides: Vec<Value> = inspection
         .sides
@@ -1156,18 +1167,65 @@ fn layout_diagram(
         ("minY", min_y.into()),
         ("maxX", max_x.into()),
         ("maxY", max_y.into()),
-        // 軸組材。面材の下に敷いて描くので、面材の縁がどの材に載っている
-        // のか（＝釘がどこに刺さるのか）が図で分かる。
-        ("members", Value::Arr(member_shapes(input))),
+        // 軸組材。面材に重ねて描くので、面材の縁がどの材に載っているのか
+        // （＝釘がどこに刺さるのか）が図で分かる。
+        (
+            "members",
+            Value::Arr(members.into_iter().map(|(value, _)| value).collect()),
+        ),
         ("sides", Value::Arr(sides)),
     ])
+}
+
+/// この面材にかかる軸組材を、面材の座標（mm）の矩形にする。
+///
+/// 面材の左下を原点として、縦材は面材の下から上まで、横材は左から右まで
+/// 通っているものとして描く。面材にかからない（重ならない）材は入れない。
+/// 図に渡す値と、描く範囲を決めるための矩形（左, 下, 右, 上）を返す。
+fn panel_member_shapes(
+    panel: &PanelInput,
+    frame: &Frame,
+) -> Vec<(Value, (f64, f64, f64, f64))> {
+    frame
+        .members
+        .iter()
+        .filter_map(|member| {
+            let (low, high) = member.span();
+            let (x, y, width, height) = match member.direction {
+                frame::Direction::Vertical => {
+                    if high <= panel.left || low >= panel.right {
+                        return None;
+                    }
+                    (low - panel.left, 0.0, member.width, panel.height())
+                }
+                frame::Direction::Horizontal => {
+                    if high <= panel.bottom || low >= panel.top {
+                        return None;
+                    }
+                    (0.0, low - panel.bottom, panel.width(), member.width)
+                }
+            };
+            Some((
+                Value::obj([
+                    ("label", member.label.clone().into()),
+                    ("direction", member.direction.id().into()),
+                    ("x", x.into()),
+                    ("y", y.into()),
+                    ("width", width.into()),
+                    ("height", height.into()),
+                ]),
+                (x, y, x + width, y + height),
+            ))
+        })
+        .collect()
 }
 
 /// 軸組材を、壁の座標（mm）の矩形にする。
 ///
 /// 縦材は壁の下から上まで、横材は左から右まで通っているものとして描く
 /// （壁の中での位置と見付け幅が分かればよいので、実際の長さは追わない）。
-fn member_shapes(input: &WallInput) -> Vec<Value> {
+/// 図に渡す値と、描く範囲を決めるための矩形（左, 下, 右, 上）を返す。
+fn member_shapes(input: &WallInput) -> Vec<(Value, (f64, f64, f64, f64))> {
     input
         .frame
         .members
@@ -1182,14 +1240,17 @@ fn member_shapes(input: &WallInput) -> Vec<Value> {
                     (0.0, member.position - half, input.width, member.width)
                 }
             };
-            Value::obj([
-                ("label", member.label.clone().into()),
-                ("direction", member.direction.id().into()),
-                ("x", x.into()),
-                ("y", y.into()),
-                ("width", width.into()),
-                ("height", height.into()),
-            ])
+            (
+                Value::obj([
+                    ("label", member.label.clone().into()),
+                    ("direction", member.direction.id().into()),
+                    ("x", x.into()),
+                    ("y", y.into()),
+                    ("width", width.into()),
+                    ("height", height.into()),
+                ]),
+                (x, y, x + width, y + height),
+            )
         })
         .collect()
 }
@@ -1476,7 +1537,7 @@ fn build_panel_report(
                 step("Cxy", "(3.2.5)", six(result.cxy)),
             ]),
         ),
-        ("diagram", build_diagram(panel, nails, &result)),
+        ("diagram", build_diagram(panel, nails, &result, &wall.frame)),
     ]))
 }
 
@@ -2087,7 +2148,12 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
 /// 依らない部分をここで決める。範囲は「面材枠 (0,0)-(W,H) と全釘」の外接
 /// 矩形。釘が面材からはみ出す配列でも切り取らず、はみ出していることが
 /// 見えるようにするため。
-fn build_diagram(panel: &PanelInput, nails: &[Nail], result: &nail_array::Constants) -> Value {
+fn build_diagram(
+    panel: &PanelInput,
+    nails: &[Nail],
+    result: &nail_array::Constants,
+    frame: &Frame,
+) -> Value {
     let mut min_x = 0.0_f64;
     let mut max_x = panel.width();
     let mut min_y = 0.0_f64;
@@ -2097,6 +2163,15 @@ fn build_diagram(panel: &PanelInput, nails: &[Nail], result: &nail_array::Consta
         max_x = max_x.max(nail.x);
         min_y = min_y.min(nail.y);
         max_y = max_y.max(nail.y);
+    }
+    // この面材にかかる軸組材（釘がどこに刺さるのかを、図の上で確かめられる
+    // ようにする）。材が面材の外へ出るぶんも範囲に入れて、図の縁で切らない。
+    let members = panel_member_shapes(panel, frame);
+    for (_, (left, bottom, right, top)) in &members {
+        min_x = min_x.min(*left);
+        max_x = max_x.max(*right);
+        min_y = min_y.min(*bottom);
+        max_y = max_y.max(*top);
     }
 
     let ticks = |values: &[f64]| {
@@ -2125,6 +2200,13 @@ fn build_diagram(panel: &PanelInput, nails: &[Nail], result: &nail_array::Consta
         ("maxY", max_y.into()),
         ("xTicks", ticks(&xs)),
         ("yTicks", ticks(&ys)),
+        // 軸組材（面材の左下を原点とした矩形）。釘との位置関係が図で見える
+        // ので、へりあき（面材の縁から釘まで）と軸材の縁端距離（釘から材の
+        // 縁まで）を、数値と図の両方で確かめられる。
+        (
+            "members",
+            Value::Arr(members.into_iter().map(|(value, _)| value).collect()),
+        ),
         (
             "axis",
             Value::obj([
@@ -3225,6 +3307,37 @@ mod tests {
         assert!(value.contains("呼び径が分からないため 20 mm"), "{value}");
     }
 
+    /// 釘配列図にも、その面材にかかる軸組材を描く（釘との位置関係が見える）。
+    #[test]
+    fn the_nail_drawing_carries_the_frame_members() {
+        let report = compute_panel(&example_panel(), &example_wall(), 0).unwrap();
+        let diagram = report.get("diagram").unwrap();
+        let members = diagram.get("members").unwrap().as_array().unwrap();
+        let number = |index: usize, key: &str| {
+            members[index].get(key).unwrap().as_f64().unwrap()
+        };
+
+        // 910 × 610 を壁（W 910 × H 2900）の左下に張った面材。かかるのは
+        // 両端の柱・@455 の間柱・下の横架材・上の縁の受け材。
+        let labels: Vec<&str> = members
+            .iter()
+            .map(|member| member.get("label").unwrap().as_str().unwrap())
+            .collect();
+        assert_eq!(labels, vec!["柱", "間柱", "柱", "横架材", "継目の材"]);
+        // 面材の左下が原点。左端の柱は材心が X = 0 なので、半分が外へ出る。
+        assert_eq!((number(0, "x"), number(0, "width")), (-52.5, 105.0));
+        assert_eq!((number(1, "x"), number(1, "width")), (432.5, 45.0));
+        // 縦材は面材の下から上まで、横材は左から右まで。
+        assert_eq!((number(1, "y"), number(1, "height")), (0.0, 610.0));
+        assert_eq!((number(3, "x"), number(3, "width")), (0.0, 910.0));
+        // 材が外へ出るぶんも、図に描く範囲へ入れる。
+        assert_eq!(diagram.get("minX").unwrap().as_f64(), Some(-52.5));
+
+        // 壁の上の横架材（Y = 2900）は、この面材（上端 610）にかからない。
+        assert!(!labels.contains(&"横架材2"));
+        assert_eq!(members.len(), 5);
+    }
+
     /// 壁の面材配列図には、軸組材も描く（面材の縁がどの材に載っているか）。
     #[test]
     fn the_arrangement_drawing_carries_the_frame_members() {
@@ -3447,8 +3560,11 @@ mod tests {
         let sides = diagram.get("sides").unwrap().as_array().unwrap();
         assert_eq!(sides.len(), 1);
         assert_eq!(sides[0].get("label").unwrap().as_str(), Some("表面"));
-        // 範囲は壁そのもの（面材はどれも壁の中に収まっている）。
-        assert_eq!(diagram.get("maxY").unwrap().as_f64(), Some(3000.0));
+        // 範囲は、壁と面材に軸組材を足したもの（面材はどれも壁の中に収まって
+        // いるが、上端の横架材は材心が階高の位置なので、見付けの半分が外に
+        // 出る）。図の縁で軸組材が切れないように、そこまで描く。
+        assert_eq!(diagram.get("maxY").unwrap().as_f64(), Some(3052.5));
+        assert_eq!(diagram.get("minX").unwrap().as_f64(), Some(-52.5));
 
         let panels = sides[0].get("panels").unwrap().as_array().unwrap();
         assert_eq!(panels.len(), 2);
