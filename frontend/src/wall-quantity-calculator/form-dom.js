@@ -4,8 +4,15 @@
 // 説明を参照）。ここは「定義どおりに DOM を作る」「DOM から値を読む」
 // 「今の入力に合わせて入力できる／できないを切り替える」の 3 つだけを行う。
 
-// 節は折り畳めるセクション（<portal-section>）で作る。
+// 節・入力欄・選択肢は画面の共通部品で作る（src/components/form-field.js）。
 import { revealSection } from '../components/collapsible-section.js';
+import {
+  buildChoiceOption,
+  buildField as buildSharedField,
+  buildFieldGroup,
+  buildSection as buildSharedSection,
+  buildChoiceGroup,
+} from '../components/form-field.js';
 import {
   blockVisible,
   eachField,
@@ -16,9 +23,6 @@ import {
   sectionEnabled,
 } from './form-logic.js';
 
-// 単位から入力モード（スマートフォンのキーパッド）を決める。
-const NUMERIC_UNITS = ['mm', '寸'];
-
 function el(doc, tag, className, text) {
   const node = doc.createElement(tag);
   if (className) node.className = className;
@@ -26,70 +30,35 @@ function el(doc, tag, className, text) {
   return node;
 }
 
-function buildSelect(doc, field) {
-  const select = doc.createElement('select');
-  select.id = `field-${field.key}`;
-  select.dataset.field = field.key;
-  if (field.cascade) {
-    select.dataset.cascadeRole = field.cascade.role;
-    select.dataset.cascadeOf = field.cascade.of;
-  }
-  return select;
-}
-
-function buildInput(doc, field) {
-  const input = doc.createElement('input');
-  input.id = `field-${field.key}`;
-  input.dataset.field = field.key;
-  if (field.type === 'date') {
-    input.type = 'date';
-  } else if (field.type === 'number') {
-    input.type = 'number';
-    input.inputMode = NUMERIC_UNITS.indexOf(field.unit) === -1 ? 'decimal' : 'numeric';
-    if (field.step) input.step = field.step;
-    if (field.min !== undefined) input.min = String(field.min);
-  } else {
-    input.type = 'text';
-  }
-  return input;
-}
-
-/** 入力欄 1 つ（ラベル・入力・単位・注意書き）。 */
+/**
+ * 入力欄 1 つ。
+ *
+ * 形は共通部品が作り、ここが足すのは連動プルダウンの印だけ（その行の
+ * JAS 規格から候補を作り直すために、どの列のどの役かを覚えておく）。
+ * 表の桝目に入る欄（compact）は、列の見出しが名前を担うのでラベルを出さない。
+ */
 export function buildField(doc, field, { compact } = {}) {
-  const wrap = el(doc, 'div', 'wq-field');
-  wrap.dataset.fieldWrap = field.key;
-
-  if (!compact) {
-    const label = el(doc, 'label', null, field.label);
-    label.setAttribute('for', `field-${field.key}`);
-    wrap.appendChild(label);
+  const { wrap, control } = buildSharedField(doc, field, {
+    hideLabel: compact,
+    ariaLabel: compact ? field.label : '',
+  });
+  if (field.type === 'select' && field.cascade) {
+    control.dataset.cascadeRole = field.cascade.role;
+    control.dataset.cascadeOf = field.cascade.of;
   }
-
-  const row = el(doc, 'div', 'field-row');
-  const control = field.type === 'select' ? buildSelect(doc, field) : buildInput(doc, field);
-  if (compact) control.setAttribute('aria-label', field.label);
-  row.appendChild(control);
-  if (field.unit) row.appendChild(el(doc, 'span', 'unit', field.unit));
-  wrap.appendChild(row);
-
-  if (field.note) wrap.appendChild(el(doc, 'p', 'hint', field.note));
   return wrap;
 }
 
 function buildFieldsBlock(doc, block) {
-  const wrap = el(doc, 'div', 'wq-block');
+  const wrap = buildFieldGroup(doc, { label: block.label, note: block.note });
   wrap.dataset.block = block.label || '';
-  if (block.label) wrap.appendChild(el(doc, 'h4', null, block.label));
-  if (block.note) wrap.appendChild(el(doc, 'p', 'hint', block.note));
   block.fields.forEach((field) => wrap.appendChild(buildField(doc, field)));
   return wrap;
 }
 
 function buildTableBlock(doc, block) {
-  const wrap = el(doc, 'div', 'wq-block');
+  const wrap = buildFieldGroup(doc, { label: block.label, note: block.note });
   wrap.dataset.block = block.label || '';
-  if (block.label) wrap.appendChild(el(doc, 'h4', null, block.label));
-  if (block.note) wrap.appendChild(el(doc, 'p', 'hint', block.note));
 
   const table = el(doc, 'table', 'wq-table');
   const thead = doc.createElement('thead');
@@ -116,24 +85,20 @@ function buildTableBlock(doc, block) {
 
 /** 節 1 つ（見出し・算定方法のチェックボックス・かたまり）。折り畳める。 */
 export function buildSection(doc, section) {
-  const wrap = el(doc, 'portal-section', 'cert-section');
+  const { wrap } = buildSharedSection(doc, { title: section.title });
   wrap.dataset.section = section.key;
-  // 見出しは折り畳んでも見えるところ（セクションの開閉の行）に置く。
-  const heading = el(doc, 'h3', null, section.title);
-  heading.slot = 'title';
-  wrap.appendChild(heading);
   if (section.note) wrap.appendChild(el(doc, 'p', 'hint', section.note));
 
+  // 算定方法の入切。選択肢と同じ「行ごと押せる札」にする。
   if (section.toggle) {
-    const label = el(doc, 'label', 'wq-toggle');
-    const box = doc.createElement('input');
-    box.type = 'checkbox';
-    box.id = `field-${section.toggle.key}`;
-    box.dataset.field = section.toggle.key;
-    box.dataset.toggle = 'true';
-    label.appendChild(box);
-    label.appendChild(el(doc, 'span', null, section.toggle.label));
-    wrap.appendChild(label);
+    const toggle = buildChoiceOption(doc, {
+      type: 'checkbox',
+      text: section.toggle.label,
+    });
+    toggle.control.id = `field-${section.toggle.key}`;
+    toggle.control.dataset.field = section.toggle.key;
+    toggle.control.dataset.toggle = 'true';
+    wrap.appendChild(toggle.wrap);
   }
 
   (section.blocks || []).forEach((block) => {
@@ -146,19 +111,15 @@ export function buildSection(doc, section) {
 
 /** 「0. 設計の用途」のラジオ。配布物ではチェックボックスだが、選べるのは 1 つだけ。 */
 export function buildUsage(doc, usage) {
-  const wrap = el(doc, 'fieldset', 'cert-choices');
-  wrap.appendChild(el(doc, 'legend', null, usage.title));
-  if (usage.note) wrap.appendChild(el(doc, 'p', 'hint', usage.note));
-  usage.options.forEach((option) => {
-    const label = el(doc, 'label', 'choice-option');
-    const radio = doc.createElement('input');
-    radio.type = 'radio';
-    radio.name = 'usage';
-    radio.value = option.value;
-    radio.dataset.usage = option.value;
-    label.appendChild(radio);
-    label.appendChild(el(doc, 'span', null, option.label));
-    wrap.appendChild(label);
+  const { wrap, controls } = buildChoiceGroup(doc, {
+    legend: usage.title,
+    name: 'usage',
+    options: usage.options.map((option) => ({ value: option.value, text: option.label })),
+    note: usage.note,
+  });
+  // 用途は他の欄（data-field）とは別に読み書きするので、専用の印を付ける。
+  controls.forEach((radio) => {
+    radio.dataset.usage = radio.value;
   });
   return wrap;
 }

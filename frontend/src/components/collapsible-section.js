@@ -3,7 +3,7 @@
 // 入力・計算内容が増えても目的の入力欄を探しやすいよう、各ページの節を
 // 見出しの行で開け閉めできるようにする部品。
 //
-//   <portal-section class="cert-section">
+//   <portal-section class="form-section">
 //     <h3 slot="title">物件</h3>
 //     <button type="button" slot="actions">この面材を削除</button>
 //     …中身…

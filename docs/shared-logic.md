@@ -46,7 +46,7 @@
 | wasm の配り方 | `app/portal_sdk.py` | `wasm_response`（gzip・ETag・キャッシュ） |
 | ツールの名乗り | `Tool` / `tool_router` / `tools/__init__.py` | `main.py` にツールの名前は出てこない |
 | 画面の見た目 | `src/styles/`（tokens・base・layout・components） | 色・余白・部品。ツールは生の値を書かない |
-| 画面の共通部品 | `src/components/` | ヘッダー・読み込み中・サインインゲート・折り畳み節・PDF のファイル操作欄 |
+| 画面の共通部品 | `src/components/` | ヘッダー・読み込み中・サインインゲート・折り畳み節・入力欄と選択肢（`form-field.js`）・PDF のファイル操作欄 |
 | PDF のファイル操作 | `src/pdf-file-ops.js` / `src/save-dialogs.js` | 「保存 / 別名で保存 / 未保存の確認」の判断と文言 |
 | Picker | `src/google-picker.js` | Drive のファイル選択 |
 
@@ -179,7 +179,18 @@ Picker で選ばれた `fileId` を受け取り、**ゴミ箱・種類・親フ�
 
 ## 3. 洗い出し — 画面側
 
-### 3.1 入力欄の組み立て
+### 3.1 入力欄の組み立て〔第 5 段 · 済〕
+
+> **済**: `src/components/form-field.js` に寄せました（下の記述は寄せる前の
+> 状況です）。`buildField` / `buildChoiceGroup` / `buildChoiceOption` /
+> `buildFieldGroup` / `buildSection` の 5 つで、3 つの `form-dom.js` が
+> 作っていた形は 1 つになっています。**別々の中身を持っていた同名の定数
+> （`NUMERIC_UNITS` / `DECIMAL_UNITS`）も 1 つの表になりました**——
+> 3 つのツールの単位を突き合わせても食い違いは無く、そのまま重ねられました。
+>
+> ツールに残るのは、その画面にしか無い印だけです（証明書は
+> 「その選択肢を選んだときだけ入力できる」の対応、必要壁量は連動プルダウンの
+> 役、面材張り大壁は `data-panel-field` と面材ごとに分けた id）。
 
 `form-dom.js` が 3 つあり（証明書 402 行・必要壁量 350 行・面材張り大壁 886 行）、
 **骨格が同じ**です。
@@ -197,7 +208,35 @@ Picker で選ばれた `fileId` を受け取り、**ゴミ箱・種類・親フ�
 ツール固有の振る舞いはツールの `main.js` に残します**（部屋の見出しの追従・
 和暦の組み立て・釘配列図・出力結果の表など）。
 
-### 3.2 デザインシステムに漏れているツール固有の名前
+### 3.2 デザインシステムに漏れているツール固有の名前〔第 5 段 · 済〕
+
+> **済**: 汎用の名前に置き換えました（下の記述は直す前の状況です）。
+> 数えてみると `.wq-field` / `.cert-field` だけではなく、`.wq-block` /
+> `.wq-toggle` / `.wq-table` / `.wq-result-section` / `.cert-section` /
+> `.cert-choices` / `.room` / `.wall-panel` / `.wall-panels` / `.pattern-bar` /
+> `.panel-size` / `.panel-group` / `.result-heading` / `#removeWallBtn` /
+> `#addWallPanelBtn` / `.add-room` と、`styles/` の 3 枚に広がっていました。
+>
+> | 直したもの | 直した先 |
+> | --- | --- |
+> | `.cert-field` / `.wq-field` | `.field` |
+> | `.cert-choices` / `.wq-toggle` | `.choices` / `.choice-option` |
+> | `.wq-block` / `.panel-group`（中身が 1 文字違わなかった） | `.field-group` |
+> | `.cert-section` | 節そのもの（`portal-section`）。中身を桝目にする節だけ `.form-section` |
+> | `.room` / `.wall-panel` / `.pattern-bar`（カードの下地） | `portal-section` と `.card` |
+> | `#removeWallBtn` / `[data-remove-wall-panel]` / `.room .remove` | `button.danger` |
+> | `#addWallPanelBtn` / `.add-room` | `button.add` |
+> | `.wq-result-section` / `.panel-size` / `.result-heading` ほか（桝目の中で 1 行を使い切るものの数え上げ） | 数え上げをやめ、「桝目に入るのは `.field` だけ」と裏返した |
+> | `.pattern-bar`（印刷では出さない） | ツールの `tool.css` へ |
+>
+> 最後の 2 つが効いています。**「並べるものを数え上げる」書き方をやめた**ので、
+> ツールが節に新しいものを置くたびに土台へ名前を足す必要が無くなりました
+> （名前が漏れていた原因そのものです）。
+>
+> 目で見ても分からない決めごとなので、**`tests/design-system-vocabulary.test.js`
+> で数えるようにしました**——`src/styles/` の選択子に出てくる名前のうち、
+> 使っているのが 1 つのツールだけのものがあれば落ちます。直す前の状態に当てると
+> 11 個を挙げます。
 
 `src/styles/components.css` に **`.wq-field` と `.cert-field`**（＝必要壁量と
 証明書のクラス名）が 14 行ほど出てきます。「デザインシステムにツールの名前は
@@ -265,7 +304,7 @@ Picker で選ばれた `fileId` を受け取り、**ゴミ箱・種類・親フ�
 | 第 2 段 ✅ | **ファイル名の規則を 1 つにする**（2.2）。画面とサーバが同じ規則であることをテストで縛る | `portal_sdk` ＋ ツール 3 つ ＋ `pdf-file-ops.js` | 既存テスト ＋ 新しい突き合わせのテスト |
 | 第 3 段 ✅ | **突き合わせの外枠を 1 つにする**（2.3） | `portal_sdk` ＋ ツール 2 つ | 既存の verify のテストが落ちないこと |
 | 第 4 段 ✅ | **生成物の引き渡しを 1 つにする**（2.5） | `portal_sdk` ＋ ツール 4 つ | URL も応答の形も変わらないこと |
-| 第 5 段 | **入力欄を部品にし、デザインシステムからツール固有のクラス名を追い出す**（3.1・3.2） | `src/components/` ＋ `src/styles/components.css` ＋ 画面 3 つ | 既存の画面テスト ＋ デザインシステムのテスト |
+| 第 5 段 ✅ | **入力欄を部品にし、デザインシステムからツール固有のクラス名を追い出す**（3.1・3.2） | `src/components/` ＋ `src/styles/`（3 枚）＋ 画面 4 つ | 既存の画面テスト ＋ デザインシステムのテスト |
 | 第 6 段 | **雛形を設定する画面を部品にする**（3.3） | `src/components/` ＋ 画面 2 つ | 既存の画面テスト |
 | 第 7 段 | **条件の語彙を 1 つにする**（2.4） | mapping 2 つ ＋ `portal_sdk` ＋ 画面 2 つ | 既存テスト（mapping の書き換えを伴うので最後） |
 

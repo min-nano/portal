@@ -146,36 +146,24 @@
  * 自動で 1 列に戻す。 */
 
 .field-grid,
-.cert-section::part(body),
-.wq-block,
-.panel-group {
+.form-section::part(body),
+.field-group {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
   gap: var(--s-3) var(--s-4);
   align-items: start;
 }
 
-/* 欄ではないもの（見出し・説明・選択肢・表・結果）は 1 行を使い切る。 */
-.field-grid > .field-span,
-.cert-section > .hint,
-.cert-section > h4,
-.cert-section > .cert-choices,
-.cert-section > .choice-option,
-.cert-section > .wq-block,
-.cert-section > .wq-toggle,
-.cert-section > .wq-table,
-.cert-section > .table-scroll,
-.cert-section > .wq-result-section,
-.cert-section > .result-summary,
-.cert-section > .result-error,
-.cert-section > .result-heading,
-.cert-section > .panel-size,
-.cert-section > .wall-panels,
-.wq-block > h4,
-.wq-block > .hint,
-.wq-block > .wq-table,
-.panel-group > h4,
-.panel-group > .hint {
+/* 桝目に入るのは入力欄（.field）だけ。それ以外（見出し・説明・選択肢・表・
+   結果）は 1 行を使い切る。
+ *
+ * 「欄以外を並べる」ではなく「欄だけを並べる」と書いてあるのは、節に何を
+ * 置くかがツールごとに増えるため。並べたいものを数え上げる書き方だと、
+ * 数え漏れたものが桝目に潜り込む（デザインシステムにツールの名前が
+ * 出てくる原因でもあった）。 */
+.field-grid > :not(.field),
+.form-section > :not(.field),
+.field-group > :not(.field) {
   grid-column: 1 / -1;
 }
 

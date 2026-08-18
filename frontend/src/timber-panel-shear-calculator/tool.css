@@ -14,6 +14,14 @@
   box-shadow: var(--shadow-1);
 }
 
+/* 紙には「今どの壁を編集しているか」は要らない（折り畳んだ節も含めて
+   全部出るので、送りの操作そのものが意味を持たない）。 */
+@media print {
+  .pattern-bar {
+    display: none !important;
+  }
+}
+
 /* 2 列になる広さでは、この帯は入力（左）の列の幅までにする。全幅のまま
    貼り付けると、右の列に貼り付いた結果の見出しを覆い隠してしまうため
    （帯が受け持つのは左の列の中身＝どの壁を編集しているか、でもある）。 */
@@ -96,7 +104,7 @@
   margin-top: var(--s-3);
 }
 
-.panel-size label {
+.panel-size > .field {
   margin: 0;
 }
 
@@ -138,19 +146,6 @@
   min-height: 32px;
   padding: 0 var(--s-3);
   font-size: var(--fs-xs);
-}
-
-/* 面材の中の小見出し（「面材と釘」「面材の配置と釘配列」）。 */
-.panel-group {
-  margin-top: var(--s-4);
-}
-
-.panel-group h4 {
-  margin: 0;
-  padding-bottom: var(--s-1);
-  font-size: var(--fs-sm);
-  color: var(--text-brand);
-  border-bottom: 1px solid var(--divider);
 }
 
 /* 面材 1 枚ごとの計算結果。入力の続きに見えないよう、白い箱に入れる。 */

@@ -5,8 +5,13 @@
 // この画面には項目を持たないので、雛形の改訂にはマッピングの編集だけで
 // 追従できる。
 
-// 節は折り畳めるセクション（<portal-section>）で作る。
+// 節・入力欄・選択肢は画面の共通部品で作る（src/components/form-field.js）。
 import { revealSection } from '../components/collapsible-section.js';
+import {
+  buildChoiceGroup as buildSharedChoiceGroup,
+  buildField as buildSharedField,
+  buildSection as buildSharedSection,
+} from '../components/form-field.js';
 import {
   dateFieldsFromIso,
   emptyFormData,
@@ -15,60 +20,34 @@ import {
   isoFromDateFields,
 } from './form-logic.js';
 
-// 単位から入力モード（スマートフォンのキーパッド）を決める。値は文字列の
-// まま扱う（"62.10" の末尾 0 や全角入力をそのまま雛形へ差し込むため、
-// input[type=number] は使わない）。
-const NUMERIC_UNITS = ['月', '日', '階'];
-const DECIMAL_UNITS = ['m', 'm²'];
-
 /**
  * 記入欄。
+ *
+ * 形は共通部品が作る。この証明書に固有なのは 2 つで、値を文字列のまま扱う
+ * こと（"62.10" の末尾 0 や全角入力をそのまま雛形へ差し込むため、
+ * input[type=number] は使わない）と、必須をラベルの「*」で示すこと。
  *
  * dependency を渡した欄は、その選択肢が選ばれているときだけ入力できる
  * （「６ その他」の内容など。refreshDependencies を参照）。
  */
 export function buildField(doc, field, { hideLabel, labelledBy, dependency } = {}) {
-  const wrap = doc.createElement('div');
-  wrap.className = 'cert-field';
-  // 未入力のまま保存しようとしたとき、その項目を含む節を開いて示すための目印。
-  if (field.required) wrap.dataset.required = '';
-
-  // セクションの見出しと同じ名前なら、ラベルは出さない（見出しが名前を担う）。
-  if (!hideLabel) {
-    const label = doc.createElement('label');
-    label.setAttribute('for', `field-${field.key}`);
-    label.textContent = field.label + (field.required ? ' *' : '');
-    wrap.appendChild(label);
-  }
-
-  const row = doc.createElement('div');
-  row.className = 'field-row';
-  const input = doc.createElement('input');
-  input.type = 'text';
-  input.id = `field-${field.key}`;
-  input.dataset.field = field.key;
-  if (hideLabel && labelledBy) input.setAttribute('aria-labelledby', labelledBy);
-  if (field.hint) input.placeholder = field.hint;
-  if (NUMERIC_UNITS.includes(field.unit)) input.inputMode = 'numeric';
-  if (DECIMAL_UNITS.includes(field.unit)) input.inputMode = 'decimal';
+  const { wrap, control } = buildSharedField(
+    doc,
+    {
+      key: field.key,
+      label: field.label + (field.required ? ' *' : ''),
+      unit: field.unit,
+      placeholder: field.hint,
+      required: field.required,
+      note: dependency
+        ? `「${optionText(dependency.option)}」を選んだときに入力できます。`
+        : '',
+    },
+    { hideLabel, labelledBy: hideLabel ? labelledBy : '' }
+  );
   if (dependency) {
-    input.dataset.requiresChoice = dependency.choice;
-    input.dataset.requiresValue = dependency.option.value;
-  }
-  row.appendChild(input);
-  if (field.unit) {
-    const unit = doc.createElement('span');
-    unit.className = 'unit';
-    unit.textContent = field.unit;
-    row.appendChild(unit);
-  }
-  wrap.appendChild(row);
-
-  if (dependency) {
-    const hint = doc.createElement('p');
-    hint.className = 'hint';
-    hint.textContent = `「${optionText(dependency.option)}」を選んだときに入力できます。`;
-    wrap.appendChild(hint);
+    control.dataset.requiresChoice = dependency.choice;
+    control.dataset.requiresValue = dependency.option.value;
   }
   return wrap;
 }
@@ -102,7 +81,7 @@ export function refreshDependencies(root) {
     const active = Boolean(selected) && selected.value === input.dataset.requiresValue;
     input.disabled = !active;
     if (!active) input.value = '';
-    const wrap = input.closest('.cert-field');
+    const wrap = input.closest('.field');
     if (wrap) wrap.classList.toggle('disabled', !active);
   });
 }
@@ -124,28 +103,23 @@ function isDateRequired(spec, fieldsByKey) {
  * 元の値がそのまま出る（何が刷られるかは下の確認欄に出す）。
  */
 export function buildDateField(doc, spec, fieldsByKey, { hideLabel, labelledBy } = {}) {
-  const wrap = doc.createElement('div');
-  wrap.className = 'cert-field cert-date';
-  if (isDateRequired(spec, fieldsByKey)) wrap.dataset.required = '';
-
-  // セクションの見出しと同じ名前なら、ラベルは出さない（見出しが名前を担う）。
-  if (!hideLabel) {
-    const label = doc.createElement('label');
-    label.setAttribute('for', 'certDate');
-    label.textContent = (spec.label || '日付') + (isDateRequired(spec, fieldsByKey) ? ' *' : '');
-    wrap.appendChild(label);
-  }
-
-  const picker = doc.createElement('input');
-  picker.type = 'date';
-  picker.id = 'certDate';
-  if (hideLabel && labelledBy) picker.setAttribute('aria-labelledby', labelledBy);
+  const required = isDateRequired(spec, fieldsByKey);
+  const { wrap, control: picker } = buildSharedField(
+    doc,
+    {
+      id: 'certDate',
+      type: 'date',
+      label: (spec.label || '日付') + (required ? ' *' : ''),
+      required,
+    },
+    { hideLabel, labelledBy: hideLabel ? labelledBy : '', className: 'cert-date' }
+  );
   picker.dataset.datePicker = '';
   picker.dataset.eraYearField = spec.era_year;
   picker.dataset.monthField = spec.month;
   picker.dataset.dayField = spec.day;
-  wrap.appendChild(picker);
 
+  // 証明書に刷る 3 欄（年号年 / 月 / 日）は隠し入力で持つ。
   [spec.era_year, spec.month, spec.day].forEach((key) => {
     const hidden = doc.createElement('input');
     hidden.type = 'hidden';
@@ -236,43 +210,26 @@ function optionText(option) {
  * あるときだけ選べる（refreshDependencies を参照）。
  */
 export function buildChoiceGroup(doc, group, { hideLegend, labelledBy, gate } = {}) {
-  const wrap = doc.createElement('fieldset');
-  wrap.className = hideLegend ? 'cert-choices bare' : 'cert-choices';
-  if (labelledBy) wrap.setAttribute('aria-labelledby', labelledBy);
-  if (gate) wrap.dataset.requiresField = gate.key;
-  if (group.required) wrap.dataset.required = '';
-
-  if (!hideLegend) {
-    const legend = doc.createElement('legend');
-    legend.textContent = group.label + (group.required ? ' *' : '');
-    wrap.appendChild(legend);
-  }
-
   // 必須でないグループは「選ばない」状態にも戻せるようにする。
   const options = group.required
     ? group.options
     : [{ value: '', label: '（指定しない）' }].concat(group.options);
 
-  options.forEach((option) => {
-    const label = doc.createElement('label');
-    label.className = 'choice-option';
-    const radio = doc.createElement('input');
-    radio.type = 'radio';
-    radio.name = `choice-${group.key}`;
-    radio.value = option.value;
+  const { wrap, controls } = buildSharedChoiceGroup(
+    doc,
+    {
+      legend: group.label + (group.required ? ' *' : ''),
+      name: `choice-${group.key}`,
+      options: options.map((option) => ({ value: option.value, text: optionText(option) })),
+      required: group.required,
+      footnote: gate ? `「${gate.label}」を入力したときに選べます。` : '',
+    },
+    { hideLegend, labelledBy }
+  );
+  if (gate) wrap.dataset.requiresField = gate.key;
+  controls.forEach((radio) => {
     radio.dataset.choice = group.key;
-    const text = doc.createElement('span');
-    text.textContent = optionText(option);
-    label.append(radio, text);
-    wrap.appendChild(label);
   });
-
-  if (gate) {
-    const hint = doc.createElement('p');
-    hint.className = 'hint';
-    hint.textContent = `「${gate.label}」を入力したときに選べます。`;
-    wrap.appendChild(hint);
-  }
   return wrap;
 }
 
@@ -287,9 +244,6 @@ export function buildForm(root, config) {
   const dependencyByField = fieldDependencies(config);
 
   config.sections.forEach((section, index) => {
-    const wrap = doc.createElement('portal-section');
-    wrap.className = 'cert-section';
-
     // 見出しがそのまま名前になっている項目は、セクションの見出しにまとめる
     // （同じ文言と囲みが二重にならないように）。
     const mergedChoice = section.items.find(
@@ -307,12 +261,10 @@ export function buildForm(root, config) {
       (mergedGroup && mergedGroup.required) ||
       (mergedDate && isDateRequired(mergedDate.date, fieldsByKey)) ||
       (mergedField && fieldsByKey.get(mergedField.field).required);
-    const heading = doc.createElement('h3');
-    heading.id = `cert-section-${index}`;
-    heading.textContent = section.title + (required ? ' *' : '');
-    // 見出しは折り畳んでも見えるところ（セクションの開閉の行）に置く。
-    heading.slot = 'title';
-    wrap.appendChild(heading);
+    const { wrap, heading } = buildSharedSection(doc, {
+      title: section.title + (required ? ' *' : ''),
+      titleId: `cert-section-${index}`,
+    });
 
     section.items.forEach((item) => {
       if (item.field) {
@@ -368,7 +320,7 @@ export function revealMissingFields(root) {
     // 前提が外れている項目（入力・選択できない状態）は、証明書にも載らない
     // ので数えない（validateFormData と同じ扱い）。
     if (wrap.classList.contains('disabled')) return;
-    const missing = wrap.classList.contains('cert-choices')
+    const missing = wrap.classList.contains('choices')
       ? !wrap.querySelector('[data-choice]:checked')
       : Array.from(wrap.querySelectorAll('[data-field]')).some(
           (input) => !input.disabled && !input.value.trim()

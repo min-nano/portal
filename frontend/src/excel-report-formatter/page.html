@@ -15,9 +15,11 @@
 </div>
 
 <form id="reportForm" onsubmit="return false;">
-  <div class="cert-field field-half">
+  <div class="field field-half">
     <label for="property_name">住宅(物件)名</label>
-    <input type="text" id="property_name" name="property_name">
+    <div class="field-row">
+      <input type="text" id="property_name" name="property_name">
+    </div>
   </div>
 
   <!-- 部屋は 1 つずつ折り畳める。入力済みの部屋を閉じておくと、
@@ -25,7 +27,7 @@
   <portal-section-controls class="section-controls" for="rooms"></portal-section-controls>
 
   <div id="rooms"></div>
-  <button type="button" class="add-room" id="addRoomBtn">＋ 部屋を追加</button>
+  <button type="button" class="add" id="addRoomBtn">＋ 部屋を追加</button>
   <p class="hint">部屋数は物件に合わせて増減できます（雛形の上限まで）。</p>
 
   <button type="button" id="submitBtn" disabled>Excel出力</button>

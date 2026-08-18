@@ -153,7 +153,7 @@ function addRoom() {
     '<div class="room-head" slot="title">' +
       '<div class="room-title-row">' +
         '<h3 class="room-title"></h3>' +
-        '<button type="button" class="remove">削除</button>' +
+        '<button type="button" class="remove secondary danger">削除</button>' +
       '</div>' +
       '<div class="room-meta">' +
         '<label>階数</label><input type="number" inputmode="numeric" data-room-field="floor">' +
