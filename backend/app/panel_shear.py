@@ -36,10 +36,6 @@ FILE_NAME_TEMPLATE = "釘配列諸定数計算書_{projectName}.pdf"
 # これを超える差は「画面とサーバで違うものを計算している」ということ。
 VERIFY_RELATIVE_TOLERANCE = 1e-9
 
-# 突き合わせの結果に並べる差の上限（全項目が違うときに応答が膨れないように）。
-# 打ち切りそのものは土台がやる。ここにあるのは、テストと画面から参照するため。
-MAX_REPORTED_DIFFERENCES = portal_sdk.MAX_REPORTED_DIFFERENCES
-
 # グレー本 3.3(3)「面材張り大壁の許容せん断耐力の計算例」（図 3.3.10）。
 #
 # 階高 3000・幅 910 の準耐力壁形式の大壁で、下から 910 × 1820、その上に

@@ -44,10 +44,6 @@ _MAPPING = None
 _SOURCE = None
 _TEMPLATE_BYTES = None
 
-# 突き合わせの結果に並べる食い違いの上限（全部ずれていても応答が膨れないように）。
-# 打ち切りそのものは土台がやる。ここにあるのは、テストと画面から参照するため。
-MAX_REPORTED_DIFFERENCES = portal_sdk.MAX_REPORTED_DIFFERENCES
-
 
 class WallQuantityError(PortalError):
     """入力起因の生成エラー。message は利用者に表示できる日本語文。"""
