@@ -12,9 +12,8 @@ Drive アクセスも要らないので、このツールにあるのは config 
 """
 
 import json
-from urllib.parse import quote
 
-from fastapi import Depends, Request, Response
+from fastapi import Depends, Request
 
 from .. import portal_sdk, wall_quantity
 from ..clerk_auth import User
@@ -56,16 +55,12 @@ async def create_worksheet(request: Request, user: User = Depends(require_user))
     verification = wall_quantity.verify(wall_quantity.compute(data), body.get("verify"))
     xlsx_bytes = wall_quantity.build_worksheet(data)
 
-    return Response(
-        content=xlsx_bytes,
-        media_type=XLSX_MIME,
-        headers={
-            "Content-Disposition": (
-                f"attachment; filename*=UTF-8''{quote(wall_quantity.file_name(data))}"
-            ),
-            # key と数値だけなので ASCII に収まる（ヘッダに非 ASCII は置けない）。
-            VERIFICATION_HEADER: json.dumps(verification, ensure_ascii=True),
-        },
+    return portal_sdk.download_response(
+        xlsx_bytes,
+        wall_quantity.file_name(data),
+        XLSX_MIME,
+        # key と数値だけなので ASCII に収まる（ヘッダに非 ASCII は置けない）。
+        {VERIFICATION_HEADER: json.dumps(verification, ensure_ascii=True)},
     )
 
 

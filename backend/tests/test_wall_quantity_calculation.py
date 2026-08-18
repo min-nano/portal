@@ -18,6 +18,7 @@
 
 import pytest
 
+from app import portal_sdk
 from app import wall_quantity as wq
 from app.xlsx_fill import XlsxTemplate
 
@@ -313,5 +314,5 @@ def test_verify_lists_at_most_a_handful_of_differences(template, mapping):
 
     verification = wq.verify(result, {"coreVersion": "0.0.0", "cells": {}})
 
-    assert len(verification["differences"]) == wq.MAX_REPORTED_DIFFERENCES
+    assert len(verification["differences"]) == portal_sdk.MAX_REPORTED_DIFFERENCES
     assert verification["omittedDifferences"] > 0

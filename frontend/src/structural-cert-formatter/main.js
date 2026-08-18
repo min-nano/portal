@@ -49,7 +49,7 @@ const GOOGLE_DOC_MIME = 'application/vnd.google-apps.document';
 const PDF_MIME = 'application/pdf';
 
 let config = null; // /config の応答（text_fields / choice_groups / sections）
-let settings = null; // /settings の応答（雛形の設定状態）
+let templateConfigured = false; // /template の応答（雛形が設定済みか）
 let sourceFile = null; // 開いているファイル（Drive 上の PDF）。{ id, name }
 // 今開いている文書の名前。保存ダイアログの初期値に使う（空ならフォームから作る）。
 let documentName = '';
@@ -86,7 +86,7 @@ function showResult(link, fileName) {
 }
 
 function updateSubmitState() {
-  const ready = Boolean(config) && Boolean(settings) && settings.template.configured;
+  const ready = Boolean(config) && templateConfigured;
   document.getElementById('submitBtn').disabled = !ready;
   document.getElementById('saveAsBtn').disabled = !ready;
 }
@@ -102,21 +102,17 @@ function showTemplateName(text, configured) {
   el.className = configured ? 'name' : 'unset';
 }
 
-async function refreshSettings() {
+async function refreshTemplateStatus() {
   try {
-    settings = await apiGet(`${TOOL_API}/settings`);
+    const status = await apiGet(`${TOOL_API}/template`);
+    templateConfigured = status.configured;
+    showTemplateName(status.configured ? status.fileName : '未設定', status.configured);
   } catch (error) {
     // 狭い表示欄に長い文言は入らないので、理由は画面下のメッセージ欄に出す。
+    templateConfigured = false;
     showTemplateName('取得できません', false);
     showMessage(error.message, 'red');
-    updateSubmitState();
-    return;
   }
-
-  showTemplateName(
-    settings.template.configured ? settings.template.fileName : '未設定',
-    settings.template.configured
-  );
   updateSubmitState();
 }
 
@@ -157,7 +153,7 @@ async function chooseTemplate() {
     const result = await apiSendJson(`${TOOL_API}/template`, 'PUT', {
       fileId: file.id,
     });
-    await refreshSettings();
+    await refreshTemplateStatus();
     showMessage(`雛形を設定しました: ${result.fileName}`, 'green');
   } catch (error) {
     showMessage(error.message, 'red');
@@ -433,7 +429,7 @@ async function prepare() {
 
   const [loadedConfig] = await Promise.all([
     apiGet(`${TOOL_API}/config`),
-    refreshSettings(),
+    refreshTemplateStatus(),
   ]);
   config = loadedConfig;
 

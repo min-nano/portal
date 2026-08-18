@@ -1,0 +1,72 @@
+{
+  "_comment": [
+    "生成物のファイル名の規則を、サーバと画面で突き合わせるための表。",
+    "",
+    "規則の実装は 2 つある（backend/app/portal_sdk.py の sanitize_file_name /",
+    "ensure_file_name と、frontend/src/pdf-file-ops.js の sanitizeFileName /",
+    "ensurePdfExtension）。計算（wasm）と違って 1 つの実装を共有できないので、",
+    "同じ入力に同じ答えを返すことをこの表で縛る。両方のテストがこの 1 枚を読む",
+    "（backend/tests/test_file_names.py と frontend/tests/file-name-rule.test.js）。",
+    "",
+    "画面の名前がサーバとずれると、保存ダイアログに出した名前と実際に Drive へ",
+    "保存される名前が食い違う。片方だけを直したときは、ここが落ちる。"
+  ],
+  "default": "既定.pdf",
+  "cases": [
+    { "given": "証明書", "sanitized": "証明書", "withExtension": "証明書.pdf" },
+    { "given": "証明書.pdf", "sanitized": "証明書.pdf", "withExtension": "証明書.pdf" },
+    { "given": "証明書.PDF", "sanitized": "証明書.PDF", "withExtension": "証明書.PDF" },
+    { "given": "報告書.pdf.pdf", "sanitized": "報告書.pdf.pdf", "withExtension": "報告書.pdf.pdf" },
+    { "given": "", "sanitized": "", "withExtension": "既定.pdf" },
+    { "given": null, "sanitized": "", "withExtension": "既定.pdf" },
+    { "given": "   ", "sanitized": "", "withExtension": "既定.pdf" },
+    { "given": "a/b:c", "sanitized": "abc", "withExtension": "abc.pdf" },
+    { "given": "a\\b*c?d\"e<f>g|h", "sanitized": "abcdefgh", "withExtension": "abcdefgh.pdf" },
+    { "given": "/tmp/報告書", "sanitized": "tmp報告書", "withExtension": "tmp報告書.pdf" },
+    { "given": "<>|\"", "sanitized": "", "withExtension": "既定.pdf" },
+    { "given": "レポート\u0000\u001f", "sanitized": "レポート", "withExtension": "レポート.pdf" },
+    { "given": "..隠し..", "sanitized": "隠し", "withExtension": "隠し.pdf" },
+    { "given": "計算書.", "sanitized": "計算書", "withExtension": "計算書.pdf" },
+    { "given": " . ", "sanitized": "", "withExtension": "既定.pdf" },
+    { "given": "名前 . ", "sanitized": "名前", "withExtension": "名前.pdf" },
+    { "given": "  ..名前..  ", "sanitized": "名前", "withExtension": "名前.pdf" },
+    { "given": "  余白  ", "sanitized": "余白", "withExtension": "余白.pdf" },
+    { "given": "　全角空白　", "sanitized": "全角空白", "withExtension": "全角空白.pdf" },
+    { "given": "a.b", "sanitized": "a.b", "withExtension": "a.b.pdf" },
+    { "given": "名前 .pdf", "sanitized": "名前 .pdf", "withExtension": "名前 .pdf" },
+    { "given": ".pdf", "sanitized": "pdf", "withExtension": "pdf.pdf" }
+  ],
+  "templates": [
+    {
+      "template": "報告書_{name}.pdf",
+      "values": { "name": "サンプル邸" },
+      "expected": "報告書_サンプル邸.pdf"
+    },
+    {
+      "template": "報告書_{name}.pdf",
+      "values": { "name": "" },
+      "expected": "報告書.pdf"
+    },
+    {
+      "template": "報告書_{name}.pdf",
+      "values": { "name": "A/B:C" },
+      "expected": "報告書_ABC.pdf"
+    },
+    {
+      "template": "報告書_{a}_{b}.pdf",
+      "values": { "a": "", "b": "" },
+      "expected": "報告書.pdf"
+    },
+    {
+      "template": "報告書_{name}",
+      "values": { "name": "サンプル邸" },
+      "expected": "報告書_サンプル邸.pdf"
+    },
+    {
+      "template": "報告書_{unknown}.pdf",
+      "values": { "name": "サンプル邸" },
+      "expected": "既定.pdf"
+    },
+    { "template": "", "values": {}, "expected": "既定.pdf" }
+  ]
+}

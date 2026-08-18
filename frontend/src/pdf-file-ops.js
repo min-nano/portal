@@ -8,20 +8,56 @@
 // その判断と文言はツールに依らず同じなので、ここに集約する（バックエンド側も
 // portal_sdk.resolve_pdf_destination で同じ規則を共有している）。
 
-/** ファイル名に使えない文字を落とす。バックエンドの整形と同じ規則。 */
+/**
+ * ファイル名に使えない文字と、前後の空白・ドットを落とす。
+ *
+ * バックエンド（portal_sdk.sanitize_file_name）と同じ規則。1 つの実装を
+ * 共有できないので、同じ入力に同じ答えを返すことを
+ * backend/tests/file_name_cases.json で縛る（両方のテストがこの表を読む）。
+ */
 export function sanitizeFileName(name) {
   return String(name || '')
     // eslint-disable-next-line no-control-regex
     .replace(/[\\/:*?"<>|\x00-\x1f]/g, '')
     .trim()
-    .replace(/^\.+|\.+$/g, '');
+    .replace(/^\.+|\.+$/g, '')
+    .trim();
 }
 
-/** 拡張子 .pdf を必ず付ける。 */
+/** 拡張子 .pdf を必ず付ける。空になれば既定値。 */
 export function ensurePdfExtension(name, fallback) {
   const cleaned = sanitizeFileName(name);
   if (!cleaned) return fallback;
   return /\.pdf$/i.test(cleaned) ? cleaned : `${cleaned}.pdf`;
+}
+
+/**
+ * 雛形に値を差し込んでファイル名を作る。
+ *
+ * 雛形は /config が配る "構造計算安全証明書_{building_name}.pdf" のような
+ * 文字列で、{…} をフォームの入力値で置き換える。差し込む値が空だと
+ * 「証明書_.pdf」のように区切りだけが残るので、それも落とす（結果として、
+ * 材料が無いときは既定値と同じ名前になる）。雛形が求める値が無いときは
+ * 既定値へ倒す。
+ *
+ * サーバ側（portal_sdk.build_file_name）と同じ規則で、突き合わせは
+ * backend/tests/file_name_cases.json の templates が縛る。
+ */
+export function buildFileName(template, values, fallback) {
+  let missing = false;
+  const filled = String(template || '').replace(/\{(\w+)\}/g, (whole, key) => {
+    if (!values || !(key in values)) {
+      missing = true;
+      return '';
+    }
+    const value = values[key];
+    return value == null ? '' : String(value);
+  });
+  if (missing) return fallback;
+  return ensurePdfExtension(
+    sanitizeFileName(filled).replace(/_+(?=\.[^.]*$)|_+$/, ''),
+    fallback
+  );
 }
 
 /** 上書き保存できるのは、Drive 上のファイルを開いているときだけ。 */

@@ -32,7 +32,7 @@ import math
 import os
 import unicodedata
 
-from . import nail_core, xlsx_fill
+from . import nail_core, portal_sdk, xlsx_fill
 from .errors import PortalError
 from .nail_core import CoreError
 from .xlsx_fill import XlsxError, XlsxTemplate
@@ -43,9 +43,6 @@ _MAPPING_PATH = os.path.join(_DIR, "wall_quantity_mapping.json")
 _MAPPING = None
 _SOURCE = None
 _TEMPLATE_BYTES = None
-
-# 突き合わせの結果に並べる食い違いの上限（全部ずれていても応答が膨れないように）。
-MAX_REPORTED_DIFFERENCES = 20
 
 
 class WallQuantityError(PortalError):
@@ -431,54 +428,48 @@ def verify(result: dict, claim) -> dict:
 
     突き合わせるのは表示文字列。利用者が画面で見たものそのものなので、
     「値は同じだが桁の丸めが違う」も食い違いとして拾える。
+
+    外枠（材料が届かないときの扱い・版の並記・差の打ち切り）は面材張り大壁と
+    同じなので土台にある。ここが決めるのは差の作り方だけ。
     """
-    if not isinstance(claim, dict):
-        # 画面が突き合わせの材料を送ってこない（＝この仕組みより前の版）。
-        return {"checked": False, "ok": True, "differences": []}
 
-    client_version = str(claim.get("coreVersion") or "")
-    server_version = nail_core.version()
-    claimed = claim.get("cells")
-    claimed = claimed if isinstance(claimed, dict) else {}
+    def differences(claim: dict) -> list:
+        claimed = claim.get("cells")
+        claimed = claimed if isinstance(claimed, dict) else {}
+        found = []
+        for key, server_text in result_cells(result).items():
+            client_text = claimed.get(key)
+            if client_text is None or str(client_text) != server_text:
+                found.append(
+                    {
+                        "key": key,
+                        "client": "-" if client_text is None else str(client_text),
+                        "server": server_text,
+                    }
+                )
+        return found
 
-    differences = []
-    for key, server_text in result_cells(result).items():
-        client_text = claimed.get(key)
-        if client_text is None or str(client_text) != server_text:
-            differences.append(
-                {
-                    "key": key,
-                    "client": "-" if client_text is None else str(client_text),
-                    "server": server_text,
-                }
-            )
-
-    return {
-        "checked": True,
-        "ok": not differences and client_version == server_version,
-        "coreVersion": {"client": client_version, "server": server_version},
-        "differences": differences[:MAX_REPORTED_DIFFERENCES],
-        "omittedDifferences": max(0, len(differences) - MAX_REPORTED_DIFFERENCES),
-    }
+    return portal_sdk.verify_claim(claim, differences)
 
 
 # --- ファイル名 --------------------------------------------------------------
 
 
 def file_name(data: dict) -> str:
-    """ダウンロードするファイル名。物件名があれば添える。"""
+    """ダウンロードするファイル名。物件名があれば添える。
+
+    使えない文字の落とし方・拡張子の付け方は土台の規則（PDF を返す他の
+    ツールと同じもの）。このツールが決めるのは組み立て方だけ。
+    """
     naming = load_mapping()["file_name"]
     building = _building(data["building"])
     name = f"{naming['prefix']}（{building['label']}）"
-    property_name = _sanitize(data.get("property_name", ""))
+    property_name = portal_sdk.sanitize_file_name(data.get("property_name", ""))
     if property_name:
         name = f"{name}_{property_name}"
-    return name + naming["extension"]
-
-
-def _sanitize(text: str) -> str:
-    """ファイル名に使えない文字を落とす。"""
-    return "".join(ch for ch in text if ch not in '\\/:*?"<>|').strip()
+    return portal_sdk.ensure_file_name(
+        name, naming["prefix"] + naming["extension"], naming["extension"]
+    )
 
 
 __all__ = [

@@ -19,7 +19,7 @@ GAS 版（gas-timber-panel-shear-calculator）はスプレッドシートへ「�
 import json
 import re
 
-from . import nail_core, pdf_tools, pdf_write
+from . import nail_core, pdf_tools, pdf_write, portal_sdk
 from .errors import PortalError
 from .nail_core import CoreError
 
@@ -29,18 +29,12 @@ METADATA_KEY = "/PortalTimberPanelShear"
 DEFAULT_FILE_NAME = "釘配列諸定数計算書.pdf"
 FILE_NAME_TEMPLATE = "釘配列諸定数計算書_{projectName}.pdf"
 
-# ファイル名に使えない文字（Drive 上でも扱いづらいもの）。
-_UNSAFE_FILE_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
-
 # 画面の計算結果とサーバの計算結果を「同じ」とみなす相対差。
 #
 # 同じ .wasm を同じ引数で動かすので、本来は 1 ビットも違わない。ここに幅を
 # 持たせてあるのは、JSON を経由する往復や端末差を疑わずに済ませるためで、
 # これを超える差は「画面とサーバで違うものを計算している」ということ。
 VERIFY_RELATIVE_TOLERANCE = 1e-9
-
-# 突き合わせの結果に並べる差の上限（全項目が違うときに応答が膨れないように）。
-MAX_REPORTED_DIFFERENCES = 20
 
 # グレー本 3.3(3)「面材張り大壁の許容せん断耐力の計算例」（図 3.3.10）。
 #
@@ -252,33 +246,25 @@ def verify(reports: dict, claim) -> dict:
 
     ずれていても保存は止めない（計算書に載るのはサーバの値なので、成果物が
     壊れることはない）。画面には警告として返し、利用者が気付けるようにする。
+
+    外枠（材料が届かないときの扱い・版の並記・差の打ち切り）は必要壁量と
+    同じなので土台にある。ここが決めるのは差の作り方だけ。
     """
-    if not isinstance(claim, dict):
-        # 画面が突き合わせの材料を送ってこない（＝この仕組みより前の版）。
-        return {"checked": False, "ok": True, "differences": []}
 
-    client_version = str(claim.get("coreVersion") or "")
-    server_version = nail_core.version()
+    def differences(claim: dict) -> list:
+        return _differences(
+            reports["walls"],
+            _claimed_results(claim, "walls", "wallId"),
+            "wallId",
+            "wallName",
+        ) + _differences(
+            panel_reports(reports),
+            _claimed_results(claim, "panels", "panelId"),
+            "panelId",
+            "panelName",
+        )
 
-    differences = _differences(
-        reports["walls"],
-        _claimed_results(claim, "walls", "wallId"),
-        "wallId",
-        "wallName",
-    ) + _differences(
-        panel_reports(reports),
-        _claimed_results(claim, "panels", "panelId"),
-        "panelId",
-        "panelName",
-    )
-
-    return {
-        "checked": True,
-        "ok": not differences and client_version == server_version,
-        "coreVersion": {"client": client_version, "server": server_version},
-        "differences": differences[:MAX_REPORTED_DIFFERENCES],
-        "omittedDifferences": max(0, len(differences) - MAX_REPORTED_DIFFERENCES),
-    }
+    return portal_sdk.verify_claim(claim, differences)
 
 
 # --- ファイル名 --------------------------------------------------------------
@@ -286,16 +272,16 @@ def verify(reports: dict, claim) -> dict:
 
 def default_file_name(data: dict) -> str:
     """物件名から既定のファイル名を組み立てる。"""
-    project = data.get("projectName") or ""
-    name = FILE_NAME_TEMPLATE.format(projectName=project) if project else DEFAULT_FILE_NAME
-    return ensure_pdf_extension(name)
+    return portal_sdk.build_file_name(
+        FILE_NAME_TEMPLATE,
+        {"projectName": data.get("projectName") or ""},
+        DEFAULT_FILE_NAME,
+    )
 
 
 def ensure_pdf_extension(name: str) -> str:
-    name = _UNSAFE_FILE_NAME_CHARS.sub("", (name or "").strip()).strip().strip(".")
-    if not name:
-        return DEFAULT_FILE_NAME
-    return name if name.lower().endswith(".pdf") else name + ".pdf"
+    """整えたうえで .pdf を付ける（名前の規則は土台に 1 つある）。"""
+    return portal_sdk.ensure_file_name(name, DEFAULT_FILE_NAME)
 
 
 # --- 計算書 PDF の組み立て ---------------------------------------------------

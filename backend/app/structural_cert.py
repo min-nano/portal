@@ -22,15 +22,12 @@ import json
 import os
 import re
 
-from . import pdf_tools
+from . import pdf_tools, portal_sdk
 from .errors import PortalError
 from .pdf_tools import Box
 
 _MAPPING_PATH = os.path.join(os.path.dirname(__file__), "structural_cert_mapping.json")
 _MAPPING = None
-
-# ファイル名に使えない文字（Drive 上でも扱いづらいもの）。
-_UNSAFE_FILE_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 DEFAULT_FILE_NAME = "構造計算安全証明書.pdf"
 
@@ -248,22 +245,14 @@ def missing_placeholder_warnings(counts: dict, data: dict) -> list[str]:
 
 def default_file_name(data: dict) -> str:
     """建築物の名称から既定のファイル名を組み立てる。"""
-    mapping = load_mapping()
-    try:
-        name = mapping["output_file_name_template"].format(**data["fields"])
-    except KeyError:
-        name = DEFAULT_FILE_NAME
-    name = _UNSAFE_FILE_NAME_CHARS.sub("", name).strip().strip(".")
-    # 名称が未入力だと「構造計算安全証明書_.pdf」のようになるため整える。
-    name = name.replace("_.pdf", ".pdf")
-    return name or DEFAULT_FILE_NAME
+    return portal_sdk.build_file_name(
+        load_mapping()["output_file_name_template"], data["fields"], DEFAULT_FILE_NAME
+    )
 
 
 def ensure_pdf_extension(name: str) -> str:
-    name = _UNSAFE_FILE_NAME_CHARS.sub("", (name or "").strip()).strip().strip(".")
-    if not name:
-        return DEFAULT_FILE_NAME
-    return name if name.lower().endswith(".pdf") else name + ".pdf"
+    """整えたうえで .pdf を付ける（名前の規則は土台に 1 つある）。"""
+    return portal_sdk.ensure_file_name(name, DEFAULT_FILE_NAME)
 
 
 # --- ○ の描き込み -----------------------------------------------------------
