@@ -334,7 +334,8 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   src/wall-quantity-calculator/   # 必要壁量 表計算ツールの入力フォームと出力結果
 backend/                      # Cloud Run サービス (FastAPI)
   app/main.py                 # 組み立て（土台のルート・失敗の返し方・ツールの取り付け）
-  app/portal_sdk.py           # 土台がツールへ貸し出すもの（認証・代理・共有設定・保存・wasm）
+  app/portal_sdk.py           # 土台がツールへ貸し出すもの（認証・代理・共有設定・雛形の設定・
+                              # ファイル名・保存と引き渡し・画面との突き合わせ・wasm）
   app/errors.py               # 利用者に見せられる失敗の共通の形（PortalError）
   app/tools/__init__.py       # 載せるツールの一覧（ここだけがツールを知っている）
   app/tools/<ツール名>.py      # ツールごとの API ルーター（/api/tools/<id>/**）
@@ -1104,10 +1105,10 @@ open("計算書.pdf", "wb").write(panel_shear.build_pdf(data, panel_shear.valida
     （GAS 版 ROADMAP のフェーズ 1・3）。
   - 小規模木造建築物 必要壁量 計算ツール（配布物の表計算ツールへの記入）は完了。
   - **共通のロジックを土台へ寄せる**（[docs/shared-logic.md](docs/shared-logic.md)）。
-    ツールが自分を名乗り、土台がそれを読んで組み立てる形は完了。続きは、
-    複数のツールが同じことを書いている箇所——雛形の設定・ファイル名の規則・
-    画面とサーバの突き合わせ・生成物の引き渡し・入力欄の組み立て——を
-    1 つずつ土台へ寄せる（別リポジトリへの分割は取り下げ）。
+    ツールが自分を名乗り、土台がそれを読んで組み立てる形は完了。API 側
+    （雛形の設定・ファイル名の規則・画面とサーバの突き合わせ・生成物の
+    引き渡し）も完了。続きは画面側——入力欄の組み立てと雛形を設定する画面——と、
+    条件の語彙（別リポジトリへの分割は取り下げ）。
 - [ ] **設計等業務委託契約書 作成ツール（`contract-formatter`）** — 設計は完了、実装はこれから。
   設計とロードマップは **[docs/contract-formatter.md](docs/contract-formatter.md)**。
   **期限が法律で決まっている唯一のツール**です。改正建築士法（令和8年法律第74号・2026-07-31 公布）で
