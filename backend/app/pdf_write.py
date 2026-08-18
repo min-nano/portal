@@ -255,11 +255,13 @@ class Page:
         line_width: float = 0.5,
         gray: float = 0.0,
         fill_gray: float | None = None,
+        dash: tuple[float, float] | None = None,
     ):
         painter = "B" if fill_gray is not None else "S"
         fill = f"{_gray(fill_gray)} g " if fill_gray is not None else ""
+        pattern = f"[{dash[0]:.2f} {dash[1]:.2f}] 0 d " if dash else ""
         self._ops.append(
-            f"q {_gray(gray)} G {fill}{line_width:.2f} w "
+            f"q {_gray(gray)} G {fill}{line_width:.2f} w {pattern}"
             f"{x:.2f} {y:.2f} {width:.2f} {height:.2f} re {painter} Q\n"
         )
 

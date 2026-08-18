@@ -34,11 +34,8 @@ const MARKUP = `
       <input type="text" id="wallName">
       <input type="number" id="wallHeight">
       <input type="number" id="wallWidth">
-      <input type="number" id="wallStudPitch">
-      <input type="number" id="wallColumnWidth">
-      <input type="number" id="wallStudWidth">
-      <input type="number" id="wallBeamWidth">
-      <input type="number" id="wallJointWidth">
+      <div id="wallFrameMembers"></div>
+      <p id="wallFrameEmpty" hidden></p>
       <div id="wallPanels"></div>
       <div id="wallError" hidden></div>
       <div id="wallSummary"></div>
@@ -47,6 +44,7 @@ const MARKUP = `
         <p id="wallLayoutNote" hidden></p>
         <table><thead id="wallLayoutHead"></thead><tbody id="wallLayoutBody"></tbody></table>
       </div>
+      <table><thead id="wallFrameHead"></thead><tbody id="wallFrameBody"></tbody></table>
       <table><thead id="wallSpecHead"></thead><tbody id="wallSpecBody"></tbody></table>
       <table><thead id="wallPanelHead"></thead><tbody id="wallPanelBody"></tbody></table>
       <table><tbody id="wallStepsBody"></tbody></table>
@@ -142,9 +140,14 @@ const WALL = {
   wallName: 'グレー本 3.3 の計算例',
   height: 3000,
   width: 910,
-  studPitch: 455,
-  // 軸組材の見付け幅（釘が刺さる材。軸材の縁端距離の判定に使う）。
-  frame: { column: 105, stud: 45, beam: 105, joint: 105 },
+  // 軸組材は 1 本ずつ自由な位置に入れる（釘の縦列も縁端距離もここから）。
+  frame: [
+    { direction: 'vertical', label: '柱', position: 0, width: 105 },
+    { direction: 'vertical', label: '間柱', position: 455, width: 45 },
+    { direction: 'vertical', label: '柱', position: 910, width: 105 },
+    { direction: 'horizontal', label: '横架材', position: 0, width: 105 },
+    { direction: 'horizontal', label: '横架材', position: 3000, width: 105 },
+  ],
   panels: [
     { ...PANEL },
     {
@@ -206,6 +209,11 @@ const WALL_REPORT = {
   panelReports: [
     PANEL_REPORT,
     { ok: false, panelId: 'pn2', panelName: '上段', error: '釘座標が入力されていません。' },
+  ],
+  frameColumns: ['軸組材', '向き', '材心の位置 [mm]', '見付け幅 [mm]'],
+  frame: [
+    { label: '柱', cells: ['縦材', 'X = 0', '105'] },
+    { label: '間柱', cells: ['縦材', 'X = 455', '45'] },
   ],
   specColumns: ['面材', 't [mm]', 'ΔPv [kN]'],
   specs: [
@@ -302,38 +310,56 @@ describe('applyWall / readWall', () => {
     expect(panel.thickness).toBe(12);
   });
 
-  it('壁の間柱ピッチと、面材の張る面・占有領域を読み戻せる', () => {
+  it('面材の張る面・占有領域を読み戻せる', () => {
     applyWall(
       document,
       {
         ...WALL,
-        studPitch: 500,
         panels: [{ ...PANEL, side: 'back', left: 455, right: 1365 }],
       },
       OPTIONS
     );
 
     const wall = readWall(document);
-    expect(wall.studPitch).toBe(500);
     expect(wall.panels[0].side).toBe('back');
     expect(wall.panels[0].left).toBe(455);
     expect(wall.panels[0].right).toBe(1365);
   });
 
-  it('軸組材の見付け幅を読み戻せる（空欄は空のまま）', () => {
+  it('軸組材は 1 本 = 1 行で出し、そのまま読み戻せる', () => {
     applyWall(
       document,
-      { ...WALL, frame: { column: 120, stud: 30, beam: 150, joint: '' } },
+      {
+        ...WALL,
+        frame: [
+          { direction: 'vertical', label: '柱', position: 0, width: 120 },
+          // 等間隔でない位置（開口の脇に寄せた縦材）も入れられる。
+          { direction: 'vertical', label: '間柱', position: 600, width: 45 },
+          { direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
+        ],
+      },
       OPTIONS
     );
 
-    // 空欄は 0 にせず空のまま持ち帰る（計算実装が既定の見付け幅で埋める）。
-    expect(readWall(document).frame).toEqual({
-      column: 120,
-      stud: 30,
-      beam: 150,
-      joint: '',
-    });
+    const rows = document.querySelectorAll('[data-member-index]');
+    expect(rows).toHaveLength(3);
+    expect(rows[1].querySelector('[data-member-field="label"]').value).toBe('間柱');
+    expect(rows[1].querySelector('[data-member-field="position"]').value).toBe('600');
+    expect(document.getElementById('wallFrameEmpty').hidden).toBe(true);
+
+    expect(readWall(document).frame).toEqual([
+      { direction: 'vertical', label: '柱', position: 0, width: 120 },
+      { direction: 'vertical', label: '間柱', position: 600, width: 45 },
+      { direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
+    ]);
+  });
+
+  it('軸組材が 1 本も無ければ、入れ方を案内する', () => {
+    applyWall(document, { ...WALL, frame: [] }, OPTIONS);
+
+    expect(document.querySelectorAll('[data-member-index]')).toHaveLength(0);
+    expect(document.getElementById('wallFrameEmpty').hidden).toBe(false);
+    expect(readWall(document).frame).toEqual([]);
   });
 });
 

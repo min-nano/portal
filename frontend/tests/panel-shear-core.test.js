@@ -54,8 +54,19 @@ const EXAMPLE_PANEL = {
 
 /** 面材を並べただけの壁（面材と釘の数値は入れない）。 */
 function wallOf(...panels) {
-  return { walls: [{ wallId: 'w1', width: 910, height: 2900, studPitch: 455, panels }] };
+  return { walls: [{ wallId: 'w1', width: 910, height: 2900, frame: FRAME, panels }] };
 }
+
+// 壁の軸組材（尺モジュール）。1 本ずつ自由な位置に入れるので、面材の縁が
+// 来るところ（面材の上端 610）にも受け材を入れておく。
+const FRAME = [
+  { direction: 'vertical', label: '柱', position: 0, width: 105 },
+  { direction: 'vertical', label: '間柱', position: 455, width: 45 },
+  { direction: 'vertical', label: '柱', position: 910, width: 105 },
+  { direction: 'horizontal', label: '横架材', position: 0, width: 105 },
+  { direction: 'horizontal', label: '受け材', position: 610, width: 105 },
+  { direction: 'horizontal', label: '横架材', position: 2900, width: 105 },
+];
 
 async function core() {
   return instantiateCore(await wasmBytes());
@@ -101,17 +112,16 @@ describe('計算実装（wasm）', () => {
     expect(wide.result.Ixy).toBeLessThan(narrow.result.Ixy);
   });
 
-  it('軸組材の見付け幅から、軸材の縁端距離を判定する', async () => {
+  it('軸組材の位置と見付け幅から、軸材の縁端距離を判定する', async () => {
     const loaded = await core();
     // 壁の左下に 910 × 610 を 1 枚（面材と釘は 3.3(3) の計算例の組合せ）。
-    const wallWithFrame = (frame) =>
+    const wallWith = (frame) =>
       loaded.computeAll({
         walls: [
           {
             wallId: 'w1',
             width: 910,
             height: 2900,
-            studPitch: 455,
             frame,
             panels: [
               {
@@ -134,29 +144,56 @@ describe('計算実装（wasm）', () => {
     const check = (wall) =>
       wall.checks.find((entry) => entry.label.includes('軸材の縁端距離'));
 
-    // 軸組材を入れていない壁は、在来軸組でよくある見付け幅で判定する
-    //（釘は @455 の間柱の心にも来るので、いちばん厳しいのは 45 / 2）。
-    const standard = wallWithFrame(undefined);
+    // 尺モジュールの軸組（釘は @455 の間柱の心にも来るので、いちばん厳しい
+    // のは 45 / 2）。
+    const standard = wallWith(FRAME);
     expect(standard.ok).toBe(true);
     expect(standard.frameClearanceOk).toBe(true);
     expect(check(standard).value).toContain('最小 縁端距離 22.5 mm ≧ 20 mm');
-    expect(check(standard).value).toContain('中間の間柱 ／ 間柱 見付け 45 mm');
+    expect(check(standard).value).toContain('間柱（見付け 45 mm）');
 
     // 30 mm の間柱では、材心に打つ釘の縁端距離が 15 mm しか取れない。
-    const narrow = wallWithFrame({ stud: 30 });
+    const narrow = wallWith(
+      FRAME.map((member) =>
+        member.label === '間柱' ? { ...member, width: 30 } : member
+      )
+    );
     expect(narrow.frameClearanceOk).toBe(false);
-    expect(check(narrow).ok).toBe(false);
     expect(check(narrow).value).toContain('最小 縁端距離 15 mm < 20 mm');
-    // 壁の入力の控えにも、軸組材の見付け幅がそのまま残る。
-    expect(
-      narrow.inputs.find((row) => row.label.includes('軸組材')).value
-    ).toBe('柱 105 ／ 間柱 30 ／ 横架材 105 ／ 継目の材 105 mm');
+    // 軸組材は、位置と見付け幅まで壁の計算書に残る。
+    expect(narrow.frame.map((row) => row.cells[1])).toEqual([
+      'X = 0',
+      'X = 455',
+      'X = 910',
+      'Y = 0',
+      'Y = 610',
+      'Y = 2,900',
+    ]);
     // 面材のページにも、その面材でいちばん厳しい釘列が残る。
     expect(
       narrow.panelReports[0].inputs.find((row) =>
         row.label.startsWith('軸材の縁端距離')
       ).value
-    ).toBe('最小 15 mm（中間の間柱 ／ 間柱 見付け 30 mm）');
+    ).toBe('最小 15 mm（中間の縦材（X = 455 mm） ／ 間柱（見付け 30 mm））');
+
+    // 面材の縁を受ける材が無ければ、そこには釘を打てない。
+    const missing = wallWith(FRAME.filter((member) => member.position !== 610));
+    expect(missing.frameClearanceOk).toBe(false);
+    expect(check(missing).value).toContain('軸組材なし');
+  });
+
+  it('軸組材は等間隔でも組み立てられる（そのあと 1 本ずつ動かせる）', async () => {
+    const frame = (await core()).frame({ width: 1820, height: 2900, studPitch: 455 });
+
+    expect(frame.map((member) => member.position)).toEqual([
+      0, 455, 910, 1365, 1820, 0, 2900,
+    ]);
+    expect(frame[1]).toEqual({
+      direction: 'vertical',
+      label: '間柱',
+      position: 455,
+      width: 45,
+    });
   });
 
   it('釘配列図の範囲と目盛も返す（計算書 PDF と同じもの）', async () => {

@@ -129,6 +129,16 @@ export function buildWallDiagram(diagram) {
       },
       widthLabel: `W = ${wallWidth.toLocaleString('ja-JP')} mm`,
       heightLabel: `H = ${wallHeight.toLocaleString('ja-JP')} mm`,
+      // 軸組材は面材の下に敷いて描く（面材の縁がどの材に載っているのか、
+      // ＝釘がどこに刺さるのかが図で分かる）。表と裏で同じ軸組。
+      members: (diagram.members || []).map((member) => ({
+        label: member.label,
+        direction: member.direction,
+        x: mapX(member.x),
+        y: mapY(member.y + member.height),
+        width: member.width * scale,
+        height: member.height * scale,
+      })),
       panels: side.panels.map((panel) => ({
         label: panel.label,
         sizeLabel: panel.sizeLabel,

@@ -124,6 +124,44 @@
   color: var(--text-muted);
 }
 
+/* 軸組材（柱・間柱・横架材・受け材）。1 本 = 1 行で、向き・名前・材心の
+   位置・見付け幅を並べ、右端に削除を置く。狭い画面では桝目が縦に流れる。 */
+.frame-members {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.frame-member {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
+  gap: var(--s-3);
+  align-items: end;
+}
+
+.frame-member > .field {
+  margin: 0;
+}
+
+/* 削除は、欄の並びの右端で行に揃える。 */
+.frame-member > button {
+  align-self: end;
+}
+
+/* 「軸組材を追加」と「等間隔で入れ直す」を 1 行に並べる。 */
+.frame-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+}
+
+.frame-actions > .field {
+  margin: 0;
+  max-width: 10rem;
+}
+
 /* 壁を構成する面材。1 枚ごとに面材と釘の仕様・寸法・割り付け・へりあきを
    決め、その場で釘配列諸定数（グレー本 3.2）と釘配列図が出る。 */
 .wall-panels {

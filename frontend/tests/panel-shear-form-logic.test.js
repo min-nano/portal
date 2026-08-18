@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_FRAME,
   canRemoveWall,
   capturePanel,
   defaultSaveName,
   emptyFormData,
   formSignature,
   indexAfterRemoval,
+  defaultFrame,
   makeFrame,
+  makeMember,
   makePanel,
   makeWall,
   mergeFormData,
@@ -67,31 +68,57 @@ describe('emptyFormData / makeWall / makePanel', () => {
     expect([panel.materialId, panel.gradeId]).toEqual(['', '']);
   });
 
-  it('壁が持つのは軸組（階高・幅・間柱ピッチ・軸組材）だけ（面材と釘は面材ごと）', () => {
+  it('壁が持つのは軸組（階高・幅・軸組材）だけ（面材と釘は面材ごと）', () => {
     const wall = makeWall();
 
-    // 階高・壁の幅・間柱ピッチは、よくある寸法を入れておく。
+    // 階高・壁の幅は、よくある寸法を入れておく。
     expect(wall.height).toBeGreaterThan(0);
     expect(wall.width).toBeGreaterThan(0);
-    expect(wall.studPitch).toBe(455);
-    // 軸組材の見付け幅も、在来軸組でよくある取り合わせから始める
-    //（軸材の縁端距離の判定に使う。適用範囲 3.3(1)④）。
-    expect(wall.frame).toEqual({ column: 105, stud: 45, beam: 105, joint: 105 });
+    // 間柱ピッチは入力ではなくなった（軸組材を等間隔に入れる入り口だけ）。
+    expect(wall.studPitch).toBeUndefined();
+    // 軸組材は 1 本ずつ持つ（両端の柱・@455 の間柱・上下の横架材）。
+    expect(wall.frame.map((member) => [member.label, member.position])).toEqual([
+      ['柱', 0],
+      ['間柱', 455],
+      ['柱', 910],
+      ['横架材', 0],
+      ['横架材', 2900],
+    ]);
     // 中間材の有無は入力しない（間柱ピッチと壁の幅から決まる）。
     expect(wall.hasIntermediateStud).toBeUndefined();
     expect(wall.materialId).toBeUndefined();
     expect(wall.thickness).toBeUndefined();
   });
 
-  it('軸組材は、入れた欄だけを使い、空欄は既定の見付け幅で埋める', () => {
-    expect(makeFrame({ column: 120, joint: 60 })).toEqual({
-      column: 120,
-      stud: 45,
-      beam: 105,
-      joint: 60,
+  it('軸組材は 1 本ずつ自由な位置に入れる（既定は向きに合わせて埋める）', () => {
+    expect(makeMember({ label: '柱', position: 0, width: 105 })).toEqual({
+      direction: 'vertical',
+      label: '柱',
+      position: 0,
+      width: 105,
     });
-    expect(makeFrame({ stud: '' }).stud).toBe(45);
-    expect(makeFrame(undefined)).toEqual(DEFAULT_FRAME);
+    // 名前と見付け幅を書かなければ、向きに合わせた既定が入る。
+    expect(makeMember({ position: 600 })).toEqual({
+      direction: 'vertical',
+      label: '間柱',
+      position: 600,
+      width: 45,
+    });
+    expect(makeMember({ direction: 'horizontal', position: 2000 })).toEqual({
+      direction: 'horizontal',
+      label: '横架材',
+      position: 2000,
+      width: 105,
+    });
+  });
+
+  it('等間隔の軸組は、両端の柱・間柱・上下の横架材でできる', () => {
+    const frame = defaultFrame(1820, 2900, 455);
+
+    expect(frame.filter((member) => member.direction === 'vertical').map((m) => m.position))
+      .toEqual([0, 455, 910, 1365, 1820]);
+    expect(frame.filter((member) => member.direction === 'horizontal').map((m) => m.position))
+      .toEqual([0, 2900]);
   });
 
   it('面材の仕様だけを取り出して、次の面材へ引き継げる', () => {
@@ -192,7 +219,6 @@ describe('mergeFormData', () => {
     expect(data.issuedOn).toBe('2026-08-11');
     expect(data.walls[0].junk).toBeUndefined();
     expect(data.walls[0].height).toBe(3000);
-    expect(data.walls[0].studPitch).toBe(500);
     expect(data.walls[0].panels[0]).toMatchObject({
       panelId: 'pn1',
       panelName: '下段',
@@ -227,29 +253,36 @@ describe('mergeFormData', () => {
     expect(data.walls[0].panels[0].side).toBe('front');
   });
 
-  it('間柱ピッチが無ければ、尺モジュールの既定を入れる', () => {
-    const data = mergeFormData({ walls: [{ panels: [{}] }] });
+  it('軸組材が入っていなければ、尺モジュールの軸組を入れておく', () => {
+    // 読み込んだ計算書は計算実装が軸組材へ読み替え終えているので、ここへ
+    // 一覧の無い内容が来るのは、手で組み立てた入力のときだけ。
+    const data = mergeFormData({ walls: [{ width: 1820, height: 2900, panels: [{}] }] });
 
-    expect(data.walls[0].studPitch).toBe(455);
+    expect(data.walls[0].frame.map((member) => member.position)).toEqual([
+      0, 455, 910, 1365, 1820, 0, 2900,
+    ]);
   });
 
-  it('軸組材を持たない版で保存した内容は、既定の見付け幅で読む', () => {
-    const data = mergeFormData({ walls: [{ panels: [{}] }] });
-
-    expect(data.walls[0].frame).toEqual(DEFAULT_FRAME);
-  });
-
-  it('軸組材が入っていれば、その見付け幅をそのまま読む', () => {
+  it('軸組材が入っていれば、その位置と見付け幅をそのまま読む', () => {
     const data = mergeFormData({
-      walls: [{ frame: { column: 120, joint: 60 }, panels: [{}] }],
+      walls: [
+        {
+          frame: [
+            { direction: 'vertical', label: '柱', position: 0, width: 120 },
+            { direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
+          ],
+          panels: [{}],
+        },
+      ],
     });
 
-    expect(data.walls[0].frame).toEqual({
-      column: 120,
-      stud: 45,
-      beam: 105,
-      joint: 60,
-    });
+    expect(data.walls[0].frame).toEqual([
+      { direction: 'vertical', label: '柱', position: 0, width: 120 },
+      { direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
+    ]);
+    // 全て消した状態は、そのまま空で扱う（既定に戻さない）。
+    expect(mergeFormData({ walls: [{ frame: [], panels: [{}] }] }).walls[0].frame)
+      .toEqual([]);
   });
 
   it('名前が空なら通し番号で補う', () => {

@@ -56,9 +56,9 @@
   <!-- has-dock: 広い画面では入力（左）と計算結果（右）の 2 列になる。
        狭い画面ではそのまま縦に流れる（並び順は変わらない）。 -->
   <div id="wallEditor" class="has-dock">
-    <!-- 壁は面材を張る軸組。階高・幅と間柱ピッチ、それに軸組材の見付け幅
-         （釘がどの材のどこに刺さるか）だけを持つ。面材と釘の仕様は面材ごと
-         （1 枚の壁でも張り分けられる）なので、下の面材の中にある。 -->
+    <!-- 壁は面材を張る軸組。階高・幅と、軸組材（下の節で 1 本ずつ入れる）
+         だけを持つ。面材と釘の仕様は面材ごと（1 枚の壁でも張り分けられる）
+         なので、下の面材の中にある。 -->
     <portal-section class="form-section">
       <h3 slot="title">壁（面材を張る軸組）</h3>
       <div class="field">
@@ -81,56 +81,45 @@
             <input type="number" id="wallWidth" inputmode="numeric">
           </div>
         </div>
-        <div class="field">
-          <label for="wallStudPitch">間柱・根太ピッチ [mm]</label>
-          <div class="field-row">
-            <input type="number" id="wallStudPitch" inputmode="numeric">
-          </div>
-        </div>
       </div>
+    </portal-section>
+
+    <!-- 軸組材（柱・間柱・横架材・受け材）。1 本ずつ自由な位置に入れる。
+         釘の縦列の位置も、せん断座屈の ξ（中間材の有無）も、適用範囲
+         3.3(1)④ の軸材の縁端距離も、ここから決まる。 -->
+    <portal-section class="form-section">
+      <h3 slot="title">軸組材（面材を留める柱・間柱・横架材）</h3>
       <p class="hint">
-        間柱は壁の左端から等間隔に立つものとします。面材の釘の縦列は、その面材の
-        左右の縁と、この間柱のうち面材にかかるものに入ります。せん断座屈の ξ も
-        ここで決まります（壁の中に間柱が 1 本でも立てば 2、立たなければ 1）。
+        面材を留める軸組材を、<strong>1 本ずつ</strong>入れます。位置は<strong>材心</strong>（壁の左下を原点に、
+        縦材は X・横材は Y）、見付け幅は<strong>面材の側から見た材の幅</strong>です。
+        釘の縦列は、面材の左右の縁と<strong>面材の内側を通る縦材</strong>に入ります
+        （せん断座屈の ξ も、壁の中に縦材が 1 本でも立てば 2 になります）。
+      </p>
+      <p class="hint">
+        釘は面材の四周に打つので（適用範囲 3.3(1)⑤）、<strong>面材の縁が来るところには必ず
+        軸組材が要ります</strong>。面材の継目には受け材を入れてください。縁端距離は
+        <strong>見付け幅 ÷ 2 −（材心から釘までのずれ）</strong>で、面材の縁の釘列はへりあきぶん
+        内側へずれ、中間の縦材は材心に打ちます。これが適用範囲 3.3(1)④ の
+        「20 mm 以上かつ接合具径 d ×5 以上」を満たすかを判定します。
       </p>
 
-      <!-- 軸組材の見付け幅。釘配列そのものには効かないが、釘がどの材のどこに
-           刺さるかが決まるので、適用範囲 3.3(1)④ の「軸材の釘列に対する縁端
-           距離」を判定できる。 -->
-      <div class="panel-size">
+      <div id="wallFrameMembers" class="frame-members"></div>
+      <p class="hint" id="wallFrameEmpty" hidden>
+        軸組材がありません。「＋ 軸組材を追加」か「等間隔で入れ直す」で入れてください。
+      </p>
+      <div class="frame-actions">
+        <button type="button" id="addFrameMemberBtn" class="add">＋ 軸組材を追加</button>
         <div class="field">
-          <label for="wallColumnWidth">柱の見付け幅 [mm]</label>
+          <label for="frameStudPitch">間柱ピッチ [mm]</label>
           <div class="field-row">
-            <input type="number" id="wallColumnWidth" inputmode="numeric">
+            <input type="number" id="frameStudPitch" inputmode="numeric">
           </div>
         </div>
-        <div class="field">
-          <label for="wallStudWidth">間柱の見付け幅 [mm]</label>
-          <div class="field-row">
-            <input type="number" id="wallStudWidth" inputmode="numeric">
-          </div>
-        </div>
-        <div class="field">
-          <label for="wallBeamWidth">横架材の見付け幅 [mm]</label>
-          <div class="field-row">
-            <input type="number" id="wallBeamWidth" inputmode="numeric">
-          </div>
-        </div>
-        <div class="field">
-          <label for="wallJointWidth">継目の材の見付け幅 [mm]</label>
-          <div class="field-row">
-            <input type="number" id="wallJointWidth" inputmode="numeric">
-          </div>
-        </div>
+        <button type="button" id="rebuildFrameBtn" class="secondary">等間隔で入れ直す</button>
       </div>
       <p class="hint">
-        面材を張る<strong>軸組材の見付け幅</strong>（面材の側から見た材の幅）です。釘の縦列は
-        壁の両端なら<strong>柱</strong>・面材にかかる<strong>間柱</strong>、横列は壁の上下なら<strong>横架材</strong>に打たれ、
-        壁の中で面材どうしが突き付く縁（継目）は<strong>継目の材</strong>が受けます。どの釘列も材心の上に
-        あり、面材の縁の釘列だけがへりあきぶん内側へずれるので、<strong>縁端距離 =
-        見付け幅 ÷ 2 − へりあき</strong>（中間の間柱は材心に打つので見付け幅 ÷ 2）になります。
-        これが適用範囲 3.3(1)④ の「20 mm 以上かつ接合具径 d ×5 以上」を満たすかを判定します。
-        空欄なら既定（柱 105・間柱 45・横架材 105・継目の材 105 mm）で判定します。
+        「等間隔で入れ直す」は、壁の両端に柱・その間に間柱をこのピッチで・上下に横架材を
+        並べ直します（尺モジュールの一般的な軸組）。入れ直したあとに 1 本ずつ動かせます。
       </p>
     </portal-section>
 
@@ -140,7 +129,7 @@
     <p class="hint">
       面材 1 枚ごとに、面材と釘の組合せ（グレー本 表 3.3.1・3.3.2）と、
       <strong>壁の中で占める領域</strong>・釘ピッチ・へりあきを決めます。面材の寸法も釘配列も
-      この領域と上の間柱ピッチから決まるので、別に入力する欄はありません。その面材の
+      この領域と上の軸組材から決まるので、別に入力する欄はありません。その面材の
       Ixy・Zxy・Cxy（式 3.2.1〜3.2.7）が求まり、そのまま下の壁の計算に入ります。
       K0・My・Mu は面材ごとの値の和、塑性率 μ は最小値です。
       1 枚の壁でも面材ごとに違う面材と釘を使えます（上半分は N50、下半分は CN50 など）。
@@ -171,6 +160,13 @@
         </div>
       </div>
 
+      <h4 class="result-heading">軸組材</h4>
+      <div class="table-scroll">
+        <table class="steps-table">
+          <thead id="wallFrameHead"></thead>
+          <tbody id="wallFrameBody"></tbody>
+        </table>
+      </div>
       <h4 class="result-heading">面材ごとの面材と釘</h4>
       <div class="table-scroll">
         <table class="steps-table">

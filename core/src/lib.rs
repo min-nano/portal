@@ -15,6 +15,7 @@
 //! {"op": "normalize",  "data": {...}}  → {"ok": true,  "data": {...}}
 //! {"op": "presets"}                    → {"ok": true,  "presets": [...]}
 //! {"op": "preset",     "data": {...}}  → {"ok": true,  "preset": {...}, "wall": {...}, "panel": {...}}
+//! {"op": "frame",      "data": {...}}  → {"ok": true,  "frame": [...]}
 //! {"op": "materials"}                  → {"ok": true,  "materials": [...]}
 //! {"op": "grades"}                     → {"ok": true,  "grades": [...]}
 //!
@@ -154,6 +155,23 @@ fn dispatch(request: &str) -> Result<Value, String> {
                     .collect(),
             ),
         )])),
+        // 軸組材を等間隔で組み立てる（新しい壁の初期値・表 3.2.1 の呼び出し・
+        // 画面の「等間隔で入れ直す」）。1 本ずつ自由な位置に入れられるので、
+        // これは「よくある並びを一度に入れる」ための入り口でしかない。
+        "frame" => {
+            let number = |key: &str, default: f64| {
+                data().get(key).and_then(Value::as_f64).unwrap_or(default)
+            };
+            Ok(Value::obj([(
+                "frame",
+                frame::Frame::from_stud_pitch(
+                    number("width", 0.0),
+                    number("height", 0.0),
+                    number("studPitch", frame::DEFAULT_STUD_PITCH),
+                )
+                .to_value(),
+            )]))
+        }
         // グレー本 表 3.3.2「面材のせん断強度及び曲げヤング係数」。
         // JAS 2 級の合板を使うときなど、規格だけを差し替えるための一覧。
         "grades" => Ok(Value::obj([(
@@ -230,10 +248,17 @@ fn dispatch(request: &str) -> Result<Value, String> {
             ("defaultStudPitch", report::DEFAULT_STUD_PITCH.into()),
             ("minEdgeDistance", wall::MIN_EDGE_DISTANCE.into()),
             ("minFrameEdgeDistance", wall::MIN_FRAME_EDGE_DISTANCE.into()),
-            ("defaultColumnWidth", frame::DEFAULT_COLUMN_WIDTH.into()),
-            ("defaultStudWidth", frame::DEFAULT_STUD_WIDTH.into()),
-            ("defaultBeamWidth", frame::DEFAULT_BEAM_WIDTH.into()),
-            ("defaultJointWidth", frame::DEFAULT_JOINT_WIDTH.into()),
+            ("maxFrameMembers", frame::MAX_MEMBERS.into()),
+            // 軸組材を足すときの既定（見付け幅は在来軸組でよくある寸法）。
+            (
+                "frameDefaults",
+                Value::obj([
+                    ("column", frame::DEFAULT_COLUMN_WIDTH.into()),
+                    ("stud", frame::DEFAULT_STUD_WIDTH.into()),
+                    ("beam", frame::DEFAULT_BEAM_WIDTH.into()),
+                    ("joint", frame::DEFAULT_JOINT_WIDTH.into()),
+                ]),
+            ),
             ("allowableShearLimit", wall::ALLOWABLE_SHEAR_LIMIT.into()),
             ("significantDigits", format::SIGNIFICANT_DIGITS.into()),
         ])),
@@ -284,6 +309,26 @@ mod tests {
         let walls = response.get("walls").unwrap().as_array().unwrap();
         assert_eq!(walls.len(), 1);
         assert_eq!(walls[0].get("ok"), Some(&Value::Bool(false)));
+    }
+
+    /// 軸組材は等間隔でも組み立てられる（画面の「等間隔で入れ直す」）。
+    #[test]
+    fn frame_builds_an_even_set_of_members() {
+        let response = call_json(
+            r#"{"op": "frame", "data": {"width": 1820, "height": 2900, "studPitch": 455}}"#,
+        );
+
+        let members = response.get("frame").unwrap().as_array().unwrap();
+        let at = |index: usize, key: &str| members[index].get(key).unwrap().clone();
+        // 柱・間柱 3 本（455・910・1365）・柱、そのあとに上下の横架材。
+        assert_eq!(members.len(), 7);
+        assert_eq!(at(0, "label").as_str(), Some("柱"));
+        assert_eq!(at(1, "label").as_str(), Some("間柱"));
+        assert_eq!(at(1, "position").as_f64(), Some(455.0));
+        assert_eq!(at(1, "width").as_f64(), Some(45.0));
+        assert_eq!(at(4, "position").as_f64(), Some(1820.0));
+        assert_eq!(at(5, "direction").as_str(), Some("horizontal"));
+        assert_eq!(at(6, "position").as_f64(), Some(2900.0));
     }
 
     #[test]

@@ -17,7 +17,7 @@ import {
   buildSection,
 } from '../components/form-field.js';
 import { buildDiagram, buildWallDiagram } from './diagram.js';
-import { panelLabel, wallLabel } from './form-logic.js';
+import { DIRECTIONS, panelLabel, wallLabel } from './form-logic.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -63,26 +63,29 @@ function optionalNumberOf(node) {
 
 /** 壁の入力欄を読み取る（wallId は画面が持たない）。 */
 export function readWall(root) {
-  // 軸組材の見付け幅は、空欄を空文字のまま持ち帰る（計算実装が既定の
-  // 見付け幅で埋めるので、消しても判定が止まらない）。
-  const frameWidth = (id) => optionalNumberOf(element(root, id));
   return {
     wallName: element(root, 'wallName').value.trim(),
     height: Number(element(root, 'wallHeight').value) || 0,
     width: Number(element(root, 'wallWidth').value) || 0,
-    // 間柱ピッチは壁の軸組。釘の縦列の位置も、せん断座屈の ξ（中間材の
-    // 有無）も、ここから決まる。
-    studPitch: Number(element(root, 'wallStudPitch').value) || 0,
-    // 軸組材の見付け幅。釘がどの材のどこに刺さるか（＝軸材の縁端距離）が
-    // ここで決まる（適用範囲 3.3(1)④）。
-    frame: {
-      column: frameWidth('wallColumnWidth'),
-      stud: frameWidth('wallStudWidth'),
-      beam: frameWidth('wallBeamWidth'),
-      joint: frameWidth('wallJointWidth'),
-    },
+    // 軸組材は 1 本ずつ自由な位置に入れる。釘の縦列の位置も、せん断座屈の
+    // ξ（中間材の有無）も、軸材の縁端距離（適用範囲 3.3(1)④）も、
+    // ここから決まる。
+    frame: readFrameMembers(root),
     panels: readPanels(root),
   };
+}
+
+/** 軸組材の入力欄を、並び順のまま読み取る。 */
+export function readFrameMembers(root) {
+  return Array.from(root.querySelectorAll('[data-member-index]')).map((node) => {
+    const field = (name) => node.querySelector(`[data-member-field="${name}"]`);
+    return {
+      direction: field('direction').value,
+      label: field('label').value.trim(),
+      position: numberOf(field('position')),
+      width: numberOf(field('width')),
+    };
+  });
 }
 
 /** 壁を構成する面材の入力欄を、並び順のまま読み取る。 */
@@ -127,13 +130,85 @@ export function applyWall(root, wall, options) {
   element(root, 'wallName').value = wall.wallName || '';
   element(root, 'wallHeight').value = wall.height || '';
   element(root, 'wallWidth').value = wall.width || '';
-  element(root, 'wallStudPitch').value = wall.studPitch || '';
-  const frame = wall.frame || {};
-  element(root, 'wallColumnWidth').value = frame.column || '';
-  element(root, 'wallStudWidth').value = frame.stud || '';
-  element(root, 'wallBeamWidth').value = frame.beam || '';
-  element(root, 'wallJointWidth').value = frame.joint || '';
+  renderFrameMembers(root, wall.frame);
   renderWallPanels(root, wall.panels, options);
+}
+
+// --- 壁の軸組材 -------------------------------------------------------------
+
+/**
+ * 軸組材の一覧を描き直す（1 本 = 1 行）。
+ *
+ * 柱・間柱・横架材・受け材のどれも、位置（材心）と見付け幅を 1 本ずつ入れる。
+ * 等間隔の壁は「等間隔で入れ直す」で一度に入れられるが、入れたあとは 1 本
+ * ずつ動かせる（開口の脇に寄せた縦材、面材の継目の受け材など）。
+ */
+export function renderFrameMembers(root, members) {
+  const container = element(root, 'wallFrameMembers');
+  const document_ = container.ownerDocument;
+  container.innerHTML = '';
+  (members || []).forEach((member, index) => {
+    container.appendChild(buildFrameMember(document_, member, index));
+  });
+  element(root, 'wallFrameEmpty').hidden = (members || []).length > 0;
+}
+
+/** 軸組材 1 本の入力欄（向き・名前・材心の位置・見付け幅・削除）。 */
+function buildFrameMember(document_, member, index) {
+  const row = document_.createElement('div');
+  row.className = 'frame-member';
+  row.setAttribute('data-member-index', String(index));
+
+  const field = (name, spec) => {
+    const { wrap, control } = buildField(
+      document_,
+      { id: `member-${index}-${name}`, ...spec },
+      { hideLabel: index > 0, ariaLabel: index > 0 ? spec.label : undefined }
+    );
+    control.setAttribute('data-member-field', name);
+    return wrap;
+  };
+
+  row.appendChild(
+    field('direction', {
+      label: '向き',
+      type: 'select',
+      options: DIRECTIONS,
+      value: member.direction,
+    })
+  );
+  row.appendChild(
+    field('label', {
+      label: '軸組材',
+      placeholder: '柱・間柱・横架材 など',
+      value: member.label,
+    })
+  );
+  row.appendChild(
+    field('position', {
+      label: '材心の位置',
+      type: 'number',
+      unit: 'mm',
+      value: member.position,
+    })
+  );
+  row.appendChild(
+    field('width', {
+      label: '見付け幅',
+      type: 'number',
+      unit: 'mm',
+      value: member.width,
+    })
+  );
+
+  const remove = document_.createElement('button');
+  remove.type = 'button';
+  remove.className = 'secondary danger';
+  remove.textContent = '削除';
+  remove.setAttribute('data-remove-frame-member', String(index));
+  remove.setAttribute('aria-label', `${index + 1} 本目の軸組材を削除`);
+  row.appendChild(remove);
+  return row;
 }
 
 /**
@@ -202,7 +277,8 @@ function panelSelect(document_, index, name, label, value, choices) {
 /**
  * グレー本 表 3.2.1 の標準的な組み合わせを、選べる一覧にする。
  *
- * 選ぶと、壁の間柱ピッチと、この面材の釘ピッチ・へりあき・大きさが入る
+ * 選ぶと、壁の軸組材がそのピッチで入り直し、この面材の釘ピッチ・へりあき・
+ * 大きさが入る
  * （大きさは左下をそのままに右上を動かす）。釘配列の型は面材が壁のどこに
  * 来るかで決まるので、選択肢には入らない。
  */
@@ -379,7 +455,7 @@ function buildPanelEditor(document_, panel, index, options) {
     document_,
     '壁の中で占める領域と釘（グレー本 3.2）',
     '壁の左下を原点として、この面材が占める領域を入れます。面材の寸法も釘配列も' +
-      'ここから決まります（釘は面材の四周と、この面材にかかる間柱に打ちます）。' +
+      'ここから決まります（釘は面材の四周と、この面材の内側を通る縦材に打ちます）。' +
       'へりあきは、適用範囲 3.3(1)④ の「10 mm 以上かつ接合具径 d ×5 以上」を' +
       '満たす値を入れてください（上で面材と釘を選ぶと、足りなければその値まで' +
       '引き上げます）。'
@@ -605,6 +681,8 @@ export function renderWallResult(root, report) {
   const layoutNote = element(root, 'wallLayoutNote');
   const layoutHead = element(root, 'wallLayoutHead');
   const layoutBody = element(root, 'wallLayoutBody');
+  const frameHead = element(root, 'wallFrameHead');
+  const frameBody = element(root, 'wallFrameBody');
   const specHead = element(root, 'wallSpecHead');
   const specBody = element(root, 'wallSpecBody');
   const head = element(root, 'wallPanelHead');
@@ -618,8 +696,8 @@ export function renderWallResult(root, report) {
   // 面材ごとの釘配列諸定数は、壁の計算の一部として一緒に返る。
   renderPanelResults(root, report && report.panelReports);
 
-  [summary, layoutHead, layoutBody, specHead, specBody, head, body, steps,
-   bucklingHead, bucklingBody, checks]
+  [summary, layoutHead, layoutBody, frameHead, frameBody, specHead, specBody,
+   head, body, steps, bucklingHead, bucklingBody, checks]
     .forEach((node) => {
       node.innerHTML = '';
     });
@@ -667,6 +745,10 @@ export function renderWallResult(root, report) {
   if (wallDiagram) {
     appendTable(layoutHead, layoutBody, report.layoutColumns, report.layout);
   }
+
+  // 軸組材（位置と見付け幅）。釘の縦列も縁端距離もここから決まるので、
+  // 何を入れて計算したのかを結果の側にも残す。
+  appendTable(frameHead, frameBody, report.frameColumns, report.frame);
 
   // 面材と釘は面材ごとの入力なので、どの面材がどの数値で計算されたのかを
   // 壁の結果にも並べる（張り分けた壁でも根拠がその場でそろう）。
@@ -774,6 +856,21 @@ export function renderWallDiagram(svg, diagram) {
           'text-anchor': 'middle', fill: '#64748b', 'font-size': 9,
         })
       );
+    });
+
+    // 軸組材（柱・間柱・横架材・受け材）。面材の裏に隠れているものなので、
+    // 塗らずに破線で重ねる（面材の縁がどの材に載っているのか＝釘がどこに
+    // 刺さるのかが、面材を隠さずに見える）。
+    (side.members || []).forEach((member) => {
+      const rect = svgNode(document_, 'rect', {
+        x: member.x, y: member.y, width: member.width, height: member.height,
+        fill: 'none', stroke: '#78716c', 'stroke-width': 0.75,
+        'stroke-dasharray': '4 3',
+      });
+      const title = document_.createElementNS(SVG_NS, 'title');
+      title.textContent = member.label;
+      rect.appendChild(title);
+      svg.appendChild(rect);
     });
 
     // 壁の枠をもう一度、線だけ描く。はみ出した面材が壁の縁を塗り隠すと、

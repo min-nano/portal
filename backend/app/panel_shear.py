@@ -62,15 +62,22 @@ EXAMPLE_WALL = {
     "wallName": "グレー本 3.3 の計算例",
     "height": 3000,
     "width": 910,
-    # 間柱 30 × 105 を @455 で入れている（図 3.3.10）。釘の縦列の位置も、
-    # せん断座屈の ξ（中間材の有無）も、このピッチから決まる。
-    "studPitch": 455,
-    # 軸組材の見付け幅。間柱は 30 × 105 なので見付け 30mm（図 3.3.10）。
-    # 柱・横架材・継目の材の寸法は本に書かれていないので、既定（在来軸組で
-    # よくある 105mm）のままにする。中間の間柱に打つ釘は材心に来るので、
-    # 縁端距離は 15mm しか取れず、3.3(1)④ の 20mm に届かない（本の計算例を
-    # そのまま再現すると、この検定も NG になる）。
-    "frame": {"stud": 30},
+    # 軸組材（柱・間柱・横架材・受け材）は 1 本ずつ、位置と見付け幅で入れる。
+    # 間柱は 30 × 105 を @455（図 3.3.10）なので、見付けは 30mm。柱・横架材・
+    # 受け材の寸法は本に書かれていないので、在来軸組でよくある 105mm にする。
+    # 中間の間柱に打つ釘は材心に来るので縁端距離は 15mm しか取れず、
+    # 3.3(1)④ の 20mm に届かない（本の計算例をそのまま再現すると、この検定は
+    # NG になる）。面材の縁が来る Y = 1820・2730 には、四周打ちのための
+    # 受け材を入れてある。
+    "frame": [
+        {"direction": "vertical", "label": "柱", "position": 0, "width": 105},
+        {"direction": "vertical", "label": "間柱", "position": 455, "width": 30},
+        {"direction": "vertical", "label": "柱", "position": 910, "width": 105},
+        {"direction": "horizontal", "label": "横架材", "position": 0, "width": 105},
+        {"direction": "horizontal", "label": "受け材", "position": 1820, "width": 105},
+        {"direction": "horizontal", "label": "受け材", "position": 2730, "width": 105},
+        {"direction": "horizontal", "label": "横架材", "position": 3000, "width": 105},
+    ],
 }
 
 # 計算例の面材 2 枚（壁の中で占める領域と、釘ピッチ・へりあき）。
@@ -132,7 +139,7 @@ def preset(preset_id: str) -> dict:
     """グレー本 表 3.2.1 の組み合わせを、壁と面材へ入る形で返す。
 
     釘配列の型は面材が壁のどこに来るかで決まるので、読み込むのは壁の
-    間柱ピッチと、面材の釘ピッチ・へりあき・大きさだけ。
+    軸組材を入れ直すための間柱ピッチと、面材の釘ピッチ・へりあき・大きさだけ。
     """
     try:
         loaded = nail_core.call({"op": "preset", "data": {"id": preset_id}})
@@ -306,11 +313,12 @@ _FOOTNOTE = (
 _LAYOUT_TITLE = "面材張り大壁 壁の面材配列図"
 _LAYOUT_SUBTITLE = (
     "壁を構成する面材を、壁のどこに張るかを示す図。面材の寸法も釘配列も、"
-    "この配置と壁の軸組（間柱ピッチ）から決まる"
+    "この配置と壁の軸組材から決まる"
 )
 _LAYOUT_FOOTNOTE = (
     "面材は「壁の中で占める領域」として入力する。面材の寸法も釘配列も、この領域と壁の軸組"
-    "（間柱ピッチ）から決まる。壁からはみ出している面材・同じ面で重なっている面材があれば、"
+    "から決まる。軸組材は破線で重ねてある（面材の裏に隠れているもの）。"
+    "壁からはみ出している面材・同じ面で重なっている面材があれば、"
     "「配置の確認」を NG にして印（※）を付ける。面材の面積の和が壁の見付面積に満たない"
     "（張り残しがある）ことは、準耐力壁形式などで通常起こるため NG としない。"
 )
@@ -327,8 +335,9 @@ _WALL_FOOTNOTE = (
     "面材張り大壁は面材の四周を釘打ちする）。適用範囲のうち機械的に判定できるのは"
     "①許容せん断耐力の上限と、④の面材の釘列に対するへりあき（10mm 以上かつ接合具径 d ×5 以上）・"
     "軸材の釘列に対する縁端距離（20mm 以上かつ接合具径 d ×5 以上）まで。"
-    "縁端距離は、釘列を受ける軸組材（柱・間柱・横架材・継目の材）の見付け幅の半分から、"
-    "面材の縁の釘列についてはへりあきを引いた値で、材の心に面材を突き付けて張ることを前提とする。"
+    "縁端距離は、釘列を受ける軸組材の縁までの距離（中間の縦材は材心に打つので見付け幅の半分、"
+    "面材の縁の釘列は材心とのずれのぶんだけ縮む）。面材の縁を受ける軸組材が入っていない釘列は"
+    "「軸組材なし」として NG にする。"
     "釘のピッチ・面材と釘の組合せ・端部および継目の材の断面・中間材（間柱等）の配置は、"
     "設計者が 3.3(1) の②〜⑧に照らして確認すること。"
 )
@@ -465,6 +474,20 @@ def _draw_wall_layout(page: pdf_write.Page, box: tuple[float, float, float, floa
 
         for panel in side["panels"]:
             _draw_wall_layout_panel(page, panel, to_x, to_y, scale)
+
+        # 軸組材（柱・間柱・横架材・受け材）。面材の裏に隠れているものなので、
+        # 塗らずに破線で重ねる（面材の縁がどの材に載っているのか＝釘がどこに
+        # 刺さるのかが、面材を隠さずに見える）。
+        for member in diagram.get("members", []):
+            page.rect(
+                to_x(member["x"]),
+                to_y(member["y"]),
+                member["width"] * scale,
+                member["height"] * scale,
+                line_width=0.5,
+                gray=0.55,
+                dash=(2.0, 1.5),
+            )
 
         # 壁の枠をもう一度、線だけ描く。はみ出した面材が壁の縁を塗り隠すと、
         # どこまでが壁なのかが分からなくなるため。
@@ -859,8 +882,12 @@ def _draw_wall_page(document: pdf_write.Document, data: dict, report: dict,
         flow.cursor -= 13
     flow.cursor -= 8
 
-    # --- 2. 計算結果 ---
-    page = flow.section("2. 剛性とせん断耐力", 48)
+    # --- 2. 軸組材 ---
+    # 釘の縦列の位置も、軸材の縁端距離も、この位置と見付け幅で決まる。
+    table("2. 軸組材", "frameColumns", "frame")
+
+    # --- 3. 計算結果 ---
+    page = flow.section("3. 剛性とせん断耐力", 48)
     box_width = (right - left - 16) / 3
     for position, item in enumerate(report["summary"]):
         box_x = left + position * (box_width + 8)
@@ -871,16 +898,16 @@ def _draw_wall_page(document: pdf_write.Document, data: dict, report: dict,
         page.text(box_x + box_width / 2, flow.cursor - 26, item["value"], 13, align="center")
     flow.cursor -= 48
 
-    # --- 3. 面材ごとの面材と釘 ---
+    # --- 4. 面材ごとの面材と釘 ---
     # 面材と釘は面材ごとの入力（1 枚の壁でも張り分けられる）ので、どの面材が
     # どの数値で計算されたのかをここに残す。
-    table("3. 面材ごとの面材と釘", "specColumns", "specs")
+    table("4. 面材ごとの面材と釘", "specColumns", "specs")
 
-    # --- 4. 面材ごとの値 ---
-    table("4. 面材ごとの値", "panelColumns", "panels")
+    # --- 5. 面材ごとの値 ---
+    table("5. 面材ごとの値", "panelColumns", "panels")
 
-    # --- 5. 途中経過 ---
-    flow.section("5. 壁全体の計算", 13)
+    # --- 6. 途中経過 ---
+    flow.section("6. 壁全体の計算", 13)
     for row in report["steps"]:
         page = flow.room(13)
         page.text(left + 8, flow.cursor, row["label"], 8.5, gray=0.35)
@@ -891,10 +918,10 @@ def _draw_wall_page(document: pdf_write.Document, data: dict, report: dict,
         flow.cursor -= 13
     flow.cursor -= 8
 
-    # --- 6. 面材のせん断破壊・せん断座屈（式 3.3.8〜3.3.11） ---
-    table("6. 面材のせん断破壊・せん断座屈の検定", "bucklingColumns", "buckling")
+    # --- 7. 面材のせん断破壊・せん断座屈（式 3.3.8〜3.3.11） ---
+    table("7. 面材のせん断破壊・せん断座屈の検定", "bucklingColumns", "buckling")
 
-    # --- 7. 判定 ---
+    # --- 8. 判定 ---
     # 判定の根拠には、いちばん厳しい面材の名前や、釘が刺さる軸組材まで入る。
     # 欄に収まらなければ字を詰めるのではなく折り返す（OK / NG の欄と重ねない）。
     wrapped = [
@@ -903,7 +930,7 @@ def _draw_wall_page(document: pdf_write.Document, data: dict, report: dict,
     ]
     # 判定は読み手がいちばん先に探すところなので、行ごとに散らさず、
     # 収まらなければ節ごと次のページへ送る。
-    flow.section("7. 判定", sum(11 * len(lines) + 2 for _, lines in wrapped))
+    flow.section("8. 判定", sum(11 * len(lines) + 2 for _, lines in wrapped))
     for check, lines in wrapped:
         page = flow.room(11 * len(lines) + 2)
         page.text(left + 8, flow.cursor, check["label"], 8.5, gray=0.45)

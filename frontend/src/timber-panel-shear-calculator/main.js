@@ -43,6 +43,7 @@ import {
 import {
   applyWall,
   readWall,
+  renderFrameMembers,
   renderWallBar,
   renderWallPanels,
   renderWallResult,
@@ -50,12 +51,14 @@ import {
   showPanelArea,
 } from './form-dom.js';
 import {
+  DEFAULT_STUD_PITCH,
   canRemoveWall,
   capturePanel,
   defaultSaveName,
   emptyFormData,
   formSignature,
   indexAfterRemoval,
+  makeMember,
   makePanel,
   makeWall,
   mergeFormData,
@@ -221,12 +224,81 @@ function removeWallPanel(index) {
   redrawPanels();
 }
 
+// --- 壁の軸組材 -------------------------------------------------------------
+
+/**
+ * 軸組材を 1 本足す（位置と見付け幅は、そのあと入れてもらう）。
+ *
+ * 直前の材と同じ向き・同じ名前・同じ見付け幅から始める（同じ間柱を何本も
+ * 入れることが多いため）。位置だけを入れれば 1 本増える。
+ */
+function addFrameMember() {
+  const wall = currentWall();
+  if (!wall) return;
+  captureCurrentWall();
+  const previous = wall.frame[wall.frame.length - 1];
+  wall.frame.push(
+    makeMember(
+      previous
+        ? { direction: previous.direction, label: previous.label, width: previous.width }
+        : {}
+    )
+  );
+  redrawFrame();
+}
+
+function removeFrameMember(index) {
+  const wall = currentWall();
+  if (!wall) return;
+  captureCurrentWall();
+  wall.frame.splice(index, 1);
+  redrawFrame();
+}
+
+/**
+ * 軸組材を、間柱ピッチで等間隔に入れ直す。
+ *
+ * 尺モジュールのような一般的な壁を一度に入れるための入り口。組み立てるのは
+ * 計算実装（wasm）なので、前の版の入力を読み替えるときと同じ並びになる。
+ * 入れ直したあとは 1 本ずつ動かせる（入っていた材は置き換わる）。
+ */
+function rebuildFrame() {
+  const wall = currentWall();
+  if (!wall || !core) return;
+  captureCurrentWall();
+  const pitch =
+    Number(document.getElementById('frameStudPitch').value) || DEFAULT_STUD_PITCH;
+  if (
+    wall.frame.length > 0 &&
+    !window.confirm(
+      `今入っている軸組材 ${wall.frame.length} 本を、間柱 @${pitch} mm の並びで入れ直します。よろしいですか？`
+    )
+  ) {
+    return;
+  }
+  wall.frame = core.frame({
+    width: wall.width,
+    height: wall.height,
+    studPitch: pitch,
+  });
+  redrawFrame();
+}
+
+/** 軸組材の入力欄を描き直して、計算し直す。 */
+function redrawFrame() {
+  const wall = currentWall();
+  if (!wall) return;
+  renderFrameMembers(document, wall.frame);
+  scheduleCalculate();
+}
+
 /**
  * グレー本 表 3.2.1 の標準的な組み合わせを読み込む。
  *
- * 壁には間柱ピッチが、面材には釘ピッチ・へりあきと大きさ（左下はそのままに
- * 右上を動かす）が入る。読み込んだあとに実際の設計へ合わせて動かせる。
- * 釘座標そのものは、この軸組と面材の領域から計算実装（wasm）が組み立てる。
+ * 壁の軸組材はその配列が前提とするピッチで入り直し、面材には釘ピッチ・
+ * へりあきと大きさ（左下はそのままに右上を動かす）が入る。読み込んだあとに
+ * 実際の設計へ合わせて動かせる。釘座標そのものは、この軸組材と面材の領域から
+ * 計算実装（wasm）が組み立てる。
  */
 function loadPreset(index, id) {
   if (!id || !core) return;
@@ -234,7 +306,13 @@ function loadPreset(index, id) {
   const panel = captureCurrentWall(index);
   if (!panel || !wall) return;
   const loaded = core.preset(id);
-  wall.studPitch = loaded.wall.studPitch;
+  // 表 3.2.1 の配列は「面材の左端から間柱ピッチで等間隔」が前提なので、
+  // 壁の軸組材もその並びに入れ直す（入れ直したあとに 1 本ずつ動かせる）。
+  wall.frame = core.frame({
+    width: wall.width,
+    height: wall.height,
+    studPitch: loaded.wall.studPitch,
+  });
   Object.assign(panel, panelFieldsFromPreset(panel, loaded.panel));
   // 表 3.2.1 の配列はへりあき 10 mm が前提なので、この面材の釘で必要な値に
   // 足りなければ引き上げる（適用範囲 3.3(1)④）。
@@ -340,12 +418,17 @@ function watchInputs() {
     }
     scheduleCalculate();
   });
-  // 面材の行は数が変わるので、行ごとではなく容器で受ける。
+  // 面材と軸組材の行は数が変わるので、行ごとではなく容器で受ける。
   form.addEventListener('click', (event) => {
-    const index = event.target.getAttribute
-      ? event.target.getAttribute('data-remove-wall-panel')
-      : null;
-    if (index !== null) removeWallPanel(Number(index));
+    const attribute = (name) =>
+      event.target.getAttribute ? event.target.getAttribute(name) : null;
+    const panel = attribute('data-remove-wall-panel');
+    if (panel !== null) {
+      removeWallPanel(Number(panel));
+      return;
+    }
+    const member = attribute('data-remove-frame-member');
+    if (member !== null) removeFrameMember(Number(member));
   });
 }
 
@@ -570,6 +653,10 @@ async function prepare() {
   document.getElementById('addWallBtn').addEventListener('click', addWall);
   document.getElementById('removeWallBtn').addEventListener('click', removeWall);
   document.getElementById('addWallPanelBtn').addEventListener('click', addWallPanel);
+  document.getElementById('addFrameMemberBtn').addEventListener('click', addFrameMember);
+  document.getElementById('rebuildFrameBtn').addEventListener('click', rebuildFrame);
+  // 「等間隔で入れ直す」のピッチは、尺モジュールを初期値にしておく。
+  document.getElementById('frameStudPitch').value = String(DEFAULT_STUD_PITCH);
   document
     .getElementById('wallPrevBtn')
     .addEventListener('click', () => goToWall(currentWallIndex - 1));

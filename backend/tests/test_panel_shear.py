@@ -102,7 +102,6 @@ def test_normalize_defaults_a_panel_to_the_front_side():
     panel = data["walls"][0]["panels"][0]
     assert panel["side"] == "front"
     assert panel["edgeDistance"] == nail_core.config()["defaultEdgeDistance"]
-    assert data["walls"][0]["studPitch"] == nail_core.config()["defaultStudPitch"]
 
 
 def test_normalize_keeps_the_edge_distance_of_each_panel():
@@ -185,7 +184,7 @@ def test_compute_all_keeps_the_layout_in_the_inputs():
     inputs = {row["label"]: row["value"] for row in wall["panelReports"][0]["inputs"]}
 
     assert "四周打ち" in inputs["釘配列"]
-    assert "間柱 @455" in inputs["釘配列"]
+    assert "中間の縦材" in inputs["釘配列"]
     assert "釘 @150" in inputs["釘配列"]
     assert "へりあき 10 mm" in inputs["釘配列"]
     assert inputs["壁内の配置"] == "表面　左下 (0, 0) 〜 右上 (910, 610) mm"
@@ -311,23 +310,60 @@ def test_the_frame_clearance_check_follows_the_member_width():
     assert report["frameClearanceOk"] is False
     check = next(c for c in report["checks"] if "縁端距離" in c["label"])
     assert "最小 縁端距離 15 mm < 20 mm" in check["value"]
-    assert "中間の間柱 ／ 間柱 見付け 30 mm" in check["value"]
+    assert "中間の縦材（X = 455 mm） ／ 間柱（見付け 30 mm）" in check["value"]
 
-    data["walls"][0]["frame"]["stud"] = 45
+    # 間柱を 45 mm に太らせれば 22.5 mm となって通る。
+    for member in data["walls"][0]["frame"]:
+        if member["label"] == "間柱":
+            member["width"] = 45
     assert panel_shear.compute_all(data)["walls"][0]["frameClearanceOk"] is True
+
+    # 面材の縁を受ける材（Y = 1820 の受け材）を外すと、そこには釘を打てない。
+    data["walls"][0]["frame"] = [
+        member for member in data["walls"][0]["frame"] if member["position"] != 1820
+    ]
+    without = panel_shear.compute_all(data)["walls"][0]
+    assert without["frameClearanceOk"] is False
+    assert "軸組材なし" in next(
+        c for c in without["checks"] if "縁端距離" in c["label"]
+    )["value"]
 
 
 def test_the_frame_members_are_part_of_the_wall():
-    """軸組材は壁の入力。未入力の欄は在来軸組でよくある見付け幅で埋まる。"""
-    data = panel_shear.normalize_data({"walls": [{"panels": []}]})
+    """軸組材は壁の入力で、1 本ずつ位置と見付け幅を持つ。
 
-    config = nail_core.config()
-    assert data["walls"][0]["frame"] == {
-        "column": config["defaultColumnWidth"],
-        "stud": config["defaultStudWidth"],
-        "beam": config["defaultBeamWidth"],
-        "joint": config["defaultJointWidth"],
-    }
+    軸組材を持たない前の版の入力（間柱ピッチだけ）は、当時の前提のまま
+    軸組材へ読み替える（壁の両端に柱・ピッチで間柱・上下に横架材、それに
+    面材の継目の材）。
+    """
+    data = panel_shear.normalize_data(
+        {
+            "walls": [
+                {
+                    "width": 1820,
+                    "height": 2900,
+                    "studPitch": 910,
+                    "panels": [{"left": 0, "bottom": 0, "right": 1820, "top": 910}],
+                }
+            ]
+        }
+    )
+
+    frame = data["walls"][0]["frame"]
+    vertical = [
+        (m["label"], m["position"], m["width"])
+        for m in frame
+        if m["direction"] == "vertical"
+    ]
+    assert vertical == [("柱", 0, 105), ("間柱", 910, 45), ("柱", 1820, 105)]
+    # 面材の継目（Y = 910）にも、当時の前提どおり材が立つ。
+    assert ("継目の材", 910, 105) in [
+        (m["label"], m["position"], m["width"]) for m in frame
+    ]
+
+    # 軸組材を等間隔で組み立てる入り口も、計算実装が持っている。
+    even = nail_core.call({"op": "frame", "data": {"width": 910, "height": 2900}})
+    assert [member["position"] for member in even["frame"]] == [0, 455, 910, 0, 2900]
 
 
 def test_the_frame_clearance_is_reported_for_every_panel():
@@ -337,10 +373,10 @@ def test_the_frame_clearance_is_reported_for_every_panel():
     wall = panel_shear.compute_all(data)["walls"][0]
 
     inputs = {row["label"]: row["value"] for row in wall["panelReports"][0]["inputs"]}
-    # 910 × 610 を壁の左下に張るので、左右の縁は柱・下の縁は横架材。いちばん
-    # 厳しいのは、材心に打つ @455 の間柱（30 / 2）。
+    # 910 × 610 を壁の左下に張るので、左右の縁は柱・下の縁は横架材。上の縁
+    # （Y = 610）を受ける材は入れていないので、そこには釘を打てない。
     assert inputs["軸材の縁端距離（釘から軸組材の縁まで）"] == (
-        "最小 15 mm（中間の間柱 ／ 間柱 見付け 30 mm）"
+        "最小 —（上の縁 ／ 軸組材なし）"
     )
 
 
@@ -707,7 +743,9 @@ def test_pdf_prints_the_wall_calculation():
     assert "τcr [N/mm²]" in text
     assert wall["buckling"][0]["cells"][-2] in text  # τcr
     # 軸組材（釘がどの材のどこに刺さるか＝軸材の縁端距離の根拠）。
-    assert "柱 105 ／ 間柱 30 ／ 横架材 105 ／ 継目の材 105 mm" in text
+    assert "材心の位置 [mm]" in text
+    assert "見付け幅 [mm]" in text
+    assert "間柱" in text
     # 判定（適用範囲 3.3(1)① の上限と、④のへりあき・縁端距離、
     # 面材のせん断破壊・せん断座屈）。
     assert "13.7200" in text
@@ -812,7 +850,13 @@ def test_the_position_of_a_panel_travels_with_the_saved_pdf():
     assert (panel["right"], panel["top"]) == (910, 2730)
     assert panel["side"] == "front"
     # 壁の軸組（間柱ピッチ）も、そのまま戻る。
-    assert parsed["walls"][0]["studPitch"] == 455
+    # 軸組材も、位置と見付け幅のまま保存されて戻る。
+    assert parsed["walls"][0]["frame"][1] == {
+        "direction": "vertical",
+        "label": "間柱",
+        "position": 455,
+        "width": 30,
+    }
 
 
 def test_pdf_marks_a_wall_over_the_upper_limit_as_ng():

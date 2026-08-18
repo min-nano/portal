@@ -11,7 +11,7 @@
 //
 // 面材と釘の仕様も面材ごとの入力で、1 枚の壁の中で混在してよい（上半分は
 // N50、下半分は CN50 のような張り分け）。壁が持つのは、面材を張る軸組
-// （階高・幅・間柱ピッチと、軸組材の見付け幅）だけ。
+// （階高・幅と、1 本ずつ位置を入れる軸組材）だけ。
 //
 // 「保存 / 別名で保存 / 未保存の確認」といったファイル操作の判断と文言は、
 // 構造計算安全証明書 作成ツールと共通なので ../pdf-file-ops.js にある。
@@ -22,7 +22,9 @@ import { buildFileName } from '../pdf-file-ops.js';
 const DEFAULT_PANEL_WIDTH = 910;
 const DEFAULT_PANEL_HEIGHT = 1820;
 
-/** 壁の軸組と釘の既定値 [mm]（尺モジュールの間柱ピッチ・釘ピッチ）。 */
+/** 壁の軸組と釘の既定値 [mm]（尺モジュールの間柱ピッチ・釘ピッチ）。
+ *
+ * 間柱ピッチは入力ではなく、軸組材を等間隔に入れるときの初期値。 */
 export const DEFAULT_STUD_PITCH = 455;
 const DEFAULT_NAIL_PITCH = 150;
 
@@ -31,26 +33,89 @@ const DEFAULT_NAIL_PITCH = 150;
  *
  * 尺モジュールの在来軸組でよくある取り合わせ（柱 105 角・間柱 45×105・
  * 土台や桁は 105 角以上・面材の継目には 45×105 を平使いして見付け 105）。
- * 釘がどの材のどこに刺さるかが決まるので、適用範囲 3.3(1)④ の「軸材の
- * 釘列に対する縁端距離」（20mm 以上かつ接合具径 d ×5 以上）を判定できる。
+ * 軸組材は 1 本ずつ自由な位置に入れるので、これは**足すときの初期値**。
  */
-export const DEFAULT_FRAME = {
+export const DEFAULT_MEMBER_WIDTH = {
   column: 105,
   stud: 45,
   beam: 105,
   joint: 105,
 };
 
-/** 壁の軸組材（未入力の欄は既定の見付け幅で埋める）。 */
-export function makeFrame(overrides) {
-  const frame = overrides || {};
-  const width = (key) => (Number(frame[key]) || DEFAULT_FRAME[key]);
+/** 軸組材の向き（縦材＝柱・間柱など／横材＝横架材・受け材など）。 */
+export const DIRECTIONS = [
+  { value: 'vertical', text: '縦材' },
+  { value: 'horizontal', text: '横材' },
+];
+
+/**
+ * 軸組材 1 本。
+ *
+ * 位置は材心（壁の左下が原点。縦材は X、横材は Y）で、見付け幅は面材の側
+ * から見た材の幅。釘の縦列の位置も、適用範囲 3.3(1)④ の縁端距離も、
+ * ここから決まる。
+ */
+export function makeMember(overrides) {
+  const member = overrides || {};
+  const direction = member.direction === 'horizontal' ? 'horizontal' : 'vertical';
   return {
-    column: width('column'),
-    stud: width('stud'),
-    beam: width('beam'),
-    joint: width('joint'),
+    direction,
+    label:
+      String(member.label || '') ||
+      (direction === 'horizontal' ? '横架材' : '間柱'),
+    position: Number(member.position) || 0,
+    width:
+      Number(member.width) ||
+      (direction === 'horizontal'
+        ? DEFAULT_MEMBER_WIDTH.beam
+        : DEFAULT_MEMBER_WIDTH.stud),
+    ...(overrides && overrides.memberId ? { memberId: overrides.memberId } : {}),
   };
+}
+
+/**
+ * 新しい壁の軸組（尺モジュールの一般的な組み方）。
+ *
+ * 壁の両端に柱、その間に間柱を @455 で立て、上下に横架材を置く。入れたあとは
+ * 1 本ずつ動かせるし、足すことも消すこともできる。等間隔で入れ直したいときは
+ * 計算実装（wasm）の frame() が同じ並びを組み立てる（画面の「等間隔で
+ * 入れ直す」・表 3.2.1 の呼び出しはそちらを使う）。
+ */
+export function defaultFrame(width, height, studPitch) {
+  const wallWidth = Number(width) || DEFAULT_WALL_WIDTH;
+  const wallHeight = Number(height) || DEFAULT_WALL_HEIGHT;
+  const pitch = Number(studPitch) || DEFAULT_STUD_PITCH;
+  const members = [
+    makeMember({ label: '柱', position: 0, width: DEFAULT_MEMBER_WIDTH.column }),
+  ];
+  for (let position = pitch; position < wallWidth; position += pitch) {
+    members.push(makeMember({ label: '間柱', position }));
+  }
+  members.push(
+    makeMember({ label: '柱', position: wallWidth, width: DEFAULT_MEMBER_WIDTH.column })
+  );
+  ['下', '上'].forEach((_, index) => {
+    members.push(
+      makeMember({
+        direction: 'horizontal',
+        label: '横架材',
+        position: index === 0 ? 0 : wallHeight,
+        width: DEFAULT_MEMBER_WIDTH.beam,
+      })
+    );
+  });
+  return members;
+}
+
+/**
+ * 壁の軸組材の一覧を、この画面が扱う形に整える。
+ *
+ * 一覧が入っていなければ（軸組材を持たない形で組み立てたデータ）、尺モジュール
+ * の既定を入れる。空の一覧はそのまま空で扱う（軸組材を全て消した状態）。
+ */
+export function makeFrame(members, wall) {
+  if (!Array.isArray(members)) return defaultFrame((wall || {}).width, (wall || {}).height);
+  return members.map((member) => makeMember(member));
 }
 
 /**
@@ -107,7 +172,7 @@ export const EMPTY_SPEC = {
  * 新しい面材（壁を構成する 1 枚）を作る。
  *
  * 面材は「壁の中で占める領域」。既定では壁の左下に 3×6 板を 1 枚置く形に
- * しておき、そこから動かしてもらう。釘配列はこの領域と壁の間柱ピッチから
+ * しておき、そこから動かしてもらう。釘配列はこの領域と壁の軸組材から
  * 決まるので、面材が持つ釘の入力は釘ピッチとへりあきだけ。
  *
  * 面材と釘の数値は空のままにしておき、表 3.3.1 の一覧から読み込むか、
@@ -135,8 +200,8 @@ export function makePanel(overrides) {
 /**
  * 新しい壁（面材張り大壁 1 枚分の入力）を作る。
  *
- * 壁は面材を張る**軸組**として持つ: 階高・幅と、間柱ピッチ・軸組材の見付け
- * 幅。面材と釘の仕様は面材ごとの入力。面材は 1 枚から始める。
+ * 壁は面材を張る**軸組**として持つ: 階高・幅と、軸組材（1 本ずつ自由な位置）。
+ * 面材と釘の仕様は面材ごとの入力。面材は 1 枚から始める。
  */
 export function makeWall(overrides) {
   wallSequence += 1;
@@ -145,10 +210,9 @@ export function makeWall(overrides) {
     wallName: `壁${wallSequence}`,
     height: DEFAULT_WALL_HEIGHT,
     width: DEFAULT_WALL_WIDTH,
-    // 釘の縦列の位置も、せん断座屈の ξ（中間材の有無）も、このピッチで決まる。
-    studPitch: DEFAULT_STUD_PITCH,
-    // 釘が刺さる材の見付け幅（軸材の縁端距離の判定に使う）。
-    frame: makeFrame(),
+    // 軸組材は 1 本ずつ自由な位置に入れる。釘の縦列の位置も、せん断座屈の
+    // ξ（中間材の有無）も、軸材の縁端距離の判定も、ここから決まる。
+    frame: defaultFrame(DEFAULT_WALL_WIDTH, DEFAULT_WALL_HEIGHT, DEFAULT_STUD_PITCH),
     panels: [makePanel()],
     ...(overrides || {}),
   };
@@ -337,10 +401,10 @@ export function mergeFormData(parsed) {
       wallName: String(wall.wallName || '') || `壁${index + 1}`,
       height: Number(wall.height) || 0,
       width: Number(wall.width) || 0,
-      studPitch: Number(wall.studPitch) || DEFAULT_STUD_PITCH,
-      // 軸組材を持たない版で保存した計算書を開いたときは、既定の見付け幅で
-      // 判定を始める（剛性・許容せん断耐力の数値は変わらない）。
-      frame: makeFrame(wall.frame),
+      // 軸組材。前の版（間柱ピッチだけを持っていた形）で保存した計算書は、
+      // 読み込みの時点で計算実装が軸組材へ読み替え終えているので、ここでは
+      // その一覧をそのまま読む。
+      frame: makeFrame(wall.frame, wall),
       panels: (Array.isArray(wall.panels) ? wall.panels : []).map((panel, position) =>
         makePanel({
           panelId: String(panel.panelId || '') || newPanelId(),
