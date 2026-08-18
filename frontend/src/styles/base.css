@@ -162,8 +162,7 @@ portal-save-bar {
   .portal-header,
   portal-section-controls,
   .verdict-fab,
-  .save-bar,
-  .pattern-bar {
+  .save-bar {
     display: none !important;
   }
 

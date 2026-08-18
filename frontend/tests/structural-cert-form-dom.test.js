@@ -110,7 +110,7 @@ function setDate(node, iso) {
 
 describe('buildForm', () => {
   it('sections の並びどおりにセクションを作る', () => {
-    const titles = [...root.querySelectorAll('.cert-section h3')].map((h) => h.textContent);
+    const titles = [...root.querySelectorAll('.form-section h3')].map((h) => h.textContent);
 
     // 必須の項目をひとつだけ持つセクションは、見出しが * を引き受ける。
     expect(titles).toEqual([
@@ -123,7 +123,7 @@ describe('buildForm', () => {
   });
 
   it('セクションは折り畳めるようにし、見出しを開閉の行に出す', () => {
-    const sections = [...root.querySelectorAll('.cert-section')];
+    const sections = [...root.querySelectorAll('.form-section')];
 
     expect(sections.every((node) => node.tagName.toLowerCase() === 'portal-section')).toBe(
       true
@@ -141,7 +141,7 @@ describe('buildForm', () => {
 
     revealMissingFields(root);
 
-    const sectionOf = (selector) => root.querySelector(selector).closest('.cert-section');
+    const sectionOf = (selector) => root.querySelector(selector).closest('.form-section');
     expect(sectionOf('[data-date-picker]').open).toBe(true); // 証明日（必須）
     expect(sectionOf('[data-choice="calc_type"]').open).toBe(true); // 選択が必須
     expect(sectionOf('#field-building_area').open).toBe(false); // 入力済み
@@ -156,7 +156,7 @@ describe('buildForm', () => {
     expect(root.querySelector('label[for="field-remarks"]')).toBeNull();
     // 名前は見出しが担う（読み上げでも同じ結び付きになる）。
     expect(input.getAttribute('aria-labelledby')).toBe(
-      input.closest('.cert-section').querySelector('h3').id
+      input.closest('.form-section').querySelector('h3').id
     );
   });
 
@@ -168,7 +168,7 @@ describe('buildForm', () => {
     expect(root.querySelector('label[for="field-building_area"]').textContent).toBe(
       '建築面積 *'
     );
-    expect(area.closest('.cert-field').querySelector('.unit').textContent).toBe('m²');
+    expect(area.closest('.field').querySelector('.unit').textContent).toBe('m²');
   });
 
   it('数値だけの欄は数字キーパッドを出す', () => {
@@ -224,7 +224,7 @@ describe('buildForm', () => {
     expect(group.classList.contains('bare')).toBe(true);
     // 名前は見出しが担う（読み上げでも同じ結び付きになる）。
     expect(group.getAttribute('aria-labelledby')).toBe(
-      group.closest('.cert-section').querySelector('h3').id
+      group.closest('.form-section').querySelector('h3').id
     );
   });
 
@@ -253,7 +253,7 @@ describe('証明日（日付ピッカー）', () => {
     // 見出しが「証明日 *」なので、同じ文言のラベルは重ねて出さない。
     expect(root.querySelector('label[for="certDate"]')).toBeNull();
     expect(picker.getAttribute('aria-labelledby')).toBe(
-      root.querySelector('.cert-section h3').id
+      root.querySelector('.form-section h3').id
     );
     ['era_year', 'month', 'day'].forEach((key) => {
       expect(root.querySelector(`[data-field="${key}"]`).type).toBe('hidden');
@@ -332,9 +332,9 @@ describe('項目どうしの前提条件', () => {
     const input = root.querySelector('#field-other_calc_type');
 
     expect(input.disabled).toBe(true);
-    expect(input.closest('.cert-field').classList.contains('disabled')).toBe(true);
+    expect(input.closest('.field').classList.contains('disabled')).toBe(true);
     // いつ入力できるようになるのかを画面にも書いておく。
-    expect(input.closest('.cert-field').querySelector('.hint').textContent).toBe(
+    expect(input.closest('.field').querySelector('.hint').textContent).toBe(
       '「6　その他」を選んだときに入力できます。'
     );
   });
@@ -349,7 +349,7 @@ describe('項目どうしの前提条件', () => {
 
     const input = root.querySelector('#field-other_calc_type');
     expect(input.disabled).toBe(false);
-    expect(input.closest('.cert-field').classList.contains('disabled')).toBe(false);
+    expect(input.closest('.field').classList.contains('disabled')).toBe(false);
   });
 
   it('別の選択肢へ移すと、入力した内容は残さない', () => {

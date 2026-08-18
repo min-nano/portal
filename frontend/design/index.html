@@ -24,7 +24,7 @@
       ここに出ているものが、そのまま画面に出るものです。
     </p>
 
-    <portal-section class="cert-section ds-section">
+    <portal-section class="form-section ds-section">
       <h3 slot="title">1. 考え方（この 3 つだけ守る）</h3>
 
       <h4>① 画面は「入力する面」「読む面」「操作するもの」の 3 つでできている</h4>
@@ -66,7 +66,7 @@
       </div>
     </portal-section>
 
-    <portal-section class="cert-section ds-section">
+    <portal-section class="form-section ds-section">
       <h3 slot="title">2. 色</h3>
       <p class="hint">
         画面側の CSS には生の色を書きません。使うのは「役割の名前」だけです
@@ -148,7 +148,7 @@
       </p>
     </portal-section>
 
-    <portal-section class="cert-section ds-section">
+    <portal-section class="form-section ds-section">
       <h3 slot="title">3. 文字と数値</h3>
       <div class="ds-type">
         <p style="font-size: var(--fs-xl); font-weight: 700">見出し 1.375rem <code>--fs-xl</code></p>
@@ -165,7 +165,7 @@
       </p>
     </portal-section>
 
-    <portal-section class="cert-section ds-section">
+    <portal-section class="form-section ds-section">
       <h3 slot="title">4. 余白と角丸</h3>
       <p class="hint">余白は 4px 刻み（<code>--s-1</code> … <code>--s-12</code>）だけを使います。</p>
       <div class="ds-scale">
@@ -185,7 +185,7 @@
       </table>
     </portal-section>
 
-    <portal-section class="cert-section ds-section">
+    <portal-section class="form-section ds-section">
       <h3 slot="title">5. 入力欄</h3>
       <p class="hint">
         入力する場所は、どのツールでも同じ形にします。ラベルは太字の小さめ、欄は白い升目、
@@ -195,12 +195,20 @@
         （右は値と単位で埋まるため）、それ以外の欄では<strong>ラベル行の右端</strong>に置きます。
       </p>
 
+      <p class="hint">
+        この形は手で書かずに、<code>src/components/form-field.js</code> の
+        <code>buildField()</code> が作ります（3 つのツールが同じものを使っています）。
+        下は、その出来上がりと同じ形です。
+      </p>
+
       <div class="field-grid">
-        <div class="cert-field">
+        <div class="field">
           <label for="demoText">物件名</label>
-          <input type="text" id="demoText" placeholder="○○邸 新築工事">
+          <div class="field-row">
+            <input type="text" id="demoText" placeholder="○○邸 新築工事">
+          </div>
         </div>
-        <div class="wq-field required">
+        <div class="field required">
           <label for="demoNum">階高 H</label>
           <div class="field-row">
             <input type="number" id="demoNum" inputmode="numeric" value="2730">
@@ -208,7 +216,7 @@
           </div>
           <p class="hint">数値は右そろえなので、札は左側に付きます。</p>
         </div>
-        <div class="wq-field required">
+        <div class="field required">
           <label for="demoSelect">面材の種類</label>
           <div class="field-row">
             <select id="demoSelect">
@@ -218,9 +226,11 @@
           </div>
           <p class="hint">左寄せの欄では、札はラベル行の右端に付きます。</p>
         </div>
-        <div class="cert-field disabled">
+        <div class="field disabled">
           <label for="demoDisabled">大臣認定番号</label>
-          <input type="text" id="demoDisabled" value="" disabled>
+          <div class="field-row">
+            <input type="text" id="demoDisabled" value="" disabled>
+          </div>
           <p class="hint">前提を満たすまで入力できない欄は、灰色にして理由を添えます。</p>
         </div>
       </div>
@@ -230,7 +240,7 @@
         文字だけのラジオ・チェックは押す場所が狭く、選び間違えます。行ごと押せる札にして、
         選んだものは下地と枠で残します。
       </p>
-      <fieldset class="cert-choices">
+      <fieldset class="choices">
         <legend>釘配列の入力方法</legend>
         <label class="choice-option">
           <input type="radio" name="demoMode" checked>
@@ -247,7 +257,7 @@
       </fieldset>
     </portal-section>
 
-    <portal-section class="cert-section ds-section">
+    <portal-section class="form-section ds-section">
       <h3 slot="title">6. ボタン</h3>
       <p class="hint">
         3 段階しかありません。<strong>主</strong>（塗り）はその画面で 1 つだけ、
@@ -257,14 +267,11 @@
       <div class="ds-row">
         <button type="button">保存</button>
         <button type="button" class="secondary">別名で保存</button>
-        <button type="button" class="secondary" id="demoDelete"
-                style="color: var(--ng-600); border-color: color-mix(in srgb, var(--ng-500) 45%, var(--border))">
-          この面材を削除
-        </button>
+        <button type="button" class="secondary danger" id="demoDelete">この面材を削除</button>
         <button type="button" disabled>押せない状態</button>
       </div>
       <div style="max-width: 22rem">
-        <button type="button" class="add-room">＋ 部屋を追加</button>
+        <button type="button" class="add">＋ 部屋を追加</button>
       </div>
       <p class="ds-note">
         「＋ 追加」は破線の枠にして、「ここに増やせる」ことを形で示します。
@@ -272,32 +279,37 @@
       </p>
     </portal-section>
 
-    <portal-section class="cert-section ds-section">
+    <portal-section class="form-section ds-section">
       <h3 slot="title">7. 節（折り畳めるカード）</h3>
       <p class="hint">
         入力のかたまりは 1 枚のカードです。見出しの行はどこを押しても開閉でき、
         閉じているあいだも見分けが付く情報（面材名・部屋名）は見出しに残します。
         この見本ページ自身も同じ部品でできています。
       </p>
-      <portal-section class="wall-panel">
+      <portal-section>
         <strong slot="title">面材 1（南面 下段）</strong>
-        <button type="button" slot="actions" class="secondary"
-                style="color: var(--ng-600); border-color: color-mix(in srgb, var(--ng-500) 45%, var(--border))">
-          この面材を削除
-        </button>
-        <div class="panel-group">
+        <button type="button" slot="actions" class="secondary danger">この面材を削除</button>
+        <div class="field-group">
           <h4>面材と釘</h4>
-          <label>厚さ t [mm]
-            <input type="number" value="9" inputmode="numeric">
-          </label>
-          <label>釘ピッチ [mm]
-            <input type="number" value="150" inputmode="numeric">
-          </label>
+          <div class="field">
+            <label for="demoThickness">厚さ t</label>
+            <div class="field-row">
+              <input type="number" id="demoThickness" value="9" inputmode="numeric">
+              <span class="unit">mm</span>
+            </div>
+          </div>
+          <div class="field">
+            <label for="demoPitch">釘ピッチ</label>
+            <div class="field-row">
+              <input type="number" id="demoPitch" value="150" inputmode="numeric">
+              <span class="unit">mm</span>
+            </div>
+          </div>
         </div>
       </portal-section>
     </portal-section>
 
-    <portal-section class="cert-section ds-section">
+    <portal-section class="form-section ds-section">
       <h3 slot="title">8. 結果と判定</h3>
       <p class="hint">
         結果の節に <code>.result-dock</code> を付けると、見出しが帯になり、その色が
@@ -309,7 +321,7 @@
         <button type="button" id="verdictBtn" class="secondary">判定を OK / NG で切り替える</button>
       </div>
 
-      <portal-section class="cert-section result-dock">
+      <portal-section class="form-section result-dock">
         <h3 slot="title">壁の計算結果（グレー本 3.3）</h3>
         <div class="result-summary">
           <div class="result-box">
@@ -370,7 +382,7 @@
       </p>
     </portal-section>
 
-    <portal-section class="cert-section ds-section">
+    <portal-section class="form-section ds-section">
       <h3 slot="title">9. 待たせるとき（読み込み中）</h3>
       <p class="hint">
         画面を開いてから使えるようになるまでには、①サインインの確認（Clerk の読み込みと
@@ -450,7 +462,7 @@
       </table>
     </portal-section>
 
-    <portal-section class="cert-section ds-section">
+    <portal-section class="form-section ds-section">
       <h3 slot="title">10. 骨組み（広い画面と狭い画面）</h3>
       <p class="hint">
         ページの最大幅は <code>--shell-max</code>（1280px）。1080px 以上では、入力（左）と
@@ -479,16 +491,19 @@
       </table>
     </portal-section>
 
-    <portal-section class="cert-section ds-section">
+    <portal-section class="form-section ds-section">
       <h3 slot="title">11. 使い方（新しい画面を作るとき）</h3>
       <table class="ds-token-table">
         <tr><th><code>.container</code></th><td>ページ本体。この中に節を並べる</td></tr>
         <tr><th><code>.page-head</code></th><td>見出しの行（右端に設定のチップを置ける）</td></tr>
-        <tr><th><code>portal-section.cert-section</code></th><td>入力の節。中身は自動で桝目に並ぶ</td></tr>
-        <tr><th><code>.cert-field</code> / <code>.wq-field</code></th><td>入力欄 1 つ（ラベル + 欄 + 単位 + 補足）</td></tr>
+        <tr><th><code>portal-section</code></th><td>折り畳めるカード（<code>.card</code> は折り畳まない同じ台紙）</td></tr>
+        <tr><th><code>portal-section.form-section</code></th><td>入力の節。中身の <code>.field</code> は自動で桝目に並ぶ</td></tr>
+        <tr><th><code>.field</code></th><td>入力欄 1 つ（ラベル + 欄 + 単位 + 補足）。<code>buildField()</code> が作る</td></tr>
         <tr><th><code>.field-row</code> + <code>.unit</code></th><td>欄に単位をくっつける</td></tr>
+        <tr><th><code>.field-group</code></th><td>節の中の小見出し付きのかたまり</td></tr>
         <tr><th><code>.field-narrow</code> / <code>.field-half</code></th><td>欄の幅を、入る値の長さに合わせる</td></tr>
-        <tr><th><code>.choice-option</code></th><td>行ごと押せる選択肢</td></tr>
+        <tr><th><code>.choices</code> + <code>.choice-option</code></th><td>選択肢のグループと、行ごと押せる選択肢</td></tr>
+        <tr><th><code>button.secondary</code> / <code>.danger</code> / <code>.add</code></th><td>副次的な操作・消す操作・足す操作</td></tr>
         <tr><th><code>.has-dock</code> / <code>.result-dock</code></th><td>入力と結果の 2 列</td></tr>
         <tr><th><code>.verdict.ok</code> / <code>.verdict.ng</code></th><td>判定の升目。帯とボタンの色がここから決まる</td></tr>
         <tr><th><code>.result-summary</code> / <code>.result-box</code></th><td>結果の要約（数値の枠）</td></tr>

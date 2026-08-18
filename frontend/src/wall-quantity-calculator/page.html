@@ -19,9 +19,11 @@
 <!-- has-dock: 広い画面では入力（左）と出力結果（右）の 2 列になる。
      狭い画面ではそのまま縦に流れる（並び順は変わらない）。 -->
 <form id="worksheetForm" class="has-dock" onsubmit="return false;">
-  <div class="wq-field field-half">
+  <div class="field field-half">
     <label for="buildingSelect">建物の種別</label>
-    <select id="buildingSelect"></select>
+    <div class="field-row">
+      <select id="buildingSelect"></select>
+    </div>
   </div>
 
   <!-- 節は折り畳める。入力する箇所を探しやすいよう、まとめて開閉もできる。 -->
@@ -33,7 +35,7 @@
        計算し直す。中身は src/wall-quantity-calculator/form-dom.js が作る。
        result-dock: 広い画面では右の列に貼り付いて、入力しながらでも
        結果が見えるようにする。 -->
-  <portal-section class="cert-section result-dock" id="resultsSection">
+  <portal-section class="form-section result-dock" id="resultsSection">
     <h3 slot="title">出力結果</h3>
     <p class="hint">
       入力に合わせてその場で計算しています。入力が足りないところは、

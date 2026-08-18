@@ -195,9 +195,12 @@ GAS 版の機能をそのまま移植しています。
 | 骨組み | 使い方 |
 | --- | --- |
 | `.container` | ページ本体。この中に節を並べる |
-| `portal-section.cert-section` | 入力の節。中身は自動で桝目（狭い画面では 1 列）に並ぶ |
-| `.cert-field` / `.wq-field` | 入力欄 1 つ（ラベル + 欄 + 単位 + 補足）。`.field-row` + `.unit` で欄に単位をくっつける |
-| `.choice-option` | 行ごと押せる選択肢（選んだものは下地と枠で残る） |
+| `portal-section` | 折り畳めるカード（`.card` は折り畳まない同じ台紙） |
+| `portal-section.form-section` | 入力の節。中の `.field` は自動で桝目（狭い画面では 1 列）に並ぶ |
+| `.field` | 入力欄 1 つ（ラベル + 欄 + 単位 + 補足）。`.field-row` + `.unit` で欄に単位をくっつける |
+| `.field-group` | 節の中の、小見出し付きのかたまり |
+| `.choices` / `.choice-option` | 選択肢のグループと、行ごと押せる選択肢（選んだものは下地と枠で残る） |
+| `button.secondary` / `.danger` / `.add` | 副次的な操作・消す操作・足す操作 |
 | `.has-dock` + `.result-dock` | 1080px 以上で「入力（左）・結果（右・貼り付き）」の 2 列にする。DOM の並びは変えないので、読み上げ順とタブ順は入力 → 結果のまま |
 | `.verdict.ok` / `.verdict.ng` | 判定の升目。結果の帯と「結果へ飛ぶ」ボタンの色が、ここから決まる |
 | `portal-loading.page-loading` | 読み込み中の表示。JS を待たずに出て、`finishPageLoading()` で消える |
@@ -205,6 +208,8 @@ GAS 版の機能をそのまま移植しています。
 色・余白・文字の値は `src/styles/tokens.css` の**役割の名前**（`--surface`・`--text-2`・`--ng-600` など）だけを使い、画面側の CSS には生の値を書きません。明暗テーマは `light-dark()` でこのファイルの中だけにまとまっていて、部品側の CSS は 1 行も分岐しません（端末の設定に従い、`<html data-theme="light|dark">` で固定もできます）。新しい色を足したくなったら、まず既にある役割で言い表せないかを考えてください。
 
 **`src/styles/` にあるのは、どのツールにも同じように効くものだけです。** そのツールにしか出てこない形（計測値の表・釘配列図・配布物にそろえた出力欄など）は、そのツールの `tool.css` にあり、ツールの `main.js` が `styles.css` の**後に**読み込みます。ここでも生の値は書かず、必ず `tokens.css` の変数を使います——これが「全ツールの見た目がそろっている」ことを構造として保証しています。見本ページ（`/design/`）は、載っている全ツールの `tool.css` も束ねて読み込むので、実物とずれません。
+
+**裏返すと、`src/styles/` にツールの名前は出てきません。** これは目で見ても分からない決めごとなので（`.wq-field` と `.cert-field` が同じ部品の 2 つの名前として居座っていました）、`frontend/tests/design-system-vocabulary.test.js` が数えます——土台の CSS の選択子に出てくる名前のうち、使っているのが 1 つのツールだけのものがあれば落ちます。直し方は 2 通りで、名前を汎用のもの（`.field` / `.card` / `.danger`）にして土台に残すか、その見た目ごとツールの `tool.css` へ移すかです。
 
 指で押すものの高さは `--tap`（44px）以上、入力欄の文字は 16px（iOS Safari が勝手に拡大しないため）、焦点は必ず見えるようにする、の 3 つは部品側で担保しています。
 
@@ -224,6 +229,8 @@ GAS 版の機能をそのまま移植しています。
 | `<portal-edit-bar>` | 編集中のファイル（PDF ツール共通） |
 | `<portal-save-bar>` | 保存欄（PDF ツール共通） |
 | `<portal-save-dialogs>` | 未保存の確認・名前を付けて保存（PDF ツール共通） |
+
+カスタム要素にしていない部品も 1 つあります。**入力欄・選択肢・節を組み立てる `form-field.js`** です（`buildField` / `buildChoiceGroup` / `buildChoiceOption` / `buildFieldGroup` / `buildSection`）。3 つのツール（構造計算安全証明書・必要壁量・面材張り大壁）は、どれもサーバが配る定義どおりに入力欄を並べる作りで、その骨格が `form-dom.js` に 1 つずつありました。要素ではなく関数にしてあるのは、入力欄はページの中に何百と並ぶためです（1 つずつを要素にすると、その数だけアップグレードと shadow DOM が要ります）。ツールに残るのは、その画面にしか無い印と振る舞いだけです（和暦の組み立て・連動プルダウン・釘配列図・部屋の見出しの追従など）。
 
 **入力・計算の量が増えたので、各ページの節は折り畳めます**。入力の済んだ節を閉じておけば、次に入力する箇所を見つけやすくなります。
 
@@ -310,13 +317,14 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
     layout.css                # 骨組み（ヘッダー・ページ幅・入力と結果の 2 列）
     components.css            # 部品（ボタン・入力欄・節・結果・判定）
   src/design-system/          # 見本ページ（/design/）の入口と、そこだけで使う CSS
-  src/components/             # 画面共通の部品（Web Components）
+  src/components/             # 画面共通の部品（Web Components ＋ 組み立ての関数）
     index.js                  # 部品の読み込み口と、部品を足すときの約束事
     page-header.js            # <portal-header>（ヘッダー・アカウント欄）
     loading.js                # <portal-loading>（読み込み中。JS を待たずに出る）
     auth-gate.js              # <portal-auth-gate>（サインインゲート）
     collapsible-section.js    # <portal-section>（折り畳めるセクション）
     section-controls.js       # <portal-section-controls>（一括開閉）
+    form-field.js             # 入力欄・選択肢・節の組み立て（全ツールの form-dom.js が使う）
     pdf-file-ui.js            # <portal-edit-bar> / <portal-save-bar> / <portal-save-dialogs>
   src/page-start.js           # 各ページの入口の共通の段取り（起動・サインイン・読み込み中・画面を出す）
   src/auth.js                 # Clerk（サインインゲート・トークン取得。サインイン画面は必要になってから読む）

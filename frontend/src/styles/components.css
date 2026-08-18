@@ -76,26 +76,22 @@ button.secondary:disabled {
 }
 
 /* 消す操作。押し間違いが取り返しにくいので、塗らずに赤い枠線にして
-   「他と違うもの」だと分かるようにする。 */
-.room .remove,
-#removeWallBtn,
-button[data-remove-wall-panel] {
+   「他と違うもの」だと分かるようにする。押せない状態は .secondary が
+   受け持つので、消すボタンは .secondary と重ねて付ける。 */
+button.danger {
   background: var(--surface);
   color: var(--ng-600);
   border-color: color-mix(in srgb, var(--ng-500) 45%, var(--border));
   font-weight: 700;
 }
 
-.room .remove:hover,
-#removeWallBtn:hover,
-button[data-remove-wall-panel]:hover {
+button.danger:hover {
   background: var(--ng-50);
   border-color: var(--ng-500);
 }
 
 /* 足す操作。破線の枠にして「ここに増やせる」ことを示す。 */
-.add-room,
-#addWallPanelBtn {
+button.add {
   width: 100%;
   margin-top: var(--s-4);
   background: var(--surface);
@@ -103,8 +99,7 @@ button[data-remove-wall-panel]:hover {
   border: 1px dashed var(--brand-300);
 }
 
-.add-room:hover,
-#addWallPanelBtn:hover {
+button.add:hover {
   background: var(--surface-hover);
   border-style: dashed;
   border-color: var(--brand-500);
@@ -239,18 +234,17 @@ select {
   background-size: 12px 12px;
 }
 
-/* 入力欄 1 つ（ラベル + 欄 + 単位 + 補足）を包む枠。名前が 2 通りあるのは
-   出てきた順の名残で、どちらも同じ部品（デザインシステム側の持ちもの）。
+/* 入力欄 1 つ（ラベル + 欄 + 単位 + 補足）を包む枠。組み立てるのは
+   src/components/form-field.js の buildField。
 
    桝目の中に置かれるので、既定の min-width: auto を外して縮められるように
    する。これが無いと、中身の長い欄が列の幅を押し広げて桝目が崩れる。 */
-.cert-field,
-.wq-field {
+.field {
   min-width: 0;
 }
 
-.wq-field .field-row select,
-.wq-field .field-row input {
+.field .field-row select,
+.field .field-row input {
   margin: 0;
 }
 
@@ -300,8 +294,8 @@ select {
  * どちらの場合も、札は入力した値と重ならない。 */
 
 /* 札の見た目（置き場所は下の 2 通り）。 */
-.wq-field.required > label::after,
-.wq-field.required .field-row::after {
+.field.required > label::after,
+.field.required .field-row::after {
   content: '必須';
   padding: 1px var(--s-2);
   font-size: var(--fs-2xs);
@@ -314,31 +308,31 @@ select {
 }
 
 /* (1) 既定 … ラベル行の右端。 */
-.wq-field.required > label {
+.field.required > label {
   display: flex;
   align-items: center;
   gap: var(--s-2);
 }
 
-.wq-field.required > label::after {
+.field.required > label::after {
   flex: none;
   margin-left: auto;
 }
 
-.wq-field.required .field-row::after {
+.field.required .field-row::after {
   display: none;
 }
 
 /* (2) 数値の欄 … 枠の中の左側。札の上を触っても下の欄に届く。 */
-.wq-field.required:has(> .field-row > input[type='number']) > label::after {
+.field.required:has(> .field-row > input[type='number']) > label::after {
   display: none;
 }
 
-.wq-field.required:has(> .field-row > input[type='number']) .field-row {
+.field.required:has(> .field-row > input[type='number']) .field-row {
   position: relative;
 }
 
-.wq-field.required:has(> .field-row > input[type='number']) .field-row::after {
+.field.required:has(> .field-row > input[type='number']) .field-row::after {
   display: block;
   position: absolute;
   top: 50%;
@@ -348,22 +342,22 @@ select {
 }
 
 /* 札のぶんだけ、値の入る場所を空けておく。 */
-.wq-field.required .field-row > input[type='number'] {
+.field.required .field-row > input[type='number'] {
   padding-left: 4.5em;
 }
 
 /* 前提を満たしていない欄（その選択肢を選んだときだけ入力できる欄など）と、
    その節そのもの。読めるが「今は入れられない」ことが分かる濃さにする。 */
-.cert-field.disabled label,
-.cert-field.disabled .unit,
-.cert-choices.disabled legend,
-.cert-choices.disabled .choice-option,
-.cert-section.disabled h3,
-.cert-section.disabled .hint {
+.field.disabled label,
+.field.disabled .unit,
+.choices.disabled legend,
+.choices.disabled .choice-option,
+portal-section.disabled > [slot='title'],
+portal-section.disabled .hint {
   color: var(--text-muted);
 }
 
-.cert-field.disabled input {
+.field.disabled input {
   background: var(--field-bg-disabled);
   color: var(--text-muted);
 }
@@ -376,11 +370,25 @@ select {
   color: var(--text-muted);
 }
 
+/* 節の中で、いくつかの欄をひとまとまりにする小見出し（「面材と釘」
+   「屋根・外壁の仕様」など）。並べ方は layout.css の桝目。 */
+.field-group {
+  margin-top: var(--s-4);
+}
+
+.field-group > h4 {
+  margin: 0;
+  padding-bottom: var(--s-1);
+  font-size: var(--fs-sm);
+  color: var(--text-brand);
+  border-bottom: 1px solid var(--divider);
+}
+
 /* --- 選択肢（ラジオ・チェック） ------------------------------------------
  * 文字だけの選択肢は、押せる場所が狭くて選び間違えやすい。行全体を
  * 押せる札にして、選んだものは色でも分かるようにする。 */
 
-.cert-choices {
+.choices {
   margin-top: var(--s-3);
   padding: var(--s-3);
   border: 1px solid var(--border);
@@ -388,7 +396,7 @@ select {
   background: var(--surface);
 }
 
-.cert-choices legend {
+.choices legend {
   padding: 0 var(--s-2);
   font-size: var(--fs-sm);
   font-weight: 700;
@@ -396,15 +404,14 @@ select {
 }
 
 /* セクションの見出しがそのまま名前になっている選択肢は、囲みを重ねない。 */
-.cert-choices.bare {
+.choices.bare {
   border: none;
   padding: 0;
   background: none;
   margin-top: var(--s-1);
 }
 
-.choice-option,
-.wq-toggle {
+.choice-option {
   display: flex;
   align-items: flex-start;
   gap: var(--s-3);
@@ -421,30 +428,26 @@ select {
   transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 
-.choice-option:hover,
-.wq-toggle:hover {
+.choice-option:hover {
   background: var(--surface-hover);
   border-color: var(--brand-300);
 }
 
 /* 選ばれているものは、色と枠で残す（読み上げの状態とは別に、目でも分かる）。 */
-.choice-option:has(input:checked),
-.wq-toggle:has(input:checked) {
+.choice-option:has(input:checked) {
   background: var(--brand-50);
   border-color: var(--brand-400);
   color: var(--text);
   font-weight: 700;
 }
 
-.choice-option:has(input:focus-visible),
-.wq-toggle:has(input:focus-visible) {
+.choice-option:has(input:focus-visible) {
   box-shadow: var(--focus-ring);
   border-color: var(--focus);
 }
 
 .choice-option input[type='radio'],
-.choice-option input[type='checkbox'],
-.wq-toggle input {
+.choice-option input[type='checkbox'] {
   width: 20px;
   height: 20px;
   min-height: 0;
@@ -457,10 +460,8 @@ select {
  * 入力のかたまりは、台紙の上に乗った 1 枚のカードにする。見出しの行は
  * 開閉のつまみを兼ねるので、押せることが分かるように下地を変える。 */
 
-.cert-section,
-.room,
-.wall-panel,
-.pattern-bar {
+portal-section,
+.card {
   margin-top: var(--s-4);
   padding: var(--s-4);
   background: var(--surface-sunken);
@@ -469,7 +470,7 @@ select {
 }
 
 /* 折り畳めるセクションの見出し。見出し自身は light DOM に置くので、
-   セクションごとの見た目（.cert-section h3 など）はそのまま効く。 */
+   ツール側の見た目（.wall-panel > [slot='title'] など）はそのまま効く。 */
 portal-section > [slot='title'] {
   margin: 0;
   min-width: 0;

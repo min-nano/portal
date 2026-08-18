@@ -9,8 +9,13 @@
 // 数値の丸めや単位は計算実装（core/、wasm）が組み立てた文字列をそのまま出す。
 // 計算書 PDF も同じ文字列を刷るので、画面と計算書で桁がずれない。
 
-// 面材 1 枚ぶんの入力欄は、折り畳めるセクション（<portal-section>）で作る。
+// 節・入力欄は画面の共通部品で作る（src/components/form-field.js）。
 import '../components/collapsible-section.js';
+import {
+  buildField,
+  buildFieldGroup,
+  buildSection,
+} from '../components/form-field.js';
 import { buildDiagram, buildWallDiagram } from './diagram.js';
 import { panelLabel, wallLabel } from './form-logic.js';
 
@@ -151,34 +156,31 @@ export function renderWallBar(root, walls, currentIndex, onSelect) {
 
 // --- 壁を構成する面材（釘配列: グレー本 3.2） -------------------------------
 
-function labelled(document_, text, control) {
-  const label = document_.createElement('label');
-  label.append(document_.createTextNode(text), control);
-  return label;
+/**
+ * 面材 1 枚ぶんの入力欄。
+ *
+ * 形は共通部品が作る。ここが足すのは `data-panel-field`（面材の中で欄を
+ * 名前で引くための印）と、面材ごとに分けた id。同じ名前の欄が面材の枚数
+ * だけ画面に出るので、id をそのまま使い回すとラベルの結び付きが壊れる。
+ */
+function panelField(document_, index, name, spec) {
+  const { wrap, control } = buildField(document_, {
+    ...spec,
+    id: `panel-${index}-${name}`,
+  });
+  control.setAttribute('data-panel-field', name);
+  return wrap;
 }
 
-function input(document_, name, value, attributes) {
-  const node = document_.createElement('input');
-  node.setAttribute('data-panel-field', name);
-  Object.entries(attributes || {}).forEach(([key, attribute]) => {
-    node.setAttribute(key, String(attribute));
+/** 面材 1 枚ぶんの選ぶ欄。候補に無い値が来たら先頭に倒す。 */
+function panelSelect(document_, index, name, label, value, choices) {
+  const chosen = choices.some((choice) => choice.value === value) ? value : choices[0].value;
+  return panelField(document_, index, name, {
+    label,
+    type: 'select',
+    options: choices.map((choice) => ({ ...choice, title: choice.note })),
+    value: chosen,
   });
-  node.value = value === '' || value === undefined || value === null ? '' : value;
-  return node;
-}
-
-function select(document_, name, value, choices) {
-  const node = document_.createElement('select');
-  node.setAttribute('data-panel-field', name);
-  choices.forEach((choice) => {
-    const option = document_.createElement('option');
-    option.value = choice.value;
-    option.textContent = choice.text;
-    option.title = choice.note || '';
-    node.appendChild(option);
-  });
-  node.value = choices.some((choice) => choice.value === value) ? value : choices[0].value;
-  return node;
 }
 
 /**
@@ -218,22 +220,11 @@ function presetSelect(document_, index, presets) {
 
 /** 面材の中の小見出し（「面材と釘」「面材の配置と釘配列」）。 */
 function subheading(document_, text, note) {
-  const box = document_.createElement('div');
-  box.className = 'panel-group';
-  const title = document_.createElement('h4');
-  title.textContent = text;
-  box.appendChild(title);
-  if (note) {
-    const hint = document_.createElement('p');
-    hint.className = 'hint';
-    hint.textContent = note;
-    box.appendChild(hint);
-  }
-  return box;
+  return buildFieldGroup(document_, { label: text, note });
 }
 
-/** { id, label } の一覧を選べる select にする（先頭は読み込みの案内）。 */
-function tableSelect(document_, name, value, entries, placeholder) {
+/** { id, label } の一覧を選べる欄にする（先頭は読み込みの案内）。 */
+function tableSelect(document_, index, name, label, value, entries, placeholder) {
   const choices = [{ value: '', text: placeholder }].concat(
     (entries || []).map((entry) => ({ value: entry.id, text: entry.label }))
   );
@@ -242,7 +233,7 @@ function tableSelect(document_, name, value, entries, placeholder) {
   if (value && !choices.some((choice) => choice.value === value)) {
     choices.push({ value, text: value });
   }
-  return select(document_, name, value || '', choices);
+  return panelSelect(document_, index, name, label, value || '', choices);
 }
 
 /**
@@ -256,16 +247,14 @@ function buildPanelSpec(document_, panel, index, options) {
   const group = subheading(document_, '面材と釘（グレー本 表 3.3.1・表 3.3.2）');
 
   group.appendChild(
-    labelled(
+    tableSelect(
       document_,
+      index,
+      'materialId',
       '面材と釘の組合せ（表 3.3.1）から読み込む',
-      tableSelect(
-        document_,
-        'materialId',
-        panel.materialId,
-        options && options.materials,
-        '選択すると、下の数値へ読み込みます'
-      )
+      panel.materialId,
+      options && options.materials,
+      '選択すると、下の数値へ読み込みます'
     )
   );
   const note = document_.createElement('p');
@@ -275,11 +264,13 @@ function buildPanelSpec(document_, panel, index, options) {
   group.appendChild(note);
 
   const number = (name, text, value) =>
-    labelled(document_, text, input(document_, name, value, {
+    panelField(document_, index, name, {
+      label: text,
       type: 'number',
-      inputmode: 'decimal',
+      inputMode: 'decimal',
       step: 'any',
-    }));
+      value,
+    });
   const row = (...fields) => {
     const line = document_.createElement('div');
     line.className = 'panel-size';
@@ -303,16 +294,14 @@ function buildPanelSpec(document_, panel, index, options) {
   );
 
   group.appendChild(
-    labelled(
+    tableSelect(
       document_,
+      index,
+      'gradeId',
       '面材の規格（表 3.3.2）から読み込む',
-      tableSelect(
-        document_,
-        'gradeId',
-        panel.gradeId,
-        options && options.grades,
-        '選択すると、下の数値へ読み込みます'
-      )
+      panel.gradeId,
+      options && options.grades,
+      '選択すると、下の数値へ読み込みます'
     )
   );
   const gradeNote = document_.createElement('p');
@@ -344,27 +333,29 @@ function buildPanelSpec(document_, panel, index, options) {
  * （見出しの行には面材名と削除ボタンだけが残る）。
  */
 function buildPanelEditor(document_, panel, index, options) {
-  const box = document_.createElement('portal-section');
-  box.className = 'wall-panel';
+  const remove = document_.createElement('button');
+  remove.type = 'button';
+  remove.className = 'secondary danger';
+  remove.textContent = 'この面材を削除';
+  remove.setAttribute('data-remove-wall-panel', String(index));
+
+  // 面材の中は「仕様 → 配置 → 結果」と縦に積むので、節の中身は桝目にしない。
+  const { wrap: box } = buildSection(document_, {
+    title: panelLabel(panel, index),
+    titleTag: 'strong',
+    className: 'wall-panel',
+    actions: remove,
+    grid: false,
+  });
   box.setAttribute('data-panel-index', String(index));
   box.setAttribute('data-panel-id', panel.panelId || '');
 
-  const title = document_.createElement('strong');
-  title.slot = 'title';
-  title.textContent = panelLabel(panel, index);
-  const remove = document_.createElement('button');
-  remove.type = 'button';
-  remove.slot = 'actions';
-  remove.className = 'secondary';
-  remove.textContent = 'この面材を削除';
-  remove.setAttribute('data-remove-wall-panel', String(index));
-  box.append(title, remove);
-
   box.appendChild(
-    labelled(document_, '面材名', input(document_, 'panelName', panel.panelName, {
-      type: 'text',
+    panelField(document_, index, 'panelName', {
+      label: '面材名',
       placeholder: '南面 下段 など',
-    }))
+      value: panel.panelName,
+    })
   );
   box.appendChild(buildPanelSpec(document_, panel, index, options));
 
@@ -381,11 +372,13 @@ function buildPanelEditor(document_, panel, index, options) {
   box.appendChild(presetSelect(document_, index, options && options.presets));
 
   const number = (name, text, value, step) =>
-    labelled(document_, text, input(document_, name, value, {
+    panelField(document_, index, name, {
+      label: text,
       type: 'number',
-      inputmode: step ? 'decimal' : 'numeric',
+      inputMode: step ? 'decimal' : 'numeric',
       ...(step ? { step: 'any' } : {}),
-    }));
+      value,
+    });
   const row = (...fields) => {
     const line = document_.createElement('div');
     line.className = 'panel-size';
@@ -395,8 +388,8 @@ function buildPanelEditor(document_, panel, index, options) {
 
   box.appendChild(
     row(
-      labelled(document_, '張る面', select(document_, 'side', panel.side || 'front', SIDE_CHOICES)),
-      labelled(document_, '繊維方向', select(document_, 'grain', panel.grain || '', GRAIN_CHOICES))
+      panelSelect(document_, index, 'side', '張る面', panel.side || 'front', SIDE_CHOICES),
+      panelSelect(document_, index, 'grain', '繊維方向', panel.grain || '', GRAIN_CHOICES)
     )
   );
   box.appendChild(

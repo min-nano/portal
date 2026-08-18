@@ -4,18 +4,6 @@
  * ここには書かない。色・余白・字送りは必ず styles/tokens.css の変数を使う
  * （生の値を書かない）。これが「全ツールの見た目がそろっている」ことを
  * 保証している。 */
-.wq-block {
-  margin-top: var(--s-4);
-}
-
-.wq-block h4 {
-  margin: 0;
-  padding-bottom: var(--s-1);
-  font-size: var(--fs-sm);
-  color: var(--text-brand);
-  border-bottom: 1px solid var(--divider);
-}
-
 /* 柱材（JAS 規格 → 樹種等 → 等級等）の表。狭い画面では横スクロールさせる。 */
 .wq-table {
   width: 100%;
@@ -56,7 +44,7 @@
   text-align: center;
 }
 
-.wq-table .wq-field {
+.wq-table .field {
   margin-top: 0;
 }
 
