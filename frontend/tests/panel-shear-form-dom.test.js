@@ -35,6 +35,10 @@ const MARKUP = `
       <input type="number" id="wallHeight">
       <input type="number" id="wallWidth">
       <input type="number" id="wallStudPitch">
+      <input type="number" id="wallColumnWidth">
+      <input type="number" id="wallStudWidth">
+      <input type="number" id="wallBeamWidth">
+      <input type="number" id="wallJointWidth">
       <div id="wallPanels"></div>
       <div id="wallError" hidden></div>
       <div id="wallSummary"></div>
@@ -139,6 +143,8 @@ const WALL = {
   height: 3000,
   width: 910,
   studPitch: 455,
+  // 軸組材の見付け幅（釘が刺さる材。軸材の縁端距離の判定に使う）。
+  frame: { column: 105, stud: 45, beam: 105, joint: 105 },
   panels: [
     { ...PANEL },
     {
@@ -312,6 +318,22 @@ describe('applyWall / readWall', () => {
     expect(wall.panels[0].side).toBe('back');
     expect(wall.panels[0].left).toBe(455);
     expect(wall.panels[0].right).toBe(1365);
+  });
+
+  it('軸組材の見付け幅を読み戻せる（空欄は空のまま）', () => {
+    applyWall(
+      document,
+      { ...WALL, frame: { column: 120, stud: 30, beam: 150, joint: '' } },
+      OPTIONS
+    );
+
+    // 空欄は 0 にせず空のまま持ち帰る（計算実装が既定の見付け幅で埋める）。
+    expect(readWall(document).frame).toEqual({
+      column: 120,
+      stud: 30,
+      beam: 150,
+      joint: '',
+    });
   });
 });
 

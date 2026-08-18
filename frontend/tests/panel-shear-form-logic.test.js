@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_FRAME,
   canRemoveWall,
   capturePanel,
   defaultSaveName,
   emptyFormData,
   formSignature,
   indexAfterRemoval,
+  makeFrame,
   makePanel,
   makeWall,
   mergeFormData,
@@ -65,17 +67,31 @@ describe('emptyFormData / makeWall / makePanel', () => {
     expect([panel.materialId, panel.gradeId]).toEqual(['', '']);
   });
 
-  it('壁が持つのは軸組（階高・幅・間柱ピッチ）だけ（面材と釘は面材ごと）', () => {
+  it('壁が持つのは軸組（階高・幅・間柱ピッチ・軸組材）だけ（面材と釘は面材ごと）', () => {
     const wall = makeWall();
 
     // 階高・壁の幅・間柱ピッチは、よくある寸法を入れておく。
     expect(wall.height).toBeGreaterThan(0);
     expect(wall.width).toBeGreaterThan(0);
     expect(wall.studPitch).toBe(455);
+    // 軸組材の見付け幅も、在来軸組でよくある取り合わせから始める
+    //（軸材の縁端距離の判定に使う。適用範囲 3.3(1)④）。
+    expect(wall.frame).toEqual({ column: 105, stud: 45, beam: 105, joint: 105 });
     // 中間材の有無は入力しない（間柱ピッチと壁の幅から決まる）。
     expect(wall.hasIntermediateStud).toBeUndefined();
     expect(wall.materialId).toBeUndefined();
     expect(wall.thickness).toBeUndefined();
+  });
+
+  it('軸組材は、入れた欄だけを使い、空欄は既定の見付け幅で埋める', () => {
+    expect(makeFrame({ column: 120, joint: 60 })).toEqual({
+      column: 120,
+      stud: 45,
+      beam: 105,
+      joint: 60,
+    });
+    expect(makeFrame({ stud: '' }).stud).toBe(45);
+    expect(makeFrame(undefined)).toEqual(DEFAULT_FRAME);
   });
 
   it('面材の仕様だけを取り出して、次の面材へ引き継げる', () => {
@@ -215,6 +231,25 @@ describe('mergeFormData', () => {
     const data = mergeFormData({ walls: [{ panels: [{}] }] });
 
     expect(data.walls[0].studPitch).toBe(455);
+  });
+
+  it('軸組材を持たない版で保存した内容は、既定の見付け幅で読む', () => {
+    const data = mergeFormData({ walls: [{ panels: [{}] }] });
+
+    expect(data.walls[0].frame).toEqual(DEFAULT_FRAME);
+  });
+
+  it('軸組材が入っていれば、その見付け幅をそのまま読む', () => {
+    const data = mergeFormData({
+      walls: [{ frame: { column: 120, joint: 60 }, panels: [{}] }],
+    });
+
+    expect(data.walls[0].frame).toEqual({
+      column: 120,
+      stud: 45,
+      beam: 105,
+      joint: 60,
+    });
   });
 
   it('名前が空なら通し番号で補う', () => {
@@ -364,6 +399,8 @@ describe('面材と釘の一覧（グレー本 表 3.3.1 / 表 3.3.2）', () => 
     nailDiameter: 2.75,
     // 3.3(1)④「10mm 以上かつ接合具径 d × 5 以上」→ 2.75 × 5 = 13.75mm。
     minEdgeDistance: 13.75,
+    // 同じ ④ の軸材側は「20mm 以上かつ d × 5 以上」→ 20mm。
+    minFrameClearance: 20,
     thickness: 12,
     shearModulus: 0.4,
     k: 0.43,
@@ -410,13 +447,15 @@ describe('面材と釘の一覧（グレー本 表 3.3.1 / 表 3.3.2）', () => 
     });
   });
 
-  it('選んだ釘と、そこから決まるへりあきの最小値を案内する', () => {
+  it('選んだ釘と、そこから決まるへりあき・縁端距離の最小値を案内する', () => {
     const note = nailNote([material], 'plywood12-n50');
 
     expect(note).toContain('鉄丸釘 N-50');
     expect(note).toContain('φ2.75 mm');
     // 3.3(1)④「10mm 以上かつ接合具径 d × 5 以上」→ 2.75 × 5 = 13.75mm。
     expect(note).toContain('13.75 mm 以上');
+    // 軸材の側は「20mm 以上かつ d × 5 以上」なので、この釘では 20mm。
+    expect(note).toContain('軸材の縁端距離は 20 mm 以上');
     // まだ選んでいないときは案内を出さない。
     expect(nailNote([material], '')).toBe('');
   });

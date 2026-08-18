@@ -56,9 +56,9 @@
   <!-- has-dock: 広い画面では入力（左）と計算結果（右）の 2 列になる。
        狭い画面ではそのまま縦に流れる（並び順は変わらない）。 -->
   <div id="wallEditor" class="has-dock">
-    <!-- 壁は面材を張る軸組。階高・幅と間柱ピッチだけを持つ。面材と釘の
-         仕様は面材ごと（1 枚の壁でも張り分けられる）なので、下の面材の
-         中にある。 -->
+    <!-- 壁は面材を張る軸組。階高・幅と間柱ピッチ、それに軸組材の見付け幅
+         （釘がどの材のどこに刺さるか）だけを持つ。面材と釘の仕様は面材ごと
+         （1 枚の壁でも張り分けられる）なので、下の面材の中にある。 -->
     <portal-section class="form-section">
       <h3 slot="title">壁（面材を張る軸組）</h3>
       <div class="field">
@@ -92,6 +92,45 @@
         間柱は壁の左端から等間隔に立つものとします。面材の釘の縦列は、その面材の
         左右の縁と、この間柱のうち面材にかかるものに入ります。せん断座屈の ξ も
         ここで決まります（壁の中に間柱が 1 本でも立てば 2、立たなければ 1）。
+      </p>
+
+      <!-- 軸組材の見付け幅。釘配列そのものには効かないが、釘がどの材のどこに
+           刺さるかが決まるので、適用範囲 3.3(1)④ の「軸材の釘列に対する縁端
+           距離」を判定できる。 -->
+      <div class="panel-size">
+        <div class="field">
+          <label for="wallColumnWidth">柱の見付け幅 [mm]</label>
+          <div class="field-row">
+            <input type="number" id="wallColumnWidth" inputmode="numeric">
+          </div>
+        </div>
+        <div class="field">
+          <label for="wallStudWidth">間柱の見付け幅 [mm]</label>
+          <div class="field-row">
+            <input type="number" id="wallStudWidth" inputmode="numeric">
+          </div>
+        </div>
+        <div class="field">
+          <label for="wallBeamWidth">横架材の見付け幅 [mm]</label>
+          <div class="field-row">
+            <input type="number" id="wallBeamWidth" inputmode="numeric">
+          </div>
+        </div>
+        <div class="field">
+          <label for="wallJointWidth">継目の材の見付け幅 [mm]</label>
+          <div class="field-row">
+            <input type="number" id="wallJointWidth" inputmode="numeric">
+          </div>
+        </div>
+      </div>
+      <p class="hint">
+        面材を張る<strong>軸組材の見付け幅</strong>（面材の側から見た材の幅）です。釘の縦列は
+        壁の両端なら<strong>柱</strong>・面材にかかる<strong>間柱</strong>、横列は壁の上下なら<strong>横架材</strong>に打たれ、
+        壁の中で面材どうしが突き付く縁（継目）は<strong>継目の材</strong>が受けます。どの釘列も材心の上に
+        あり、面材の縁の釘列だけがへりあきぶん内側へずれるので、<strong>縁端距離 =
+        見付け幅 ÷ 2 − へりあき</strong>（中間の間柱は材心に打つので見付け幅 ÷ 2）になります。
+        これが適用範囲 3.3(1)④ の「20 mm 以上かつ接合具径 d ×5 以上」を満たすかを判定します。
+        空欄なら既定（柱 105・間柱 45・横架材 105・継目の材 105 mm）で判定します。
       </p>
     </portal-section>
 

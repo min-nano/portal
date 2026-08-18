@@ -10,8 +10,8 @@
 // 配置・釘の間隔・へりあきで調整するため。
 //
 // 面材と釘の仕様も面材ごとの入力で、1 枚の壁の中で混在してよい（上半分は
-// N50、下半分は CN50 のような張り分け）。壁が持つのは階高・幅と中間材の
-// 有無だけ。
+// N50、下半分は CN50 のような張り分け）。壁が持つのは、面材を張る軸組
+// （階高・幅・間柱ピッチと、軸組材の見付け幅）だけ。
 //
 // 「保存 / 別名で保存 / 未保存の確認」といったファイル操作の判断と文言は、
 // 構造計算安全証明書 作成ツールと共通なので ../pdf-file-ops.js にある。
@@ -27,6 +27,33 @@ export const DEFAULT_STUD_PITCH = 455;
 const DEFAULT_NAIL_PITCH = 150;
 
 /**
+ * 軸組材の見付け幅の既定値 [mm]（面材を張る面から見た材の幅）。
+ *
+ * 尺モジュールの在来軸組でよくある取り合わせ（柱 105 角・間柱 45×105・
+ * 土台や桁は 105 角以上・面材の継目には 45×105 を平使いして見付け 105）。
+ * 釘がどの材のどこに刺さるかが決まるので、適用範囲 3.3(1)④ の「軸材の
+ * 釘列に対する縁端距離」（20mm 以上かつ接合具径 d ×5 以上）を判定できる。
+ */
+export const DEFAULT_FRAME = {
+  column: 105,
+  stud: 45,
+  beam: 105,
+  joint: 105,
+};
+
+/** 壁の軸組材（未入力の欄は既定の見付け幅で埋める）。 */
+export function makeFrame(overrides) {
+  const frame = overrides || {};
+  const width = (key) => (Number(frame[key]) || DEFAULT_FRAME[key]);
+  return {
+    column: width('column'),
+    stud: width('stud'),
+    beam: width('beam'),
+    joint: width('joint'),
+  };
+}
+
+/**
  * へりあき（面材の縁から釘の中心まで）の下限 [mm]。
  *
  * 適用範囲 3.3(1)④「面材の釘列に対するへりあきは、10mm 以上かつ接合具径
@@ -34,6 +61,15 @@ const DEFAULT_NAIL_PITCH = 150;
  * 表 3.3.1 の一覧が配る minEdgeDistance を使う。
  */
 export const MIN_EDGE_DISTANCE = 10;
+
+/**
+ * 軸材の釘列に対する縁端距離の下限 [mm]。
+ *
+ * 同じ 3.3(1)④ の「軸材の釘列に対する縁端距離は、20mm 以上かつ接合具径
+ * d [mm] × 5 以上とする」の 20mm 側。こちらは釘が刺さる軸組材の見付け幅で
+ * 決まるので、判定そのものは計算実装（wasm）が壁の軸組材から行う。
+ */
+export const MIN_FRAME_CLEARANCE = 20;
 
 /** 壁の既定値。階高は一般的な 1 階。 */
 const DEFAULT_WALL_HEIGHT = 2900;
@@ -99,8 +135,8 @@ export function makePanel(overrides) {
 /**
  * 新しい壁（面材張り大壁 1 枚分の入力）を作る。
  *
- * 壁は面材を張る**軸組**として持つ: 階高・幅と、間柱ピッチ。面材と釘の仕様は
- * 面材ごとの入力。面材は 1 枚から始める。
+ * 壁は面材を張る**軸組**として持つ: 階高・幅と、間柱ピッチ・軸組材の見付け
+ * 幅。面材と釘の仕様は面材ごとの入力。面材は 1 枚から始める。
  */
 export function makeWall(overrides) {
   wallSequence += 1;
@@ -111,6 +147,8 @@ export function makeWall(overrides) {
     width: DEFAULT_WALL_WIDTH,
     // 釘の縦列の位置も、せん断座屈の ξ（中間材の有無）も、このピッチで決まる。
     studPitch: DEFAULT_STUD_PITCH,
+    // 釘が刺さる材の見付け幅（軸材の縁端距離の判定に使う）。
+    frame: makeFrame(),
     panels: [makePanel()],
     ...(overrides || {}),
   };
@@ -230,10 +268,12 @@ export function minimumEdgeDistance(materials, materialId) {
 }
 
 /**
- * 選んだ面材と釘の組合せを、へりあきを決めるための一言にする。
+ * 選んだ面材と釘の組合せを、へりあき・縁端距離を決めるための一言にする。
  *
- * へりあきは釘の呼び径で決まる（3.3(1)④）ので、選んだ釘とその径、必要な
- * へりあきをそのまま伝える。
+ * どちらも釘の呼び径で決まる（3.3(1)④）ので、選んだ釘とその径、面材側に
+ * 必要なへりあきと、軸材側に必要な縁端距離をそのまま伝える。縁端距離のほうは
+ * 「軸組材の見付け幅の半分から、へりあきを引いた残り」なので、足りなければ
+ * 壁の軸組材を太くするか、へりあきを狭める（面材側の下限まで）ことになる。
  */
 export function nailNote(materials, materialId) {
   const material = findMaterial(materials, materialId);
@@ -241,7 +281,9 @@ export function nailNote(materials, materialId) {
   return (
     `選んだ釘は ${material.nailLabel}（呼び径 φ${material.nailDiameter} mm）です。` +
     `適用範囲 3.3(1)④ により、面材のへりあきは ${material.minEdgeDistance} mm 以上` +
-    `（10 mm 以上かつ呼び径の 5 倍以上）にしてください。`
+    `（10 mm 以上かつ呼び径の 5 倍以上）、軸材の縁端距離は ` +
+    `${material.minFrameClearance || MIN_FRAME_CLEARANCE} mm 以上` +
+    `（20 mm 以上かつ呼び径の 5 倍以上）にしてください。`
   );
 }
 
@@ -296,6 +338,9 @@ export function mergeFormData(parsed) {
       height: Number(wall.height) || 0,
       width: Number(wall.width) || 0,
       studPitch: Number(wall.studPitch) || DEFAULT_STUD_PITCH,
+      // 軸組材を持たない版で保存した計算書を開いたときは、既定の見付け幅で
+      // 判定を始める（剛性・許容せん断耐力の数値は変わらない）。
+      frame: makeFrame(wall.frame),
       panels: (Array.isArray(wall.panels) ? wall.panels : []).map((panel, position) =>
         makePanel({
           panelId: String(panel.panelId || '') || newPanelId(),

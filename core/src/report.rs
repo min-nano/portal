@@ -12,12 +12,15 @@
 //!
 //! 面材と釘の仕様（厚さ・GB・k・δv・δu・ΔPv・τmax・E1・E2）は **面材
 //! 1 枚ごとの入力**で、1 枚の壁の中で混在してよい（上半分は N50、下半分は
-//! CN50 のような張り分け）。壁が持つのは階高・幅と中間材の有無だけ。
+//! CN50 のような張り分け）。壁が持つのは、面材を張る**軸組**（階高・幅・
+//! 間柱ピッチと、軸組材の見付け幅）だけ。軸組材の見付け幅からは、釘が刺さる
+//! 材の縁端距離（適用範囲 3.3(1)④ の軸材側）が決まる。
 //!
 //! 移植元は GAS 版 gas-timber-panel-shear-calculator と、その Python 移植
 //! （backend/app/panel_shear.py の計算部分）。
 
 use crate::format::{format_dimension, format_int, significant, SIGNIFICANT_DIGITS};
+use crate::frame::{self, Frame};
 use crate::json::Value;
 use crate::layout::{self, Arrangement, Layout, DEFAULT_EDGE_DISTANCE};
 use crate::nail_array::{self, Nail};
@@ -123,6 +126,11 @@ pub struct WallInput {
     ///
     /// 釘の縦列の位置と、せん断座屈の ξ（中間材の有無）の両方がここで決まる。
     pub stud_pitch: f64,
+    /// 軸組材（柱・間柱・横架材・継目の材）の見付け幅 [mm]。
+    ///
+    /// 釘配列そのものには効かないが、**釘がどの材のどこに刺さるか**はここで
+    /// 決まるので、適用範囲 3.3(1)④ の軸材の縁端距離を判定できる。
+    pub frame: Frame,
     /// 壁を構成する面材。
     pub panels: Vec<PanelInput>,
 }
@@ -252,6 +260,15 @@ impl WallInput {
             ("width", self.width.into()),
             ("studPitch", self.stud_pitch.into()),
             (
+                "frame",
+                Value::obj([
+                    ("column", self.frame.column.into()),
+                    ("stud", self.frame.stud.into()),
+                    ("beam", self.frame.beam.into()),
+                    ("joint", self.frame.joint.into()),
+                ]),
+            ),
+            (
                 "panels",
                 Value::Arr(self.panels.iter().map(PanelInput::to_value).collect()),
             ),
@@ -339,7 +356,26 @@ pub fn normalize_wall(item: &Value, index: usize) -> Result<WallInput, String> {
         height: float_of(item.get("height"), "階高 H")?,
         width: float_of(item.get("width"), "壁の幅 W")?,
         stud_pitch: wall_stud_pitch(item, &raw_panels)?,
+        frame: wall_frame(item)?,
         panels,
+    })
+}
+
+/// 壁の軸組材の見付け幅 [mm]。
+///
+/// 未入力の欄は、尺モジュールの在来軸組でよくある寸法を既定にする。軸組材を
+/// 持たない版で保存した計算書を開いたときも、この既定で判定が始まる（判定に
+/// 使うだけで、剛性・許容せん断耐力の数値は前の版のまま変わらない）。
+fn wall_frame(wall: &Value) -> Result<Frame, String> {
+    let group = wall.get("frame");
+    let width = |key: &str, label: &str, default: f64| -> Result<f64, String> {
+        float_or(group.and_then(|group| group.get(key)), label, default)
+    };
+    Ok(Frame {
+        column: width("column", "柱の見付け幅", frame::DEFAULT_COLUMN_WIDTH)?,
+        stud: width("stud", "間柱の見付け幅", frame::DEFAULT_STUD_WIDTH)?,
+        beam: width("beam", "横架材の見付け幅", frame::DEFAULT_BEAM_WIDTH)?,
+        joint: width("joint", "継目の材の見付け幅", frame::DEFAULT_JOINT_WIDTH)?,
     })
 }
 
@@ -762,7 +798,7 @@ fn compute_all_panels(input: &WallInput) -> Value {
                 let (nails, reason) = nails_and_reason(panel, input.stud_pitch);
                 let report = match reason {
                     Some(reason) => Err(reason),
-                    None => build_panel_report(panel, &nails, input.stud_pitch, index),
+                    None => build_panel_report(panel, &nails, input, index),
                 };
                 match report {
                     Ok(report) => with_ok(report),
@@ -793,9 +829,38 @@ pub fn validate_walls(data: &FormData) -> Result<Vec<Value>, String> {
 ///
 /// 表示用の文字列（有効桁・単位）まで組み立てて返すことで、画面と計算書で
 /// 桁の丸め方が食い違わないようにしている。
-pub fn compute_panel(panel: &PanelInput, stud_pitch: f64, index: usize) -> Result<Value, String> {
-    let nails = nails_of(panel, stud_pitch)?;
-    build_panel_report(panel, &nails, stud_pitch, index)
+pub fn compute_panel(panel: &PanelInput, wall: &WallInput, index: usize) -> Result<Value, String> {
+    let nails = nails_of(panel, wall.stud_pitch)?;
+    build_panel_report(panel, &nails, wall, index)
+}
+
+/// この面材の釘列を、刺さる軸組材ごとの縁端距離にする（適用範囲 3.3(1)④）。
+///
+/// 中間の縦列は、釘配列計算に入れた列だけを数える（3.3(1)⑧ で外した縦列は
+/// 釘そのものを置いていないので、へりあきと同じ物差しで測れる）。
+fn frame_lines(panel: &PanelInput, wall: &WallInput) -> Vec<frame::Clearance> {
+    let columns = panel.layout(wall.stud_pitch).stud_positions().len();
+    frame::clearances(
+        &frame::Placement {
+            wall_width: wall.width,
+            wall_height: wall.height,
+            left: panel.left,
+            bottom: panel.bottom,
+            right: panel.right,
+            top: panel.top,
+            edge_distance: panel.edge_distance,
+            // 面材の左右の縁を除いた本数（縁の釘列は別に数える）。
+            intermediate_studs: columns.saturating_sub(2),
+        },
+        &wall.frame,
+    )
+}
+
+/// この面材の釘で必要な、軸材の釘列に対する縁端距離 [mm]（3.3(1)④）。
+fn required_frame_clearance(panel: &PanelInput) -> f64 {
+    frame::required_clearance(
+        wall::find_material(&panel.material_id).map(|material| material.nail_diameter),
+    )
 }
 
 /// 面材の見出しに使う名前（未入力なら通し番号で代替する）。
@@ -1168,9 +1233,10 @@ fn layout_check_text(
 fn build_panel_report(
     panel: &PanelInput,
     nails: &[Nail],
-    stud_pitch: f64,
+    wall: &WallInput,
     index: usize,
 ) -> Result<Value, String> {
+    let stud_pitch = wall.stud_pitch;
     let area = panel.panel_area();
     let result = nail_array::compute(nails, area).map_err(|error| error.0)?;
     let six = |value: f64| significant(value, SIGNIFICANT_DIGITS);
@@ -1230,6 +1296,23 @@ fn build_panel_report(
                         panel.height()
                     ))
                 )
+                .into(),
+            ),
+        ]),
+        Value::obj([
+            // 釘が刺さる軸組材の縁まで（適用範囲 3.3(1)④ の軸材側）。どの
+            // 釘列がいちばん厳しいのかまで出す（壁の判定はこの値で決まる）。
+            ("label", "軸材の縁端距離（釘から軸組材の縁まで）".into()),
+            (
+                "value",
+                {
+                    let worst = frame::worst(&frame_lines(panel, wall));
+                    format!(
+                        "最小 {} mm（{}）",
+                        format_dimension(worst.distance),
+                        worst.label()
+                    )
+                }
                 .into(),
             ),
         ]),
@@ -1351,12 +1434,7 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
             panel.width(),
             panel.height(),
         ));
-        panel_reports.push(with_ok(build_panel_report(
-            panel,
-            &nails,
-            input.stud_pitch,
-            position,
-        )?));
+        panel_reports.push(with_ok(build_panel_report(panel, &nails, input, position)?));
         specs.push(wall::PanelSpec::new(
             &panel_label(panel, position),
             &constants,
@@ -1433,6 +1511,42 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
         .iter()
         .all(|(_, clearance, required)| *clearance >= *required - 1e-9);
 
+    // 適用範囲 3.3(1)④「軸材の釘列に対する縁端距離は、20mm 以上かつ接合具径
+    // d ×5 以上」。釘列がどの軸組材（柱・間柱・横架材・継目の材）に来るかは
+    // 面材の張られ方で決まるので、面材 1 枚ずつ釘列を並べ、いちばん余裕の
+    // 少ない釘列を壁の判定にする。
+    let frames: Vec<(usize, frame::Clearance, f64)> = input
+        .panels
+        .iter()
+        .enumerate()
+        .map(|(position, panel)| {
+            (
+                position,
+                frame::worst(&frame_lines(panel, input)),
+                required_frame_clearance(panel),
+            )
+        })
+        .collect();
+    let (frame_position, frame_worst, frame_required) =
+        frames.iter().fold(frames[0].clone(), |worst, line| {
+            if line.1.distance - line.2 < worst.1.distance - worst.2 {
+                line.clone()
+            } else {
+                worst
+            }
+        });
+    let frame_ok = frames
+        .iter()
+        .all(|(_, line, required)| line.distance >= *required - 1e-9);
+    let frame_basis = match wall::find_material(&input.panels[frame_position].material_id) {
+        Some(material) => format!(
+            "20 mm かつ 釘の呼び径 φ{} mm × {} 以上",
+            format_dimension(material.nail_diameter),
+            format_dimension(wall::EDGE_DISTANCE_DIAMETER_FACTOR)
+        ),
+        None => "釘の呼び径が分からないため 20 mm のみで確認".to_string(),
+    };
+
     let mut inputs = vec![
         row("階高 H", format!("{} mm", format_int(input.height))),
         row("壁の幅 W", format!("{} mm", format_int(input.width))),
@@ -1440,6 +1554,18 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
         row(
             "間柱・根太ピッチ",
             format!("@{} mm（壁の左端から）", format_dimension(input.stud_pitch)),
+        ),
+        // 軸組材の見付け幅。釘配列そのものには効かないが、釘がどの材のどこに
+        // 刺さるか（＝軸材の縁端距離）がここで決まる。
+        row(
+            "軸組材（見付け幅）",
+            format!(
+                "柱 {} ／ 間柱 {} ／ 横架材 {} ／ 継目の材 {} mm",
+                format_dimension(input.frame.column),
+                format_dimension(input.frame.stud),
+                format_dimension(input.frame.beam),
+                format_dimension(input.frame.joint)
+            ),
         ),
     ];
     // 面材と釘は面材ごとの入力なので、壁の控えには「全面材で同じかどうか」を
@@ -1499,7 +1625,7 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
     // 判定は、まず「計算した面材の並びが、想定した張り方と合っているか」から
     // 始める（配置を書いていない壁では、この行そのものが出ない）。そのあとに
     // 適用範囲と面材の検定が続く。
-    let mut checks: Vec<Value> = Vec::with_capacity(5);
+    let mut checks: Vec<Value> = Vec::with_capacity(6);
     checks.push(arrangement.check.clone());
     checks.extend([
         Value::obj([
@@ -1533,6 +1659,26 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
                 .into(),
             ),
             ("ok", edge_ok.into()),
+        ]),
+        Value::obj([
+            ("label", "適用範囲 3.3(1)④ 軸材の縁端距離".into()),
+            (
+                "value",
+                // どの面材のどの釘列がいちばん厳しいのか（＋その材の見付け
+                // 幅）まで出す。広げるべきなのが面材のへりあきなのか、材の
+                // 見付けなのかが、この 1 行で分かる。
+                format!(
+                    "最小 縁端距離 {} mm {} {} mm（面材「{}」の{} ／ {}）",
+                    format_dimension(frame_worst.distance),
+                    if frame_ok { "≧" } else { "<" },
+                    format_dimension(frame_required),
+                    panel_label(&input.panels[frame_position], frame_position),
+                    frame_worst.label(),
+                    frame_basis
+                )
+                .into(),
+            ),
+            ("ok", frame_ok.into()),
         ]),
         Value::obj([
             ("label", "面材のせん断破壊 τN < τmax（3.3.8）".into()),
@@ -1843,6 +1989,7 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
         ("governing", result.governing.id().into()),
         ("withinLimit", result.within_limit.into()),
         ("edgeDistanceOk", edge_ok.into()),
+        ("frameClearanceOk", frame_ok.into()),
         ("shearOk", result.shear_ok.into()),
         ("bucklingOk", result.buckling_ok.into()),
     ]))
@@ -1943,7 +2090,7 @@ mod tests {
         }
     }
 
-    /// 面材 1 枚だけの壁（間柱は尺モジュール @455）。
+    /// 面材 1 枚だけの壁（間柱は尺モジュール @455、軸組材は既定の見付け）。
     fn example_wall_of(panel: PanelInput) -> WallInput {
         WallInput {
             wall_id: "w1".to_string(),
@@ -1951,8 +2098,14 @@ mod tests {
             height: 2900.0,
             width: 910.0,
             stud_pitch: DEFAULT_STUD_PITCH,
+            frame: Frame::default(),
             panels: vec![panel],
         }
+    }
+
+    /// 面材 1 枚を単独で計算するときの、その面材を張る壁。
+    fn example_wall() -> WallInput {
+        example_wall_of(example_panel())
     }
 
     /// 3.3(3) の計算例の面材と釘（表 3.3.1 の構造用合板 12mm ＋ 鉄丸釘 N-65。
@@ -2126,6 +2279,37 @@ mod tests {
         assert_eq!(stored.get("materialId"), None);
     }
 
+    /// 軸組材は壁の入力。未入力の欄は、在来軸組でよくある寸法を既定にする
+    /// （軸組材を持たない版で保存した計算書を開いても、判定がそのまま始まる）。
+    #[test]
+    fn the_frame_members_default_to_common_timber_sizes() {
+        let data = normalize(r#"{"walls":[{"height":2900,"width":910}]}"#).unwrap();
+        assert_eq!(data.walls[0].frame, Frame::default());
+
+        let typed = normalize(
+            r#"{"walls":[{"height":2900,"width":910,
+                 "frame":{"column":120,"stud":"","beam":150,"joint":60}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            typed.walls[0].frame,
+            // 空欄のままの間柱だけが既定（45）に戻る。
+            Frame { column: 120.0, stud: 45.0, beam: 150.0, joint: 60.0 }
+        );
+        // 書き戻した JSON（計算書 PDF に埋める形）から同じ軸組材が読める。
+        let round_trip = normalize_data(&typed.to_value()).unwrap();
+        assert_eq!(round_trip.walls[0].frame, typed.walls[0].frame);
+    }
+
+    #[test]
+    fn rejects_a_non_numeric_frame_member() {
+        let error = normalize(
+            r#"{"walls":[{"height":2900,"width":910,"frame":{"joint":"太いやつ"}}]}"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("継目の材の見付け幅"), "{error}");
+    }
+
     #[test]
     fn rejects_a_non_numeric_dimension() {
         let error = normalize(r#"{"walls": [{"panels": [{"right": "ろく"}]}]}"#).unwrap_err();
@@ -2252,7 +2436,7 @@ mod tests {
     /// （@455 / 釘 @150）」と同じ配列になる。
     #[test]
     fn the_nail_array_comes_from_the_wall_frame() {
-        let report = compute_panel(&example_panel(), DEFAULT_STUD_PITCH, 0).unwrap();
+        let report = compute_panel(&example_panel(), &example_wall(), 0).unwrap();
 
         assert_eq!(report.get("panelArea").unwrap().as_f64(), Some(555_100.0));
         // 表 3.2.1 の同じ欄（Ixy 1.56 / Zxy 0.0063 / Cxy 1.23）と合う。
@@ -2301,7 +2485,7 @@ mod tests {
 
     #[test]
     fn the_inputs_section_repeats_what_was_typed() {
-        let report = compute_panel(&example_panel(), DEFAULT_STUD_PITCH, 0).unwrap();
+        let report = compute_panel(&example_panel(), &example_wall(), 0).unwrap();
         let inputs = labelled(&report, "inputs", "label");
 
         assert!(inputs.contains(&("面材寸法 W × H".to_string(), "910 × 610 mm".to_string())));
@@ -2327,7 +2511,7 @@ mod tests {
     /// （どの面材がどの仕様で壁の計算に入ったのかが 1 ページで分かる）。
     #[test]
     fn the_inputs_section_carries_the_specification_of_this_panel() {
-        let report = compute_panel(&example_panel(), DEFAULT_STUD_PITCH, 0).unwrap();
+        let report = compute_panel(&example_panel(), &example_wall(), 0).unwrap();
         let inputs = labelled(&report, "inputs", "label");
 
         assert!(inputs.contains(&(
@@ -2355,7 +2539,7 @@ mod tests {
                 grade_id: String::new(),
                 ..example_panel()
             },
-            DEFAULT_STUD_PITCH,
+            &example_wall(),
             0,
         )
         .unwrap();
@@ -2370,13 +2554,13 @@ mod tests {
     /// へりあきを広げると釘が内側に寄り、諸定数が小さくなる。
     #[test]
     fn a_wider_edge_distance_lowers_the_constants() {
-        let narrow = compute_panel(&example_panel(), DEFAULT_STUD_PITCH, 0).unwrap();
+        let narrow = compute_panel(&example_panel(), &example_wall(), 0).unwrap();
         let wide = compute_panel(
             &PanelInput {
                 edge_distance: 30.0,
                 ..example_panel()
             },
-            DEFAULT_STUD_PITCH,
+            &example_wall(),
             0,
         )
         .unwrap();
@@ -2434,7 +2618,7 @@ mod tests {
             ),
         ];
         for (panel, expected) in cases {
-            let error = compute_panel(&panel, DEFAULT_STUD_PITCH, 0).unwrap_err();
+            let error = compute_panel(&panel, &example_wall(), 0).unwrap_err();
             assert!(error.contains(expected), "{error} should mention {expected}");
         }
     }
@@ -2464,6 +2648,7 @@ mod tests {
                 height: 3000.0,
                 width: 910.0,
                 stud_pitch: 455.0,
+                frame: Frame::default(),
                 panels: vec![
                     example_placed_panel(0, "下段", 0.0, 0.0, 910.0, 1820.0),
                     example_placed_panel(1, "上段", 0.0, 1820.0, 910.0, 2730.0),
@@ -2791,6 +2976,97 @@ mod tests {
         assert!(value.contains("呼び径が分からないため"), "{value}");
     }
 
+    /// 3.3(1)④ の軸材の縁端距離（20mm 以上かつ釘の呼び径 ×5 以上）を検定する。
+    ///
+    /// 計算例の壁は、下段の上の縁（＝面材の横の継目）が継目の材で受けられる。
+    /// 既定の見付け 105 mm なら 52.5 − 10 = 42.5 mm で足りるが、45 mm の材に
+    /// 替えると 22.5 − 10 = 12.5 mm しか残らず、20 mm に届かない。
+    #[test]
+    fn the_wall_report_checks_the_frame_clearance_against_the_member_width() {
+        let data = wall_example_form();
+        let report = only_wall(&data);
+        assert_eq!(report.get("frameClearanceOk"), Some(&Value::Bool(true)));
+
+        let mut narrow = data;
+        narrow.walls[0].frame.joint = 45.0;
+        let report = only_wall(&narrow);
+
+        assert_eq!(report.get("frameClearanceOk"), Some(&Value::Bool(false)));
+        let value = labelled(&report, "checks", "label")
+            .into_iter()
+            .find(|(label, _)| label.contains("縁端距離"))
+            .map(|(_, value)| value)
+            .unwrap();
+        assert!(value.contains("最小 縁端距離 12.5 mm < 20 mm"), "{value}");
+        assert!(value.contains("継目の材 見付け 45 mm"), "{value}");
+        assert!(value.contains("φ3.05 mm × 5 以上"), "{value}");
+    }
+
+    /// 中間の間柱に打つ釘は材心の上に来るので、縁端距離は見付けの半分。
+    /// へりあきをいくら広げても増えない（広げるべきなのは材の見付け）。
+    #[test]
+    fn a_nail_on_an_intermediate_stud_is_judged_against_half_the_stud() {
+        let mut data = wall_example_form();
+        // 上段の 910 × 910 には @455 の間柱がかかる（縦長の下段は 3.3(1)⑧ で
+        // 中間の縦列を持たない）。
+        data.walls[0].frame.stud = 30.0;
+        let report = only_wall(&data);
+
+        assert_eq!(report.get("frameClearanceOk"), Some(&Value::Bool(false)));
+        let value = labelled(&report, "checks", "label")
+            .into_iter()
+            .find(|(label, _)| label.contains("縁端距離"))
+            .map(|(_, value)| value)
+            .unwrap();
+        assert!(value.contains("最小 縁端距離 15 mm < 20 mm"), "{value}");
+        assert!(value.contains("中間の間柱 ／ 間柱 見付け 30 mm"), "{value}");
+    }
+
+    /// 面材と釘を表 3.3.1 から読み込んでいないときは、呼び径が分からないので
+    /// 20mm の側だけを確かめる。
+    #[test]
+    fn the_frame_clearance_falls_back_to_twenty_millimetres_without_a_material() {
+        let mut data = wall_example_form();
+        for panel in &mut data.walls[0].panels {
+            panel.material_id = String::new();
+        }
+        let value = labelled(&only_wall(&data), "checks", "label")
+            .into_iter()
+            .find(|(label, _)| label.contains("縁端距離"))
+            .map(|(_, value)| value)
+            .unwrap();
+        assert!(value.contains("呼び径が分からないため 20 mm"), "{value}");
+    }
+
+    /// 軸組材の見付け幅は、壁の入力の控えにそのまま残す。
+    #[test]
+    fn the_wall_inputs_carry_the_frame_members() {
+        let report = only_wall(&wall_example_form());
+        let value = labelled(&report, "inputs", "label")
+            .into_iter()
+            .find(|(label, _)| label.contains("軸組材"))
+            .map(|(_, value)| value)
+            .unwrap();
+        assert_eq!(value, "柱 105 ／ 間柱 45 ／ 横架材 105 ／ 継目の材 105 mm");
+    }
+
+    /// 面材のページにも、その面材でいちばん厳しい釘列の縁端距離を残す。
+    #[test]
+    fn every_panel_reports_the_member_its_nails_are_driven_into() {
+        let report = compute_panel(&example_panel(), &example_wall(), 0).unwrap();
+        let inputs = labelled(&report, "inputs", "label");
+        // 910 × 610 を壁（W 910 × H 2900）の左下に張るので、左右の縁は柱・
+        // 下の縁は横架材・上の縁は壁の中の継目（どれも見付け 105 で 42.5 mm）。
+        // いちばん厳しいのは、材心に打つ @455 の間柱（45 / 2）。
+        assert!(
+            inputs.contains(&(
+                "軸材の縁端距離（釘から軸組材の縁まで）".to_string(),
+                "最小 22.5 mm（中間の間柱 ／ 間柱 見付け 45 mm）".to_string()
+            )),
+            "{inputs:?}"
+        );
+    }
+
     /// へりあきは、実際に置かれた釘の座標から測る。
     #[test]
     fn the_edge_clearance_is_measured_from_the_nails() {
@@ -2798,7 +3074,7 @@ mod tests {
             edge_distance: 12.0,
             ..example_panel()
         };
-        let report = compute_panel(&panel, DEFAULT_STUD_PITCH, 0).unwrap();
+        let report = compute_panel(&panel, &example_wall(), 0).unwrap();
         let inputs = labelled(&report, "inputs", "label");
         assert!(inputs.contains(&(
             "へりあき（面材の縁から釘まで）".to_string(),

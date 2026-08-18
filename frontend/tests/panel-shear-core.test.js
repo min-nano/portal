@@ -101,6 +101,64 @@ describe('計算実装（wasm）', () => {
     expect(wide.result.Ixy).toBeLessThan(narrow.result.Ixy);
   });
 
+  it('軸組材の見付け幅から、軸材の縁端距離を判定する', async () => {
+    const loaded = await core();
+    // 壁の左下に 910 × 610 を 1 枚（面材と釘は 3.3(3) の計算例の組合せ）。
+    const wallWithFrame = (frame) =>
+      loaded.computeAll({
+        walls: [
+          {
+            wallId: 'w1',
+            width: 910,
+            height: 2900,
+            studPitch: 455,
+            frame,
+            panels: [
+              {
+                ...EXAMPLE_PANEL,
+                materialId: 'plywood12-n65',
+                thickness: 12,
+                shearModulus: 0.4,
+                k: 0.483,
+                deltaV: 2.3,
+                deltaU: 17,
+                deltaPv: 1.13,
+                tauMax: 3.6,
+                e1: 3500,
+                e2: 5500,
+              },
+            ],
+          },
+        ],
+      }).walls[0];
+    const check = (wall) =>
+      wall.checks.find((entry) => entry.label.includes('軸材の縁端距離'));
+
+    // 軸組材を入れていない壁は、在来軸組でよくある見付け幅で判定する
+    //（釘は @455 の間柱の心にも来るので、いちばん厳しいのは 45 / 2）。
+    const standard = wallWithFrame(undefined);
+    expect(standard.ok).toBe(true);
+    expect(standard.frameClearanceOk).toBe(true);
+    expect(check(standard).value).toContain('最小 縁端距離 22.5 mm ≧ 20 mm');
+    expect(check(standard).value).toContain('中間の間柱 ／ 間柱 見付け 45 mm');
+
+    // 30 mm の間柱では、材心に打つ釘の縁端距離が 15 mm しか取れない。
+    const narrow = wallWithFrame({ stud: 30 });
+    expect(narrow.frameClearanceOk).toBe(false);
+    expect(check(narrow).ok).toBe(false);
+    expect(check(narrow).value).toContain('最小 縁端距離 15 mm < 20 mm');
+    // 壁の入力の控えにも、軸組材の見付け幅がそのまま残る。
+    expect(
+      narrow.inputs.find((row) => row.label.includes('軸組材')).value
+    ).toBe('柱 105 ／ 間柱 30 ／ 横架材 105 ／ 継目の材 105 mm');
+    // 面材のページにも、その面材でいちばん厳しい釘列が残る。
+    expect(
+      narrow.panelReports[0].inputs.find((row) =>
+        row.label.startsWith('軸材の縁端距離')
+      ).value
+    ).toBe('最小 15 mm（中間の間柱 ／ 間柱 見付け 30 mm）');
+  });
+
   it('釘配列図の範囲と目盛も返す（計算書 PDF と同じもの）', async () => {
     const report = panelReport((await core()).computeAll(wallOf(EXAMPLE_PANEL)).walls);
 

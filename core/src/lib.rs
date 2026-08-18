@@ -34,6 +34,7 @@
 pub mod abi;
 pub mod column_strength;
 pub mod format;
+pub mod frame;
 pub mod json;
 pub mod layout;
 pub mod nail_array;
@@ -133,6 +134,11 @@ fn dispatch(request: &str) -> Result<Value, String> {
                             // 面材のへりあきの最小値（適用範囲 3.3(1)④）。
                             ("nailDiameter", material.nail_diameter.into()),
                             ("minEdgeDistance", material.min_edge_distance().into()),
+                            // 同じ釘で必要な、軸材の釘列に対する縁端距離。
+                            (
+                                "minFrameClearance",
+                                frame::required_clearance(Some(material.nail_diameter)).into(),
+                            ),
                             ("thickness", material.thickness.into()),
                             ("shearModulus", material.shear_modulus.into()),
                             ("k", material.nail.k.into()),
@@ -223,6 +229,11 @@ fn dispatch(request: &str) -> Result<Value, String> {
             ("defaultEdgeDistance", layout::DEFAULT_EDGE_DISTANCE.into()),
             ("defaultStudPitch", report::DEFAULT_STUD_PITCH.into()),
             ("minEdgeDistance", wall::MIN_EDGE_DISTANCE.into()),
+            ("minFrameEdgeDistance", wall::MIN_FRAME_EDGE_DISTANCE.into()),
+            ("defaultColumnWidth", frame::DEFAULT_COLUMN_WIDTH.into()),
+            ("defaultStudWidth", frame::DEFAULT_STUD_WIDTH.into()),
+            ("defaultBeamWidth", frame::DEFAULT_BEAM_WIDTH.into()),
+            ("defaultJointWidth", frame::DEFAULT_JOINT_WIDTH.into()),
             ("allowableShearLimit", wall::ALLOWABLE_SHEAR_LIMIT.into()),
             ("significantDigits", format::SIGNIFICANT_DIGITS.into()),
         ])),

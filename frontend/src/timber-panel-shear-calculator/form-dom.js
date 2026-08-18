@@ -63,6 +63,9 @@ function optionalNumberOf(node) {
 
 /** 壁の入力欄を読み取る（wallId は画面が持たない）。 */
 export function readWall(root) {
+  // 軸組材の見付け幅は、空欄を空文字のまま持ち帰る（計算実装が既定の
+  // 見付け幅で埋めるので、消しても判定が止まらない）。
+  const frameWidth = (id) => optionalNumberOf(element(root, id));
   return {
     wallName: element(root, 'wallName').value.trim(),
     height: Number(element(root, 'wallHeight').value) || 0,
@@ -70,6 +73,14 @@ export function readWall(root) {
     // 間柱ピッチは壁の軸組。釘の縦列の位置も、せん断座屈の ξ（中間材の
     // 有無）も、ここから決まる。
     studPitch: Number(element(root, 'wallStudPitch').value) || 0,
+    // 軸組材の見付け幅。釘がどの材のどこに刺さるか（＝軸材の縁端距離）が
+    // ここで決まる（適用範囲 3.3(1)④）。
+    frame: {
+      column: frameWidth('wallColumnWidth'),
+      stud: frameWidth('wallStudWidth'),
+      beam: frameWidth('wallBeamWidth'),
+      joint: frameWidth('wallJointWidth'),
+    },
     panels: readPanels(root),
   };
 }
@@ -117,6 +128,11 @@ export function applyWall(root, wall, options) {
   element(root, 'wallHeight').value = wall.height || '';
   element(root, 'wallWidth').value = wall.width || '';
   element(root, 'wallStudPitch').value = wall.studPitch || '';
+  const frame = wall.frame || {};
+  element(root, 'wallColumnWidth').value = frame.column || '';
+  element(root, 'wallStudWidth').value = frame.stud || '';
+  element(root, 'wallBeamWidth').value = frame.beam || '';
+  element(root, 'wallJointWidth').value = frame.joint || '';
   renderWallPanels(root, wall.panels, options);
 }
 
