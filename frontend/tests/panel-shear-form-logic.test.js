@@ -90,24 +90,36 @@ describe('emptyFormData / makeWall / makePanel', () => {
     expect(wall.thickness).toBeUndefined();
   });
 
-  it('軸組材は 1 本ずつ自由な位置に入れる（既定は向きに合わせて埋める）', () => {
-    expect(makeMember({ label: '柱', position: 0, width: 105 })).toEqual({
+  it('軸組材は 1 本ずつ自由な位置に入れる（既定は種別に合わせて埋める）', () => {
+    expect(makeMember({ kind: 'column', position: 0 })).toEqual({
+      kind: 'column',
       direction: 'vertical',
       label: '柱',
       position: 0,
       width: 105,
     });
-    // 名前と見付け幅を書かなければ、向きに合わせた既定が入る。
+    // 種別を書かなければ間柱（図の勝ち負けでいちばん弱い側）。
     expect(makeMember({ position: 600 })).toEqual({
+      kind: 'stud',
       direction: 'vertical',
       label: '間柱',
       position: 600,
       width: 45,
     });
-    expect(makeMember({ direction: 'horizontal', position: 2000 })).toEqual({
+    // 向きは種別のふつうの向き。名前は自由に付けられる。
+    expect(makeMember({ kind: 'beam', label: 'まぐさ', position: 2000 })).toEqual({
+      kind: 'beam',
       direction: 'horizontal',
-      label: '横架材',
+      label: 'まぐさ',
       position: 2000,
+      width: 105,
+    });
+    // 継目の材は縦にも横にも入るので、向きを書けばそちらが優先される。
+    expect(makeMember({ kind: 'joint', direction: 'horizontal', position: 1820 })).toEqual({
+      kind: 'joint',
+      direction: 'horizontal',
+      label: '継目の材',
+      position: 1820,
       width: 105,
     });
   });
@@ -119,6 +131,16 @@ describe('emptyFormData / makeWall / makePanel', () => {
       .toEqual([0, 455, 910, 1365, 1820]);
     expect(frame.filter((member) => member.direction === 'horizontal').map((m) => m.position))
       .toEqual([0, 2900]);
+    // 種別も入る（図の勝ち負けと、足すときの既定に効く）。
+    expect(frame.map((member) => member.kind)).toEqual([
+      'column',
+      'stud',
+      'stud',
+      'stud',
+      'column',
+      'beam',
+      'beam',
+    ]);
   });
 
   it('面材の仕様だけを取り出して、次の面材へ引き継げる', () => {
@@ -268,8 +290,8 @@ describe('mergeFormData', () => {
       walls: [
         {
           frame: [
-            { direction: 'vertical', label: '柱', position: 0, width: 120 },
-            { direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
+            { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120 },
+            { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
           ],
           panels: [{}],
         },
@@ -277,8 +299,8 @@ describe('mergeFormData', () => {
     });
 
     expect(data.walls[0].frame).toEqual([
-      { direction: 'vertical', label: '柱', position: 0, width: 120 },
-      { direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
+      { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120 },
+      { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
     ]);
     // 全て消した状態は、そのまま空で扱う（既定に戻さない）。
     expect(mergeFormData({ walls: [{ frame: [], panels: [{}] }] }).walls[0].frame)

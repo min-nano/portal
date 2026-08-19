@@ -68,15 +68,23 @@ EXAMPLE_WALL = {
     # 中間の間柱に打つ釘は材心に来るので縁端距離は 15mm しか取れず、
     # 3.3(1)④ の 20mm に届かない（本の計算例をそのまま再現すると、この検定は
     # NG になる）。面材の縁が来る Y = 1820・2730 には、四周打ちのための
-    # 受け材を入れてある。
+    # 受け材を入れてある。種別（kind）は計算に効かず、図で材が交わるところの
+    # 勝ち負け（横架材 ＞ 柱 ＞ 継目の材 ＞ 間柱）を決める。
     "frame": [
-        {"direction": "vertical", "label": "柱", "position": 0, "width": 105},
-        {"direction": "vertical", "label": "間柱", "position": 455, "width": 30},
-        {"direction": "vertical", "label": "柱", "position": 910, "width": 105},
-        {"direction": "horizontal", "label": "横架材", "position": 0, "width": 105},
-        {"direction": "horizontal", "label": "受け材", "position": 1820, "width": 105},
-        {"direction": "horizontal", "label": "受け材", "position": 2730, "width": 105},
-        {"direction": "horizontal", "label": "横架材", "position": 3000, "width": 105},
+        {"kind": "column", "direction": "vertical", "label": "柱",
+         "position": 0, "width": 105},
+        {"kind": "stud", "direction": "vertical", "label": "間柱",
+         "position": 455, "width": 30},
+        {"kind": "column", "direction": "vertical", "label": "柱",
+         "position": 910, "width": 105},
+        {"kind": "beam", "direction": "horizontal", "label": "横架材",
+         "position": 0, "width": 105},
+        {"kind": "joint", "direction": "horizontal", "label": "受け材",
+         "position": 1820, "width": 105},
+        {"kind": "joint", "direction": "horizontal", "label": "受け材",
+         "position": 2730, "width": 105},
+        {"kind": "beam", "direction": "horizontal", "label": "横架材",
+         "position": 3000, "width": 105},
     ],
 }
 

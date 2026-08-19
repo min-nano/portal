@@ -68,6 +68,95 @@ pub const STUD_LABEL: &str = "間柱";
 pub const BEAM_LABEL: &str = "横架材";
 pub const JOINT_LABEL: &str = "継目の材";
 
+/// 軸組材の種別。
+///
+/// 計算（釘の縦列・縁端距離）には効かない。効くのは
+///
+///   - 図の**勝ち負け**（交わるところで、どちらの材を通して描くか）
+///   - 画面で軸組材を足すときの既定（名前と見付け幅）
+///
+/// の 2 つ。勝ち負けは在来軸組の納まりのとおり
+///
+/// ```text
+///   横架材 ＞ 柱 ＞ 継目の材 ＞ 間柱
+/// ```
+///
+/// で、強いほうが通り、弱いほうがその手前で止まる（管柱は横架材で切られ、
+/// 面材の継目に入れる受け材は柱の間に納まり、間柱はその受け材で切られる）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// 横架材（土台・胴差・桁）。
+    Beam,
+    /// 柱。
+    Column,
+    /// 面材の継目に入れる材（受け材・継目の間柱）。
+    Joint,
+    /// 間柱。
+    Stud,
+}
+
+/// 画面の選択肢に並べる順（勝ちの強い順）。
+pub const KINDS: [Kind; 4] = [Kind::Beam, Kind::Column, Kind::Joint, Kind::Stud];
+
+impl Kind {
+    pub fn id(self) -> &'static str {
+        match self {
+            Kind::Beam => "beam",
+            Kind::Column => "column",
+            Kind::Joint => "joint",
+            Kind::Stud => "stud",
+        }
+    }
+
+    /// id から種別を引く（知らない id は間柱とみなす）。
+    pub fn from_id(id: &str) -> Kind {
+        match id {
+            "beam" => Kind::Beam,
+            "column" => Kind::Column,
+            "joint" => Kind::Joint,
+            _ => Kind::Stud,
+        }
+    }
+
+    /// 名前（既定の名前でもあり、計算書の「種別」の欄にも出る）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Kind::Beam => BEAM_LABEL,
+            Kind::Column => COLUMN_LABEL,
+            Kind::Joint => JOINT_LABEL,
+            Kind::Stud => STUD_LABEL,
+        }
+    }
+
+    /// 図の勝ち負け（大きいほうが通り、小さいほうが手前で止まる）。
+    pub fn rank(self) -> u8 {
+        match self {
+            Kind::Beam => 3,
+            Kind::Column => 2,
+            Kind::Joint => 1,
+            Kind::Stud => 0,
+        }
+    }
+
+    /// 足すときの既定の見付け幅 [mm]。
+    pub fn default_width(self) -> f64 {
+        match self {
+            Kind::Beam => DEFAULT_BEAM_WIDTH,
+            Kind::Column => DEFAULT_COLUMN_WIDTH,
+            Kind::Joint => DEFAULT_JOINT_WIDTH,
+            Kind::Stud => DEFAULT_STUD_WIDTH,
+        }
+    }
+
+    /// その種別がふつう向く向き（継目の材だけは縦にも横にも入る）。
+    pub fn default_direction(self) -> Direction {
+        match self {
+            Kind::Beam => Direction::Horizontal,
+            _ => Direction::Vertical,
+        }
+    }
+}
+
 /// 軸組材の向き。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -115,8 +204,10 @@ impl Direction {
 /// 軸組材 1 本。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Member {
+    /// 種別（図の勝ち負けと、足すときの既定を決める）。
+    pub kind: Kind,
     pub direction: Direction,
-    /// 名前（「柱」「間柱」「横架材」「継目の材」など）。計算書にそのまま出る。
+    /// 名前（「柱」「通し柱」「まぐさ」など）。計算書にそのまま出る。
     pub label: String,
     /// 材心の位置 [mm]（壁の左下が原点）。
     pub position: f64,
@@ -125,8 +216,26 @@ pub struct Member {
 }
 
 impl Member {
-    pub fn new(direction: Direction, label: &str, position: f64, width: f64) -> Member {
+    /// 種別の名前をそのまま名前にした 1 本（向きも種別のふつうの向き）。
+    pub fn new(kind: Kind, position: f64, width: f64) -> Member {
+        Member::named(
+            kind,
+            kind.default_direction(),
+            kind.label(),
+            position,
+            width,
+        )
+    }
+
+    pub fn named(
+        kind: Kind,
+        direction: Direction,
+        label: &str,
+        position: f64,
+        width: f64,
+    ) -> Member {
         Member {
+            kind,
             direction,
             label: label.to_string(),
             position,
@@ -163,6 +272,7 @@ impl Member {
 
     pub fn to_value(&self) -> Value {
         Value::obj([
+            ("kind", self.kind.id().into()),
             ("direction", self.direction.id().into()),
             ("label", self.label.clone().into()),
             ("position", self.position.into()),
@@ -238,12 +348,9 @@ impl Frame {
     /// 置く。面材の継目に入れる受け材は納まりで決まるので、ここには入れない
     /// （画面で 1 本ずつ足す）。
     pub fn from_stud_pitch(width: f64, height: f64, stud_pitch: f64) -> Frame {
-        let mut members = vec![Member::new(
-            Direction::Vertical,
-            COLUMN_LABEL,
-            0.0,
-            DEFAULT_COLUMN_WIDTH,
-        )];
+        let column =
+            |position: f64| Member::new(Kind::Column, position, Kind::Column.default_width());
+        let mut members = vec![column(0.0)];
         if stud_pitch > 0.0 && width > 0.0 {
             // 桁を間違えたピッチで数え上げが止まらないよう、本数で頭を打つ。
             let count = (width / stud_pitch).ceil() as usize;
@@ -253,31 +360,20 @@ impl Frame {
                     break;
                 }
                 members.push(Member::new(
-                    Direction::Vertical,
-                    STUD_LABEL,
+                    Kind::Stud,
                     position,
-                    DEFAULT_STUD_WIDTH,
+                    Kind::Stud.default_width(),
                 ));
             }
         }
-        members.push(Member::new(
-            Direction::Vertical,
-            COLUMN_LABEL,
-            width,
-            DEFAULT_COLUMN_WIDTH,
-        ));
-        members.push(Member::new(
-            Direction::Horizontal,
-            BEAM_LABEL,
-            0.0,
-            DEFAULT_BEAM_WIDTH,
-        ));
-        members.push(Member::new(
-            Direction::Horizontal,
-            BEAM_LABEL,
-            height,
-            DEFAULT_BEAM_WIDTH,
-        ));
+        members.push(column(width));
+        for position in [0.0, height] {
+            members.push(Member::new(
+                Kind::Beam,
+                position,
+                Kind::Beam.default_width(),
+            ));
+        }
         Frame::new(members)
     }
 
@@ -289,11 +385,12 @@ impl Frame {
         if self.carrying(direction, position).is_some() {
             return;
         }
-        self.members.push(Member::new(
+        self.members.push(Member::named(
+            Kind::Joint,
             direction,
-            JOINT_LABEL,
+            Kind::Joint.label(),
             position,
-            DEFAULT_JOINT_WIDTH,
+            Kind::Joint.default_width(),
         ));
     }
 
@@ -448,6 +545,137 @@ pub fn worst(clearances: &[Clearance], required: f64) -> Clearance {
         })
 }
 
+/// 図に描く軸組材の 1 片（勝ち負けで切られたあとの矩形）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Shape {
+    pub label: String,
+    pub kind: Kind,
+    pub direction: Direction,
+    /// 描く矩形 [mm]（範囲の左下が原点）。
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl Shape {
+    pub fn to_value(&self) -> Value {
+        Value::obj([
+            ("label", self.label.clone().into()),
+            ("kind", self.kind.id().into()),
+            ("direction", self.direction.id().into()),
+            ("x", self.x.into()),
+            ("y", self.y.into()),
+            ("width", self.width.into()),
+            ("height", self.height.into()),
+        ])
+    }
+}
+
+/// 軸組材を、図に描く矩形にする（範囲の左下が原点）。
+///
+/// 範囲は壁そのもの（壁の面材配列図）か、面材 1 枚の占める領域（釘配列図）。
+/// 縦材は範囲の下から上まで、横材は左から右まで通っているものとして描き、
+/// **交わるところは種別の勝ち負けで切る**（`Kind` 参照）。負けた材は勝った材の
+/// 手前で止まるので、1 本の材が 2 片以上に分かれることがある。
+///
+/// 同じ種別どうし（縦の継目の材と横の継目の材など）は、どちらも通して描く。
+/// 範囲にかからない材は描かない。
+pub fn shapes(frame: &Frame, area: (f64, f64, f64, f64)) -> Vec<Shape> {
+    let (left, bottom, right, top) = area;
+    let (width, height) = (right - left, top - bottom);
+    let drawn: Vec<&Member> = frame
+        .members
+        .iter()
+        .filter(|member| {
+            let (low, high) = member.span();
+            match member.direction {
+                Direction::Vertical => high > left && low < right,
+                Direction::Horizontal => high > bottom && low < top,
+            }
+        })
+        .collect();
+
+    drawn
+        .iter()
+        .flat_map(|member| {
+            let (low, _) = member.span();
+            // 交わる材のうち、種別で勝つものの帯（材の長さ方向で切られる区間）。
+            let cuts: Vec<(f64, f64)> = drawn
+                .iter()
+                .filter(|other| {
+                    other.direction != member.direction && other.kind.rank() > member.kind.rank()
+                })
+                .map(|other| {
+                    let (other_low, other_high) = other.span();
+                    match member.direction {
+                        Direction::Vertical => (other_low - bottom, other_high - bottom),
+                        Direction::Horizontal => (other_low - left, other_high - left),
+                    }
+                })
+                .collect();
+            let full = match member.direction {
+                Direction::Vertical => height,
+                Direction::Horizontal => width,
+            };
+            let (band, thickness) = match member.direction {
+                Direction::Vertical => (low - left, member.width),
+                Direction::Horizontal => (low - bottom, member.width),
+            };
+
+            remaining(full, &cuts)
+                .into_iter()
+                .map(|(from, to)| match member.direction {
+                    Direction::Vertical => Shape {
+                        label: member.label.clone(),
+                        kind: member.kind,
+                        direction: member.direction,
+                        x: band,
+                        y: from,
+                        width: thickness,
+                        height: to - from,
+                    },
+                    Direction::Horizontal => Shape {
+                        label: member.label.clone(),
+                        kind: member.kind,
+                        direction: member.direction,
+                        x: from,
+                        y: band,
+                        width: to - from,
+                        height: thickness,
+                    },
+                })
+                .collect::<Vec<Shape>>()
+        })
+        .collect()
+}
+
+/// 0〜full のうち、cuts（勝った材の帯）に食われずに残る区間。
+fn remaining(full: f64, cuts: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut sorted: Vec<(f64, f64)> = cuts
+        .iter()
+        .copied()
+        .filter(|(low, high)| *high > 0.0 && *low < full)
+        .collect();
+    sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).expect("材の位置は有限"));
+
+    let mut segments = Vec::new();
+    let mut from = 0.0_f64;
+    for (low, high) in sorted {
+        if low > from {
+            segments.push((from, low.min(full)));
+        }
+        from = from.max(high);
+        if from >= full {
+            break;
+        }
+    }
+    if from < full {
+        segments.push((from, full));
+    }
+    segments
+}
+
 /// 軸組材の一覧を、計算書と画面に並べる 1 行ずつの表にする。
 pub fn rows(frame: &Frame) -> Vec<Value> {
     DIRECTIONS
@@ -460,6 +688,7 @@ pub fn rows(frame: &Frame) -> Vec<Value> {
                     "cells",
                     Value::Arr(
                         [
+                            member.kind.label().to_string(),
                             member.direction.label().to_string(),
                             format!(
                                 "{} = {}",
@@ -525,9 +754,9 @@ mod tests {
     fn members_can_stand_anywhere() {
         // 等間隔でない軸組（開口の脇に寄せた縦材と、窓台の受け材）。
         let frame = Frame::new(vec![
-            Member::new(Direction::Vertical, "柱", 0.0, 105.0),
-            Member::new(Direction::Vertical, "間柱", 600.0, 45.0),
-            Member::new(Direction::Horizontal, "窓台", 800.0, 60.0),
+            Member::new(Kind::Column, 0.0, 105.0),
+            Member::new(Kind::Stud, 600.0, 45.0),
+            Member::named(Kind::Joint, Direction::Horizontal, "窓台", 800.0, 60.0),
         ]);
         assert_eq!(frame.studs_between(0.0, 910.0), vec![600.0]);
         assert_eq!(
@@ -580,7 +809,7 @@ mod tests {
     #[test]
     fn a_member_off_the_panel_edge_is_measured_where_it_is() {
         // 面材の左端（X = 0）に対して、心が 30 mm 内側にずれた 105 の柱。
-        let frame = Frame::new(vec![Member::new(Direction::Vertical, "柱", 30.0, 105.0)]);
+        let frame = Frame::new(vec![Member::new(Kind::Column, 30.0, 105.0)]);
         let lines = clearances(&panel(0.0, 0.0, 910.0, 910.0), &frame, &[]);
         // 釘は X = 10、材は −22.5〜82.5 なので、近いほうの縁まで 32.5 mm。
         assert_eq!(lines[0].distance, Some(32.5));
@@ -604,12 +833,106 @@ mod tests {
     #[test]
     fn overlapping_members_take_the_one_with_the_most_room() {
         let frame = Frame::new(vec![
-            Member::new(Direction::Vertical, "間柱", 455.0, 45.0),
-            Member::new(Direction::Vertical, "抱き間柱", 460.0, 105.0),
+            Member::new(Kind::Stud, 455.0, 45.0),
+            Member::named(Kind::Stud, Direction::Vertical, "抱き間柱", 460.0, 105.0),
         ]);
         let member = frame.carrying(Direction::Vertical, 455.0).unwrap();
         assert_eq!(member.label, "抱き間柱");
         assert_eq!(member.clearance_at(455.0), 47.5);
+    }
+
+    // --- 図の勝ち負け（交わるところで、どちらの材を通して描くか） -----------
+
+    /// 壁（W 910 × H 3000）に、勝ち負けを確かめるための 4 種を 1 本ずつ。
+    fn crossing_frame() -> Frame {
+        Frame::new(vec![
+            Member::new(Kind::Column, 0.0, 105.0),
+            Member::new(Kind::Stud, 455.0, 45.0),
+            Member::new(Kind::Beam, 0.0, 105.0),
+            Member::named(Kind::Joint, Direction::Horizontal, "受け材", 1820.0, 105.0),
+        ])
+    }
+
+    fn drawn(frame: &Frame, label: &str) -> Vec<(f64, f64, f64, f64)> {
+        shapes(frame, (0.0, 0.0, 910.0, 3000.0))
+            .into_iter()
+            .filter(|shape| shape.label == label)
+            .map(|shape| (shape.x, shape.y, shape.width, shape.height))
+            .collect()
+    }
+
+    /// 柱と横架材は横架材勝ち（柱が横架材の手前で止まる）。
+    #[test]
+    fn a_beam_wins_over_a_column() {
+        let frame = crossing_frame();
+
+        // 横架材（材心 Y = 0・見付け 105）は左から右まで通る。
+        assert_eq!(drawn(&frame, "横架材"), vec![(0.0, -52.5, 910.0, 105.0)]);
+        // 柱はその上（Y = 52.5）から始まる。
+        let column = drawn(&frame, "柱");
+        assert_eq!(column.len(), 1);
+        assert_eq!((column[0].1, column[0].3), (52.5, 3000.0 - 52.5));
+    }
+
+    /// 柱と継目の材は柱勝ち（継目の材が柱の手前で止まる）。
+    #[test]
+    fn a_column_wins_over_a_joint() {
+        let frame = crossing_frame();
+
+        // 継目の材は、柱（材心 X = 0・見付け 105）の右の縁から始まる。
+        let joint = drawn(&frame, "受け材");
+        assert_eq!(joint.len(), 1);
+        assert_eq!((joint[0].0, joint[0].2), (52.5, 910.0 - 52.5));
+        // 柱は継目の材で切られない（上下の横架材だけで切られる）。
+        assert_eq!(drawn(&frame, "柱").len(), 1);
+    }
+
+    /// 継目の材と間柱は継目の材勝ち（間柱が継目の材で切られて 2 片になる）。
+    #[test]
+    fn a_joint_wins_over_a_stud() {
+        let frame = crossing_frame();
+
+        let stud = drawn(&frame, "間柱");
+        assert_eq!(stud.len(), 2);
+        // 下の横架材の上から、継目の材の下まで。
+        assert_eq!((stud[0].1, stud[0].3), (52.5, 1767.5 - 52.5));
+        // 継目の材の上から、壁の上端まで（上に横架材が無いので切られない）。
+        assert_eq!((stud[1].1, stud[1].3), (1872.5, 3000.0 - 1872.5));
+        // 切られても見付け幅は変わらない。
+        assert!(stud.iter().all(|piece| piece.2 == 45.0));
+    }
+
+    /// 同じ種別どうしは、どちらも通して描く（縦横の継目の材が交わるとき）。
+    #[test]
+    fn members_of_the_same_kind_both_run_through() {
+        let frame = Frame::new(vec![
+            Member::named(Kind::Joint, Direction::Vertical, "縦の継目", 455.0, 45.0),
+            Member::named(
+                Kind::Joint,
+                Direction::Horizontal,
+                "横の継目",
+                1820.0,
+                105.0,
+            ),
+        ]);
+
+        assert_eq!(drawn(&frame, "縦の継目").len(), 1);
+        assert_eq!(drawn(&frame, "横の継目").len(), 1);
+    }
+
+    /// 範囲にかからない材は描かない（面材 1 枚の図では、その面材にかかる
+    /// 材だけになる）。
+    #[test]
+    fn members_outside_the_area_are_not_drawn() {
+        let frame = crossing_frame();
+        // 壁の下半分（Y = 0〜910）だけを描く範囲にすると、Y = 1820 の
+        // 受け材は入らない。
+        let labels: Vec<String> = shapes(&frame, (0.0, 0.0, 910.0, 910.0))
+            .into_iter()
+            .map(|shape| shape.label)
+            .collect();
+        assert!(!labels.contains(&"受け材".to_string()));
+        assert!(labels.contains(&"間柱".to_string()));
     }
 
     #[test]

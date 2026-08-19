@@ -17,7 +17,7 @@ import {
   buildSection,
 } from '../components/form-field.js';
 import { buildDiagram, buildWallDiagram } from './diagram.js';
-import { DIRECTIONS, panelLabel, wallLabel } from './form-logic.js';
+import { DIRECTIONS, KINDS, findKind, panelLabel, wallLabel } from './form-logic.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -80,6 +80,7 @@ export function readFrameMembers(root) {
   return Array.from(root.querySelectorAll('[data-member-index]')).map((node) => {
     const field = (name) => node.querySelector(`[data-member-field="${name}"]`);
     return {
+      kind: field('kind').value,
       direction: field('direction').value,
       label: field('label').value.trim(),
       position: numberOf(field('position')),
@@ -139,9 +140,10 @@ export function applyWall(root, wall, options) {
 /**
  * 軸組材の一覧を描き直す（1 本 = 1 行）。
  *
- * 柱・間柱・横架材・受け材のどれも、位置（材心）と見付け幅を 1 本ずつ入れる。
- * 等間隔の壁は「等間隔で入れ直す」で一度に入れられるが、入れたあとは 1 本
- * ずつ動かせる（開口の脇に寄せた縦材、面材の継目の受け材など）。
+ * 柱・間柱・横架材・受け材のどれも、種別・向き・位置（材心）・見付け幅を
+ * 1 本ずつ入れる。等間隔の壁は「等間隔で入れ直す」で一度に入れられるが、
+ * 入れたあとは 1 本ずつ動かせる（開口の脇に寄せた縦材、面材の継目の
+ * 受け材など）。種別は、図で材が交わるところの勝ち負けを決める。
  */
 export function renderFrameMembers(root, members) {
   const container = element(root, 'wallFrameMembers');
@@ -170,6 +172,14 @@ function buildFrameMember(document_, member, index) {
   };
 
   row.appendChild(
+    field('kind', {
+      label: '種別',
+      type: 'select',
+      options: KINDS,
+      value: findKind(member.kind).value,
+    })
+  );
+  row.appendChild(
     field('direction', {
       label: '向き',
       type: 'select',
@@ -179,8 +189,8 @@ function buildFrameMember(document_, member, index) {
   );
   row.appendChild(
     field('label', {
-      label: '軸組材',
-      placeholder: '柱・間柱・横架材 など',
+      label: '名前',
+      placeholder: '柱・通し柱・まぐさ など',
       value: member.label,
     })
   );

@@ -141,12 +141,13 @@ const WALL = {
   height: 3000,
   width: 910,
   // 軸組材は 1 本ずつ自由な位置に入れる（釘の縦列も縁端距離もここから）。
+  // 種別は、図で材が交わるところの勝ち負けを決める。
   frame: [
-    { direction: 'vertical', label: '柱', position: 0, width: 105 },
-    { direction: 'vertical', label: '間柱', position: 455, width: 45 },
-    { direction: 'vertical', label: '柱', position: 910, width: 105 },
-    { direction: 'horizontal', label: '横架材', position: 0, width: 105 },
-    { direction: 'horizontal', label: '横架材', position: 3000, width: 105 },
+    { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 105 },
+    { kind: 'stud', direction: 'vertical', label: '間柱', position: 455, width: 45 },
+    { kind: 'column', direction: 'vertical', label: '柱', position: 910, width: 105 },
+    { kind: 'beam', direction: 'horizontal', label: '横架材', position: 0, width: 105 },
+    { kind: 'beam', direction: 'horizontal', label: '横架材', position: 3000, width: 105 },
   ],
   panels: [
     { ...PANEL },
@@ -343,10 +344,11 @@ describe('applyWall / readWall', () => {
       {
         ...WALL,
         frame: [
-          { direction: 'vertical', label: '柱', position: 0, width: 120 },
+          { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120 },
           // 等間隔でない位置（開口の脇に寄せた縦材）も入れられる。
-          { direction: 'vertical', label: '間柱', position: 600, width: 45 },
-          { direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
+          { kind: 'stud', direction: 'vertical', label: '間柱', position: 600, width: 45 },
+          // 種別は 4 つから選び、名前は自由（「まぐさ」は横架材として描く）。
+          { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
         ],
       },
       OPTIONS
@@ -356,12 +358,13 @@ describe('applyWall / readWall', () => {
     expect(rows).toHaveLength(3);
     expect(rows[1].querySelector('[data-member-field="label"]').value).toBe('間柱');
     expect(rows[1].querySelector('[data-member-field="position"]').value).toBe('600');
+    expect(rows[2].querySelector('[data-member-field="kind"]').value).toBe('beam');
     expect(document.getElementById('wallFrameEmpty').hidden).toBe(true);
 
     expect(readWall(document).frame).toEqual([
-      { direction: 'vertical', label: '柱', position: 0, width: 120 },
-      { direction: 'vertical', label: '間柱', position: 600, width: 45 },
-      { direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
+      { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120 },
+      { kind: 'stud', direction: 'vertical', label: '間柱', position: 600, width: 45 },
+      { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
     ]);
   });
 

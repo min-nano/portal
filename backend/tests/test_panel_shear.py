@@ -366,6 +366,35 @@ def test_the_frame_members_are_part_of_the_wall():
     assert [member["position"] for member in even["frame"]] == [0, 455, 910, 0, 2900]
 
 
+def test_the_frame_members_are_cut_by_the_ones_that_win():
+    """図の軸組材は、交わるところを種別の勝ち負けで切る。
+
+    在来軸組の納まりのとおり「横架材 ＞ 柱 ＞ 継目の材 ＞ 間柱」で、勝った
+    材が通り、負けた材はその手前で止まる（1 本が 2 片以上に分かれる）。
+    """
+    data = panel_shear.example_wall_data()
+
+    members = panel_shear.compute_all(data)["walls"][0]["wallDiagram"]["members"]
+    pieces = lambda label: [m for m in members if m["label"] == label]  # noqa: E731
+
+    # 横架材（材心 Y = 0）は左から右まで通る。
+    assert pieces("横架材")[0]["width"] == 910
+    # 柱は横架材に負けるので、上下の横架材のあいだだけになる。
+    column = pieces("柱")[0]
+    assert (column["y"], column["height"]) == (52.5, 3000 - 105)
+    # 受け材（継目の材）は柱に負けて、柱と柱のあいだだけになる。
+    joint = pieces("受け材")[0]
+    assert (joint["x"], joint["width"]) == (52.5, 910 - 105)
+    # 間柱は横架材にも受け材にも負けるので、切られて 3 片になる。
+    stud = pieces("間柱")
+    assert [(piece["y"], piece["height"]) for piece in stud] == [
+        (52.5, 1767.5 - 52.5),
+        (1872.5, 2677.5 - 1872.5),
+        (2782.5, 2947.5 - 2782.5),
+    ]
+    assert all(piece["width"] == 30 for piece in stud)
+
+
 def test_the_frame_clearance_is_reported_for_every_panel():
     """面材のページにも、その面材でいちばん厳しい釘列の縁端距離を残す。"""
     data = panel_shear.normalize_data(make_data())
@@ -850,8 +879,9 @@ def test_the_position_of_a_panel_travels_with_the_saved_pdf():
     assert (panel["right"], panel["top"]) == (910, 2730)
     assert panel["side"] == "front"
     # 壁の軸組（間柱ピッチ）も、そのまま戻る。
-    # 軸組材も、位置と見付け幅のまま保存されて戻る。
+    # 軸組材も、種別・向き・位置・見付け幅のまま保存されて戻る。
     assert parsed["walls"][0]["frame"][1] == {
+        "kind": "stud",
         "direction": "vertical",
         "label": "間柱",
         "position": 455,

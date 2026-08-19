@@ -229,7 +229,7 @@ function removeWallPanel(index) {
 /**
  * 軸組材を 1 本足す（位置と見付け幅は、そのあと入れてもらう）。
  *
- * 直前の材と同じ向き・同じ名前・同じ見付け幅から始める（同じ間柱を何本も
+ * 直前の材と同じ種別・向き・名前・見付け幅から始める（同じ間柱を何本も
  * 入れることが多いため）。位置だけを入れれば 1 本増える。
  */
 function addFrameMember() {
@@ -240,7 +240,12 @@ function addFrameMember() {
   wall.frame.push(
     makeMember(
       previous
-        ? { direction: previous.direction, label: previous.label, width: previous.width }
+        ? {
+            kind: previous.kind,
+            direction: previous.direction,
+            label: previous.label,
+            width: previous.width,
+          }
         : {}
     )
   );

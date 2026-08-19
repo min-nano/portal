@@ -249,15 +249,23 @@ fn dispatch(request: &str) -> Result<Value, String> {
             ("minEdgeDistance", wall::MIN_EDGE_DISTANCE.into()),
             ("minFrameEdgeDistance", wall::MIN_FRAME_EDGE_DISTANCE.into()),
             ("maxFrameMembers", frame::MAX_MEMBERS.into()),
-            // 軸組材を足すときの既定（見付け幅は在来軸組でよくある寸法）。
+            // 軸組材の種別。図の勝ち負け（強い順に並ぶ）と、足すときの既定
+            // （名前・向き・見付け幅）を決める。
             (
-                "frameDefaults",
-                Value::obj([
-                    ("column", frame::DEFAULT_COLUMN_WIDTH.into()),
-                    ("stud", frame::DEFAULT_STUD_WIDTH.into()),
-                    ("beam", frame::DEFAULT_BEAM_WIDTH.into()),
-                    ("joint", frame::DEFAULT_JOINT_WIDTH.into()),
-                ]),
+                "frameKinds",
+                Value::Arr(
+                    frame::KINDS
+                        .iter()
+                        .map(|kind| {
+                            Value::obj([
+                                ("id", kind.id().into()),
+                                ("label", kind.label().into()),
+                                ("direction", kind.default_direction().id().into()),
+                                ("width", kind.default_width().into()),
+                            ])
+                        })
+                        .collect(),
+                ),
             ),
             ("allowableShearLimit", wall::ALLOWABLE_SHEAR_LIMIT.into()),
             ("significantDigits", format::SIGNIFICANT_DIGITS.into()),

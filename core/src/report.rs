@@ -409,19 +409,49 @@ fn wall_frame(
 }
 
 /// 軸組材 1 本の入力を読む。
+///
+/// 種別（柱・間柱・横架材・継目の材）は、図の勝ち負けと足すときの既定を
+/// 決める。種別を持たない入力（種別を入れる前の版・手で組み立てた入力）は、
+/// 名前が既定の名前と同じならその種別、違えば向きから決める（縦材は間柱、
+/// 横材は継目の材＝どちらも勝ち負けのいちばん弱い側）。向きを書いていなければ
+/// 種別のふつうの向きを使う。
 fn normalize_member(item: &Value) -> Result<frame::Member, String> {
-    let label = match text_of(item.get("label")) {
-        label if label.is_empty() => frame::Direction::from_id(&text_of(item.get("direction")))
-            .label()
-            .to_string(),
-        label => label,
+    let label = text_of(item.get("label"));
+    let kind = match item.get("kind") {
+        Some(value) if !is_blank(Some(value)) => frame::Kind::from_id(&text_of(Some(value))),
+        _ => kind_of_label(&label, item.get("direction")),
+    };
+    let direction = match item.get("direction") {
+        Some(value) if !is_blank(Some(value)) => {
+            frame::Direction::from_id(&text_of(Some(value)))
+        }
+        _ => kind.default_direction(),
     };
     Ok(frame::Member {
-        direction: frame::Direction::from_id(&text_of(item.get("direction"))),
-        label,
+        kind,
+        direction,
+        label: match label.is_empty() {
+            true => kind.label().to_string(),
+            false => label,
+        },
         position: float_of(item.get("position"), "軸組材の位置")?,
         width: float_of(item.get("width"), "軸組材の見付け幅")?,
     })
+}
+
+/// 種別を持たない入力の種別。名前が既定の名前と同じならその種別にする。
+fn kind_of_label(label: &str, direction: Option<&Value>) -> frame::Kind {
+    if let Some(kind) = frame::KINDS
+        .iter()
+        .find(|kind| kind.label() == label)
+        .copied()
+    {
+        return kind;
+    }
+    match frame::Direction::from_id(&text_of(direction)) {
+        frame::Direction::Horizontal => frame::Kind::Joint,
+        frame::Direction::Vertical => frame::Kind::Stud,
+    }
 }
 
 /// 壁の間柱ピッチ [mm]（軸組材を持たない前の版の入力を読み替えるときだけ使う）。
@@ -1102,15 +1132,15 @@ fn layout_diagram(
     inspection: &wall_layout::Inspection,
 ) -> Value {
     // 軸組材も図に描くので、描く範囲に入れる（壁の両端の柱・上下の横架材は
-    // 見付け幅の半分が壁の外へ出る）。
-    let members = member_shapes(input);
+    // 見付け幅の半分が壁の外へ出る）。交わるところは種別の勝ち負けで切る。
+    let members = frame::shapes(&input.frame, (0.0, 0.0, input.width, input.height));
     let (min_x, min_y, max_x, max_y) = wall_layout::bounds(
         input.width,
         input.height,
         pieces,
         &members
             .iter()
-            .map(|(_, rect)| *rect)
+            .map(|shape| (shape.x, shape.y, shape.x + shape.width, shape.y + shape.height))
             .collect::<Vec<(f64, f64, f64, f64)>>(),
     );
 
@@ -1171,88 +1201,10 @@ fn layout_diagram(
         // （＝釘がどこに刺さるのか）が図で分かる。
         (
             "members",
-            Value::Arr(members.into_iter().map(|(value, _)| value).collect()),
+            Value::Arr(members.iter().map(frame::Shape::to_value).collect()),
         ),
         ("sides", Value::Arr(sides)),
     ])
-}
-
-/// この面材にかかる軸組材を、面材の座標（mm）の矩形にする。
-///
-/// 面材の左下を原点として、縦材は面材の下から上まで、横材は左から右まで
-/// 通っているものとして描く。面材にかからない（重ならない）材は入れない。
-/// 図に渡す値と、描く範囲を決めるための矩形（左, 下, 右, 上）を返す。
-fn panel_member_shapes(
-    panel: &PanelInput,
-    frame: &Frame,
-) -> Vec<(Value, (f64, f64, f64, f64))> {
-    frame
-        .members
-        .iter()
-        .filter_map(|member| {
-            let (low, high) = member.span();
-            let (x, y, width, height) = match member.direction {
-                frame::Direction::Vertical => {
-                    if high <= panel.left || low >= panel.right {
-                        return None;
-                    }
-                    (low - panel.left, 0.0, member.width, panel.height())
-                }
-                frame::Direction::Horizontal => {
-                    if high <= panel.bottom || low >= panel.top {
-                        return None;
-                    }
-                    (0.0, low - panel.bottom, panel.width(), member.width)
-                }
-            };
-            Some((
-                Value::obj([
-                    ("label", member.label.clone().into()),
-                    ("direction", member.direction.id().into()),
-                    ("x", x.into()),
-                    ("y", y.into()),
-                    ("width", width.into()),
-                    ("height", height.into()),
-                ]),
-                (x, y, x + width, y + height),
-            ))
-        })
-        .collect()
-}
-
-/// 軸組材を、壁の座標（mm）の矩形にする。
-///
-/// 縦材は壁の下から上まで、横材は左から右まで通っているものとして描く
-/// （壁の中での位置と見付け幅が分かればよいので、実際の長さは追わない）。
-/// 図に渡す値と、描く範囲を決めるための矩形（左, 下, 右, 上）を返す。
-fn member_shapes(input: &WallInput) -> Vec<(Value, (f64, f64, f64, f64))> {
-    input
-        .frame
-        .members
-        .iter()
-        .map(|member| {
-            let half = member.width / 2.0;
-            let (x, y, width, height) = match member.direction {
-                frame::Direction::Vertical => {
-                    (member.position - half, 0.0, member.width, input.height)
-                }
-                frame::Direction::Horizontal => {
-                    (0.0, member.position - half, input.width, member.width)
-                }
-            };
-            (
-                Value::obj([
-                    ("label", member.label.clone().into()),
-                    ("direction", member.direction.id().into()),
-                    ("x", x.into()),
-                    ("y", y.into()),
-                    ("width", width.into()),
-                    ("height", height.into()),
-                ]),
-                (x, y, x + width, y + height),
-            )
-        })
-        .collect()
 }
 
 /// 面材の寸法の見出し（「910 × 1,820 mm」）。
@@ -1878,7 +1830,7 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
         (
             "frameColumns",
             Value::Arr(
-                ["軸組材", "向き", "材心の位置 [mm]", "見付け幅 [mm]"]
+                ["軸組材", "種別", "向き", "材心の位置 [mm]", "見付け幅 [mm]"]
                     .into_iter()
                     .map(Value::from)
                     .collect(),
@@ -2166,12 +2118,15 @@ fn build_diagram(
     }
     // この面材にかかる軸組材（釘がどこに刺さるのかを、図の上で確かめられる
     // ようにする）。材が面材の外へ出るぶんも範囲に入れて、図の縁で切らない。
-    let members = panel_member_shapes(panel, frame);
-    for (_, (left, bottom, right, top)) in &members {
-        min_x = min_x.min(*left);
-        max_x = max_x.max(*right);
-        min_y = min_y.min(*bottom);
-        max_y = max_y.max(*top);
+    let members = frame::shapes(
+        frame,
+        (panel.left, panel.bottom, panel.right, panel.top),
+    );
+    for shape in &members {
+        min_x = min_x.min(shape.x);
+        max_x = max_x.max(shape.x + shape.width);
+        min_y = min_y.min(shape.y);
+        max_y = max_y.max(shape.y + shape.height);
     }
 
     let ticks = |values: &[f64]| {
@@ -2205,7 +2160,7 @@ fn build_diagram(
         // 縁まで）を、数値と図の両方で確かめられる。
         (
             "members",
-            Value::Arr(members.into_iter().map(|(value, _)| value).collect()),
+            Value::Arr(members.iter().map(frame::Shape::to_value).collect()),
         ),
         (
             "axis",
@@ -2471,15 +2426,26 @@ mod tests {
         assert_eq!(round_trip.walls[0].frame, data.walls[0].frame);
     }
 
-    /// 名前を書かなかった軸組材は、向きの名前（縦材・横材）で呼ぶ。
+    /// 名前も種別も書かなかった軸組材は、向きから決めた種別の名前で呼ぶ
+    /// （縦材なら間柱・横材なら継目の材＝どちらも勝ち負けのいちばん弱い側）。
     #[test]
-    fn a_frame_member_without_a_name_is_called_by_its_direction() {
+    fn a_frame_member_without_a_name_takes_the_name_of_its_kind() {
         let data = normalize(
             r#"{"walls":[{"height":2900,"width":910,
                  "frame":[{"direction":"horizontal","position":2000,"width":105}]}]}"#,
         )
         .unwrap();
-        assert_eq!(data.walls[0].frame.members[0].label, "横材");
+        assert_eq!(data.walls[0].frame.members[0].label, "継目の材");
+        assert_eq!(data.walls[0].frame.members[0].kind, frame::Kind::Joint);
+
+        // 名前が既定の名前と同じなら、その種別として読む（種別を入れる前の
+        // 版で保存した入力も、同じ勝ち負けで描ける）。
+        let named = normalize(
+            r#"{"walls":[{"height":2900,"width":910,"frame":[
+                 {"direction":"vertical","label":"柱","position":0,"width":105}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(named.walls[0].frame.members[0].kind, frame::Kind::Column);
     }
 
     #[test]
@@ -3327,8 +3293,10 @@ mod tests {
         // 面材の左下が原点。左端の柱は材心が X = 0 なので、半分が外へ出る。
         assert_eq!((number(0, "x"), number(0, "width")), (-52.5, 105.0));
         assert_eq!((number(1, "x"), number(1, "width")), (432.5, 45.0));
-        // 縦材は面材の下から上まで、横材は左から右まで。
-        assert_eq!((number(1, "y"), number(1, "height")), (0.0, 610.0));
+        // 縦材は面材の下から上まで、横材は左から右まで。ただし交わるところは
+        // 種別の勝ち負けで切る（間柱は下の横架材にも上の継目の材にも負ける
+        // ので、そのあいだだけになる）。
+        assert_eq!((number(1, "y"), number(1, "height")), (52.5, 505.0));
         assert_eq!((number(3, "x"), number(3, "width")), (0.0, 910.0));
         // 材が外へ出るぶんも、図に描く範囲へ入れる。
         assert_eq!(diagram.get("minX").unwrap().as_f64(), Some(-52.5));
@@ -3352,10 +3320,12 @@ mod tests {
             .clone();
         let shape = |index: usize, key: &str| members[index].get(key).unwrap().as_f64().unwrap();
 
-        // 縦材は壁の下から上まで、横材は左から右まで通して描く。
+        // 縦材は壁の下から上まで、横材は左から右まで。ただし交わるところは
+        // 種別の勝ち負けで切る（柱は横架材に負けるので、上下の横架材の
+        // あいだだけになる）。
         assert_eq!(members[0].get("label").unwrap().as_str(), Some("柱"));
         assert_eq!((shape(0, "x"), shape(0, "width")), (-52.5, 105.0));
-        assert_eq!((shape(0, "y"), shape(0, "height")), (0.0, 3000.0));
+        assert_eq!((shape(0, "y"), shape(0, "height")), (52.5, 2895.0));
         let beam = members
             .iter()
             .find(|member| member.get("direction").unwrap().as_str() == Some("horizontal"))
@@ -3384,7 +3354,8 @@ mod tests {
             .iter()
             .map(|column| column.as_str().unwrap().to_string())
             .collect();
-        assert_eq!(columns[2], "材心の位置 [mm]");
+        assert_eq!(columns[1], "種別");
+        assert_eq!(columns[3], "材心の位置 [mm]");
 
         let rows: Vec<(String, Vec<String>)> = report
             .get("frame")
@@ -3408,14 +3379,30 @@ mod tests {
         // 縦材（左から）→ 横材（下から）の順に並ぶ。
         assert_eq!(
             rows[0],
-            ("柱".to_string(), vec!["縦材".to_string(), "X = 0".to_string(), "105".to_string()])
+            (
+                "柱".to_string(),
+                vec![
+                    "柱".to_string(),
+                    "縦材".to_string(),
+                    "X = 0".to_string(),
+                    "105".to_string()
+                ]
+            )
         );
         assert_eq!(
             rows[1],
-            ("間柱".to_string(), vec!["縦材".to_string(), "X = 455".to_string(), "30".to_string()])
+            (
+                "間柱".to_string(),
+                vec![
+                    "間柱".to_string(),
+                    "縦材".to_string(),
+                    "X = 455".to_string(),
+                    "30".to_string()
+                ]
+            )
         );
         assert_eq!(rows[3].0, "横架材");
-        assert_eq!(rows[4].1[1], "Y = 1,820");
+        assert_eq!(rows[4].1[2], "Y = 1,820");
         assert_eq!(rows[4].0, "継目の材");
     }
 
@@ -3763,12 +3750,7 @@ mod tests {
         // 等間隔でなくても、壁の中に 1 本でも立っていれば中間材あり。
         assert!(wall(
             910.0,
-            Frame::new(vec![frame::Member::new(
-                frame::Direction::Vertical,
-                "間柱",
-                300.0,
-                45.0
-            )])
+            Frame::new(vec![frame::Member::new(frame::Kind::Stud, 300.0, 45.0)])
         )
         .has_intermediate_stud());
     }

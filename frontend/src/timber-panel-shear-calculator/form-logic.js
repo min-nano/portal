@@ -29,18 +29,21 @@ export const DEFAULT_STUD_PITCH = 455;
 const DEFAULT_NAIL_PITCH = 150;
 
 /**
- * 軸組材の見付け幅の既定値 [mm]（面材を張る面から見た材の幅）。
+ * 軸組材の種別。
  *
- * 尺モジュールの在来軸組でよくある取り合わせ（柱 105 角・間柱 45×105・
- * 土台や桁は 105 角以上・面材の継目には 45×105 を平使いして見付け 105）。
- * 軸組材は 1 本ずつ自由な位置に入れるので、これは**足すときの初期値**。
+ * 計算（釘の縦列・縁端距離）には効かない。効くのは**図の勝ち負け**（交わる
+ * ところで、どちらの材を通して描くか）と、足すときの既定（名前・向き・
+ * 見付け幅）。並びは勝ちの強い順（横架材 ＞ 柱 ＞ 継目の材 ＞ 間柱）で、
+ * 在来軸組の納まりのとおり。見付け幅の既定は、尺モジュールでよくある
+ * 取り合わせ（柱 105 角・間柱 45×105・土台や桁は 105 角以上・面材の継目には
+ * 45×105 を平使いして見付け 105）。
  */
-export const DEFAULT_MEMBER_WIDTH = {
-  column: 105,
-  stud: 45,
-  beam: 105,
-  joint: 105,
-};
+export const KINDS = [
+  { value: 'beam', text: '横架材', direction: 'horizontal', width: 105 },
+  { value: 'column', text: '柱', direction: 'vertical', width: 105 },
+  { value: 'joint', text: '継目の材', direction: 'vertical', width: 105 },
+  { value: 'stud', text: '間柱', direction: 'vertical', width: 45 },
+];
 
 /** 軸組材の向き（縦材＝柱・間柱など／横材＝横架材・受け材など）。 */
 export const DIRECTIONS = [
@@ -48,27 +51,31 @@ export const DIRECTIONS = [
   { value: 'horizontal', text: '横材' },
 ];
 
+/** 種別を引く（知らない種別は間柱＝勝ち負けのいちばん弱い側）。 */
+export function findKind(value) {
+  return KINDS.find((kind) => kind.value === value) || KINDS[KINDS.length - 1];
+}
+
 /**
  * 軸組材 1 本。
  *
  * 位置は材心（壁の左下が原点。縦材は X、横材は Y）で、見付け幅は面材の側
  * から見た材の幅。釘の縦列の位置も、適用範囲 3.3(1)④ の縁端距離も、
- * ここから決まる。
+ * ここから決まる。種別は図の勝ち負けと、足すときの既定を決める。
  */
 export function makeMember(overrides) {
   const member = overrides || {};
-  const direction = member.direction === 'horizontal' ? 'horizontal' : 'vertical';
+  const kind = findKind(member.kind);
+  const direction =
+    member.direction === 'horizontal' || member.direction === 'vertical'
+      ? member.direction
+      : kind.direction;
   return {
+    kind: kind.value,
     direction,
-    label:
-      String(member.label || '') ||
-      (direction === 'horizontal' ? '横架材' : '間柱'),
+    label: String(member.label || '') || kind.text,
     position: Number(member.position) || 0,
-    width:
-      Number(member.width) ||
-      (direction === 'horizontal'
-        ? DEFAULT_MEMBER_WIDTH.beam
-        : DEFAULT_MEMBER_WIDTH.stud),
+    width: Number(member.width) || kind.width,
     ...(overrides && overrides.memberId ? { memberId: overrides.memberId } : {}),
   };
 }
@@ -85,24 +92,13 @@ export function defaultFrame(width, height, studPitch) {
   const wallWidth = Number(width) || DEFAULT_WALL_WIDTH;
   const wallHeight = Number(height) || DEFAULT_WALL_HEIGHT;
   const pitch = Number(studPitch) || DEFAULT_STUD_PITCH;
-  const members = [
-    makeMember({ label: '柱', position: 0, width: DEFAULT_MEMBER_WIDTH.column }),
-  ];
+  const members = [makeMember({ kind: 'column', position: 0 })];
   for (let position = pitch; position < wallWidth; position += pitch) {
-    members.push(makeMember({ label: '間柱', position }));
+    members.push(makeMember({ kind: 'stud', position }));
   }
-  members.push(
-    makeMember({ label: '柱', position: wallWidth, width: DEFAULT_MEMBER_WIDTH.column })
-  );
-  ['下', '上'].forEach((_, index) => {
-    members.push(
-      makeMember({
-        direction: 'horizontal',
-        label: '横架材',
-        position: index === 0 ? 0 : wallHeight,
-        width: DEFAULT_MEMBER_WIDTH.beam,
-      })
-    );
+  members.push(makeMember({ kind: 'column', position: wallWidth }));
+  [0, wallHeight].forEach((position) => {
+    members.push(makeMember({ kind: 'beam', position }));
   });
   return members;
 }
