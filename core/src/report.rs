@@ -386,7 +386,11 @@ fn wall_frame(
         for item in items {
             members.push(normalize_member(item)?);
         }
-        return Ok(Frame::new(members));
+        let mut frame = Frame::new(members);
+        // 材端を書いていない材（材端を入れる前の版の入力）は、直交する材の
+        // 外面まで伸ばす（横架材は両端の柱の外面まで）。
+        frame.fit_ends(width, height);
+        return Ok(frame);
     }
 
     let mut migrated = Frame::from_stud_pitch(width, height, wall_stud_pitch(wall, panels)?);
@@ -405,6 +409,7 @@ fn wall_frame(
             }
         }
     }
+    migrated.fit_ends(width, height);
     Ok(migrated)
 }
 
@@ -436,7 +441,18 @@ fn normalize_member(item: &Value) -> Result<frame::Member, String> {
         },
         position: float_of(item.get("position"), "軸組材の位置")?,
         width: float_of(item.get("width"), "軸組材の見付け幅")?,
+        from: member_end(item.get("from"))?,
+        to: member_end(item.get("to"))?,
     })
+}
+
+/// 軸組材の材端 1 つ。書いていなければ「決めていない」印を返し、
+/// あとで `Frame::fit_ends` が既定の材端（直交する材の外面）を入れる。
+fn member_end(value: Option<&Value>) -> Result<f64, String> {
+    match is_blank(value) {
+        true => Ok(f64::NAN),
+        false => float_of(value, "軸組材の材端"),
+    }
 }
 
 /// 種別を持たない入力の種別。名前が既定の名前と同じならその種別にする。
@@ -1830,7 +1846,14 @@ fn build_wall_report(input: &WallInput, index: usize) -> Result<Value, String> {
         (
             "frameColumns",
             Value::Arr(
-                ["軸組材", "種別", "向き", "材心の位置 [mm]", "見付け幅 [mm]"]
+                [
+                    "軸組材",
+                    "種別",
+                    "向き",
+                    "材心の位置 [mm]",
+                    "見付け幅 [mm]",
+                    "材端の位置 [mm]",
+                ]
                     .into_iter()
                     .map(Value::from)
                     .collect(),
@@ -2422,6 +2445,33 @@ mod tests {
         // 等間隔でない位置もそのまま（釘の縦列はこの位置に入る）。
         assert_eq!(data.walls[0].frame.studs_between(0.0, 910.0), vec![600.0]);
         // 書き戻した JSON（計算書 PDF に埋める形）から同じ軸組材が読める。
+        let round_trip = normalize_data(&data.to_value()).unwrap();
+        assert_eq!(round_trip.walls[0].frame, data.walls[0].frame);
+    }
+
+    /// 材端を書いていない軸組材は、直交する材の外面まで伸ばす（横架材なら
+    /// 両端の柱の外面まで）。材端を入れた材は、その長さのまま。
+    #[test]
+    fn the_ends_of_a_member_default_to_the_faces_of_the_crossing_members() {
+        let data = normalize(
+            r#"{"walls":[{"height":2900,"width":910,"frame":[
+                 {"kind":"column","position":0,"width":105},
+                 {"kind":"column","position":910,"width":105},
+                 {"kind":"beam","position":0,"width":105},
+                 {"kind":"beam","label":"まぐさ","position":2000,"width":105,
+                  "from":300,"to":700}
+               ]}]}"#,
+        )
+        .unwrap();
+
+        let members = &data.walls[0].frame.members;
+        // 柱は上下（下の横架材の外面から壁の上端）まで。
+        assert_eq!(members[0].ends(), (-52.5, 2900.0));
+        // 横架材は両端の柱の外面まで。
+        assert_eq!(members[2].ends(), (-52.5, 962.5));
+        // 入れた材端はそのまま（まぐさのように途中で終わる材）。
+        assert_eq!(members[3].ends(), (300.0, 700.0));
+        // 書き戻した JSON からも同じ材端が読める。
         let round_trip = normalize_data(&data.to_value()).unwrap();
         assert_eq!(round_trip.walls[0].frame, data.walls[0].frame);
     }
@@ -3297,7 +3347,9 @@ mod tests {
         // 種別の勝ち負けで切る（間柱は下の横架材にも上の継目の材にも負ける
         // ので、そのあいだだけになる）。
         assert_eq!((number(1, "y"), number(1, "height")), (52.5, 505.0));
-        assert_eq!((number(3, "x"), number(3, "width")), (0.0, 910.0));
+        // 横架材は両端の柱の外面まで伸びる（材心 X = 0 と 910 の柱が
+        // 見付け 105 なので、−52.5 から 962.5 まで）。
+        assert_eq!((number(3, "x"), number(3, "width")), (-52.5, 1015.0));
         // 材が外へ出るぶんも、図に描く範囲へ入れる。
         assert_eq!(diagram.get("minX").unwrap().as_f64(), Some(-52.5));
 
@@ -3330,7 +3382,9 @@ mod tests {
             .iter()
             .find(|member| member.get("direction").unwrap().as_str() == Some("horizontal"))
             .unwrap();
-        assert_eq!(beam.get("width").unwrap().as_f64(), Some(910.0));
+        // 横架材は両端の柱の外面まで伸びる（壁の幅 910 ＋ 柱の見付けの半分 × 2）。
+        assert_eq!(beam.get("x").unwrap().as_f64(), Some(-52.5));
+        assert_eq!(beam.get("width").unwrap().as_f64(), Some(1015.0));
     }
 
     /// 軸組材は、位置と見付け幅まで壁の計算書に残す（釘の縦列と縁端距離が
@@ -3385,7 +3439,9 @@ mod tests {
                     "柱".to_string(),
                     "縦材".to_string(),
                     "X = 0".to_string(),
-                    "105".to_string()
+                    "105".to_string(),
+                    // 上下の横架材（材心 Y = 0・3,000、見付け 105）の外面まで。
+                    "Y = -52.5 〜 3,052.5".to_string()
                 ]
             )
         );
@@ -3397,11 +3453,14 @@ mod tests {
                     "間柱".to_string(),
                     "縦材".to_string(),
                     "X = 455".to_string(),
-                    "30".to_string()
+                    "30".to_string(),
+                    "Y = -52.5 〜 3,052.5".to_string()
                 ]
             )
         );
         assert_eq!(rows[3].0, "横架材");
+        // 横架材は両端の柱（材心 X = 0・910、見付け 105）の外面まで伸びる。
+        assert_eq!(rows[3].1[4], "X = -52.5 〜 962.5");
         assert_eq!(rows[4].1[2], "Y = 1,820");
         assert_eq!(rows[4].0, "継目の材");
     }
@@ -3750,7 +3809,12 @@ mod tests {
         // 等間隔でなくても、壁の中に 1 本でも立っていれば中間材あり。
         assert!(wall(
             910.0,
-            Frame::new(vec![frame::Member::new(frame::Kind::Stud, 300.0, 45.0)])
+            Frame::new(vec![frame::Member::new(
+                frame::Kind::Stud,
+                300.0,
+                45.0,
+                (0.0, 3000.0),
+            )])
         )
         .has_intermediate_stud());
     }

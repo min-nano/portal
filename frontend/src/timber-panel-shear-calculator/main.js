@@ -56,6 +56,7 @@ import {
   capturePanel,
   defaultSaveName,
   emptyFormData,
+  fitEnds,
   formSignature,
   indexAfterRemoval,
   makeMember,
@@ -293,6 +294,9 @@ function rebuildFrame() {
 function redrawFrame() {
   const wall = currentWall();
   if (!wall) return;
+  // 材端を空にした材（と、足したばかりの材）に既定の材端を入れてから描く
+  // ＝横架材なら両端の柱の外面まで、柱・間柱なら上下の横架材の外面まで。
+  wall.frame = fitEnds(wall.frame, wall);
   renderFrameMembers(document, wall.frame);
   scheduleCalculate();
 }

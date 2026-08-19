@@ -62,6 +62,10 @@ export function findKind(value) {
  * 位置は材心（壁の左下が原点。縦材は X、横材は Y）で、見付け幅は面材の側
  * から見た材の幅。釘の縦列の位置も、適用範囲 3.3(1)④ の縁端距離も、
  * ここから決まる。種別は図の勝ち負けと、足すときの既定を決める。
+ *
+ * 材端（from・to）は材の長さの方向の位置（縦材は Y、横材は X）で、図に
+ * 描く長さを決める。入っていなければ fitEnds が既定（直交する材の外面まで
+ * ＝横架材なら両端の柱の外面まで）を入れる。
  */
 export function makeMember(overrides) {
   const member = overrides || {};
@@ -76,8 +80,55 @@ export function makeMember(overrides) {
     label: String(member.label || '') || kind.text,
     position: Number(member.position) || 0,
     width: Number(member.width) || kind.width,
+    ...(Number.isFinite(Number(member.from)) && member.from !== ''
+      ? { from: Number(member.from) }
+      : {}),
+    ...(Number.isFinite(Number(member.to)) && member.to !== ''
+      ? { to: Number(member.to) }
+      : {}),
     ...(overrides && overrides.memberId ? { memberId: overrides.memberId } : {}),
   };
+}
+
+/**
+ * 既定の材端（壁の端と、直交する材のいちばん外の面の、外側のほう）。
+ *
+ * 在来軸組の納まりのとおり、横架材は両端の柱の外面まで伸び、柱・間柱は
+ * 上下の横架材の外面まで伸びる。計算実装（wasm）の Frame::default_ends と
+ * 同じ規則（画面で 1 本足したときに、その場で同じ材端を入れるためにここにも
+ * 置く）。
+ */
+export function defaultEnds(members, direction, wall) {
+  const wallWidth = Number((wall || {}).width) || DEFAULT_WALL_WIDTH;
+  const wallHeight = Number((wall || {}).height) || DEFAULT_WALL_HEIGHT;
+  const ends = direction === 'horizontal' ? [0, wallWidth] : [0, wallHeight];
+  (members || [])
+    .filter((member) => member.direction !== direction)
+    .forEach((member) => {
+      const half = (Number(member.width) || 0) / 2;
+      const position = Number(member.position) || 0;
+      ends[0] = Math.min(ends[0], position - half);
+      ends[1] = Math.max(ends[1], position + half);
+    });
+  return ends;
+}
+
+/**
+ * 材端が入っていない軸組材に、既定の材端を入れる。
+ *
+ * 入っている材端はそのまま（まぐさや窓台のように、途中で終わる材）。
+ */
+export function fitEnds(members, wall) {
+  const list = members || [];
+  return list.map((member) => {
+    if (Number.isFinite(member.from) && Number.isFinite(member.to)) return member;
+    const [from, to] = defaultEnds(list, member.direction, wall);
+    return {
+      ...member,
+      from: Number.isFinite(member.from) ? member.from : from,
+      to: Number.isFinite(member.to) ? member.to : to,
+    };
+  });
 }
 
 /**
@@ -100,7 +151,8 @@ export function defaultFrame(width, height, studPitch) {
   [0, wallHeight].forEach((position) => {
     members.push(makeMember({ kind: 'beam', position }));
   });
-  return members;
+  // 材端は既定（横架材は両端の柱の外面まで、柱・間柱は上下の横架材の外面まで）。
+  return fitEnds(members, { width: wallWidth, height: wallHeight });
 }
 
 /**
@@ -111,7 +163,12 @@ export function defaultFrame(width, height, studPitch) {
  */
 export function makeFrame(members, wall) {
   if (!Array.isArray(members)) return defaultFrame((wall || {}).width, (wall || {}).height);
-  return members.map((member) => makeMember(member));
+  // 材端を持たない形（材端を入れる前の版）で保存された入力は、ここで
+  // 既定の材端（直交する材の外面まで）を入れる。
+  return fitEnds(
+    members.map((member) => makeMember(member)),
+    wall
+  );
 }
 
 /**

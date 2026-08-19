@@ -7,6 +7,7 @@ import {
   formSignature,
   indexAfterRemoval,
   defaultFrame,
+  fitEnds,
   makeFrame,
   makeMember,
   makePanel,
@@ -122,6 +123,25 @@ describe('emptyFormData / makeWall / makePanel', () => {
       position: 1820,
       width: 105,
     });
+  });
+
+  it('材端の既定は、直交する材の外面まで（横架材は柱の外面まで伸びる）', () => {
+    const frame = fitEnds(
+      [
+        makeMember({ kind: 'column', position: 0 }),
+        makeMember({ kind: 'column', position: 910 }),
+        makeMember({ kind: 'beam', position: 0 }),
+        // 材端を入れた材は、その長さのまま（開口の幅だけのまぐさ）。
+        makeMember({ kind: 'beam', label: 'まぐさ', position: 2000, from: 300, to: 700 }),
+      ],
+      { width: 910, height: 2900 }
+    );
+
+    // 横架材は両端の柱（見付け 105）の外面まで。
+    expect([frame[2].from, frame[2].to]).toEqual([-52.5, 962.5]);
+    // 柱は下の横架材の外面から壁の上端まで（この軸組には上の横架材が無い）。
+    expect([frame[0].from, frame[0].to]).toEqual([-52.5, 2900]);
+    expect([frame[3].from, frame[3].to]).toEqual([300, 700]);
   });
 
   it('等間隔の軸組は、両端の柱・間柱・上下の横架材でできる', () => {
@@ -298,9 +318,12 @@ describe('mergeFormData', () => {
       ],
     });
 
+    // 材端を書いていない材には、既定の材端（直交する材の外面まで）が入る。
     expect(data.walls[0].frame).toEqual([
-      { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120 },
-      { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
+      { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120,
+        from: 0, to: 2900 },
+      { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105,
+        from: -60, to: 910 },
     ]);
     // 全て消した状態は、そのまま空で扱う（既定に戻さない）。
     expect(mergeFormData({ walls: [{ frame: [], panels: [{}] }] }).walls[0].frame)

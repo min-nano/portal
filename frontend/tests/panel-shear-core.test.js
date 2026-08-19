@@ -200,8 +200,8 @@ describe('計算実装（wasm）', () => {
     const pieces = (label) =>
       wall.wallDiagram.members.filter((member) => member.label === label);
 
-    // 横架材（材心 Y = 0）は左から右まで通る。
-    expect(pieces('横架材')[0].width).toBe(910);
+    // 横架材（材心 Y = 0）は、両端の柱の外面（見付け 105 の半分ずつ外）まで。
+    expect([pieces('横架材')[0].x, pieces('横架材')[0].width]).toEqual([-52.5, 910 + 105]);
     // 柱は横架材に負けるので、上下の横架材のあいだだけになる。
     const column = pieces('柱')[0];
     expect([column.y, column.height]).toEqual([52.5, 2900 - 105]);
@@ -231,7 +231,12 @@ describe('計算実装（wasm）', () => {
       label: '間柱',
       position: 455,
       width: 45,
+      // 材端は既定（上下の横架材の外面まで）。
+      from: -52.5,
+      to: 2952.5,
     });
+    // 横架材は両端の柱（材心 X = 0・1,820、見付け 105）の外面まで伸びる。
+    expect([frame[5].from, frame[5].to]).toEqual([-52.5, 1872.5]);
   });
 
   it('釘配列図の範囲と目盛も返す（計算書 PDF と同じもの）', async () => {

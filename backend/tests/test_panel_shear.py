@@ -377,8 +377,9 @@ def test_the_frame_members_are_cut_by_the_ones_that_win():
     members = panel_shear.compute_all(data)["walls"][0]["wallDiagram"]["members"]
     pieces = lambda label: [m for m in members if m["label"] == label]  # noqa: E731
 
-    # 横架材（材心 Y = 0）は左から右まで通る。
-    assert pieces("横架材")[0]["width"] == 910
+    # 横架材（材心 Y = 0）は、両端の柱の外面（見付け 105 の半分ずつ外）まで。
+    beam = pieces("横架材")[0]
+    assert (beam["x"], beam["width"]) == (-52.5, 910 + 105)
     # 柱は横架材に負けるので、上下の横架材のあいだだけになる。
     column = pieces("柱")[0]
     assert (column["y"], column["height"]) == (52.5, 3000 - 105)
@@ -774,7 +775,10 @@ def test_pdf_prints_the_wall_calculation():
     # 軸組材（釘がどの材のどこに刺さるか＝軸材の縁端距離の根拠）。
     assert "材心の位置 [mm]" in text
     assert "見付け幅 [mm]" in text
+    assert "材端の位置 [mm]" in text
     assert "間柱" in text
+    # 横架材は両端の柱（材心 X = 0・910、見付け 105）の外面まで伸びる。
+    assert "X = -52.5 〜 962.5" in text
     # 判定（適用範囲 3.3(1)① の上限と、④のへりあき・縁端距離、
     # 面材のせん断破壊・せん断座屈）。
     assert "13.7200" in text
@@ -886,6 +890,9 @@ def test_the_position_of_a_panel_travels_with_the_saved_pdf():
         "label": "間柱",
         "position": 455,
         "width": 30,
+        # 材端も戻る（既定は上下の横架材の外面まで）。
+        "from": -52.5,
+        "to": 3052.5,
     }
 
 

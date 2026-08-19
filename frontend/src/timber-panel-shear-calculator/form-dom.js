@@ -85,6 +85,9 @@ export function readFrameMembers(root) {
       label: field('label').value.trim(),
       position: numberOf(field('position')),
       width: numberOf(field('width')),
+      // 材端は空にできる（空にすると既定＝直交する材の外面まで戻る）。
+      from: optionalNumberOf(field('from')),
+      to: optionalNumberOf(field('to')),
     };
   });
 }
@@ -208,6 +211,24 @@ function buildFrameMember(document_, member, index) {
       type: 'number',
       unit: 'mm',
       value: member.width,
+    })
+  );
+  // 材端（材の長さの方向。縦材は Y、横材は X）。既定は直交する材の外面まで
+  // ＝横架材なら両端の柱の外面まで伸びる。
+  row.appendChild(
+    field('from', {
+      label: '材端（始め）',
+      type: 'number',
+      unit: 'mm',
+      value: member.from,
+    })
+  );
+  row.appendChild(
+    field('to', {
+      label: '材端（終わり）',
+      type: 'number',
+      unit: 'mm',
+      value: member.to,
     })
   );
 

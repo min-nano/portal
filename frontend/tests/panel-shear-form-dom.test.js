@@ -142,12 +142,18 @@ const WALL = {
   width: 910,
   // 軸組材は 1 本ずつ自由な位置に入れる（釘の縦列も縁端距離もここから）。
   // 種別は、図で材が交わるところの勝ち負けを決める。
+  // 材端は、縦材が上下の横架材の外面まで、横材が両端の柱の外面まで（既定）。
   frame: [
-    { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 105 },
-    { kind: 'stud', direction: 'vertical', label: '間柱', position: 455, width: 45 },
-    { kind: 'column', direction: 'vertical', label: '柱', position: 910, width: 105 },
-    { kind: 'beam', direction: 'horizontal', label: '横架材', position: 0, width: 105 },
-    { kind: 'beam', direction: 'horizontal', label: '横架材', position: 3000, width: 105 },
+    { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 105,
+      from: -52.5, to: 3052.5 },
+    { kind: 'stud', direction: 'vertical', label: '間柱', position: 455, width: 45,
+      from: -52.5, to: 3052.5 },
+    { kind: 'column', direction: 'vertical', label: '柱', position: 910, width: 105,
+      from: -52.5, to: 3052.5 },
+    { kind: 'beam', direction: 'horizontal', label: '横架材', position: 0, width: 105,
+      from: -52.5, to: 962.5 },
+    { kind: 'beam', direction: 'horizontal', label: '横架材', position: 3000, width: 105,
+      from: -52.5, to: 962.5 },
   ],
   panels: [
     { ...PANEL },
@@ -344,11 +350,15 @@ describe('applyWall / readWall', () => {
       {
         ...WALL,
         frame: [
-          { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120 },
+          { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120,
+            from: -52.5, to: 2952.5 },
           // 等間隔でない位置（開口の脇に寄せた縦材）も入れられる。
-          { kind: 'stud', direction: 'vertical', label: '間柱', position: 600, width: 45 },
+          { kind: 'stud', direction: 'vertical', label: '間柱', position: 600, width: 45,
+            from: -52.5, to: 2952.5 },
           // 種別は 4 つから選び、名前は自由（「まぐさ」は横架材として描く）。
-          { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
+          // 材端を入れれば、その長さで描く（まぐさは開口の幅だけ）。
+          { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105,
+            from: 300, to: 700 },
         ],
       },
       OPTIONS
@@ -361,11 +371,20 @@ describe('applyWall / readWall', () => {
     expect(rows[2].querySelector('[data-member-field="kind"]').value).toBe('beam');
     expect(document.getElementById('wallFrameEmpty').hidden).toBe(true);
 
+    expect(rows[2].querySelector('[data-member-field="from"]').value).toBe('300');
+
     expect(readWall(document).frame).toEqual([
-      { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120 },
-      { kind: 'stud', direction: 'vertical', label: '間柱', position: 600, width: 45 },
-      { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
+      { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120,
+        from: -52.5, to: 2952.5 },
+      { kind: 'stud', direction: 'vertical', label: '間柱', position: 600, width: 45,
+        from: -52.5, to: 2952.5 },
+      { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105,
+        from: 300, to: 700 },
     ]);
+
+    // 材端を空にすると、既定（直交する材の外面まで）に戻す印として空で返る。
+    rows[2].querySelector('[data-member-field="from"]').value = '';
+    expect(readWall(document).frame[2].from).toBe('');
   });
 
   it('軸組材が 1 本も無ければ、入れ方を案内する', () => {

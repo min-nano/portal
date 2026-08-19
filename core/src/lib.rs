@@ -337,6 +337,12 @@ mod tests {
         assert_eq!(at(4, "position").as_f64(), Some(1820.0));
         assert_eq!(at(5, "direction").as_str(), Some("horizontal"));
         assert_eq!(at(6, "position").as_f64(), Some(2900.0));
+        // 材端は既定（直交する材の外面まで）。横架材は両端の柱の外面まで
+        // 伸び、柱は上下の横架材の外面まで伸びる。
+        assert_eq!(at(5, "from").as_f64(), Some(-52.5));
+        assert_eq!(at(5, "to").as_f64(), Some(1872.5));
+        assert_eq!(at(0, "from").as_f64(), Some(-52.5));
+        assert_eq!(at(0, "to").as_f64(), Some(2952.5));
     }
 
     #[test]
