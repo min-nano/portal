@@ -6,6 +6,10 @@ import {
   emptyFormData,
   formSignature,
   indexAfterRemoval,
+  defaultFrame,
+  fitEnds,
+  makeFrame,
+  makeMember,
   makePanel,
   makeWall,
   mergeFormData,
@@ -65,17 +69,98 @@ describe('emptyFormData / makeWall / makePanel', () => {
     expect([panel.materialId, panel.gradeId]).toEqual(['', '']);
   });
 
-  it('壁が持つのは軸組（階高・幅・間柱ピッチ）だけ（面材と釘は面材ごと）', () => {
+  it('壁が持つのは軸組（階高・幅・軸組材）だけ（面材と釘は面材ごと）', () => {
     const wall = makeWall();
 
-    // 階高・壁の幅・間柱ピッチは、よくある寸法を入れておく。
+    // 階高・壁の幅は、よくある寸法を入れておく。
     expect(wall.height).toBeGreaterThan(0);
     expect(wall.width).toBeGreaterThan(0);
-    expect(wall.studPitch).toBe(455);
+    // 間柱ピッチは入力ではなくなった（軸組材を等間隔に入れる入り口だけ）。
+    expect(wall.studPitch).toBeUndefined();
+    // 軸組材は 1 本ずつ持つ（両端の柱・@455 の間柱・上下の横架材）。
+    expect(wall.frame.map((member) => [member.label, member.position])).toEqual([
+      ['柱', 0],
+      ['間柱', 455],
+      ['柱', 910],
+      ['横架材', 0],
+      ['横架材', 2900],
+    ]);
     // 中間材の有無は入力しない（間柱ピッチと壁の幅から決まる）。
     expect(wall.hasIntermediateStud).toBeUndefined();
     expect(wall.materialId).toBeUndefined();
     expect(wall.thickness).toBeUndefined();
+  });
+
+  it('軸組材は 1 本ずつ自由な位置に入れる（既定は種別に合わせて埋める）', () => {
+    expect(makeMember({ kind: 'column', position: 0 })).toEqual({
+      kind: 'column',
+      direction: 'vertical',
+      label: '柱',
+      position: 0,
+      width: 105,
+    });
+    // 種別を書かなければ間柱（図の勝ち負けでいちばん弱い側）。
+    expect(makeMember({ position: 600 })).toEqual({
+      kind: 'stud',
+      direction: 'vertical',
+      label: '間柱',
+      position: 600,
+      width: 45,
+    });
+    // 向きは種別のふつうの向き。名前は自由に付けられる。
+    expect(makeMember({ kind: 'beam', label: 'まぐさ', position: 2000 })).toEqual({
+      kind: 'beam',
+      direction: 'horizontal',
+      label: 'まぐさ',
+      position: 2000,
+      width: 105,
+    });
+    // 継目の材は縦にも横にも入るので、向きを書けばそちらが優先される。
+    expect(makeMember({ kind: 'joint', direction: 'horizontal', position: 1820 })).toEqual({
+      kind: 'joint',
+      direction: 'horizontal',
+      label: '継目の材',
+      position: 1820,
+      width: 105,
+    });
+  });
+
+  it('材端の既定は、直交する材の外面まで（横架材は柱の外面まで伸びる）', () => {
+    const frame = fitEnds(
+      [
+        makeMember({ kind: 'column', position: 0 }),
+        makeMember({ kind: 'column', position: 910 }),
+        makeMember({ kind: 'beam', position: 0 }),
+        // 材端を入れた材は、その長さのまま（開口の幅だけのまぐさ）。
+        makeMember({ kind: 'beam', label: 'まぐさ', position: 2000, from: 300, to: 700 }),
+      ],
+      { width: 910, height: 2900 }
+    );
+
+    // 横架材は両端の柱（見付け 105）の外面まで。
+    expect([frame[2].from, frame[2].to]).toEqual([-52.5, 962.5]);
+    // 柱は下の横架材の外面から壁の上端まで（この軸組には上の横架材が無い）。
+    expect([frame[0].from, frame[0].to]).toEqual([-52.5, 2900]);
+    expect([frame[3].from, frame[3].to]).toEqual([300, 700]);
+  });
+
+  it('等間隔の軸組は、両端の柱・間柱・上下の横架材でできる', () => {
+    const frame = defaultFrame(1820, 2900, 455);
+
+    expect(frame.filter((member) => member.direction === 'vertical').map((m) => m.position))
+      .toEqual([0, 455, 910, 1365, 1820]);
+    expect(frame.filter((member) => member.direction === 'horizontal').map((m) => m.position))
+      .toEqual([0, 2900]);
+    // 種別も入る（図の勝ち負けと、足すときの既定に効く）。
+    expect(frame.map((member) => member.kind)).toEqual([
+      'column',
+      'stud',
+      'stud',
+      'stud',
+      'column',
+      'beam',
+      'beam',
+    ]);
   });
 
   it('面材の仕様だけを取り出して、次の面材へ引き継げる', () => {
@@ -176,7 +261,6 @@ describe('mergeFormData', () => {
     expect(data.issuedOn).toBe('2026-08-11');
     expect(data.walls[0].junk).toBeUndefined();
     expect(data.walls[0].height).toBe(3000);
-    expect(data.walls[0].studPitch).toBe(500);
     expect(data.walls[0].panels[0]).toMatchObject({
       panelId: 'pn1',
       panelName: '下段',
@@ -211,10 +295,39 @@ describe('mergeFormData', () => {
     expect(data.walls[0].panels[0].side).toBe('front');
   });
 
-  it('間柱ピッチが無ければ、尺モジュールの既定を入れる', () => {
-    const data = mergeFormData({ walls: [{ panels: [{}] }] });
+  it('軸組材が入っていなければ、尺モジュールの軸組を入れておく', () => {
+    // 読み込んだ計算書は計算実装が軸組材へ読み替え終えているので、ここへ
+    // 一覧の無い内容が来るのは、手で組み立てた入力のときだけ。
+    const data = mergeFormData({ walls: [{ width: 1820, height: 2900, panels: [{}] }] });
 
-    expect(data.walls[0].studPitch).toBe(455);
+    expect(data.walls[0].frame.map((member) => member.position)).toEqual([
+      0, 455, 910, 1365, 1820, 0, 2900,
+    ]);
+  });
+
+  it('軸組材が入っていれば、その位置と見付け幅をそのまま読む', () => {
+    const data = mergeFormData({
+      walls: [
+        {
+          frame: [
+            { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120 },
+            { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105 },
+          ],
+          panels: [{}],
+        },
+      ],
+    });
+
+    // 材端を書いていない材には、既定の材端（直交する材の外面まで）が入る。
+    expect(data.walls[0].frame).toEqual([
+      { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120,
+        from: 0, to: 2900 },
+      { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105,
+        from: -60, to: 910 },
+    ]);
+    // 全て消した状態は、そのまま空で扱う（既定に戻さない）。
+    expect(mergeFormData({ walls: [{ frame: [], panels: [{}] }] }).walls[0].frame)
+      .toEqual([]);
   });
 
   it('名前が空なら通し番号で補う', () => {
@@ -364,6 +477,8 @@ describe('面材と釘の一覧（グレー本 表 3.3.1 / 表 3.3.2）', () => 
     nailDiameter: 2.75,
     // 3.3(1)④「10mm 以上かつ接合具径 d × 5 以上」→ 2.75 × 5 = 13.75mm。
     minEdgeDistance: 13.75,
+    // 同じ ④ の軸材側は「20mm 以上かつ d × 5 以上」→ 20mm。
+    minFrameClearance: 20,
     thickness: 12,
     shearModulus: 0.4,
     k: 0.43,
@@ -410,13 +525,15 @@ describe('面材と釘の一覧（グレー本 表 3.3.1 / 表 3.3.2）', () => 
     });
   });
 
-  it('選んだ釘と、そこから決まるへりあきの最小値を案内する', () => {
+  it('選んだ釘と、そこから決まるへりあき・縁端距離の最小値を案内する', () => {
     const note = nailNote([material], 'plywood12-n50');
 
     expect(note).toContain('鉄丸釘 N-50');
     expect(note).toContain('φ2.75 mm');
     // 3.3(1)④「10mm 以上かつ接合具径 d × 5 以上」→ 2.75 × 5 = 13.75mm。
     expect(note).toContain('13.75 mm 以上');
+    // 軸材の側は「20mm 以上かつ d × 5 以上」なので、この釘では 20mm。
+    expect(note).toContain('軸材の縁端距離は 20 mm 以上');
     // まだ選んでいないときは案内を出さない。
     expect(nailNote([material], '')).toBe('');
   });

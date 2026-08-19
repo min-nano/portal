@@ -34,7 +34,8 @@ const MARKUP = `
       <input type="text" id="wallName">
       <input type="number" id="wallHeight">
       <input type="number" id="wallWidth">
-      <input type="number" id="wallStudPitch">
+      <div id="wallFrameMembers"></div>
+      <p id="wallFrameEmpty" hidden></p>
       <div id="wallPanels"></div>
       <div id="wallError" hidden></div>
       <div id="wallSummary"></div>
@@ -43,6 +44,7 @@ const MARKUP = `
         <p id="wallLayoutNote" hidden></p>
         <table><thead id="wallLayoutHead"></thead><tbody id="wallLayoutBody"></tbody></table>
       </div>
+      <table><thead id="wallFrameHead"></thead><tbody id="wallFrameBody"></tbody></table>
       <table><thead id="wallSpecHead"></thead><tbody id="wallSpecBody"></tbody></table>
       <table><thead id="wallPanelHead"></thead><tbody id="wallPanelBody"></tbody></table>
       <table><tbody id="wallStepsBody"></tbody></table>
@@ -138,7 +140,21 @@ const WALL = {
   wallName: 'グレー本 3.3 の計算例',
   height: 3000,
   width: 910,
-  studPitch: 455,
+  // 軸組材は 1 本ずつ自由な位置に入れる（釘の縦列も縁端距離もここから）。
+  // 種別は、図で材が交わるところの勝ち負けを決める。
+  // 材端は、縦材が上下の横架材の外面まで、横材が両端の柱の外面まで（既定）。
+  frame: [
+    { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 105,
+      from: -52.5, to: 3052.5 },
+    { kind: 'stud', direction: 'vertical', label: '間柱', position: 455, width: 45,
+      from: -52.5, to: 3052.5 },
+    { kind: 'column', direction: 'vertical', label: '柱', position: 910, width: 105,
+      from: -52.5, to: 3052.5 },
+    { kind: 'beam', direction: 'horizontal', label: '横架材', position: 0, width: 105,
+      from: -52.5, to: 962.5 },
+    { kind: 'beam', direction: 'horizontal', label: '横架材', position: 3000, width: 105,
+      from: -52.5, to: 962.5 },
+  ],
   panels: [
     { ...PANEL },
     {
@@ -181,6 +197,12 @@ const PANEL_REPORT = {
       { value: 600, label: '600' },
     ],
     axis: { x0: 455, y0: 305, xLabel: 'x0 = 455.0', yLabel: 'y0 = 305.0' },
+    // この面材にかかる軸組材（面材の左下が原点）。釘との位置関係を図に出す。
+    members: [
+      { label: '柱', direction: 'vertical', x: -52.5, y: 0, width: 105, height: 610 },
+      { label: '間柱', direction: 'vertical', x: 432.5, y: 0, width: 45, height: 610 },
+      { label: '横架材', direction: 'horizontal', x: 0, y: -52.5, width: 910, height: 105 },
+    ],
   },
   summary: [
     { key: 'Ixy', unit: 'mm²/mm²', value: '0.888868' },
@@ -200,6 +222,11 @@ const WALL_REPORT = {
   panelReports: [
     PANEL_REPORT,
     { ok: false, panelId: 'pn2', panelName: '上段', error: '釘座標が入力されていません。' },
+  ],
+  frameColumns: ['軸組材', '向き', '材心の位置 [mm]', '見付け幅 [mm]'],
+  frame: [
+    { label: '柱', cells: ['縦材', 'X = 0', '105'] },
+    { label: '間柱', cells: ['縦材', 'X = 455', '45'] },
   ],
   specColumns: ['面材', 't [mm]', 'ΔPv [kN]'],
   specs: [
@@ -230,6 +257,11 @@ const WALL_REPORT = {
   wallDiagram: {
     wallWidth: 910,
     wallHeight: 3000,
+    // 壁の軸組材（壁の左下が原点）。面材に重ねて描く。
+    members: [
+      { label: '柱', direction: 'vertical', x: -52.5, y: 0, width: 105, height: 3000 },
+      { label: '横架材', direction: 'horizontal', x: 0, y: -52.5, width: 910, height: 105 },
+    ],
     minX: 0,
     minY: 0,
     maxX: 910,
@@ -296,22 +328,71 @@ describe('applyWall / readWall', () => {
     expect(panel.thickness).toBe(12);
   });
 
-  it('壁の間柱ピッチと、面材の張る面・占有領域を読み戻せる', () => {
+  it('面材の張る面・占有領域を読み戻せる', () => {
     applyWall(
       document,
       {
         ...WALL,
-        studPitch: 500,
         panels: [{ ...PANEL, side: 'back', left: 455, right: 1365 }],
       },
       OPTIONS
     );
 
     const wall = readWall(document);
-    expect(wall.studPitch).toBe(500);
     expect(wall.panels[0].side).toBe('back');
     expect(wall.panels[0].left).toBe(455);
     expect(wall.panels[0].right).toBe(1365);
+  });
+
+  it('軸組材は 1 本 = 1 行で出し、そのまま読み戻せる', () => {
+    applyWall(
+      document,
+      {
+        ...WALL,
+        frame: [
+          { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120,
+            from: -52.5, to: 2952.5 },
+          // 等間隔でない位置（開口の脇に寄せた縦材）も入れられる。
+          { kind: 'stud', direction: 'vertical', label: '間柱', position: 600, width: 45,
+            from: -52.5, to: 2952.5 },
+          // 種別は 4 つから選び、名前は自由（「まぐさ」は横架材として描く）。
+          // 材端を入れれば、その長さで描く（まぐさは開口の幅だけ）。
+          { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105,
+            from: 300, to: 700 },
+        ],
+      },
+      OPTIONS
+    );
+
+    const rows = document.querySelectorAll('[data-member-index]');
+    expect(rows).toHaveLength(3);
+    expect(rows[1].querySelector('[data-member-field="label"]').value).toBe('間柱');
+    expect(rows[1].querySelector('[data-member-field="position"]').value).toBe('600');
+    expect(rows[2].querySelector('[data-member-field="kind"]').value).toBe('beam');
+    expect(document.getElementById('wallFrameEmpty').hidden).toBe(true);
+
+    expect(rows[2].querySelector('[data-member-field="from"]').value).toBe('300');
+
+    expect(readWall(document).frame).toEqual([
+      { kind: 'column', direction: 'vertical', label: '柱', position: 0, width: 120,
+        from: -52.5, to: 2952.5 },
+      { kind: 'stud', direction: 'vertical', label: '間柱', position: 600, width: 45,
+        from: -52.5, to: 2952.5 },
+      { kind: 'beam', direction: 'horizontal', label: 'まぐさ', position: 2000, width: 105,
+        from: 300, to: 700 },
+    ]);
+
+    // 材端を空にすると、既定（直交する材の外面まで）に戻す印として空で返る。
+    rows[2].querySelector('[data-member-field="from"]').value = '';
+    expect(readWall(document).frame[2].from).toBe('');
+  });
+
+  it('軸組材が 1 本も無ければ、入れ方を案内する', () => {
+    applyWall(document, { ...WALL, frame: [] }, OPTIONS);
+
+    expect(document.querySelectorAll('[data-member-index]')).toHaveLength(0);
+    expect(document.getElementById('wallFrameEmpty').hidden).toBe(false);
+    expect(readWall(document).frame).toEqual([]);
   });
 });
 
@@ -595,7 +676,20 @@ describe('renderWallResult', () => {
 
     const first = document.querySelectorAll('[data-panel-index]')[0];
     expect(first.querySelectorAll('.result-box')).toHaveLength(3);
-    expect(first.querySelector('[data-panel-diagram]').hasAttribute('hidden')).toBe(false);
+    const diagram = first.querySelector('[data-panel-diagram]');
+    expect(diagram.hasAttribute('hidden')).toBe(false);
+    // 釘配列図にも、その面材にかかる軸組材を破線で重ねる（釘との位置関係で
+    // へりあきと軸材の縁端距離が図の上で見える）。
+    const members = [...diagram.querySelectorAll('rect')].filter((rect) =>
+      rect.getAttribute('stroke-dasharray')
+    );
+    expect(members.map((rect) => rect.querySelector('title').textContent)).toEqual([
+      '柱',
+      '間柱',
+      '横架材',
+    ]);
+    expect(members[0].getAttribute('fill')).toBe('none');
+    expect(diagram.querySelectorAll('circle')).toHaveLength(3);
   });
 
   it('壁内の位置を入れた壁には、面材配列図と面材の一覧を出す', () => {
@@ -605,8 +699,18 @@ describe('renderWallResult', () => {
     expect(document.getElementById('wallLayout').hidden).toBe(false);
     const diagram = document.getElementById('wallLayoutDiagram');
     expect(diagram.hasAttribute('hidden')).toBe(false);
-    // 壁の枠（面ごとに、塗りと線で 2 回）と、面材の枠。
-    expect(diagram.querySelectorAll('rect')).toHaveLength(4);
+    // 壁の枠（面ごとに、塗りと線で 2 回）・面材の枠・軸組材の枠。
+    expect(diagram.querySelectorAll('rect')).toHaveLength(6);
+    // 軸組材は、面材の裏に隠れているものなので塗らずに破線で描く。
+    const members = [...diagram.querySelectorAll('rect')].filter((rect) =>
+      rect.getAttribute('stroke-dasharray')
+    );
+    expect(members).toHaveLength(2);
+    expect(members[0].getAttribute('fill')).toBe('none');
+    expect(members.map((rect) => rect.querySelector('title').textContent)).toEqual([
+      '柱',
+      '横架材',
+    ]);
     expect([...diagram.querySelectorAll('text')].map((t) => t.textContent))
       .toContain('表面（2 枚）');
     // 一覧は、壁の他の表と同じ組み方（見出し ＋ 面材ごとの行）。

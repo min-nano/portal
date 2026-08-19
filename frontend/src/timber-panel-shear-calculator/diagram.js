@@ -43,6 +43,16 @@ export function buildDiagram(nails, diagram) {
       width: panelWidth * scale,
       height: panelHeight * scale,
     },
+    // この面材にかかる軸組材。釘との位置関係が見えるので、へりあき（面材の
+    // 縁から釘まで）と軸材の縁端距離（釘から材の縁まで）を図で確かめられる。
+    members: (diagram.members || []).map((member) => ({
+      label: member.label,
+      direction: member.direction,
+      x: mapX(member.x),
+      y: mapY(member.y + member.height),
+      width: member.width * scale,
+      height: member.height * scale,
+    })),
     points: nails.map((nail, index) => ({
       index: index + 1,
       cx: mapX(nail.x),
@@ -129,6 +139,16 @@ export function buildWallDiagram(diagram) {
       },
       widthLabel: `W = ${wallWidth.toLocaleString('ja-JP')} mm`,
       heightLabel: `H = ${wallHeight.toLocaleString('ja-JP')} mm`,
+      // 軸組材は面材の下に敷いて描く（面材の縁がどの材に載っているのか、
+      // ＝釘がどこに刺さるのかが図で分かる）。表と裏で同じ軸組。
+      members: (diagram.members || []).map((member) => ({
+        label: member.label,
+        direction: member.direction,
+        x: mapX(member.x),
+        y: mapY(member.y + member.height),
+        width: member.width * scale,
+        height: member.height * scale,
+      })),
       panels: side.panels.map((panel) => ({
         label: panel.label,
         sizeLabel: panel.sizeLabel,

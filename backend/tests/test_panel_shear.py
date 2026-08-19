@@ -17,7 +17,8 @@ import io
 import json
 
 import pytest
-from pdfminer.high_level import extract_text
+from pdfminer.high_level import extract_pages, extract_text
+from pdfminer.layout import LTTextContainer
 
 from app import nail_core, panel_shear
 
@@ -101,7 +102,6 @@ def test_normalize_defaults_a_panel_to_the_front_side():
     panel = data["walls"][0]["panels"][0]
     assert panel["side"] == "front"
     assert panel["edgeDistance"] == nail_core.config()["defaultEdgeDistance"]
-    assert data["walls"][0]["studPitch"] == nail_core.config()["defaultStudPitch"]
 
 
 def test_normalize_keeps_the_edge_distance_of_each_panel():
@@ -184,7 +184,7 @@ def test_compute_all_keeps_the_layout_in_the_inputs():
     inputs = {row["label"]: row["value"] for row in wall["panelReports"][0]["inputs"]}
 
     assert "四周打ち" in inputs["釘配列"]
-    assert "間柱 @455" in inputs["釘配列"]
+    assert "中間の縦材" in inputs["釘配列"]
     assert "釘 @150" in inputs["釘配列"]
     assert "へりあき 10 mm" in inputs["釘配列"]
     assert inputs["壁内の配置"] == "表面　左下 (0, 0) 〜 右上 (910, 610) mm"
@@ -294,6 +294,120 @@ def test_the_edge_distance_check_follows_the_nail_diameter():
         panel["edgeDistance"] = 15.25
     widened = panel_shear.compute_all(data)["walls"][0]
     assert widened["edgeDistanceOk"] is True
+
+
+def test_the_frame_clearance_check_follows_the_member_width():
+    """適用範囲 3.3(1)④「軸材の縁端距離は 20mm 以上かつ接合具径 d ×5 以上」。
+
+    計算例の間柱は 30 × 105（図 3.3.10）。中間の間柱に打つ釘は材心に来るので
+    縁端距離は 15mm しか取れず、20mm に届かない（上段の 910 × 910 には @455 の
+    間柱がかかる）。間柱を 45 にすれば 22.5mm となって通る。
+    """
+    data = panel_shear.example_wall_data()
+
+    report = panel_shear.compute_all(data)["walls"][0]
+
+    assert report["frameClearanceOk"] is False
+    check = next(c for c in report["checks"] if "縁端距離" in c["label"])
+    assert "最小 縁端距離 15 mm < 20 mm" in check["value"]
+    assert "中間の縦材（X = 455 mm） ／ 間柱（見付け 30 mm）" in check["value"]
+
+    # 間柱を 45 mm に太らせれば 22.5 mm となって通る。
+    for member in data["walls"][0]["frame"]:
+        if member["label"] == "間柱":
+            member["width"] = 45
+    assert panel_shear.compute_all(data)["walls"][0]["frameClearanceOk"] is True
+
+    # 面材の縁を受ける材（Y = 1820 の受け材）を外すと、そこには釘を打てない。
+    data["walls"][0]["frame"] = [
+        member for member in data["walls"][0]["frame"] if member["position"] != 1820
+    ]
+    without = panel_shear.compute_all(data)["walls"][0]
+    assert without["frameClearanceOk"] is False
+    assert "軸組材なし" in next(
+        c for c in without["checks"] if "縁端距離" in c["label"]
+    )["value"]
+
+
+def test_the_frame_members_are_part_of_the_wall():
+    """軸組材は壁の入力で、1 本ずつ位置と見付け幅を持つ。
+
+    軸組材を持たない前の版の入力（間柱ピッチだけ）は、当時の前提のまま
+    軸組材へ読み替える（壁の両端に柱・ピッチで間柱・上下に横架材、それに
+    面材の継目の材）。
+    """
+    data = panel_shear.normalize_data(
+        {
+            "walls": [
+                {
+                    "width": 1820,
+                    "height": 2900,
+                    "studPitch": 910,
+                    "panels": [{"left": 0, "bottom": 0, "right": 1820, "top": 910}],
+                }
+            ]
+        }
+    )
+
+    frame = data["walls"][0]["frame"]
+    vertical = [
+        (m["label"], m["position"], m["width"])
+        for m in frame
+        if m["direction"] == "vertical"
+    ]
+    assert vertical == [("柱", 0, 105), ("間柱", 910, 45), ("柱", 1820, 105)]
+    # 面材の継目（Y = 910）にも、当時の前提どおり材が立つ。
+    assert ("継目の材", 910, 105) in [
+        (m["label"], m["position"], m["width"]) for m in frame
+    ]
+
+    # 軸組材を等間隔で組み立てる入り口も、計算実装が持っている。
+    even = nail_core.call({"op": "frame", "data": {"width": 910, "height": 2900}})
+    assert [member["position"] for member in even["frame"]] == [0, 455, 910, 0, 2900]
+
+
+def test_the_frame_members_are_cut_by_the_ones_that_win():
+    """図の軸組材は、交わるところを種別の勝ち負けで切る。
+
+    在来軸組の納まりのとおり「横架材 ＞ 柱 ＞ 継目の材 ＞ 間柱」で、勝った
+    材が通り、負けた材はその手前で止まる（1 本が 2 片以上に分かれる）。
+    """
+    data = panel_shear.example_wall_data()
+
+    members = panel_shear.compute_all(data)["walls"][0]["wallDiagram"]["members"]
+    pieces = lambda label: [m for m in members if m["label"] == label]  # noqa: E731
+
+    # 横架材（材心 Y = 0）は、両端の柱の外面（見付け 105 の半分ずつ外）まで。
+    beam = pieces("横架材")[0]
+    assert (beam["x"], beam["width"]) == (-52.5, 910 + 105)
+    # 柱は横架材に負けるので、上下の横架材のあいだだけになる。
+    column = pieces("柱")[0]
+    assert (column["y"], column["height"]) == (52.5, 3000 - 105)
+    # 受け材（継目の材）は柱に負けて、柱と柱のあいだだけになる。
+    joint = pieces("受け材")[0]
+    assert (joint["x"], joint["width"]) == (52.5, 910 - 105)
+    # 間柱は横架材にも受け材にも負けるので、切られて 3 片になる。
+    stud = pieces("間柱")
+    assert [(piece["y"], piece["height"]) for piece in stud] == [
+        (52.5, 1767.5 - 52.5),
+        (1872.5, 2677.5 - 1872.5),
+        (2782.5, 2947.5 - 2782.5),
+    ]
+    assert all(piece["width"] == 30 for piece in stud)
+
+
+def test_the_frame_clearance_is_reported_for_every_panel():
+    """面材のページにも、その面材でいちばん厳しい釘列の縁端距離を残す。"""
+    data = panel_shear.normalize_data(make_data())
+
+    wall = panel_shear.compute_all(data)["walls"][0]
+
+    inputs = {row["label"]: row["value"] for row in wall["panelReports"][0]["inputs"]}
+    # 910 × 610 を壁の左下に張るので、左右の縁は柱・下の縁は横架材。上の縁
+    # （Y = 610）を受ける材は入れていないので、そこには釘を打てない。
+    assert inputs["軸材の縁端距離（釘から軸組材の縁まで）"] == (
+        "最小 —（上の縁 ／ 軸組材なし）"
+    )
 
 
 def test_the_edge_distance_is_measured_from_the_nails():
@@ -550,8 +664,10 @@ def test_pdf_has_one_page_per_panel_and_one_per_wall():
     )
     pdf_bytes = panel_shear.build_pdf(data, panel_shear.validate(data))
 
-    # ページ区切り（改ページ）で数える。配列図 1 ＋ 面材 2 ＋ 壁 1 枚。
-    assert extract_text(io.BytesIO(pdf_bytes)).count("\x0c") == 4
+    # ページ区切り（改ページ）で数える。配列図 1 ＋ 面材 2 ＋ 壁 2
+    # （壁のページに載る量は面材の枚数で変わるので、入りきらない判定は
+    # 「（続き）」のページへ送られる）。
+    assert extract_text(io.BytesIO(pdf_bytes)).count("\x0c") == 5
 
 
 def test_pdf_prints_the_inputs_and_the_results():
@@ -581,15 +697,51 @@ def test_pdf_puts_the_nail_arrangement_pages_before_their_wall():
 
     pages = extract_text(io.BytesIO(pdf_bytes)).split("\x0c")[:-1]
 
-    assert len(pages) == 4  # 配列図 1 ＋ 面材 2 枚 ＋ 壁 1 枚
+    assert len(pages) == 5  # 配列図 1 ＋ 面材 2 枚 ＋ 壁 2（判定は続きのページ）
     assert panel_shear._LAYOUT_TITLE in pages[0]
     assert all(panel_shear._TITLE in page for page in pages[1:3])
-    assert panel_shear._WALL_TITLE in pages[3]
+    assert all(panel_shear._WALL_TITLE in page for page in pages[3:])
     # どの壁のどの面材かが、面材のページからも読める。
     assert "面材 1 / 2" in pages[1]
     assert "壁 1 / 1" in pages[1]
     # 通しのページ番号は、すべての節を続けて数える。
-    assert "4 / 4" in pages[3]
+    assert "5 / 5" in pages[4]
+
+
+def test_a_wall_with_many_panels_continues_onto_another_page():
+    """壁のページに載る量は、面材の枚数で変わる（面材ごとの表が 3 つある）。
+
+    入りきらなければ「（続き）」のページへ送り、表や判定が脚注に重ならない
+    ようにする。どのページだけを見てもどの壁の続きかが分かるよう、見出しと
+    壁の名前は続きのページにも出す。
+    """
+    data = make_data()
+    data["walls"][0]["panels"] = [
+        make_panel(
+            panelId=f"w1-p{index}",
+            panelName=f"面材{index + 1}",
+            bottom=610 * index,
+            top=610 * (index + 1),
+        )
+        for index in range(6)
+    ]
+    reports = panel_shear.validate(data)
+    pdf_bytes = panel_shear.build_pdf(data, reports)
+
+    pages = extract_text(io.BytesIO(pdf_bytes)).split("\x0c")[:-1]
+    wall_pages = [page for page in pages if panel_shear._WALL_TITLE in page]
+
+    assert len(wall_pages) >= 2
+    assert "（続き）" in wall_pages[1]
+    assert all("○○邸 新築工事" in page for page in wall_pages)
+    # 判定は 1 つも落ちない（節ごと続きのページへ送られる）。
+    for check in reports["walls"][0]["checks"]:
+        assert check["label"] in "".join(wall_pages)
+    # 本文が脚注やページ番号の下（余白）へこぼれていない。
+    for page in extract_pages(io.BytesIO(pdf_bytes)):
+        for element in page:
+            if isinstance(element, LTTextContainer):
+                assert element.y0 >= panel_shear._MARGIN, element.get_text()
 
 
 def test_pdf_prints_the_wall_calculation():
@@ -597,7 +749,8 @@ def test_pdf_prints_the_wall_calculation():
     reports = panel_shear.validate(data)
     pdf_bytes = panel_shear.build_pdf(data, reports)
 
-    text = extract_text(io.BytesIO(pdf_bytes)).split("\x0c")[3]
+    # 壁の計算は 1 ページに収まるとは限らない（面材が増えるほど表が伸びる）。
+    text = "".join(extract_text(io.BytesIO(pdf_bytes)).split("\x0c")[3:])
     wall = reports["walls"][0]
 
     assert "グレー本 3.3 の計算例" in text
@@ -619,8 +772,17 @@ def test_pdf_prints_the_wall_calculation():
     # 面材のせん断破壊・せん断座屈の検定（式 3.3.8〜3.3.11）。
     assert "τcr [N/mm²]" in text
     assert wall["buckling"][0]["cells"][-2] in text  # τcr
-    # 判定（適用範囲 3.3(1)① の上限と、せん断破壊・せん断座屈）。
+    # 軸組材（釘がどの材のどこに刺さるか＝軸材の縁端距離の根拠）。
+    assert "材心の位置 [mm]" in text
+    assert "見付け幅 [mm]" in text
+    assert "材端の位置 [mm]" in text
+    assert "間柱" in text
+    # 横架材は両端の柱（材心 X = 0・910、見付け 105）の外面まで伸びる。
+    assert "X = -52.5 〜 962.5" in text
+    # 判定（適用範囲 3.3(1)① の上限と、④のへりあき・縁端距離、
+    # 面材のせん断破壊・せん断座屈）。
     assert "13.7200" in text
+    assert "軸材の縁端距離" in text
     assert text.count("OK") >= 3
 
 
@@ -642,13 +804,14 @@ def test_pdf_puts_the_arrangement_drawing_in_front_of_the_wall():
 
     pages = extract_text(io.BytesIO(pdf_bytes)).split("\x0c")[:-1]
 
-    # 配列図 1 ＋ 面材 2 ＋ 壁 1。
-    assert len(pages) == 4
+    # 配列図 1 ＋ 面材 2 ＋ 壁 2（入りきらない判定は続きのページへ）。
+    assert len(pages) == 5
     assert panel_shear._LAYOUT_TITLE in pages[0]
     assert all(panel_shear._TITLE in page for page in pages[1:3])
     assert panel_shear._WALL_TITLE in pages[3]
+    assert panel_shear._WALL_TITLE + "（続き）" in pages[4]
     # 通しのページ番号も、配列図を含めて数える。
-    assert "4 / 4" in pages[3]
+    assert "5 / 5" in pages[4]
 
 
 def test_the_arrangement_page_shows_where_every_panel_goes():
@@ -720,7 +883,17 @@ def test_the_position_of_a_panel_travels_with_the_saved_pdf():
     assert (panel["right"], panel["top"]) == (910, 2730)
     assert panel["side"] == "front"
     # 壁の軸組（間柱ピッチ）も、そのまま戻る。
-    assert parsed["walls"][0]["studPitch"] == 455
+    # 軸組材も、種別・向き・位置・見付け幅のまま保存されて戻る。
+    assert parsed["walls"][0]["frame"][1] == {
+        "kind": "stud",
+        "direction": "vertical",
+        "label": "間柱",
+        "position": 455,
+        "width": 30,
+        # 材端も戻る（既定は上下の横架材の外面まで）。
+        "from": -52.5,
+        "to": 3052.5,
+    }
 
 
 def test_pdf_marks_a_wall_over_the_upper_limit_as_ng():
@@ -728,7 +901,8 @@ def test_pdf_marks_a_wall_over_the_upper_limit_as_ng():
     data["walls"][0]["width"] = 300
     reports = panel_shear.validate(data)
 
-    text = extract_text(io.BytesIO(panel_shear.build_pdf(data, reports))).split("\x0c")[3]
+    # 判定は壁のページの最後（入りきらなければ「（続き）」のページ）に出る。
+    text = extract_text(io.BytesIO(panel_shear.build_pdf(data, reports))).split("\x0c")[-2]
 
     assert reports["walls"][0]["withinLimit"] is False
     assert "NG" in text

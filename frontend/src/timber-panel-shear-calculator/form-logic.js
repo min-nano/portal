@@ -10,8 +10,8 @@
 // 配置・釘の間隔・へりあきで調整するため。
 //
 // 面材と釘の仕様も面材ごとの入力で、1 枚の壁の中で混在してよい（上半分は
-// N50、下半分は CN50 のような張り分け）。壁が持つのは階高・幅と中間材の
-// 有無だけ。
+// N50、下半分は CN50 のような張り分け）。壁が持つのは、面材を張る軸組
+// （階高・幅と、1 本ずつ位置を入れる軸組材）だけ。
 //
 // 「保存 / 別名で保存 / 未保存の確認」といったファイル操作の判断と文言は、
 // 構造計算安全証明書 作成ツールと共通なので ../pdf-file-ops.js にある。
@@ -22,9 +22,154 @@ import { buildFileName } from '../pdf-file-ops.js';
 const DEFAULT_PANEL_WIDTH = 910;
 const DEFAULT_PANEL_HEIGHT = 1820;
 
-/** 壁の軸組と釘の既定値 [mm]（尺モジュールの間柱ピッチ・釘ピッチ）。 */
+/** 壁の軸組と釘の既定値 [mm]（尺モジュールの間柱ピッチ・釘ピッチ）。
+ *
+ * 間柱ピッチは入力ではなく、軸組材を等間隔に入れるときの初期値。 */
 export const DEFAULT_STUD_PITCH = 455;
 const DEFAULT_NAIL_PITCH = 150;
+
+/**
+ * 軸組材の種別。
+ *
+ * 計算（釘の縦列・縁端距離）には効かない。効くのは**図の勝ち負け**（交わる
+ * ところで、どちらの材を通して描くか）と、足すときの既定（名前・向き・
+ * 見付け幅）。並びは勝ちの強い順（横架材 ＞ 柱 ＞ 継目の材 ＞ 間柱）で、
+ * 在来軸組の納まりのとおり。見付け幅の既定は、尺モジュールでよくある
+ * 取り合わせ（柱 105 角・間柱 45×105・土台や桁は 105 角以上・面材の継目には
+ * 45×105 を平使いして見付け 105）。
+ */
+export const KINDS = [
+  { value: 'beam', text: '横架材', direction: 'horizontal', width: 105 },
+  { value: 'column', text: '柱', direction: 'vertical', width: 105 },
+  { value: 'joint', text: '継目の材', direction: 'vertical', width: 105 },
+  { value: 'stud', text: '間柱', direction: 'vertical', width: 45 },
+];
+
+/** 軸組材の向き（縦材＝柱・間柱など／横材＝横架材・受け材など）。 */
+export const DIRECTIONS = [
+  { value: 'vertical', text: '縦材' },
+  { value: 'horizontal', text: '横材' },
+];
+
+/** 種別を引く（知らない種別は間柱＝勝ち負けのいちばん弱い側）。 */
+export function findKind(value) {
+  return KINDS.find((kind) => kind.value === value) || KINDS[KINDS.length - 1];
+}
+
+/**
+ * 軸組材 1 本。
+ *
+ * 位置は材心（壁の左下が原点。縦材は X、横材は Y）で、見付け幅は面材の側
+ * から見た材の幅。釘の縦列の位置も、適用範囲 3.3(1)④ の縁端距離も、
+ * ここから決まる。種別は図の勝ち負けと、足すときの既定を決める。
+ *
+ * 材端（from・to）は材の長さの方向の位置（縦材は Y、横材は X）で、図に
+ * 描く長さを決める。入っていなければ fitEnds が既定（直交する材の外面まで
+ * ＝横架材なら両端の柱の外面まで）を入れる。
+ */
+export function makeMember(overrides) {
+  const member = overrides || {};
+  const kind = findKind(member.kind);
+  const direction =
+    member.direction === 'horizontal' || member.direction === 'vertical'
+      ? member.direction
+      : kind.direction;
+  return {
+    kind: kind.value,
+    direction,
+    label: String(member.label || '') || kind.text,
+    position: Number(member.position) || 0,
+    width: Number(member.width) || kind.width,
+    ...(Number.isFinite(Number(member.from)) && member.from !== ''
+      ? { from: Number(member.from) }
+      : {}),
+    ...(Number.isFinite(Number(member.to)) && member.to !== ''
+      ? { to: Number(member.to) }
+      : {}),
+    ...(overrides && overrides.memberId ? { memberId: overrides.memberId } : {}),
+  };
+}
+
+/**
+ * 既定の材端（壁の端と、直交する材のいちばん外の面の、外側のほう）。
+ *
+ * 在来軸組の納まりのとおり、横架材は両端の柱の外面まで伸び、柱・間柱は
+ * 上下の横架材の外面まで伸びる。計算実装（wasm）の Frame::default_ends と
+ * 同じ規則（画面で 1 本足したときに、その場で同じ材端を入れるためにここにも
+ * 置く）。
+ */
+export function defaultEnds(members, direction, wall) {
+  const wallWidth = Number((wall || {}).width) || DEFAULT_WALL_WIDTH;
+  const wallHeight = Number((wall || {}).height) || DEFAULT_WALL_HEIGHT;
+  const ends = direction === 'horizontal' ? [0, wallWidth] : [0, wallHeight];
+  (members || [])
+    .filter((member) => member.direction !== direction)
+    .forEach((member) => {
+      const half = (Number(member.width) || 0) / 2;
+      const position = Number(member.position) || 0;
+      ends[0] = Math.min(ends[0], position - half);
+      ends[1] = Math.max(ends[1], position + half);
+    });
+  return ends;
+}
+
+/**
+ * 材端が入っていない軸組材に、既定の材端を入れる。
+ *
+ * 入っている材端はそのまま（まぐさや窓台のように、途中で終わる材）。
+ */
+export function fitEnds(members, wall) {
+  const list = members || [];
+  return list.map((member) => {
+    if (Number.isFinite(member.from) && Number.isFinite(member.to)) return member;
+    const [from, to] = defaultEnds(list, member.direction, wall);
+    return {
+      ...member,
+      from: Number.isFinite(member.from) ? member.from : from,
+      to: Number.isFinite(member.to) ? member.to : to,
+    };
+  });
+}
+
+/**
+ * 新しい壁の軸組（尺モジュールの一般的な組み方）。
+ *
+ * 壁の両端に柱、その間に間柱を @455 で立て、上下に横架材を置く。入れたあとは
+ * 1 本ずつ動かせるし、足すことも消すこともできる。等間隔で入れ直したいときは
+ * 計算実装（wasm）の frame() が同じ並びを組み立てる（画面の「等間隔で
+ * 入れ直す」・表 3.2.1 の呼び出しはそちらを使う）。
+ */
+export function defaultFrame(width, height, studPitch) {
+  const wallWidth = Number(width) || DEFAULT_WALL_WIDTH;
+  const wallHeight = Number(height) || DEFAULT_WALL_HEIGHT;
+  const pitch = Number(studPitch) || DEFAULT_STUD_PITCH;
+  const members = [makeMember({ kind: 'column', position: 0 })];
+  for (let position = pitch; position < wallWidth; position += pitch) {
+    members.push(makeMember({ kind: 'stud', position }));
+  }
+  members.push(makeMember({ kind: 'column', position: wallWidth }));
+  [0, wallHeight].forEach((position) => {
+    members.push(makeMember({ kind: 'beam', position }));
+  });
+  // 材端は既定（横架材は両端の柱の外面まで、柱・間柱は上下の横架材の外面まで）。
+  return fitEnds(members, { width: wallWidth, height: wallHeight });
+}
+
+/**
+ * 壁の軸組材の一覧を、この画面が扱う形に整える。
+ *
+ * 一覧が入っていなければ（軸組材を持たない形で組み立てたデータ）、尺モジュール
+ * の既定を入れる。空の一覧はそのまま空で扱う（軸組材を全て消した状態）。
+ */
+export function makeFrame(members, wall) {
+  if (!Array.isArray(members)) return defaultFrame((wall || {}).width, (wall || {}).height);
+  // 材端を持たない形（材端を入れる前の版）で保存された入力は、ここで
+  // 既定の材端（直交する材の外面まで）を入れる。
+  return fitEnds(
+    members.map((member) => makeMember(member)),
+    wall
+  );
+}
 
 /**
  * へりあき（面材の縁から釘の中心まで）の下限 [mm]。
@@ -34,6 +179,15 @@ const DEFAULT_NAIL_PITCH = 150;
  * 表 3.3.1 の一覧が配る minEdgeDistance を使う。
  */
 export const MIN_EDGE_DISTANCE = 10;
+
+/**
+ * 軸材の釘列に対する縁端距離の下限 [mm]。
+ *
+ * 同じ 3.3(1)④ の「軸材の釘列に対する縁端距離は、20mm 以上かつ接合具径
+ * d [mm] × 5 以上とする」の 20mm 側。こちらは釘が刺さる軸組材の見付け幅で
+ * 決まるので、判定そのものは計算実装（wasm）が壁の軸組材から行う。
+ */
+export const MIN_FRAME_CLEARANCE = 20;
 
 /** 壁の既定値。階高は一般的な 1 階。 */
 const DEFAULT_WALL_HEIGHT = 2900;
@@ -71,7 +225,7 @@ export const EMPTY_SPEC = {
  * 新しい面材（壁を構成する 1 枚）を作る。
  *
  * 面材は「壁の中で占める領域」。既定では壁の左下に 3×6 板を 1 枚置く形に
- * しておき、そこから動かしてもらう。釘配列はこの領域と壁の間柱ピッチから
+ * しておき、そこから動かしてもらう。釘配列はこの領域と壁の軸組材から
  * 決まるので、面材が持つ釘の入力は釘ピッチとへりあきだけ。
  *
  * 面材と釘の数値は空のままにしておき、表 3.3.1 の一覧から読み込むか、
@@ -99,8 +253,8 @@ export function makePanel(overrides) {
 /**
  * 新しい壁（面材張り大壁 1 枚分の入力）を作る。
  *
- * 壁は面材を張る**軸組**として持つ: 階高・幅と、間柱ピッチ。面材と釘の仕様は
- * 面材ごとの入力。面材は 1 枚から始める。
+ * 壁は面材を張る**軸組**として持つ: 階高・幅と、軸組材（1 本ずつ自由な位置）。
+ * 面材と釘の仕様は面材ごとの入力。面材は 1 枚から始める。
  */
 export function makeWall(overrides) {
   wallSequence += 1;
@@ -109,8 +263,9 @@ export function makeWall(overrides) {
     wallName: `壁${wallSequence}`,
     height: DEFAULT_WALL_HEIGHT,
     width: DEFAULT_WALL_WIDTH,
-    // 釘の縦列の位置も、せん断座屈の ξ（中間材の有無）も、このピッチで決まる。
-    studPitch: DEFAULT_STUD_PITCH,
+    // 軸組材は 1 本ずつ自由な位置に入れる。釘の縦列の位置も、せん断座屈の
+    // ξ（中間材の有無）も、軸材の縁端距離の判定も、ここから決まる。
+    frame: defaultFrame(DEFAULT_WALL_WIDTH, DEFAULT_WALL_HEIGHT, DEFAULT_STUD_PITCH),
     panels: [makePanel()],
     ...(overrides || {}),
   };
@@ -230,10 +385,12 @@ export function minimumEdgeDistance(materials, materialId) {
 }
 
 /**
- * 選んだ面材と釘の組合せを、へりあきを決めるための一言にする。
+ * 選んだ面材と釘の組合せを、へりあき・縁端距離を決めるための一言にする。
  *
- * へりあきは釘の呼び径で決まる（3.3(1)④）ので、選んだ釘とその径、必要な
- * へりあきをそのまま伝える。
+ * どちらも釘の呼び径で決まる（3.3(1)④）ので、選んだ釘とその径、面材側に
+ * 必要なへりあきと、軸材側に必要な縁端距離をそのまま伝える。縁端距離のほうは
+ * 「軸組材の見付け幅の半分から、へりあきを引いた残り」なので、足りなければ
+ * 壁の軸組材を太くするか、へりあきを狭める（面材側の下限まで）ことになる。
  */
 export function nailNote(materials, materialId) {
   const material = findMaterial(materials, materialId);
@@ -241,7 +398,9 @@ export function nailNote(materials, materialId) {
   return (
     `選んだ釘は ${material.nailLabel}（呼び径 φ${material.nailDiameter} mm）です。` +
     `適用範囲 3.3(1)④ により、面材のへりあきは ${material.minEdgeDistance} mm 以上` +
-    `（10 mm 以上かつ呼び径の 5 倍以上）にしてください。`
+    `（10 mm 以上かつ呼び径の 5 倍以上）、軸材の縁端距離は ` +
+    `${material.minFrameClearance || MIN_FRAME_CLEARANCE} mm 以上` +
+    `（20 mm 以上かつ呼び径の 5 倍以上）にしてください。`
   );
 }
 
@@ -295,7 +454,10 @@ export function mergeFormData(parsed) {
       wallName: String(wall.wallName || '') || `壁${index + 1}`,
       height: Number(wall.height) || 0,
       width: Number(wall.width) || 0,
-      studPitch: Number(wall.studPitch) || DEFAULT_STUD_PITCH,
+      // 軸組材。前の版（間柱ピッチだけを持っていた形）で保存した計算書は、
+      // 読み込みの時点で計算実装が軸組材へ読み替え終えているので、ここでは
+      // その一覧をそのまま読む。
+      frame: makeFrame(wall.frame, wall),
       panels: (Array.isArray(wall.panels) ? wall.panels : []).map((panel, position) =>
         makePanel({
           panelId: String(panel.panelId || '') || newPanelId(),

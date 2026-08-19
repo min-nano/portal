@@ -151,18 +151,31 @@ impl Preset {
 
     /// この配列の割り付け（へりあきは表が前提とする 10 mm）。
     ///
-    /// 表 3.2.1 の図は、面材の左端に柱があり、そこから間柱ピッチで割り付けた
-    /// 配列を描いている（stud_origin = 0）。
+    /// 表 3.2.1 の図は、面材の左端に柱があり、そこから間柱ピッチで等間隔に
+    /// 立てた縦材へ釘を打つ配列を描いている。
     pub fn layout(&self) -> Layout {
         Layout {
             width: self.width,
             height: self.height,
-            stud_pitch: self.stud_pitch,
-            stud_origin: 0.0,
+            studs: self.studs(),
             nail_pitch: self.nail_pitch,
             edge_distance: EDGE_DISTANCE,
             arrangement: self.arrangement,
         }
+    }
+
+    /// 面材の内側を通る縦材の位置（面材の左端から間柱ピッチで等間隔）。
+    pub fn studs(&self) -> Vec<f64> {
+        let mut studs = Vec::new();
+        if self.stud_pitch <= 0.0 {
+            return studs;
+        }
+        let mut position = self.stud_pitch;
+        while position < self.width {
+            studs.push(position);
+            position += self.stud_pitch;
+        }
+        studs
     }
 
     /// 釘 1 本ごとの座標（X, Y の昇順）。
@@ -338,7 +351,13 @@ mod tests {
                 ("edgeDistance", loaded.get("edgeDistance").unwrap().clone()),
             ]);
             let panel = report::normalize_panel(&placed, "w1", 0).unwrap();
-            let nails = report::nails_of(&panel, preset.stud_pitch).unwrap_or_else(|error| {
+            // 表 3.2.1 の割り付けと同じ軸組（面材の左端から等間隔の縦材）。
+            let frame = crate::frame::Frame::from_stud_pitch(
+                preset.width,
+                preset.height,
+                preset.stud_pitch,
+            );
+            let nails = report::nails_of(&panel, &frame).unwrap_or_else(|error| {
                 panic!("{} を計算できません: {error}", preset.id());
             });
             assert_eq!(nails.len(), preset.nails().len(), "{}", preset.id());

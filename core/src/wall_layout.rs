@@ -178,7 +178,12 @@ fn overlaps_rect(left: (f64, f64, f64, f64), right: (f64, f64, f64, f64)) -> boo
 ///
 /// 面材が壁からはみ出していても切り取らず、はみ出していることが図で見える
 /// ようにする（釘配列図が、面材からはみ出した釘をそのまま描くのと同じ）。
-pub fn bounds(wall_width: f64, wall_height: f64, pieces: &[Piece]) -> (f64, f64, f64, f64) {
+pub fn bounds(
+    wall_width: f64,
+    wall_height: f64,
+    pieces: &[Piece],
+    frame: &[(f64, f64, f64, f64)],
+) -> (f64, f64, f64, f64) {
     let mut min_x = 0.0_f64;
     let mut min_y = 0.0_f64;
     let mut max_x = wall_width;
@@ -189,6 +194,15 @@ pub fn bounds(wall_width: f64, wall_height: f64, pieces: &[Piece]) -> (f64, f64,
         min_y = min_y.min(bottom);
         max_x = max_x.max(right);
         max_y = max_y.max(top);
+    }
+    // 軸組材（左, 下, 右, 上）。壁の両端の柱・上下の横架材は材心が壁の縁に
+    // 立つので、見付け幅の半分が壁の外へ出る。その外へ出るぶんまで描く範囲に
+    // 入れておかないと、図の縁で材が切れる（寸法の文字にも重なる）。
+    for (left, bottom, right, top) in frame {
+        min_x = min_x.min(*left);
+        min_y = min_y.min(*bottom);
+        max_x = max_x.max(*right);
+        max_y = max_y.max(*top);
     }
     (min_x, min_y, max_x, max_y)
 }
@@ -305,9 +319,25 @@ mod tests {
         let mut pieces = example();
         pieces[1].origin = (-100.0, 2500.0);
 
-        assert_eq!(bounds(910.0, 3000.0, &pieces), (-100.0, 0.0, 910.0, 3410.0));
+        assert_eq!(bounds(910.0, 3000.0, &pieces, &[]), (-100.0, 0.0, 910.0, 3410.0));
         // 壁の中に収まっていれば、範囲は壁そのもの。
-        assert_eq!(bounds(910.0, 3000.0, &example()), (0.0, 0.0, 910.0, 3000.0));
+        assert_eq!(bounds(910.0, 3000.0, &example(), &[]), (0.0, 0.0, 910.0, 3000.0));
+    }
+
+    /// 軸組材も図に描くので、壁の外へ出るぶんまで範囲に入れる（両端の柱・
+    /// 上下の横架材は、材心が壁の縁に立つので見付け幅の半分が外へ出る）。
+    #[test]
+    fn the_drawing_range_covers_the_frame_members() {
+        let members = [
+            (-52.5, 0.0, 52.5, 3000.0),   // 壁の左端に立つ 105 の柱
+            (857.5, 0.0, 962.5, 3000.0),  // 壁の右端に立つ 105 の柱
+            (0.0, -52.5, 910.0, 52.5),    // 壁の下端の横架材
+        ];
+
+        assert_eq!(
+            bounds(910.0, 3000.0, &example(), &members),
+            (-52.5, -52.5, 962.5, 3000.0)
+        );
     }
 
     #[test]
