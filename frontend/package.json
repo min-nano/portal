@@ -10,9 +10,9 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@clerk/clerk-js": "^6.27.0",
-    "@clerk/localizations": "^4.14.1",
-    "@clerk/ui": "^1.29.1"
+    "@clerk/clerk-js": "^6.29.1",
+    "@clerk/localizations": "^4.15.3",
+    "@clerk/ui": "^1.30.3"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.10",
