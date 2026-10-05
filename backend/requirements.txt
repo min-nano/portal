@@ -1,4 +1,4 @@
-fastapi>=0.141.1,<1
+fastapi>=0.142.2,<1
 uvicorn[standard]>=0.52.1,<1
 openpyxl==3.1.5
 # 構造計算安全証明書（PDF）の読み書き。pdfminer.six は文字の座標取得（○ を
