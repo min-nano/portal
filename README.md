@@ -646,6 +646,8 @@ Hosting は `https://<サイトID>.firebaseapp.com` でも同じアプリを配�
    gcloud services enable firebasehosting.googleapis.com
    firebase hosting:sites:create "$PROJECT_ID" --project "$PROJECT_ID"  # 既定サイト（通常はプロジェクト ID と同名）
    ```
+   > **2026-10-15 以降に作成したプロジェクトでは、Firebase の追加時に既定サイトが自動作成されません**（初回デプロイ等のタイミングでオンデマンドに作られる方式に変わった）。上の `hosting:sites:create` を省くと CI のデプロイが `404 Site Not Found` で失敗しうるため、必ず実行すること。CI 側もデプロイ先を既定サイトの自動解決に任せず、リポジトリ変数 `SITE_ID` で明示している（`firebase.json` の `hosting.site` をデプロイ時に差し込む）。
+
    サイト ID はグローバルに一意のため、プロジェクト ID が使えず **別のサブドメインになる場合がある**。実際のサイト ID は `firebase hosting:sites:list` で確認し、`CLERK_AUTHORIZED_PARTIES` のプレビュー URL パターン等にはその値を使うこと。プロジェクトに複数サイトを作る場合は `firebase.json` の `hosting` に `"site": "<サイトID>"` を明示する（1 サイトのみなら省略可）。
 2. `.firebaserc` の `default` をプロジェクト ID に書き換える。
 3. 初回は手動デプロイで確認できる:

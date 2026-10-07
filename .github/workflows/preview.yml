@@ -155,9 +155,11 @@ jobs:
         # チャンネルのデプロイはそのときの firebase.json をリリースに焼き込む
         # ため、ここでの書き換えはこの PR のチャンネルにだけ効く（本番の
         # リライト先は firebase.json のまま portal-api）。
+        # あわせてデプロイ先のサイトを SITE_ID で明示する（既定サイトの自動解決に
+        # 頼らない。理由は deploy.yml の「Pin the Hosting site」）。
         run: |
-          jq --arg service "portal-api-pr-$PR" \
-            '.hosting.rewrites |= map(if .run then .run.serviceId = $service else . end)' \
+          jq --arg service "portal-api-pr-$PR" --arg site '${{ vars.SITE_ID }}' \
+            '.hosting.site = $site | .hosting.rewrites |= map(if .run then .run.serviceId = $service else . end)' \
             firebase.json > firebase.json.tmp
           mv firebase.json.tmp firebase.json
       - name: Deploy to preview channel
