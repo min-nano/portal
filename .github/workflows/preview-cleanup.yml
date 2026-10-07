@@ -58,7 +58,8 @@ jobs:
         # 既に無いことが普通にある。
         run: |
           if out="$(npx firebase-tools@latest hosting:channel:delete "pr-$PR" \
-              --project '${{ vars.PROJECT_ID }}' --force 2>&1)"; then
+              --project '${{ vars.PROJECT_ID }}' --site '${{ vars.SITE_ID }}' \
+              --force 2>&1)"; then
             echo "$out"
           elif grep -qiE '404|not found|does not exist' <<<"$out"; then
             echo "$out"
