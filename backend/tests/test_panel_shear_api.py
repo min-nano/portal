@@ -126,7 +126,10 @@ def test_core_wasm_is_sent_gzipped_to_clients_that_accept_it(client):
     assert resp.status_code == 200
     assert resp.headers["content-encoding"] == "gzip"
     # 同じ URL で符号化が 2 通りあることを、途中のキャッシュへ知らせる。
-    assert resp.headers["vary"] == "Accept-Encoding"
+    # 完全一致では見ない。CORS ミドルウェア（Starlette 1.7 以降）が Origin を
+    # 書き足すため、Vary は "Accept-Encoding, Origin" のように並ぶことがある。
+    vary = {v.strip().lower() for v in resp.headers["vary"].split(",")}
+    assert "accept-encoding" in vary
     # 実際に縮んでいる（wasm は 1/3 以下になる）。
     assert int(resp.headers["content-length"]) < len(nail_core.wasm_bytes()) / 2
     # 受け取った側が展開すれば、サーバが計算に使うバイト列そのもの。
