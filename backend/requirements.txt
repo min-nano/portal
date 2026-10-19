@@ -15,7 +15,7 @@ wasmtime>=49.0.0,<50
 # 釘配列諸定数の計算書 PDF は雛形を使わずバックエンドが直接組み立てる。
 # fontTools は、同梱した日本語フォント（app/fonts、SIL OFL 1.1）から
 # 「その PDF で実際に使った文字だけ」を切り出して埋め込むために使う。
-fonttools>=4.66.1,<5
+fonttools>=4.67.0,<5
 PyJWT[crypto]>=2.15.1,<3
 google-auth>=2.59.1,<3
 google-cloud-firestore>=2.34.0,<3
