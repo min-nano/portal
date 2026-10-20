@@ -50,7 +50,7 @@ async def get_template_status(user: User = Depends(require_user)):
     """雛形の設定状態を返す。UI の初期表示で使う。
 
     保存先はここでは持たない。証明書の保存先は「編集中のファイル」そのもの
-    （上書き保存）か、新規保存のたびに Picker で選ぶフォルダで、共有設定と
+    （上書き保存）か、新規保存のたびにファイル選択ダイアログで選ぶフォルダで、共有設定と
     して固定するものではないため。
     """
     return TEMPLATE.status()
@@ -106,7 +106,7 @@ async def create_certificate(request: Request, user: User = Depends(require_user
     保存方法は body.save.mode で切り替える。一般的なアプリの「保存」／
     「別名で保存」と同じ考え方で、保存先はそのつど決まる:
       overwrite … 編集中のファイルの内容を差し替える（Drive の版履歴が残る）
-      new       … save.folderId（画面の Picker で選ばれたフォルダ）に
+      new       … save.folderId（画面のファイル選択ダイアログで選ばれたフォルダ）に
                    新しいファイルとして作る
     """
     body = await portal_sdk.json_body(request)

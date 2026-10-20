@@ -31,7 +31,7 @@ VALID_CHOICES = {
 }
 
 
-# 新規保存の保存先は、そのつど画面の Picker で選ばれたフォルダが送られてくる。
+# 新規保存の保存先は、そのつど画面のファイル選択ダイアログで選ばれたフォルダが送られてくる。
 NEW_SAVE = {"mode": "new", "folderId": "out-folder"}
 
 
@@ -253,7 +253,7 @@ def test_create_certificate_requires_the_template_setting(client, drive):
 
 
 def test_create_certificate_requires_a_destination_folder(client, drive):
-    # 新規保存は保存のたびに Picker でフォルダを選ぶ。選ばずに送られてきたら
+    # 新規保存は保存のたびにファイル選択ダイアログでフォルダを選ぶ。選ばずに送られてきたら
     # 保存しようがないので、雛形を複製する前に断る。
     drive.configure_certificate(export_bytes=make_certificate_pdf())
 
@@ -278,7 +278,7 @@ def test_create_certificate_rejects_a_destination_that_is_not_a_folder(client, d
 
 
 def test_create_certificate_checks_the_destination_as_the_signed_in_user(client, drive):
-    # 選択は公式 Picker が行うが、届くのは ID だけなので、それが本当にフォルダ
+    # 選択はファイル選択ダイアログが行うが、届くのは ID だけなので、それが本当にフォルダ
     # なのか・本人が書き込めるのかは実行ユーザーの代理セッションで確かめる。
     drive.configure_certificate(export_bytes=make_certificate_pdf())
 

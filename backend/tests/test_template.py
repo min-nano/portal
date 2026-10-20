@@ -1,7 +1,7 @@
 """雛形設定 API（GET/PUT template）のテスト。
 
 GAS 版の getTemplateStatus / saveTemplateSelection に相当する機能。ファイルを
-選ぶ操作はブラウザ側の公式 Google Picker が担い、ここには選ばれたファイル ID
+選ぶ操作はブラウザ側のファイル選択ダイアログが担い、ここには選ばれたファイル ID
 だけが届く。そのため、種類・ゴミ箱・親フォルダの確認はすべてこちら側で行う。
 """
 
@@ -104,7 +104,7 @@ def test_save_template_unknown_file_returns_404(client, drive):
 
 
 def test_save_template_reads_the_file_as_the_signed_in_user(client, drive):
-    """Picker から届くのはファイル ID だけなので、確認もサーバー側で行う。
+    """ファイル選択ダイアログから届くのはファイル ID だけなので、確認もサーバー側で行う。
 
     メタデータの取得は実行ユーザーの代理セッションで行うため、本人に閲覧権限の
     無いファイル ID を送りつけても雛形には設定できない（GAS 版と同じ境界）。

@@ -45,8 +45,9 @@ export function warmUpApi() {
   fetch('/api/healthz', { cache: 'no-store' }).catch(() => {});
 }
 
-export async function apiGet(path) {
-  const resp = await authorizedFetch(path);
+/** options.signal を渡すと、途中でやめた読み込みの通信も打ち切る。 */
+export async function apiGet(path, options = {}) {
+  const resp = await authorizedFetch(path, options);
   await raiseForError(resp);
   return resp.json();
 }

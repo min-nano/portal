@@ -42,7 +42,8 @@ export function inputModeFor(unit, type) {
   return type === 'number' ? 'decimal' : '';
 }
 
-function el(doc, tag, className, text) {
+/** 要素を 1 つ作る（class と文字を添えて）。部品を組み立てるところで共通に使う。 */
+export function el(doc, tag, className, text) {
   const node = doc.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined && text !== null) node.textContent = text;
