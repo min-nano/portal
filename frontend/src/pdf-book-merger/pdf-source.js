@@ -161,20 +161,52 @@ export async function readPageText(doc, index) {
   }
 }
 
+/** 余白の帯（上下 MARGIN_ZONE）を、OCR に足りる細かさで描く viewport と canvas の大きさ。 */
+function marginViewports(page) {
+  const base = page.getViewport({ scale: 1 });
+  const scale = OCR_PAGE_HEIGHT / base.height;
+  const full = page.getViewport({ scale });
+  const size = { width: full.width, height: full.height * MARGIN_ZONE };
+  return [
+    { zone: 'top', top: 0 },
+    { zone: 'bottom', top: 1 - MARGIN_ZONE },
+  ].map(({ zone, top }) => ({
+    zone,
+    top,
+    size,
+    viewport: page.getViewport({ scale, offsetY: -top * full.height }),
+  }));
+}
+
+function stripsOf(margins, canvases) {
+  return margins.map(({ zone, top }, k) => ({ zone, canvas: canvases[k], top, height: MARGIN_ZONE }));
+}
+
 /**
- * 1 頁を測る画像（白黒）と、一覧の縮小画像にする。
+ * 1 頁を測る画像（白黒）と、一覧の縮小画像にする。margins なら、頁番号を
+ * OCR する余白の帯も、同じ展開から描く（600dpi のスキャンは展開そのものが
+ * 重いので、1 頁につき 1 回にする）。
  *
  * @param {object} doc openPdf の結果
  * @param {number} index 0 から数えた頁の位置
  * @param {object|null} [scan] その頁の JPEG（scan-images.js）。無ければ pdf.js で描く
- * @returns {Promise<{image:{width:number,height:number,gray:Uint8Array}, thumbUrl:string}>}
+ * @param {{margins?: boolean}} [options]
+ * @returns {Promise<{image:{width:number,height:number,gray:Uint8Array}, thumbUrl:string,
+ *                    strips:{zone:'top'|'bottom', canvas:HTMLCanvasElement, top:number, height:number}[]}>}
+ *   strips は margins のときだけ（そうでなければ空）。
  */
-export async function renderPageImage(doc, index, scan = null) {
+export async function renderPageImage(doc, index, scan = null, { margins = false } = {}) {
   const page = await doc.getPage(index + 1);
   try {
     const base = page.getViewport({ scale: 1 });
     const viewport = page.getViewport({ scale: ANALYSIS_LONG_SIDE / Math.max(base.width, base.height) });
-    const [canvas] = await drawViewports(page, [viewport], [], scan);
+    const bands = margins ? marginViewports(page) : [];
+    const [canvas, ...stripCanvases] = await drawViewports(
+      page,
+      [viewport, ...bands.map((band) => band.viewport)],
+      [undefined, ...bands.map((band) => band.size)],
+      scan
+    );
     const context = canvas.getContext('2d', { willReadFrequently: true });
     const image = {
       width: canvas.width,
@@ -183,7 +215,7 @@ export async function renderPageImage(doc, index, scan = null) {
     };
     const thumbUrl = await thumbnailUrl(canvas);
     releaseCanvas(canvas);
-    return { image, thumbUrl };
+    return { image, thumbUrl, strips: stripsOf(bands, stripCanvases) };
   } finally {
     page.cleanup();
   }
@@ -201,17 +233,14 @@ export async function renderPageImage(doc, index, scan = null) {
 export async function renderMargins(doc, index, scan = null) {
   const page = await doc.getPage(index + 1);
   try {
-    const base = page.getViewport({ scale: 1 });
-    const scale = OCR_PAGE_HEIGHT / base.height;
-    const full = page.getViewport({ scale });
-    const size = { width: full.width, height: full.height * MARGIN_ZONE };
-    const zones = [
-      { zone: 'top', top: 0 },
-      { zone: 'bottom', top: 1 - MARGIN_ZONE },
-    ];
-    const viewports = zones.map(({ top }) => page.getViewport({ scale, offsetY: -top * full.height }));
-    const canvases = await drawViewports(page, viewports, [size, size], scan);
-    return zones.map(({ zone, top }, k) => ({ zone, canvas: canvases[k], top, height: MARGIN_ZONE }));
+    const bands = marginViewports(page);
+    const canvases = await drawViewports(
+      page,
+      bands.map((band) => band.viewport),
+      bands.map((band) => band.size),
+      scan
+    );
+    return stripsOf(bands, canvases);
   } finally {
     page.cleanup();
   }

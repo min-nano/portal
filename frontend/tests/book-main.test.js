@@ -209,14 +209,17 @@ beforeEach(async () => {
     specOf(bytes).pages.map((p) => (p.jpeg === false ? null : { jpeg: p.id }))
   );
   // 縮小画像の URL に、どちらで描いたか（JPEG を展開 / pdf.js）を残す。
-  mocks.renderPageImage.mockImplementation(async (doc, index, scan) => ({
-    image: mocks.image(),
-    thumbUrl: `blob:${scan ? 'scan' : 'pdfjs'}-${doc.spec.pages[index].id}`,
-  }));
-  mocks.renderMargins.mockImplementation(async (doc, index) => [
+  const strips = (doc, index) => [
     { zone: 'top', canvas: {}, top: 0, height: 0.14, page: doc.spec.pages[index] },
     { zone: 'bottom', canvas: {}, top: 0.86, height: 0.14, page: doc.spec.pages[index] },
-  ]);
+  ];
+  // OCR する頁は、同じ展開から余白の帯も描く（margins）。
+  mocks.renderPageImage.mockImplementation(async (doc, index, scan, { margins = false } = {}) => ({
+    image: mocks.image(),
+    thumbUrl: `blob:${scan ? 'scan' : 'pdfjs'}-${doc.spec.pages[index].id}`,
+    strips: margins ? strips(doc, index) : [],
+  }));
+  mocks.renderMargins.mockImplementation(async (doc, index) => strips(doc, index));
   mocks.closePdf.mockResolvedValue(undefined);
   mocks.mergePdf.mockImplementation(async ({ sources, order, title, labels, onProgress }) => {
     const { pageLabelTexts } = await import('../src/pdf-book-merger/ordering.js');
@@ -383,9 +386,10 @@ describe('ファイルを足して並べる', () => {
     // 頁の画像は、ブラウザの中で、頁の JPEG を展開して描く（サーバーは使わない）。
     expect(mocks.findScanImages).toHaveBeenCalledTimes(2);
     expect(document.querySelector('#pageGrid img').src).toMatch(/^blob:scan-/);
-    // 画像から番号を読む頁（5 頁）の余白も、その頁の JPEG から描く。
-    expect(mocks.renderMargins).toHaveBeenCalledTimes(1);
-    expect(mocks.renderMargins.mock.calls[0].slice(1)).toEqual([2, { jpeg: 'o5' }]);
+    // 画像から番号を読む頁（5 頁）の余白も、その頁の JPEG から、同じ展開で描く。
+    expect(mocks.renderMargins).not.toHaveBeenCalled();
+    const marginCalls = mocks.renderPageImage.mock.calls.filter(([, , , options]) => options?.margins);
+    expect(marginCalls.map(([doc, index, scan]) => [doc.spec.pages[index].id, scan])).toEqual([['o5', { jpeg: 'o5' }]]);
     expect(gridLabels()).toContain('5 頁');
 
     // 拡大表示は pdf.js で描く。
@@ -412,12 +416,13 @@ describe('ファイルを足して並べる', () => {
     drop([file('odd.pdf', pdf(pages))]);
     await settled(1);
 
-    expect(mocks.renderPageImage.mock.calls.map(([, index, scan]) => [index, scan])).toEqual([
-      [0, { jpeg: 'o1' }],
-      [1, null],
-      [2, { jpeg: 'o5' }],
+    // 何頁かを並べて描くので、頼んだ順は前後する。
+    const calls = mocks.renderPageImage.mock.calls.map(([, index, scan, options]) => [index, scan, options]);
+    expect(calls.sort((a, b) => a[0] - b[0])).toEqual([
+      [0, { jpeg: 'o1' }, { margins: false }],
+      [1, null, { margins: true }],
+      [2, { jpeg: 'o5' }, { margins: false }],
     ]);
-    expect(mocks.renderMargins.mock.calls.map(([, index, scan]) => [index, scan])).toEqual([[1, null]]);
     expect(document.querySelector('#pageGrid [data-page-key="f1:1"] img').src).toBe('blob:pdfjs-o3');
     expect(gridLabels()).toEqual(['1 頁', '-2 頁', '3 頁', '-4 頁', '5 頁']);
   });

@@ -212,17 +212,33 @@ describe('canvas に描く', () => {
       expect(createImageBitmap).toHaveBeenCalledTimes(1);
       const [blob, options] = createImageBitmap.mock.calls[0];
       expect(blob.type).toBe('image/jpeg');
-      expect(options).toEqual({ resizeWidth: 800, resizeHeight: 1200, resizeQuality: 'medium', imageOrientation: 'none' });
+      // 要る大きさ（800×1200）の 2 倍で、粗く縮めて展開する（canvas で丁寧に縮める）。
+      expect(options).toEqual({ resizeWidth: 1600, resizeHeight: 2400, resizeQuality: 'low', imageOrientation: 'none' });
       expect(canvases.map((c) => [c.width, c.height])).toEqual([
         [800, 1200],
         [800, 168],
       ]);
-      expect(calls.filter(([name]) => name === 'setTransform')[0]).toEqual(['setTransform', 1, 0, 0, 1, 0, 0]);
+      expect(calls.filter(([name]) => name === 'setTransform')[0]).toEqual(['setTransform', 0.5, 0, 0, 0.5, 0, 0]);
       expect(calls.filter(([name]) => name === 'drawImage')).toEqual([
-        ['drawImage', 800, 1200, 0, 0],
-        ['drawImage', 800, 1200, 0, 0],
+        ['drawImage', 1600, 2400, 0, 0],
+        ['drawImage', 1600, 2400, 0, 0],
       ]);
       expect(close).toHaveBeenCalledTimes(1);
+    });
+
+    it('細かく描く帯があれば、それに足りる大きさで展開する（元の大きさは超えない）', async () => {
+      fakeBitmaps();
+      // OCR の帯は、測る画像の 2.4 倍の細かさで描く。
+      const strip = { width: 1920, height: 2880, transform: [4.8, 0, 0, -4.8, 0, 403] };
+
+      await drawScan(scan, [viewport, strip], [undefined, { width: 1920, height: 403 }]);
+      expect(createImageBitmap.mock.calls[0][1]).toMatchObject({ resizeWidth: 1920, resizeHeight: 2880 });
+
+      createImageBitmap.mockClear();
+      const fine = { width: 8000, height: 12000, transform: [20, 0, 0, -20, 0, 12000] };
+      await drawScan(scan, [viewport, fine]);
+      // 元の画像より細かくは展開しない（縮めずに展開する）。
+      expect(createImageBitmap.mock.calls[0][1]).toEqual({ imageOrientation: 'none' });
     });
 
     it('imageOrientation を知らないブラウザでは、付けずに頼み直す', async () => {

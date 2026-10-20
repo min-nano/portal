@@ -72,19 +72,29 @@ export function otsuThreshold(gray) {
 export function estimateSkew(points, { range = 4, coarse = 0.25, fine = 0.05 } = {}) {
   if (points.length < 200) return { angle: 0, sharpness: 1, direction: 'horizontal' };
 
+  // 投影した位置ごとの点の数は、配列で数える（角度ごとに数十回数え直すので、
+  // Map だと 1 頁で 100ms を超える）。位置は -（幅 + 高さ）〜（幅 + 高さ）に収まる。
+  let extent = 1;
+  for (let i = 0; i < points.length; i++) extent = Math.max(extent, points.x[i] + points.y[i] + 2);
+  const bins = new Int32Array(2 * extent + 1);
+
   const profileScore = (degrees, vertical) => {
     const theta = (degrees * Math.PI) / 180;
     const cos = Math.cos(theta);
     const sin = Math.sin(theta);
-    const bins = new Map();
+    bins.fill(0);
+    let low = bins.length;
+    let high = 0;
     for (let i = 0; i < points.length; i++) {
       const x = points.x[i];
       const y = points.y[i];
-      const key = Math.round(vertical ? x * cos + y * sin : y * cos - x * sin);
-      bins.set(key, (bins.get(key) || 0) + 1);
+      const key = Math.round(vertical ? x * cos + y * sin : y * cos - x * sin) + extent;
+      bins[key]++;
+      if (key < low) low = key;
+      if (key > high) high = key;
     }
     let score = 0;
-    for (const value of bins.values()) score += value * value;
+    for (let k = low; k <= high; k++) score += bins[k] * bins[k];
     return score;
   };
 

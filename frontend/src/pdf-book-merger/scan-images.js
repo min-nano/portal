@@ -260,7 +260,7 @@ export async function findScanImages(bytes) {
   let doc;
   try {
     // 数百頁の PDF でも画面を固めないよう、少しずつ読む。
-    doc = await PDFDocument.load(bytes, { updateMetadata: false, objectsPerTick: 200 });
+    doc = await PDFDocument.load(bytes, { updateMetadata: false, objectsPerTick: 50 });
   } catch {
     return [];
   }
@@ -301,7 +301,10 @@ async function decode(scan, size) {
   const blob = new Blob([scan.jpeg], { type: 'image/jpeg' });
   const options = {};
   if (size.width < scan.width || size.height < scan.height) {
-    Object.assign(options, { resizeWidth: size.width, resizeHeight: size.height, resizeQuality: 'medium' });
+    // 縮め方は粗いもの（low）にする。600dpi の頁（数千万画素）でも、全部を
+    // 展開するより速く、メモリも小さい（細かい縮め方は倍近くかかる）。粗さは、
+    // 要る大きさの 2 倍で展開してから canvas で丁寧に縮めて打ち消す（drawScan）。
+    Object.assign(options, { resizeWidth: size.width, resizeHeight: size.height, resizeQuality: 'low' });
   }
   // PDF の中の JPEG は、EXIF の向きの指定を無視して描く決まり。
   try {
@@ -324,12 +327,13 @@ async function decode(scan, size) {
  * @returns {Promise<HTMLCanvasElement[]>}
  */
 export async function drawScan(scan, viewports, canvasSizes = []) {
-  // いちばん細かく描く viewport に足りる大きさで展開する。
+  // 展開は 1 回。いちばん細かく描く viewport に足り、いちばん粗く描くものの
+  // 2 倍はある大きさで展開する（展開のときの粗い縮め方を、canvas で縮めるときに
+  // 均す）。元の大きさは超えない。
   const sizes = viewports.map((viewport) => decodeSize(viewport.transform, scan));
-  const size = {
-    width: Math.max(...sizes.map((s) => s.width)),
-    height: Math.max(...sizes.map((s) => s.height)),
-  };
+  const pick = (key) =>
+    Math.min(scan[key], Math.max(...sizes.map((s) => s[key]), 2 * Math.min(...sizes.map((s) => s[key]))));
+  const size = { width: pick('width'), height: pick('height') };
   const bitmap = await decode(scan, size);
   try {
     return viewports.map((viewport, k) => {

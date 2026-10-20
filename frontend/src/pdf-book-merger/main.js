@@ -69,8 +69,11 @@ const DEFAULT_NAME = '結合.pdf';
 
 /** 同時に読み取る頁の数（OCR の worker の数より少し多くして、待ちを埋める）。 */
 const OCR_IN_FLIGHT = 3;
-/** 測り終わるのを待たずに描き進める頁の数（描いている間に worker が測る）。 */
-const MEASURES_IN_FLIGHT = 2;
+/**
+ * 同時に描く頁の数。600dpi のスキャンは頁ごとの JPEG の展開が重い（1 頁で
+ * 0.2 秒ほど）が、展開は画面とは別のところで進むので、端末の芯を並べて使う。
+ */
+const PAGES_IN_FLIGHT = 3;
 
 let nextKey = 1;
 /** 選んだファイル（画面の並び順）。中身は addFile() を参照。 */
@@ -82,9 +85,12 @@ let view = { order: [], problems: [], issues: new Map(), numberings: new Map() }
 /** 結合した PDF と検証の結果。並びが変わったら捨てる。 */
 let merged = null;
 let filter = 'all';
-// ファイルは 1 つずつ読む（pdf.js も OCR も、同時に動かすと遅くなるだけなので）。
+// ファイルは 1 つずつ調べる（pdf.js も OCR も、同時に動かすと遅くなるだけなので）。
 let queue = Promise.resolve();
-let ocrFailed = false;
+// Drive からの読み込みは、調べるのを待たずに先へ進める（調べている間に、次の
+// ファイルを読んでおく）。読み込みどうしは 1 つずつ。
+let downloads = Promise.resolve();
+let ocrStarting = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -128,7 +134,7 @@ function addFile(source) {
     key: `f${nextKey++}`,
     name: source.name,
     driveId: source.driveId || '',
-    status: 'waiting', // waiting → loading → reading → ocr → ready / error
+    status: 'waiting', // waiting → loading → loaded → reading → ocr → ready / error
     detail: '',
     error: '',
     role: 'body',
@@ -140,23 +146,43 @@ function addFile(source) {
   };
   files.push(file);
   renderFiles();
-  queue = queue.then(() => readFile(file, source)).catch(() => {});
+  file.loaded = downloads.then(() => loadBytes(file, source));
+  downloads = file.loaded.catch(() => {});
+  queue = queue.then(() => readFile(file)).catch(() => {});
 }
 
-async function readFile(file, source) {
+/** ファイルの中身を読む（Drive なら転送）。読む前に外されたら null。 */
+async function loadBytes(file, source) {
+  if (!files.includes(file)) return null;
+  file.status = 'loading';
+  renderFiles();
+  const bytes = await source.load((received, total) => {
+    const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
+    file.detail = amount;
+    // 調べる順番が来て、読み込みを待っているときだけ、上の進み具合に出す。
+    if (file.waiting) showProgress(`「${file.name}」を読み込んでいます（${amount}）`, total ? received / total : null);
+    renderFiles();
+  });
+  if (file.status === 'loading') {
+    file.status = 'loaded';
+    file.detail = '';
+    renderFiles();
+  }
+  return bytes;
+}
+
+async function readFile(file) {
   if (!files.includes(file)) return; // 読む前に外された。
   try {
-    file.status = 'loading';
-    renderFiles();
-    file.bytes = await source.load((received, total) => {
-      const text = total
-        ? `「${file.name}」を読み込んでいます（${megabytes(received)} / ${megabytes(total)}）`
-        : `「${file.name}」を読み込んでいます（${megabytes(received)}）`;
-      showProgress(text, total ? received / total : null);
-    });
+    file.waiting = true;
+    if (file.status !== 'loaded') showProgress(`「${file.name}」を読み込んでいます`, null);
+    file.bytes = await file.loaded;
+    file.waiting = false;
+    if (!file.bytes || !files.includes(file)) return;
     if (!isPdf(file.bytes)) throw new Error('PDF ファイルではありません。');
 
     file.status = 'reading';
+    file.detail = '';
     file.doc = await withContext('PDF として開けませんでした', () => openPdf(file.bytes));
     const count = file.doc.numPages;
 
@@ -179,15 +205,22 @@ async function readFile(file, source) {
       if (index % 16 === 0) await breathe();
     }
 
-    // 頁の画像を測る（重いところ）。JPEG のまま描ける頁を先に調べておく。
+    // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
+    // もののほかは、役割を決める前に番号を読み切る（文字情報の無い束も、画像
+    // から番号が読めれば本文と分かる）。OCR の準備は、画像を描く間に進める。
+    const ocrPages = new Set(
+      !roleFromName(file.name) && $('ocrToggle').checked
+        ? file.pages.filter((page) => page.candidates.length === 0).map((page) => page.index)
+        : []
+    );
+    if (ocrPages.size) startOcr();
+
+    // 頁の画像を描いて測る（重いところ）。JPEG のまま描ける頁を先に調べておく。
     // 調べた JPEG は読み終えたら手放す（ファイルと同じだけの大きさがある）。
     showProgress(`「${file.name}」の頁の画像を調べています`, null);
     const scans = await findScanImages(file.bytes);
-    await measureImages(file, scans);
+    await analyzePages(file, scans, ocrPages);
 
-    // 名前で表紙と分かるもののほかは、役割を決める前に番号を読み切る
-    // （文字情報の無い束も、画像から番号が読めれば本文と分かる）。
-    if (!roleFromName(file.name) && $('ocrToggle').checked) await readMarginsWithOcr(file, scans);
     file.role = guessRole(file.name, file.pages);
     file.status = 'ready';
     file.detail = '';
@@ -200,41 +233,113 @@ async function readFile(file, source) {
   }
 }
 
+/** OCR を用意する（1 度だけ）。使えなければ false（文字情報だけで並べる）。 */
+function startOcr() {
+  ocrStarting ??= prepareOcr().then(
+    () => true,
+    (error) => {
+      showMessage(`画像からの読み取りを使えませんでした（${error.message}）。文字情報だけで並べます。`, 'red');
+      return false;
+    }
+  );
+  return ocrStarting;
+}
+
+/** 同時に進める数を limit までにする（空きを待つ take と、返す give）。 */
+function slots(limit) {
+  let free = limit;
+  const waiting = [];
+  return {
+    async take() {
+      if (free > 0) {
+        free--;
+        return;
+      }
+      await new Promise((resolve) => waiting.push(resolve));
+    },
+    give() {
+      const next = waiting.shift();
+      if (next) next();
+      else free++;
+    },
+  };
+}
+
+/** items を、同時に limit 個までの run で処理する。 */
+async function inPool(items, limit, run) {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await run(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
 /**
- * 頁の画像を描いて測り、一覧の縮小画像を付ける。
+ * 頁の画像を描いて測り、一覧の縮小画像を付ける。OCR する頁は、同じ展開から
+ * 余白の帯も描いて読む（600dpi のスキャンは展開が重いので、1 頁につき 1 回）。
  *
- * 測るのは worker（measure-client.js）なので、測っている間に次の頁を描く。
+ * 何頁かを並べて描き、測るのは worker（measure-client.js）、読むのは OCR の
+ * worker。帯は読み終えるまで手元に置くので、読みが追いつかないときは描くのを
+ * 待つ（数百頁ぶんの帯を抱えないように）。
  *
  * @param {object} file
  * @param {(object|null)[]} scans 頁ごとの JPEG（scan-images.js。無い頁は pdf.js で描く）
+ * @param {Set<number>} ocrPages 余白を OCR する頁の位置
  */
-async function measureImages(file, scans) {
+async function analyzePages(file, scans, ocrPages) {
   const count = file.pages.length;
-  let done = 0;
-  const running = new Set();
-  for (const page of file.pages) {
-    if (!files.includes(file)) break;
-    const { image, thumbUrl } = await withContext(`${page.index + 1} 頁目の画像を描けませんでした`, () =>
-      renderPageImage(file.doc, page.index, scans[page.index] ?? null)
-    );
-    page.thumbUrl = thumbUrl;
-    // 画素は測ったら捨てる（数百頁ぶん抱えるとメモリが足りなくなる）。
-    const job = measure(image).then((result) => {
-      page.measure = result;
-      done++;
-      file.detail = `頁の画像を調べています ${done} / ${count}`;
-      showProgress(`「${file.name}」の頁の画像を調べています（${done} / ${count}）`, done / count);
-      if (done % 8 === 0) renderFiles();
+  let measured = 0;
+  let read = 0;
+  const report = () => {
+    const parts = [`頁の画像を調べています ${measured} / ${count}`];
+    if (ocrPages.size) parts.push(`余白の読み取り ${read} / ${ocrPages.size}`);
+    file.detail = parts.join('・');
+    showProgress(`「${file.name}」の${parts.join('・')}`, (measured + read) / (count + ocrPages.size));
+    if ((measured + read) % 8 === 0) renderFiles();
+  };
+  const ocrSlots = slots(OCR_IN_FLIGHT);
+  const reading = [];
+
+  await inPool(file.pages, PAGES_IN_FLIGHT, async (page) => {
+    if (!files.includes(file)) return;
+    const wantsOcr = ocrPages.has(page.index);
+    if (wantsOcr) await ocrSlots.take();
+    const { image, thumbUrl, strips } = await withContext(`${page.index + 1} 頁目の画像を描けませんでした`, () =>
+      renderPageImage(file.doc, page.index, scans[page.index] ?? null, { margins: wantsOcr })
+    ).catch((error) => {
+      if (wantsOcr) ocrSlots.give();
+      throw error;
     });
-    running.add(job);
-    job.then(
-      () => running.delete(job),
-      () => running.delete(job)
-    );
-    if (running.size >= MEASURES_IN_FLIGHT) await Promise.race(running);
-    await breathe();
+    page.thumbUrl = thumbUrl;
+    if (wantsOcr) {
+      reading.push(
+        readStrips(file, page, strips).finally(() => {
+          ocrSlots.give();
+          read++;
+          report();
+        })
+      );
+    }
+    // 画素は測ったら捨てる（数百頁ぶん抱えるとメモリが足りなくなる）。
+    page.measure = await measure(image);
+    measured++;
+    report();
+  });
+  await Promise.all(reading);
+}
+
+/** 1 頁の余白の帯を OCR して、番号の候補に足す。帯は読み終えたら手放す。 */
+async function readStrips(file, page, strips) {
+  try {
+    if (!files.includes(file) || !(await startOcr())) return;
+    const results = await Promise.all(strips.map((strip) => readStrip(strip)));
+    page.candidates = mergeCandidates(page.candidates, pageNumberCandidates(results.flat(), 'ocr'));
+    page.ocr = true;
+  } catch {
+    // 1 頁読めなくても続ける（その頁は前後から番号を補う）。
+  } finally {
+    strips.forEach((strip) => releaseCanvas(strip.canvas));
   }
-  await Promise.all(running);
 }
 
 /**
@@ -258,57 +363,40 @@ function isPdf(bytes) {
 }
 
 /**
- * 文字情報に番号が見つからなかった頁の余白を、画像として読む。
+ * 読み終えたファイルの、番号の見つかっていない頁の余白を OCR する（あとから
+ * OCR を有効にしたとき）。
  *
  * @param {object} file
  * @param {(object|null)[]} scans 頁ごとの JPEG（scan-images.js）
- * @param {object[]} [pages] 読む頁
+ * @param {object[]} pages 読む頁
  */
-async function readMarginsWithOcr(
-  file,
-  scans,
-  pages = file.pages.filter((page) => page.candidates.length === 0)
-) {
-  if (pages.length === 0 || ocrFailed) return;
+async function readMarginsWithOcr(file, scans, pages) {
+  if (pages.length === 0 || !(await startOcr())) return;
   file.status = 'ocr';
-  try {
-    showProgress('画像から文字を読む準備をしています（初回は数秒かかります）…', null);
-    await prepareOcr();
-  } catch (error) {
-    ocrFailed = true;
-    showMessage(`画像からの読み取りを使えませんでした（${error.message}）。文字情報だけで並べます。`, 'red');
-    return;
-  }
-
   let done = 0;
-  const running = new Set();
+  const ocrSlots = slots(OCR_IN_FLIGHT);
+  const reading = [];
   for (const page of pages) {
-    const strips = await renderMargins(file.doc, page.index, scans[page.index] ?? null);
-    if (!files.includes(file)) {
-      strips.forEach((strip) => releaseCanvas(strip.canvas));
-      return;
+    if (!files.includes(file)) break;
+    await ocrSlots.take();
+    let strips;
+    try {
+      strips = await renderMargins(file.doc, page.index, scans[page.index] ?? null);
+    } catch {
+      ocrSlots.give();
+      continue;
     }
-    const job = Promise.all(
-      strips.map((strip) => readStrip(strip).finally(() => releaseCanvas(strip.canvas)))
-    )
-      .then((results) => {
-        page.candidates = mergeCandidates(page.candidates, pageNumberCandidates(results.flat(), 'ocr'));
-        page.ocr = true;
-      })
-      .catch(() => {
-        // 1 頁読めなくても続ける（その頁は前後から番号を補う）。
-      })
-      .finally(() => {
-        running.delete(job);
+    reading.push(
+      readStrips(file, page, strips).finally(() => {
+        ocrSlots.give();
         done++;
         file.detail = `画像から読み取り ${done} / ${pages.length} 頁`;
         showProgress(`「${file.name}」の余白を読み取っています（${done} / ${pages.length}）`, done / pages.length);
         if (done % 8 === 0) renderFiles();
-      });
-    running.add(job);
-    if (running.size >= OCR_IN_FLIGHT) await Promise.race(running);
+      })
+    );
   }
-  await Promise.all(running);
+  await Promise.all(reading);
 }
 
 function mergeCandidates(a, b) {
@@ -396,6 +484,7 @@ function discardMerged() {
 const STATUS_TEXT = {
   waiting: '順番待ち',
   loading: '読み込み中',
+  loaded: '読み込み済み（調べる順番待ち）',
   reading: '頁を調査中',
   ocr: '余白を読み取り中',
   ready: '',
