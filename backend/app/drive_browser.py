@@ -123,15 +123,19 @@ def _list_files(session, params: dict, mime_types, folders_only) -> dict:
     )
     _raise_for_status(resp, "Drive の一覧の取得")
     body = resp.json()
-    items = []
-    seen = set()
-    for file in body.get("files", []):
-        item = _item(file, mime_types, folders_only)
-        # 同じものへのショートカットが並んでいると、選択肢が重複して見える。
-        if item and item["id"] not in seen:
-            seen.add(item["id"])
-            items.append(item)
-    return {"items": items, "nextPageToken": body.get("nextPageToken")}
+    # 同じものを指すショートカットの重複は、ページをまたいで起きるので画面側で除く。
+    items = [
+        item
+        for item in (_item(file, mime_types, folders_only) for file in body.get("files", []))
+        if item
+    ]
+    return {
+        "items": items,
+        "nextPageToken": body.get("nextPageToken"),
+        # 共有ドライブをまたぐ検索では、Drive が一部のドライブを探さずに返す
+        # ことがある。漏れがありうることを画面で伝えるために渡す。
+        "incomplete": bool(body.get("incompleteSearch")),
+    }
 
 
 def _list_shared_drives(session, page_token: str | None) -> dict:
@@ -153,7 +157,7 @@ def _list_shared_drives(session, page_token: str | None) -> dict:
         }
         for drive in body.get("drives", [])
     ]
-    return {"items": items, "nextPageToken": body.get("nextPageToken")}
+    return {"items": items, "nextPageToken": body.get("nextPageToken"), "incomplete": False}
 
 
 def list_items(
@@ -169,7 +173,8 @@ def list_items(
     """フォルダの中身・検索結果・最初の場所（タブ）のどれか 1 つを返す。
 
     指定の優先順は folder → query → location。戻り値は
-    {"items": [{id, name, mimeType, folder, modifiedTime}], "nextPageToken"}。
+    {"items": [{id, name, mimeType, folder, modifiedTime}], "nextPageToken",
+    "incomplete"}。incomplete は、Drive が一部の共有ドライブを探さずに返したこと。
     """
     mime_types = mime_types or []
     query = (query or "").strip()
@@ -192,8 +197,13 @@ def list_items(
         # 共有ドライブの中も同じ書き方でたどれるよう、全ドライブを対象にする。
         params.update(corpora="allDrives", orderBy="folder,name_natural")
     elif query:
-        terms.insert(0, f"name contains '{_escape_query_value(query)}'")
-        params.update(corpora="allDrives", orderBy="folder,name_natural")
+        # name contains は名前（や単語）の先頭からしか一致しない。日本語の名前は
+        # 単語に区切られないので、「報告書」で「2024年度報告書.xlsx」が出てこない。
+        # fullText（名前・説明・本文の全文検索）も併せて、途中の文字でも見つける。
+        # fullText を含むクエリは並べ替えを指定できないので、Drive の関連度順のまま。
+        value = _escape_query_value(query)
+        terms.insert(0, f"(name contains '{value}' or fullText contains '{value}')")
+        params.update(corpora="allDrives")
     elif location == "my-drive":
         terms.insert(0, "'root' in parents")
         params.update(orderBy="folder,name_natural")

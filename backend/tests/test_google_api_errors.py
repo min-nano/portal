@@ -99,6 +99,34 @@ def test_drive_error_without_a_usable_body_keeps_the_plain_message():
     assert str(excinfo.value) == "ファイルの保存に失敗しました (HTTP 500)。"
 
 
+# --- 代理の資格情報の使い回し ------------------------------------------------
+
+def test_delegated_credentials_are_reused_per_user_and_scope(monkeypatch):
+    # ファイル選択はフォルダを開くたびに一覧を取りに来る。そのたびに署名と
+    # トークンの取得をやり直さないよう、資格情報は利用者ごとに使い回す。
+    made = []
+
+    def credentials(scopes, subject):
+        made.append((tuple(scopes), subject))
+        return object()
+
+    monkeypatch.setattr(google_drive, "_credentials", credentials)
+    monkeypatch.setattr(google_drive, "_CREDENTIALS_CACHE", {})
+    monkeypatch.setattr(google_drive, "AuthorizedSession", lambda creds: creds)
+
+    first = google_drive.delegated_session("a@example.co.jp")
+    assert google_drive.delegated_session("a@example.co.jp") is first
+    google_drive.delegated_session("b@example.co.jp")
+    google_drive.delegated_write_session("a@example.co.jp")
+
+    assert [subject for _, subject in made] == [
+        "a@example.co.jp",
+        "b@example.co.jp",
+        "a@example.co.jp",
+    ]
+    assert made[0][0] != made[2][0]  # 読み取りと書き込みは別の資格情報
+
+
 # --- Docs --------------------------------------------------------------------
 
 def test_docs_403_points_at_api_enablement_and_quotes_google(monkeypatch):

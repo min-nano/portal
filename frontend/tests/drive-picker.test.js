@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // api.js は Clerk を読み込むため、丸ごと差し替える（API の応答を注入する）。
 const apiGet = vi.fn();
-vi.mock('../src/api.js', () => ({ apiGet: (path) => apiGet(path) }));
+vi.mock('../src/api.js', () => ({ apiGet: (path, options) => apiGet(path, options) }));
 
 const PDF_MIME = 'application/pdf';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
@@ -113,6 +113,25 @@ describe('最初の表示', () => {
     expect(status().textContent).toContain('選べるものがありません');
     button('キャンセル').click();
     await picking;
+  });
+});
+
+describe('後ろのページ', () => {
+  it('開いている間は動かさず、閉じたら元に戻す', async () => {
+    respond({});
+    document.body.style.paddingRight = '3px';
+
+    const picking = pickFile({});
+    await flush();
+    expect(document.body.style.overflow).toBe('hidden');
+    // スクロールバーが消えた分を余白で埋め、横にずれないようにする。
+    const width = window.innerWidth - document.documentElement.clientWidth;
+    if (width > 0) expect(document.body.style.paddingRight).toBe(`${3 + width}px`);
+    button('キャンセル').click();
+    await picking;
+
+    expect(document.body.style.overflow).toBe('');
+    expect(document.body.style.paddingRight).toBe('3px');
   });
 });
 
@@ -221,6 +240,58 @@ describe('たどる', () => {
     await picking;
   });
 
+  it('検索結果から入ったフォルダは、パンくずの先頭が検索結果になる', async () => {
+    respond({
+      'q:案件': { items: [folder('sd-folder', '共有の案件')] },
+      'sd-folder': { items: [pdf('p1', 'a.pdf')] },
+    });
+
+    let picking = pickFile({ selectFolder: true });
+    await flush();
+    const input = dialog().querySelector('input[type="search"]');
+    input.value = '案件';
+    dialog().querySelector('form').dispatchEvent(new Event('submit', { cancelable: true }));
+    await flush();
+    itemNamed('共有の案件').click();
+    await flush();
+
+    // どのタブの下にあるかは分からないので、タブの名前は出さない。
+    expect(crumbs()).toEqual(['「案件」の検索結果', '共有の案件']);
+    expect(dialog().querySelector('[aria-selected="true"]')).toBeNull();
+    button('キャンセル').click();
+    await picking;
+
+    // 開き直しても同じ場所から。先頭を押すと元の検索に戻る。
+    picking = pickFile({ selectFolder: true });
+    await flush();
+    expect(crumbs()).toEqual(['「案件」の検索結果', '共有の案件']);
+    dialog().querySelector('.drive-picker-crumb[data-depth="0"]').click();
+    await flush();
+    expect(query(apiGet.mock.calls.at(-1)[0]).q).toBe('案件');
+    expect(input.value).toBe('案件');
+    button('キャンセル').click();
+    await picking;
+  });
+
+  it('ダブルクリックの 2 回目で、開いた先の行を押さない', async () => {
+    respond({
+      'my-drive': { items: [folder('d1', '案件')] },
+      d1: { items: [folder('d2', '2026')] },
+    });
+
+    const picking = pickFile({});
+    await flush();
+    itemNamed('案件').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    await flush();
+    // 1 回目で開いた先の、同じ位置の行に 2 回目が当たる。
+    itemNamed('2026').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }));
+    await flush();
+
+    expect(crumbs()).toEqual(['マイドライブ', '案件']);
+    button('キャンセル').click();
+    await picking;
+  });
+
   it('続きがあれば「さらに表示」で足す', async () => {
     respond({
       'my-drive': { items: [pdf('p1', 'a.pdf')], nextPageToken: 'n2' },
@@ -236,6 +307,38 @@ describe('たどる', () => {
 
     expect(items()).toHaveLength(2);
     expect(more.hidden).toBe(true);
+    button('キャンセル').click();
+    await picking;
+  });
+
+  it('ページをまたいで同じものが返っても、2 度は出さない', async () => {
+    respond({
+      'my-drive': { items: [folder('d1', '案件')], nextPageToken: 'n2' },
+      'my-drive#n2': { items: [folder('d1', '案件（ショートカット）'), pdf('p1', 'a.pdf')] },
+    });
+
+    const picking = pickFile({});
+    await flush();
+    button('さらに表示').click();
+    await flush();
+
+    expect(items().map((node) => node.dataset.id)).toEqual(['d1', 'p1']);
+    button('キャンセル').click();
+    await picking;
+  });
+
+  it('1 ページが丸ごと対象外でも、続きがあれば読み進める', async () => {
+    respond({
+      'my-drive': { items: [], nextPageToken: 'n2' },
+      'my-drive#n2': { items: [pdf('p1', 'a.pdf')] },
+    });
+
+    const picking = pickFile({ mimeTypes: PDF_MIME });
+    await flush();
+    await flush();
+
+    expect(itemNamed('a.pdf')).toBeTruthy();
+    expect(status().textContent).not.toContain('選べるものがありません');
     button('キャンセル').click();
     await picking;
   });
@@ -340,6 +443,65 @@ describe('失敗', () => {
     expect(status().hidden).toBe(true);
     button('キャンセル').click();
     await picking;
+  });
+
+  it('続きの読み込みに失敗しても、読めた分は残し、その続きだけを読み直す', async () => {
+    respond({
+      'my-drive': { items: [pdf('p1', 'a.pdf')], nextPageToken: 'n2' },
+      'my-drive#n2': new Error('一時的なエラー'),
+    });
+
+    const picking = pickFile({});
+    await flush();
+    button('さらに表示').click();
+    await flush();
+    expect(status().textContent).toContain('一時的なエラー');
+    expect(itemNamed('a.pdf')).toBeTruthy();
+
+    respond({
+      'my-drive': { items: [pdf('x', '最初から読み直した.pdf')] },
+      'my-drive#n2': { items: [pdf('p2', 'b.pdf')] },
+    });
+    button('再試行').click();
+    await flush();
+
+    expect(items().map((node) => node.dataset.id)).toEqual(['p1', 'p2']);
+    button('キャンセル').click();
+    await picking;
+  });
+
+  it('Drive が一部の共有ドライブを探さずに返したら、そう添える', async () => {
+    respond({ 'q:図面': { items: [], incomplete: true } });
+
+    const picking = pickFile({});
+    await flush();
+    dialog().querySelector('input[type="search"]').value = '図面';
+    dialog().querySelector('form').dispatchEvent(new Event('submit', { cancelable: true }));
+    await flush();
+
+    expect(status().textContent).toContain('見つかりませんでした');
+    expect(status().textContent).toContain('一部の共有ドライブは探せていない');
+    button('キャンセル').click();
+    await picking;
+  });
+
+  it('移った先の読み込みが始まったら、前の通信は打ち切る', async () => {
+    const signals = [];
+    apiGet.mockImplementation((path, options) => {
+      signals.push(options.signal);
+      return new Promise(() => {});
+    });
+
+    const picking = pickFile({});
+    await flush();
+    dialog().querySelector('[data-location="recent"]').click();
+    await flush();
+
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+    button('キャンセル').click();
+    await picking;
+    expect(signals[1].aborted).toBe(true);
   });
 
   it('遅れて届いた古い一覧で、今の場所を上書きしない', async () => {

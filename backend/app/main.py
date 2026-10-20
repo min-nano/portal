@@ -80,7 +80,7 @@ async def me(user: User = Depends(require_user)):
 
 
 @app.get("/api/drive/items")
-async def list_drive_items(
+def list_drive_items(
     location: str | None = None,
     folder: str | None = None,
     q: str | None = None,
@@ -93,8 +93,12 @@ async def list_drive_items(
 
     Drive の中をたどる画面はポータル側で描き、一覧だけをここで本人の代理
     （drive.readonly）で取る（Google Picker をやめた理由は drive_browser 参照）。
-    指定は folder（フォルダの中身）→ q（名前で検索）→ location（最初の場所:
+    指定は folder（フォルダの中身）→ q（名前と本文で検索）→ location（最初の場所:
     my-drive / shared-drives / recent / shared-with-me）の順に見る。
+
+    Drive の呼び出しは同期処理（requests）なので、async にせず普通の関数に
+    しておく（FastAPI がスレッドプールで動かし、待つ間もイベントループを
+    止めない）。フォルダを開くたび・検索のたびに呼ばれるため。
     """
     session = google_drive.delegated_session(user.email)
     return drive_browser.list_items(

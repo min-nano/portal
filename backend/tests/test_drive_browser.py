@@ -109,6 +109,7 @@ def test_shared_drives_are_returned_as_folders():
             }
         ],
         "nextPageToken": "next",
+        "incomplete": False,
     }
 
 
@@ -117,9 +118,14 @@ def test_search_matches_names_across_all_drives():
 
     drive_browser.list_items(session, location="my-drive", query=" 証明書 ")
 
-    # 検索語があれば、開いているタブに関係なく全体から探す。
-    assert session.params["q"] == "name contains '証明書' and trashed = false"
+    # 検索語があれば、開いているタブに関係なく全体から探す。名前の途中の文字でも
+    # 見つかるよう、全文検索（fullText）も併せる（name contains は先頭一致）。
+    assert session.params["q"] == (
+        "(name contains '証明書' or fullText contains '証明書') and trashed = false"
+    )
     assert session.params["corpora"] == "allDrives"
+    # fullText を含むクエリは並べ替えを指定できない（Drive が 400 を返す）。
+    assert "orderBy" not in session.params
 
 
 def test_folder_takes_precedence_over_search_and_location():
@@ -135,7 +141,7 @@ def test_quotes_in_ids_and_queries_are_escaped():
 
     drive_browser.list_items(session, query="it's")
 
-    assert "name contains 'it\\'s'" in session.params["q"]
+    assert "name contains 'it\\'s' or fullText contains 'it\\'s'" in session.params["q"]
 
 
 def test_page_token_is_passed_through():
@@ -227,6 +233,7 @@ def test_items_are_returned_in_the_shape_the_dialog_uses():
             },
         ],
         "nextPageToken": "more",
+        "incomplete": False,
     }
 
 
@@ -268,24 +275,22 @@ def test_shortcuts_to_other_types_are_filtered_out():
         )
     )
 
-    assert drive_browser.list_items(session, folder="f", mime_types=[PDF_MIME]) == {
-        "items": [],
-        "nextPageToken": None,
-    }
+    assert drive_browser.list_items(session, folder="f", mime_types=[PDF_MIME])["items"] == []
 
 
-def test_duplicate_shortcuts_are_listed_once():
-    target = {"targetId": "real", "targetMimeType": PDF_MIME}
-    session = FakeSession(
-        files(
-            {"id": "real", "name": "a.pdf", "mimeType": PDF_MIME},
-            {"id": "s", "name": "a.pdf", "mimeType": SHORTCUT_MIME, "shortcutDetails": target},
-        )
-    )
+def test_incomplete_searches_are_reported():
+    # 共有ドライブをまたぐ検索で、Drive が一部のドライブを探さずに返したとき。
+    session = FakeSession({**files(), "incompleteSearch": True})
 
-    items = drive_browser.list_items(session, folder="f")["items"]
+    result = drive_browser.list_items(session, query="図面")
 
-    assert [item["id"] for item in items] == ["real"]
+    assert result["incomplete"] is True
+
+
+def test_complete_listings_are_not_marked_incomplete():
+    assert drive_browser.list_items(FakeSession(), folder="f")["incomplete"] is False
+    session = FakeSession({"drives": []})
+    assert drive_browser.list_items(session, location="shared-drives")["incomplete"] is False
 
 
 def test_folders_only_drops_files_returned_by_drive():

@@ -19,6 +19,7 @@
 // ここから返すのはファイルの ID・名前・種類だけ。
 
 import { apiGet } from './api.js';
+import { el } from './components/form-field.js';
 
 export const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
@@ -39,7 +40,9 @@ const SEARCH_DELAY_MS = 350;
 
 // 開き直したときは、前回いた場所から始める（雛形と保存先を続けて選ぶときなど、
 // 同じフォルダの周りを行き来することが多いため）。ページを開き直せば忘れる。
-let lastPlace = { location: 'my-drive', path: [] };
+// origin は、検索結果から入ったフォルダのときの検索語（たどってきた道が
+// 分からないので、パンくずの先頭は検索結果になる）。
+let lastPlace = { location: 'my-drive', path: [], origin: '' };
 
 const dateFormat = new Intl.DateTimeFormat('ja-JP', {
   year: 'numeric',
@@ -95,10 +98,10 @@ export function itemsQuery({ location, path, query }, { mimeTypes, selectFolder 
  * 共有ドライブの一覧・最近・共有アイテム・検索結果は、フォルダの中ではない
  * ので選べない（中へ入れば選べる）。マイドライブは最上位でも選べる。
  */
-export function currentFolder({ location, path, query }) {
+export function currentFolder({ location, path, query, origin }) {
   if (query) return null;
   if (path.length) return path[path.length - 1];
-  return location === 'my-drive' ? MY_DRIVE_ROOT : null;
+  return location === 'my-drive' && !origin ? MY_DRIVE_ROOT : null;
 }
 
 /**
@@ -110,20 +113,24 @@ export function currentFolder({ location, path, query }) {
  */
 function lockPageScroll(doc) {
   const { documentElement: html, body } = doc;
+  const view = doc.defaultView;
   const previous = { html: html.style.overflow, body: body.style.overflow };
+  // スクロールバーが消えた分だけ内容が右にずれるので、その幅を埋める
+  // （スクロールバーが常に出ているデスクトップのブラウザで、後ろのページが
+  // 開閉のたびに横へ動かないように）。
+  const scrollbar = view.innerWidth - html.clientWidth;
+  const previousPadding = body.style.paddingRight;
   html.style.overflow = 'hidden';
   body.style.overflow = 'hidden';
+  if (scrollbar > 0) {
+    const current = parseFloat(view.getComputedStyle(body).paddingRight) || 0;
+    body.style.paddingRight = `${current + scrollbar}px`;
+  }
   return () => {
     html.style.overflow = previous.html;
     body.style.overflow = previous.body;
+    body.style.paddingRight = previousPadding;
   };
-}
-
-function el(doc, tag, className, text) {
-  const node = doc.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
 }
 
 /** ダイアログの骨組み。中身（一覧・パンくず）は開いている間に描き直す。 */
@@ -155,8 +162,8 @@ function buildDialog(doc) {
   search.setAttribute('role', 'search');
   const input = el(doc, 'input');
   input.type = 'search';
-  input.placeholder = 'Drive 内を名前で検索';
-  input.setAttribute('aria-label', 'Drive 内を名前で検索');
+  input.placeholder = 'Drive 内を検索';
+  input.setAttribute('aria-label', 'Drive 内を検索');
   input.enterKeyHint = 'search';
   search.append(input);
 
@@ -222,25 +229,30 @@ export function pickFile(options = {}) {
   let selected = null; // 一覧で選んでいるファイル（ファイルを選ぶとき）
   let nextPageToken = null;
   let loading = null; // 進行中の読み込み（AbortController）
+  // 一覧に出した ID。同じものを指すショートカットが別のページに入っていても、
+  // 2 度は出さない（Drive はページをまたいだ重複を除いてくれない）。
+  let shown = new Set();
+  let incomplete = false; // Drive が一部の共有ドライブを探さずに返したか
 
   const updateChoose = () => {
     choose.disabled = options.selectFolder ? !currentFolder(state) : !selected;
   };
 
-  const showStatus = (text, retry = false) => {
+  /** 状態の表示。retry を渡すと「再試行」を添え、押すとそれを呼ぶ。 */
+  const showStatus = (text, retry = null) => {
     status.replaceChildren(text);
     status.hidden = !text;
     if (retry) {
       const again = el(doc, 'button', 'secondary', '再試行');
       again.type = 'button';
-      again.addEventListener('click', () => load());
+      again.addEventListener('click', retry);
       status.append(' ', again);
     }
   };
 
   const renderTabs = () => {
     dialog.querySelectorAll('.drive-picker-tab').forEach((tab) => {
-      const active = !state.query && tab.dataset.location === state.location;
+      const active = !state.query && !state.origin && tab.dataset.location === state.location;
       tab.setAttribute('aria-selected', String(active));
     });
   };
@@ -248,10 +260,15 @@ export function pickFile(options = {}) {
   const renderCrumbs = () => {
     const crumbs = $('.drive-picker-crumbs');
     const trail = el(doc, 'ol');
-    const root = LOCATIONS.find(({ key }) => key === state.location);
+    const tab = LOCATIONS.find(({ key }) => key === state.location);
+    // 検索結果から入ったフォルダの先頭は、タブではなくその検索結果（戻ると
+    // 同じ検索をやり直す）。どのタブの下にあるかは分からないため。
+    const root = state.origin
+      ? { label: `「${state.origin}」の検索結果`, depth: 0 }
+      : { label: tab.label, depth: 0 };
     const steps = state.query
       ? [{ label: `「${state.query}」の検索結果` }]
-      : [{ label: root.label, depth: 0 }, ...state.path.map((f, i) => ({ label: f.name, depth: i + 1 }))];
+      : [root, ...state.path.map((f, i) => ({ label: f.name, depth: i + 1 }))];
     steps.forEach((step, index) => {
       const item = el(doc, 'li');
       const last = index === steps.length - 1;
@@ -292,6 +309,8 @@ export function pickFile(options = {}) {
     if (!append) {
       selected = null;
       nextPageToken = null;
+      shown = new Set();
+      incomplete = false;
       list.replaceChildren();
       // 別の場所へ移ったら、一覧は先頭から見せる。
       $('.drive-picker-body').scrollTop = 0;
@@ -303,26 +322,46 @@ export function pickFile(options = {}) {
     showStatus('読み込んでいます…');
     let result;
     try {
-      result = await apiGet(itemsQuery(state, options, append ? nextPageToken : null));
+      result = await apiGet(itemsQuery(state, options, append ? nextPageToken : null), {
+        signal: controller.signal,
+      });
     } catch (error) {
       if (controller.signal.aborted) return;
       loading = null;
-      showStatus(error.message, true);
+      // 続きの読み込みに失敗したときは、読めている分を残したまま、その続き
+      // だけを読み直す。
+      showStatus(error.message, () => load(append));
       return;
     }
     // 待っている間に別の場所へ移っていたら、古い結果は捨てる。
     if (controller.signal.aborted) return;
     loading = null;
-    result.items.forEach((item) => list.append(renderItem(item)));
+    result.items
+      .filter((item) => !shown.has(item.id))
+      .forEach((item) => {
+        shown.add(item.id);
+        list.append(renderItem(item));
+      });
     nextPageToken = result.nextPageToken || null;
+    incomplete = incomplete || Boolean(result.incomplete);
+    // 絞り込みで 1 ページがまるごと対象外だった（0 件でも続きがある）ときは、
+    // 「選べるものがない」とは言わずに、そのまま続きを読む。
+    if (!list.children.length && nextPageToken) {
+      load(true);
+      return;
+    }
     more.hidden = !nextPageToken;
-    if (list.children.length) showStatus('');
-    else showStatus(state.query ? '見つかりませんでした。' : 'ここには選べるものがありません。');
+    const partly = incomplete ? '一部の共有ドライブは探せていない可能性があります。' : '';
+    if (list.children.length) showStatus(partly);
+    else if (state.query) showStatus(`見つかりませんでした。${partly}`);
+    else showStatus('ここには選べるものがありません。');
   }
 
   const go = (change) => {
     Object.assign(state, change);
-    if (!state.query) lastPlace = { location: state.location, path: [...state.path] };
+    if (!state.query) {
+      lastPlace = { location: state.location, path: [...state.path], origin: state.origin };
+    }
     load();
   };
 
@@ -369,18 +408,30 @@ export function pickFile(options = {}) {
       else if (target.dataset.action === 'choose') finish(result());
       else if (target.dataset.location) {
         input.value = '';
-        go({ location: target.dataset.location, path: [], query: '' });
+        go({ location: target.dataset.location, path: [], query: '', origin: '' });
       } else if (target.dataset.depth !== undefined) {
-        go({ path: state.path.slice(0, Number(target.dataset.depth)), query: '' });
+        const depth = Number(target.dataset.depth);
+        if (depth === 0 && state.origin) {
+          // 先頭が検索結果なら、その検索に戻る。
+          input.value = state.origin;
+          go({ path: [], query: state.origin, origin: '' });
+        } else go({ path: state.path.slice(0, depth), query: '' });
       } else if (target === more) load(true);
       else if (target.driveItem) {
+        // ダブルクリックの 2 回目（detail が 2 以上）は無視する。フォルダを
+        // ダブルクリックしたとき、1 回目で開いた先の一覧に 2 回目が当たって、
+        // 意図しない行を開いたり選んだりしないように（ファイルのダブル
+        // クリックは dblclick で受ける）。
+        if (event.detail > 1) return;
         const item = target.driveItem;
         if (item.folder) {
           // 検索結果から入ったフォルダは、たどってきた道が分からないので、
-          // そのフォルダを起点にする。
-          const path = state.query ? [item] : [...state.path, item];
+          // そのフォルダを起点にし、先頭には元の検索結果を置く。
+          const change = state.query
+            ? { path: [item], origin: state.query }
+            : { path: [...state.path, item] };
           input.value = '';
-          go({ path, query: '' });
+          go({ ...change, query: '' });
         } else select(target);
       }
     });

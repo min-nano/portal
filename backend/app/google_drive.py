@@ -21,6 +21,8 @@ JSON 鍵ファイルなしで動作するよう、Cloud Run 上ではランタ�
 GOOGLE_APPLICATION_CREDENTIALS に JSON 鍵を指定すればそのまま動く。
 """
 
+import threading
+
 import google.auth
 from google.auth import iam
 from google.auth.transport.requests import AuthorizedSession, Request
@@ -85,9 +87,33 @@ def _credentials(scopes: list[str], subject: str) -> service_account.Credentials
     )
 
 
+# 代理の資格情報は、利用者（とスコープ）ごとに使い回す。作るたびに ADC の
+# 読み込み・IAM での署名・トークンの取得が要り、ファイル選択ダイアログは
+# フォルダを開くたび・検索のたびに一覧を取りに来るため。トークンが切れれば
+# AuthorizedSession が使う前に取り直すので、捨てる必要はない。利用者は社内の
+# 人数ぶんしかいないが、念のため上限を超えたら一度空にする。
+_CREDENTIALS_CACHE: dict[tuple, service_account.Credentials] = {}
+_CREDENTIALS_CACHE_LIMIT = 256
+_credentials_lock = threading.Lock()
+
+
+def _cached_credentials(scopes: list[str], subject: str) -> service_account.Credentials:
+    key = (tuple(scopes), subject)
+    with _credentials_lock:
+        creds = _CREDENTIALS_CACHE.get(key)
+        if creds is None:
+            if len(_CREDENTIALS_CACHE) >= _CREDENTIALS_CACHE_LIMIT:
+                _CREDENTIALS_CACHE.clear()
+            creds = _credentials(scopes, subject)
+            _CREDENTIALS_CACHE[key] = creds
+    return creds
+
+
 def delegated_session(user_email: str) -> AuthorizedSession:
     """user_email の代理（読み取り専用）で Drive を呼ぶセッション。"""
-    return AuthorizedSession(_credentials([DRIVE_READONLY_SCOPE], subject=user_email))
+    return AuthorizedSession(
+        _cached_credentials([DRIVE_READONLY_SCOPE], subject=user_email)
+    )
 
 
 def delegated_write_session(user_email: str) -> AuthorizedSession:
@@ -98,7 +124,7 @@ def delegated_write_session(user_email: str) -> AuthorizedSession:
     権限で行う。本人が書き込めない場所には保存できない。
     """
     return AuthorizedSession(
-        _credentials([DRIVE_SCOPE, DOCUMENTS_SCOPE], subject=user_email)
+        _cached_credentials([DRIVE_SCOPE, DOCUMENTS_SCOPE], subject=user_email)
     )
 
 
