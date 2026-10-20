@@ -135,31 +135,50 @@ class RangeSession:
         self.response = response
         self.calls = []
 
-    def get(self, url, params=None, headers=None):
-        self.calls.append((url, params, headers))
+    def get(self, url, params=None, headers=None, stream=False):
+        self.calls.append((url, params, headers, stream))
         return self.response
 
 
 class RangeResponse(FakeResponse):
     def __init__(self, status_code, content=b"", payload=None):
         super().__init__(status_code, payload)
-        self.content = content
+        self._content = content
+        self.read = False
+        self.closed = False
+
+    @property
+    def content(self):
+        self.read = True
+        return self._content
+
+    def close(self):
+        self.closed = True
 
 
 def test_download_range_asks_drive_for_part_of_the_file():
     session = RangeSession(RangeResponse(206, b"cdef"))
 
     assert google_drive.download_range(session, "f1", 2, 5) == b"cdef"
-    ((url, params, headers),) = session.calls
+    ((url, params, headers, stream),) = session.calls
     assert url.endswith("/files/f1")
     assert params["alt"] == "media"
     assert headers == {"Range": "bytes=2-5"}
+    assert stream is True
+    assert session.response.closed
 
 
-def test_download_range_cuts_out_the_part_when_drive_sends_everything():
-    session = RangeSession(RangeResponse(200, b"abcdefgh"))
+def test_download_range_refuses_the_whole_file_without_reading_it():
+    # 範囲を無視して全体が返ってきたら、本文を読まずに失敗にする（数百 MB を
+    # 範囲ごとに読むと、Cloud Run のメモリが足りなくなる）。
+    response = RangeResponse(200, b"abcdefgh")
+    session = RangeSession(response)
 
-    assert google_drive.download_range(session, "f1", 2, 5) == b"cdef"
+    with pytest.raises(DriveError, match="範囲を指定して読めませんでした") as caught:
+        google_drive.download_range(session, "f1", 2, 5)
+    assert caught.value.status == 502
+    assert not response.read
+    assert response.closed
 
 
 def test_download_range_reports_drive_errors():

@@ -23,6 +23,7 @@
 import '../styles.css';
 import './tool.css';
 import '../components/index.js';
+import { el } from '../components/form-field.js';
 import { startPage } from '../page-start.js';
 import { pickFiles } from '../drive-picker.js';
 import { ensurePdfExtension } from '../pdf-file-ops.js';
@@ -85,6 +86,8 @@ const overrides = new Map();
 let view = { order: [], problems: [], issues: new Map(), numberings: new Map() };
 /** 結合した PDF と検証の結果。並びが変わったら捨てる。 */
 let merged = null;
+/** 並びが変わるたびに進める番号（結合の途中で変わったら、その結合は捨てる）。 */
+let generation = 0;
 let filter = 'all';
 // ファイルは 1 つずつ調べる（pdf.js も OCR も、同時に動かすと遅くなるだけなので）。
 let queue = Promise.resolve();
@@ -270,6 +273,7 @@ async function readFile(file) {
         measure: null,
         thumbUrl: '',
         ocr: false,
+        scan: null,
       });
       if (index % 16 === 0) await breathe();
     }
@@ -298,6 +302,11 @@ async function readFile(file) {
       log(`「${file.name}」の ${count - jpegPages} 頁は pdf.js で描きます（${why || '理由不明'}）。${example}`);
     }
     await analyzePages(file, scans, ocrPages);
+    // あとから OCR を有効にしたときのために、番号の見つかっていない頁の JPEG
+    // だけを残す（PDF 全体を読み直さずに済む。残すのは一部の頁なので小さい）。
+    for (const page of file.pages) {
+      if (page.candidates.length === 0 && !page.ocr) page.scan = scans[page.index] ?? null;
+    }
     const byOcr = file.pages.filter((page) => page.ocr && page.candidates.some((c) => c.source === 'ocr')).length;
     log(
       `「${file.name}」の頁の画像を調べました（JPEG のまま展開 ${jpegPages} / ${count} 頁、` +
@@ -352,8 +361,16 @@ function slots(limit) {
 /** items を、同時に limit 個までの run で処理する。 */
 async function inPool(items, limit, run) {
   let next = 0;
+  let failed = false; // 1 つ失敗したら、残りは始めない（ほかの run も止まる）
   const worker = async () => {
-    while (next < items.length) await run(items[next++]);
+    while (!failed && next < items.length) {
+      try {
+        await run(items[next++]);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
@@ -374,7 +391,10 @@ async function analyzePages(file, scans, ocrPages) {
   const count = file.pages.length;
   let measured = 0;
   let read = 0;
+  let failed = false;
   const report = () => {
+    // 失敗したあとに描き終えた頁は、次のファイルの進み具合を上書きしない。
+    if (failed) return;
     const parts = [`頁の画像を調べています ${measured} / ${count}`];
     if (ocrPages.size) parts.push(`余白の読み取り ${read} / ${ocrPages.size}`);
     showProgress(`「${file.name}」の${parts.join('・')}`, (measured + read) / (count + ocrPages.size));
@@ -407,6 +427,9 @@ async function analyzePages(file, scans, ocrPages) {
     page.measure = await measure(image);
     measured++;
     report();
+  }).catch((error) => {
+    failed = true;
+    throw error;
   });
   await Promise.all(reading);
 }
@@ -418,6 +441,7 @@ async function readStrips(file, page, strips) {
     const results = await Promise.all(strips.map((strip) => readStrip(strip)));
     page.candidates = mergeCandidates(page.candidates, pageNumberCandidates(results.flat(), 'ocr'));
     page.ocr = true;
+    page.scan = null;
   } catch {
     // 1 頁読めなくても続ける（その頁は前後から番号を補う）。
   } finally {
@@ -447,15 +471,14 @@ function isPdf(bytes) {
 
 /**
  * 読み終えたファイルの、番号の見つかっていない頁の余白を OCR する（あとから
- * OCR を有効にしたとき）。
+ * OCR を有効にしたとき）。読んでいる間も、ファイルは並びに入れたままにする
+ * （頁が抜けて見えないように）。読み終えたら並べ直す。
  *
  * @param {object} file
- * @param {(object|null)[]} scans 頁ごとの JPEG（scan-images.js）
- * @param {object[]} pages 読む頁
+ * @param {object[]} pages 読む頁（JPEG のまま描ける頁は page.scan を使う）
  */
-async function readMarginsWithOcr(file, scans, pages) {
+async function readMarginsWithOcr(file, pages) {
   if (pages.length === 0 || !(await startOcr())) return;
-  file.status = 'ocr';
   progressLabel = '余白を読み取っています';
   log(`「${file.name}」の余白を OCR します（${pages.length} 頁）`);
   let done = 0;
@@ -466,7 +489,7 @@ async function readMarginsWithOcr(file, scans, pages) {
     await ocrSlots.take();
     let strips;
     try {
-      strips = await renderMargins(file.doc, page.index, scans[page.index] ?? null);
+      strips = await renderMargins(file.doc, page.index, page.scan);
     } catch {
       ocrSlots.give();
       continue;
@@ -559,6 +582,7 @@ function refresh() {
 }
 
 function discardMerged() {
+  generation++;
   merged = null;
   $('downloadBtn').disabled = true;
   $('verifyResult').hidden = true;
@@ -571,20 +595,12 @@ const STATUS_TEXT = {
   loading: '読み込み中',
   loaded: '読み込み済み（調べる順番待ち）',
   reading: '頁を調査中',
-  ocr: '余白を読み取り中',
   ready: '',
   error: '読み込めませんでした',
 };
 
-function el(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
 function smallButton(text, title, onClick, className = 'secondary') {
-  const button = el('button', className, text);
+  const button = el(document, 'button', className, text);
   button.type = 'button';
   button.title = title;
   button.setAttribute('aria-label', title);
@@ -600,11 +616,11 @@ function renderFiles() {
 }
 
 function fileItem(file, position) {
-  const item = el('li', `bm-file${file.status === 'error' ? ' error' : ''}`);
+  const item = el(document, 'li', `bm-file${file.status === 'error' ? ' error' : ''}`);
 
-  const head = el('div', 'bm-file-head');
-  head.append(el('span', 'name', file.name));
-  const actions = el('div', 'bm-file-buttons');
+  const head = el(document, 'div', 'bm-file-head');
+  head.append(el(document, 'span', 'name', file.name));
+  const actions = el(document, 'div', 'bm-file-buttons');
   actions.append(
     smallButton('↑', 'ひとつ上へ（先頭・末尾に置くファイルの順番）', () => moveFile(file, -1)),
     smallButton('↓', 'ひとつ下へ', () => moveFile(file, 1)),
@@ -615,13 +631,13 @@ function fileItem(file, position) {
   head.append(actions);
   item.append(head);
 
-  const meta = el('p', 'hint');
+  const meta = el(document, 'p', 'hint');
   if (file.status === 'error') {
     meta.textContent = file.error;
   } else if (file.status !== 'ready') {
     meta.textContent = STATUS_TEXT[file.status];
   } else {
-    meta.textContent = fileSummary(file);
+    meta.textContent = fileSummary(file) + (file.ocrBusy ? '・余白を読み取り中' : '');
   }
   item.append(meta);
 
@@ -646,13 +662,13 @@ function fileSummary(file) {
 }
 
 function fileControls(file) {
-  const controls = el('div', 'bm-file-controls');
+  const controls = el(document, 'div', 'bm-file-controls');
 
-  const roleField = el('label', 'bm-inline');
+  const roleField = el(document, 'label', 'bm-inline');
   roleField.append('役割 ');
-  const role = el('select');
+  const role = el(document, 'select');
   for (const [value, text] of Object.entries(ROLES)) {
-    const option = el('option', null, text);
+    const option = el(document, 'option', null, text);
     option.value = value;
     option.selected = value === file.role;
     role.append(option);
@@ -666,8 +682,8 @@ function fileControls(file) {
 
   // 給紙口の都合で、最後の頁から並んでいるファイル。本文は頁番号から自動で
   // 並ぶので、効くのは主に表紙など番号の無いファイル（と手で決めた番号）。
-  const reverseField = el('label', 'bm-inline');
-  const reverse = el('input');
+  const reverseField = el(document, 'label', 'bm-inline');
+  const reverse = el(document, 'input');
   reverse.type = 'checkbox';
   reverse.checked = file.reversed;
   reverse.addEventListener('change', () => {
@@ -680,9 +696,9 @@ function fileControls(file) {
   if (file.role !== 'body') return controls;
 
   const numbering = view.numberings.get(file.key);
-  const startField = el('label', 'bm-inline');
+  const startField = el(document, 'label', 'bm-inline');
   startField.append('先頭の頁の番号 ');
-  const start = el('input');
+  const start = el(document, 'input');
   start.type = 'text';
   start.inputMode = 'numeric';
   start.size = 5;
@@ -690,9 +706,9 @@ function fileControls(file) {
   start.value = file.manual ? String(file.manual.start) : '';
   startField.append(start);
 
-  const stepField = el('label', 'bm-inline');
+  const stepField = el(document, 'label', 'bm-inline');
   stepField.append('進み方 ');
-  const step = el('select');
+  const step = el(document, 'select');
   [
     ['', '自動'],
     ['2', '2 つずつ（奇数・偶数の束）'],
@@ -700,7 +716,7 @@ function fileControls(file) {
     ['1', '1 つずつ（両面）'],
     ['-1', '1 つずつ逆順'],
   ].forEach(([value, text]) => {
-    const option = el('option', null, text);
+    const option = el(document, 'option', null, text);
     option.value = value;
     option.selected = file.manual ? String(file.manual.step) === value : value === '';
     step.append(option);
@@ -726,7 +742,7 @@ function fileControls(file) {
   start.addEventListener('change', apply);
   step.addEventListener('change', apply);
   controls.append(startField, stepField);
-  const note = el('span', 'hint', '番号を読み違えているときだけ入れてください（空なら自動）。');
+  const note = el(document, 'span', 'hint', '番号を読み違えているときだけ入れてください（空なら自動）。');
   controls.append(note);
   return controls;
 }
@@ -740,8 +756,8 @@ function renderReview() {
 }
 
 function summaryBox(key, value) {
-  const box = el('div', 'result-box');
-  box.append(el('span', 'key', key), el('span', 'value', value));
+  const box = el(document, 'div', 'result-box');
+  box.append(el(document, 'span', 'key', key), el(document, 'span', 'value', value));
   return box;
 }
 
@@ -765,8 +781,8 @@ function renderSummary() {
 function renderProblems() {
   const list = $('problems');
   const items = view.problems.map((problem) => {
-    const item = el('li', `bm-problem ${problem.level}`);
-    item.append(el('span', null, problem.message));
+    const item = el(document, 'li', `bm-problem ${problem.level}`);
+    item.append(el(document, 'span', null, problem.message));
     if (problem.pageKeys?.length) {
       item.append(
         smallButton('見る', '該当する頁へ移動', () => scrollToPage(problem.pageKeys[0]))
@@ -794,8 +810,8 @@ function renderProblems() {
   };
   for (const [kind, count] of counts) {
     const [level, text] = SCAN_TEXT[kind];
-    const item = el('li', `bm-problem ${level}`);
-    item.append(el('span', null, `${text}が ${count} 頁あります。`));
+    const item = el(document, 'li', `bm-problem ${level}`);
+    item.append(el(document, 'span', null, `${text}が ${count} 頁あります。`));
     const first = view.order.find((entry) =>
       (view.issues.get(entry.pageKey) || []).some((issue) => issue.kind === kind)
     );
@@ -804,7 +820,7 @@ function renderProblems() {
   }
 
   if (items.length === 0 && view.order.length) {
-    items.push(el('li', 'bm-problem ok', '頁の抜け・重なり・スキャンの乱れは見つかりませんでした。'));
+    items.push(el(document, 'li', 'bm-problem ok', '頁の抜け・重なり・スキャンの乱れは見つかりませんでした。'));
   }
   list.replaceChildren(...items);
 }
@@ -826,10 +842,10 @@ function renderGrid() {
   const cards = [];
   for (const item of gridItems(view.order)) {
     if (item.type === 'missing') {
-      const card = el('li', 'bm-page missing');
+      const card = el(document, 'li', 'bm-page missing');
       card.append(
-        el('span', 'bm-missing-label', item.from === item.to ? `${item.from} 頁` : `${item.from}〜${item.to} 頁`),
-        el('span', 'hint', 'ありません')
+        el(document, 'span', 'bm-missing-label', item.from === item.to ? `${item.from} 頁` : `${item.from}〜${item.to} 頁`),
+        el(document, 'span', 'hint', 'ありません')
       );
       cards.push(card);
       continue;
@@ -845,13 +861,13 @@ function renderGrid() {
 function pageCard(entry, issues, level) {
   const file = files.find((f) => f.key === entry.fileKey);
   const page = file.pages[entry.pageIndex];
-  const card = el('li', `bm-page${level ? ` ${level}` : ''}`);
+  const card = el(document, 'li', `bm-page${level ? ` ${level}` : ''}`);
   card.dataset.pageKey = entry.pageKey;
 
-  const thumb = el('button', 'bm-thumb');
+  const thumb = el(document, 'button', 'bm-thumb');
   thumb.type = 'button';
   thumb.title = '拡大して見る';
-  const image = el('img');
+  const image = el(document, 'img');
   image.src = page.thumbUrl;
   image.alt = `${displayLabel(entry)}（${file.name} の ${entry.pageIndex + 1} 頁目）`;
   image.loading = 'lazy';
@@ -859,21 +875,21 @@ function pageCard(entry, issues, level) {
   thumb.addEventListener('click', () => openPreview(entry.pageKey));
   card.append(thumb);
 
-  const label = el('div', 'bm-page-label');
-  label.append(el('strong', null, displayLabel(entry)));
+  const label = el(document, 'div', 'bm-page-label');
+  label.append(el(document, 'strong', null, displayLabel(entry)));
   const status = STATUS_LABEL[entry.status];
-  if (status) label.append(el('span', `bm-status ${entry.status}`, status));
+  if (status) label.append(el(document, 'span', `bm-status ${entry.status}`, status));
   card.append(label);
-  card.append(el('div', 'bm-page-source', `${file.name}・${entry.pageIndex + 1}/${file.pages.length}`));
+  card.append(el(document, 'div', 'bm-page-source', `${file.name}・${entry.pageIndex + 1}/${file.pages.length}`));
 
   if (issues.length) {
-    const list = el('ul', 'bm-page-issues');
-    for (const issue of issues) list.append(el('li', issue.level, issue.message));
+    const list = el(document, 'ul', 'bm-page-issues');
+    for (const issue of issues) list.append(el(document, 'li', issue.level, issue.message));
     card.append(list);
   }
 
   if (entry.role === 'body') {
-    const input = el('input', 'bm-page-number');
+    const input = el(document, 'input', 'bm-page-number');
     input.type = 'text';
     input.inputMode = 'decimal';
     input.placeholder = '番号を直す';
@@ -964,7 +980,21 @@ async function mergeAndVerify() {
   button.disabled = true;
   discardMerged();
   showMessage('');
+  const run = generation;
   const order = view.order;
+  // 突き合わせに使う元の頁の情報は、始めるときに写しておく（結合の途中で
+  // ファイルを外されても読めるように）。
+  const originals = order.map((entry) => {
+    const { size, signature } = pageOf(entry);
+    return { size, signature };
+  });
+  // 結合の途中で並び・名前が変わったら、その結果は使わない（画面の並びと
+  // 違う PDF を保存させないため）。
+  const stale = () => run !== generation;
+  const abandon = () => {
+    log('結合している間に並びか名前が変わったので、結合した PDF を捨てました');
+    showMessage('結合している間に並びか名前が変わりました。もう一度「結合して検証する」を押してください。', 'red');
+  };
   try {
     const fileName = outputName();
     const ranges = pageLabelRanges(order);
@@ -986,33 +1016,44 @@ async function mergeAndVerify() {
 
     // 結合した PDF を読み直し、元の頁と突き合わせる（頁を描き直さないので軽い）。
     log(`結合しました（${order.length} 頁、${megabytes(bytes.length)}、${seconds(started)}）`);
+    if (stale()) {
+      abandon();
+      return;
+    }
     progressLabel = '検証しています';
     showProgress('結合した PDF を検証しています…', null);
     const mergedDigests = await pageDigests(bytes);
     const doc = await openPdf(bytes);
     const actual = [];
-    for (let index = 0; index < doc.numPages; index++) {
-      showProgress(`結合した PDF を検証しています（${index + 1} / ${doc.numPages} 頁）`, index / doc.numPages);
-      const page = await withContext(`結合した PDF の ${index + 1} 頁目を検証できませんでした`, () =>
-        readPageText(doc, index)
-      );
-      actual.push({ size: page.size, signature: page.signature, digest: mergedDigests[index] });
-      if (index % 16 === 0) await breathe();
+    let labels;
+    let info;
+    try {
+      for (let index = 0; index < doc.numPages; index++) {
+        if (stale()) break;
+        showProgress(`結合した PDF を検証しています（${index + 1} / ${doc.numPages} 頁）`, index / doc.numPages);
+        const page = await withContext(`結合した PDF の ${index + 1} 頁目を検証できませんでした`, () =>
+          readPageText(doc, index)
+        );
+        actual.push({ size: page.size, signature: page.signature, digest: mergedDigests[index] });
+        if (index % 16 === 0) await breathe();
+      }
+      labels = await doc.getPageLabels();
+      ({ info } = await doc.getMetadata());
+    } finally {
+      // 失敗しても閉じる（結合した PDF 全体を worker に残さない）。
+      await closePdf(doc);
     }
-    const labels = await doc.getPageLabels();
-    const { info } = await doc.getMetadata();
-    await closePdf(doc);
+    if (stale()) {
+      abandon();
+      return;
+    }
 
-    const expected = order.map((entry, i) => {
-      const page = pageOf(entry);
-      return {
-        pageKey: entry.pageKey,
-        label: displayLabel(entry),
-        size: page.size,
-        signature: page.signature,
-        digest: digests[i],
-      };
-    });
+    const expected = order.map((entry, i) => ({
+      pageKey: entry.pageKey,
+      label: displayLabel(entry),
+      ...originals[i],
+      digest: digests[i],
+    }));
     const result = compareOutput(expected, actual);
     const wantLabels = pageLabelTexts(ranges, order.length);
     const labelsOk = Array.isArray(labels) && labels.every((label, i) => label === wantLabels[i]);
@@ -1051,14 +1092,14 @@ function renderVerify() {
       `頁ラベル（ビューアーに出る頁番号）: ${labelsOk ? '本の頁番号と一致' : '書き込みを確かめられませんでした'}。` +
       `タイトル: ${title || '（なし）'}。大きさ: ${megabytes(bytes.length)}。`
   );
-  box.replaceChildren(...lines.map((line) => el('p', null, line)));
+  box.replaceChildren(...lines.map((line) => el(document, 'p', null, line)));
   if (result.mismatches.length) {
-    const list = el('ul', 'bm-mismatches');
+    const list = el(document, 'ul', 'bm-mismatches');
     for (const mismatch of result.mismatches.slice(0, 50)) {
-      const item = el('li', null, `${mismatch.index + 1} 枚目（${mismatch.label}）: ${mismatch.reasons.join('・')}`);
+      const item = el(document, 'li', null, `${mismatch.index + 1} 枚目（${mismatch.label}）: ${mismatch.reasons.join('・')}`);
       list.append(item);
     }
-    if (result.mismatches.length > 50) list.append(el('li', null, `ほか ${result.mismatches.length - 50} 頁`));
+    if (result.mismatches.length > 50) list.append(el(document, 'li', null, `ほか ${result.mismatches.length - 50} 頁`));
     box.append(list);
   }
   box.hidden = false;
@@ -1139,15 +1180,19 @@ function wireUp() {
   $('ocrToggle').addEventListener('change', () => {
     if (!$('ocrToggle').checked) return;
     for (const file of readyFiles()) {
-      if (file.role !== 'body') continue;
+      // 読んでいる最中のファイルは、もう一度は頼まない（切り替えを繰り返しても
+      // 同じ頁を 2 度読まない）。
+      if (file.role !== 'body' || file.ocrBusy) continue;
       const pages = file.pages.filter((page) => page.candidates.length === 0 && !page.ocr);
       if (pages.length === 0) continue;
+      file.ocrBusy = true;
+      renderFiles();
       queue = queue
-        .then(async () => {
-          await readMarginsWithOcr(file, (await findScanImages(file.bytes)).scans, pages);
-          file.status = 'ready';
+        .then(() => readMarginsWithOcr(file, pages))
+        .finally(() => {
+          file.ocrBusy = false;
           showProgress('');
-          refresh();
+          if (files.includes(file)) refresh();
         })
         .catch(() => {});
     }

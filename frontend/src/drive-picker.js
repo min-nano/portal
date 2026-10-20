@@ -265,7 +265,9 @@ function openPicker(options) {
   const updateChoose = () => {
     if (options.multiple) {
       choose.textContent = picked.size ? `選択（${picked.size} 個）` : '選択';
-      choose.disabled = picked.size === 0;
+      // 「すべて選ぶ」が読み終えるまでは決めさせない（一部だけを選んだまま
+      // 決めてしまわないように）。
+      choose.disabled = picked.size === 0 || Boolean(selectingAll);
       // フォルダの中にいるときだけ（マイドライブの最上位で全部を選ばないように）。
       all.hidden = !(currentFolder(state) && state.path.length);
       all.disabled = Boolean(selectingAll);
@@ -342,8 +344,12 @@ function openPicker(options) {
   /** 一覧を取りに行く。append なら続き（次のページ）を足す。 */
   async function load(append = false) {
     if (loading) loading.abort();
-    if (selectingAll) selectingAll.abort();
-    selectingAll = null;
+    // 別の場所へ移るときは「すべて選ぶ」を止める。同じフォルダの続きを読む
+    // だけ（スクロール・「さらに表示」）なら止めない。
+    if (selectingAll && !append) {
+      selectingAll.abort();
+      selectingAll = null;
+    }
     const controller = new AbortController();
     loading = controller;
     if (!append) {

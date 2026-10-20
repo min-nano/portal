@@ -356,15 +356,24 @@ def download_range(
 
     数百 MB のスキャンを 1 回では運べないので、画面が少しずつ頼んで読む
     （書籍スキャンの結合）。Drive は Range を受け付けて 206 で返す。
+
+    範囲を無視して全体（200）が返ってきたときは、本文を読まずに失敗にする。
+    数百 MB のファイルを範囲ごとに丸ごと読むと、Cloud Run のメモリと時間が
+    足りなくなるため（画面は範囲を並べて頼むので、同時に何倍にもなる）。
     """
     resp = session.get(
         f"{_FILES_URL}/{file_id}",
         params={"alt": "media", "supportsAllDrives": "true"},
         headers={"Range": f"bytes={start}-{end}"},
+        stream=True,
     )
-    _raise_for_status(resp, "PDF の読み込み")
-    content = resp.content
-    if resp.status_code == 200:
-        # 範囲を無視して全体を返された。要る部分だけを切り出す。
-        content = content[start : end + 1]
-    return content
+    try:
+        _raise_for_status(resp, "PDF の読み込み")
+        if resp.status_code != 206:
+            raise DriveError(
+                f"PDF の読み込みに失敗しました（範囲を指定して読めませんでした。HTTP {resp.status_code}）。",
+                502,
+            )
+        return resp.content
+    finally:
+        resp.close()

@@ -635,6 +635,42 @@ describe('いくつも選ぶ', () => {
     ]);
   });
 
+  it('すべて選ぶ間に同じフォルダの続きを読んでも止めない。選び終えるまで「選択」は押せない', async () => {
+    respond({
+      'my-drive': { items: [folder('d1', 'スキャン')] },
+      d1: { items: [pdf('p1', '1.pdf')], nextPageToken: 't2' },
+      'd1#t2': { items: [pdf('p2', '2.pdf')] },
+    });
+    const picking = pickFiles({ mimeTypes: PDF_MIME });
+    await flush();
+    itemNamed('スキャン').click();
+    await flush();
+    itemNamed('1.pdf').click();
+    expect(chooseButton().disabled).toBe(false);
+
+    // 「すべて選ぶ」の最初の読み込みを待たせておき、その間に続きを読む。
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    const answer = apiGet.getMockImplementation();
+    apiGet.mockImplementationOnce(async (...args) => {
+      await gate;
+      return answer(...args);
+    });
+    allButton().click();
+    expect(chooseButton().disabled).toBe(true);
+    dialog().querySelector('.drive-picker-more').click();
+    await flush();
+    release();
+    await flush();
+    await flush();
+
+    expect(chooseButton().disabled).toBe(false);
+    expect(chooseButton().textContent).toBe('選択（2 個）');
+    expect(itemNamed('2.pdf').getAttribute('aria-pressed')).toBe('true');
+    chooseButton().click();
+    await expect(picking).resolves.toHaveLength(2);
+  });
+
   it('すべて選ぶのに失敗したら理由を出し、やり直せる。空ならそう出す', async () => {
     respond({
       'my-drive': { items: [folder('d1', '空')] },

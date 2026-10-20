@@ -8,22 +8,18 @@
 // などになる）。共有シートなら付けた名前のまま渡り、「"ファイル" に保存」や
 // Google ドライブのアプリへのアップロードもそこから選べる。
 
+import { isIOS } from './device.js';
+
 const PDF_MIME = 'application/pdf';
 
 /**
  * 共有シートで渡す端末か（iPhone・iPad・Android）。
  *
- * iPad の Safari は Mac を名乗るので、タッチの有無で見分ける。
- *
  * @param {{userAgent?:string, platform?:string, maxTouchPoints?:number}} [nav]
  */
 export function isMobile(nav) {
   if (!nav) return false;
-  const userAgent = nav.userAgent || '';
-  return (
-    /\b(?:iPad|iPhone|iPod|Android)\b/.test(userAgent) ||
-    (nav.platform === 'MacIntel' && (nav.maxTouchPoints || 0) > 1)
-  );
+  return isIOS(nav) || /\bAndroid\b/.test(nav.userAgent || '');
 }
 
 function download(file) {

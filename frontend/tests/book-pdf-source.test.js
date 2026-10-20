@@ -6,7 +6,8 @@
 // 画素を手放すことを縛る。
 
 import { describe, expect, it } from 'vitest';
-import { cropTransform, isIOS, isWebKit, releaseCanvas } from '../src/pdf-book-merger/pdf-source.js';
+import { isIOS, isWebKit } from '../src/pdf-book-merger/device.js';
+import { cropTransform, releaseCanvas } from '../src/pdf-book-merger/pdf-source.js';
 
 const UA = {
   iphoneSafari:

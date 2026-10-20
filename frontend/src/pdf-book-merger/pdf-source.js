@@ -15,6 +15,7 @@ import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import workerSrc from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { toGray } from './image-checks.js';
 import { MARGIN_ZONE } from './page-numbers.js';
+import { isIOS, isWebKit } from './device.js';
 import { drawScan } from './scan-images.js';
 import { multiply, textItems, textSignature } from './text-layer.js';
 
@@ -70,33 +71,6 @@ function safeDocOf(doc) {
   if (!fallback) return null;
   fallback.safe ??= openPdf(fallback.bytes, { safe: true });
   return fallback.safe;
-}
-
-/**
- * WebKit で動いているか（Safari と、iPhone・iPad のすべてのブラウザ）。
- *
- * iPad の Safari は Mac を名乗るので、タッチの有無で見分ける。
- *
- * @param {{userAgent?:string, platform?:string, maxTouchPoints?:number}} [nav]
- */
-export function isWebKit(nav) {
-  if (!nav) return false;
-  const userAgent = nav.userAgent || '';
-  const safari = /Safari\//.test(userAgent) && !/Chrome\/|Chromium\/|Edg\/|Firefox\//.test(userAgent);
-  return isIOS(nav) || safari;
-}
-
-/**
- * iPhone・iPad か（どのブラウザも WebKit。canvas とメモリの上限が小さい）。
- *
- * @param {{userAgent?:string, platform?:string, maxTouchPoints?:number}} [nav]
- */
-export function isIOS(nav) {
-  if (!nav) return false;
-  return (
-    /\b(?:iPad|iPhone|iPod)\b/.test(nav.userAgent || '') ||
-    (nav.platform === 'MacIntel' && (nav.maxTouchPoints || 0) > 1)
-  );
 }
 
 /**
