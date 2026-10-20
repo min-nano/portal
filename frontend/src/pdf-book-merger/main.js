@@ -3,9 +3,10 @@
 // 裁断した本を分けてスキャンした PDF を、頁番号で 1 冊の順に並べて結合する。
 // 判断（番号の推定・検査・並べ替え）・画像の展開・OCR・結合・検証は、すべて
 // ブラウザの中で行う。サーバー（backend/app/tools/pdf_book_merger.py）が受け持つ
-// のは、Drive の PDF を読むときの中継だけ。
+// のは、Drive の PDF を確かめて読み取り専用のトークンを渡すことだけ（中身は
+// 通さない）。
 //
-//   1. ファイルを読む   Drive（サーバー経由で 8 MiB ずつ。drive-download.js）
+//   1. ファイルを読む   Drive（そのトークンで直接。drive-download.js）
 //                       か手元から
 //   2. 文字情報を読む   頁番号の候補（pdf-source.js → page-numbers.js）。軽い
 //   3. 頁の画像を測る   傾き・ずれ・すじ（image-checks.js を worker で）。

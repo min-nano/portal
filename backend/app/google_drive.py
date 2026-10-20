@@ -14,6 +14,10 @@ GAS 版の「実行ユーザーの権限で DriveApp を読む」に相当し、
     作成ツールが、雛形の Google ドキュメントを複製して差し替え、PDF を
     Drive へ保存するために使う。書き込みが必要な操作だけこちらを使う。
 
+アクセストークンはブラウザへ渡さないのが原則。例外は delegated_read_token()
+（drive.readonly）だけで、書籍スキャン PDF 結合ツールが数百 MB のスキャンを
+Drive から直接読むのに使う。
+
 JSON 鍵ファイルなしで動作するよう、Cloud Run 上ではランタイム
 サービスアカウントの IAM Credentials API（signJwt）で署名する。この方式には
 ランタイム SA が自分自身に対して roles/iam.serviceAccountTokenCreator を
@@ -21,9 +25,11 @@ JSON 鍵ファイルなしで動作するよう、Cloud Run 上ではランタ�
 GOOGLE_APPLICATION_CREDENTIALS に JSON 鍵を指定すればそのまま動く。
 """
 
+import datetime
 import threading
 
 import google.auth
+import google.auth.exceptions
 from google.auth import iam
 from google.auth.transport.requests import AuthorizedSession, Request
 from google.oauth2 import service_account
@@ -189,8 +195,8 @@ def get_file_metadata(session: AuthorizedSession, file_id: str) -> dict:
     resp = session.get(
         f"{_FILES_URL}/{file_id}",
         params={
-            # size は、PDF を少しずつ読むツール（書籍スキャンの結合）が、
-            # 読む範囲を決めるのに使う。
+            # size は、Drive から直接 PDF を読むツール（書籍スキャンの結合）が、
+            # 読み終えたかを確かめるのに使う。
             "fields": "id, name, mimeType, parents, trashed, webViewLink, size",
             "supportsAllDrives": "true",
         },
@@ -349,31 +355,25 @@ def download_file(
     return resp.content
 
 
-def download_range(
-    session: AuthorizedSession, file_id: str, start: int, end: int
-) -> bytes:
-    """ファイルの start〜end バイト目（end を含む）だけを読む。
+# ブラウザへ渡す代理トークンは、少なくともこれだけ有効な時間が残っているものに
+# する（数百 MB を読み終える前に切れないように）。残りが短ければ取り直す。
+_BROWSER_TOKEN_MIN_LIFETIME = datetime.timedelta(minutes=10)
 
-    数百 MB のスキャンを 1 回では運べないので、画面が少しずつ頼んで読む
-    （書籍スキャンの結合）。Drive は Range を受け付けて 206 で返す。
 
-    範囲を無視して全体（200）が返ってきたときは、本文を読まずに失敗にする。
-    数百 MB のファイルを範囲ごとに丸ごと読むと、Cloud Run のメモリと時間が
-    足りなくなるため（画面は範囲を並べて頼むので、同時に何倍にもなる）。
+def delegated_read_token(user_email: str) -> tuple[str, datetime.datetime | None]:
+    """user_email の代理（読み取り専用・drive.readonly）のアクセストークンと期限（UTC）。
+
+    書籍スキャンの結合だけが使う。数百 MB のスキャンを Cloud Run と Hosting を
+    通して運ぶと転送量が掛かるので、ブラウザがこのトークンで Drive から直接
+    読む（README「書籍スキャン PDF 結合ツール」）。トークンは本人が Drive で
+    読めるものすべてを、期限（1 時間ほど）まで読めるので、ほかの用途には渡さない。
     """
-    resp = session.get(
-        f"{_FILES_URL}/{file_id}",
-        params={"alt": "media", "supportsAllDrives": "true"},
-        headers={"Range": f"bytes={start}-{end}"},
-        stream=True,
-    )
-    try:
-        _raise_for_status(resp, "PDF の読み込み")
-        if resp.status_code != 206:
-            raise DriveError(
-                f"PDF の読み込みに失敗しました（範囲を指定して読めませんでした。HTTP {resp.status_code}）。",
-                502,
-            )
-        return resp.content
-    finally:
-        resp.close()
+    creds = _cached_credentials([DRIVE_READONLY_SCOPE], subject=user_email)
+    expiry = creds.expiry
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    if not creds.token or expiry is None or expiry - now < _BROWSER_TOKEN_MIN_LIFETIME:
+        try:
+            creds.refresh(Request())
+        except google.auth.exceptions.GoogleAuthError as error:
+            raise DriveError(f"Drive の代理アクセスを用意できませんでした（{error}）。", 502) from error
+    return creds.token, creds.expiry

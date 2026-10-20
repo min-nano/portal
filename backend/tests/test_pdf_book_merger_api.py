@@ -1,14 +1,19 @@
-"""書籍スキャン PDF 結合ツールの API テスト（Drive の PDF を読む中継）。
+"""書籍スキャン PDF 結合ツールの API テスト（Drive の PDF を読む準備）。
 
-結合そのものは画面の中で行い、結合した PDF はダウンロードするだけなので、
-サーバーが受け持つのは Drive の PDF を読むときの中継だけ。
+結合そのものは画面の中で行い、結合した PDF はダウンロードするだけ。PDF の
+中身も、画面が Drive から直接読む（Cloud Run・Hosting の転送量を使わない）。
+サーバーが受け持つのは、
 
-  - PDF か確かめて大きさを返す（本人の代理・読み取り専用）
-  - 範囲を指定されたバイト列を返す（1 回に読める大きさの上限、ID の形）
+  - PDF か確かめて名前と大きさを返す（本人の代理・読み取り専用）
+  - 画面が Drive から直接読むための、読み取り専用の代理トークンを渡す
 
-を検証する。Drive は conftest のフェイクと、ここでの差し替えで代役を立てる。
+だけで、これを検証する。Drive は conftest のフェイクと、ここでの差し替えで
+代役を立てる。
 """
 
+import datetime
+
+import google.auth.exceptions
 import pytest
 
 from app import google_drive
@@ -16,55 +21,45 @@ from app.google_drive import DriveError
 from tests.conftest import PDF_MIME, TEST_EMAIL
 
 BASE = "/api/tools/pdf-book-merger"
-
-
-class FakeResponse:
-    def __init__(self, status_code, payload=None, headers=None):
-        self.status_code = status_code
-        self.ok = 200 <= status_code < 300
-        self._payload = payload or {}
-        self.headers = headers or {}
-
-    def json(self):
-        return self._payload
-
-
-# --- 読む（Drive の PDF を少しずつ） ---------------------------------------------
-
 FILES_URL = f"{BASE}/files"
+EXPIRY = datetime.datetime(2026, 10, 20, 12, 0, 0)
 
 
 @pytest.fixture
 def scan(monkeypatch, drive):
-    """Drive に置いた PDF。読まれた範囲を記録する。"""
-    data = bytes(range(256)) * 64
-    record = {"ranges": [], "data": data}
+    """Drive に置いた PDF。渡したトークンの相手を記録する。"""
+    record = {"tokens": []}
     drive.metadata["scan-1"] = {
         "id": "scan-1",
         "name": "奇数1.pdf",
         "mimeType": PDF_MIME,
-        "size": str(len(data)),
+        "size": "16384",
     }
 
-    def download_range(session, file_id, start, end):
-        record["ranges"].append((session, file_id, start, end))
-        return data[start : end + 1]
+    def delegated_read_token(email):
+        record["tokens"].append(email)
+        return "ya29.read-only", EXPIRY
 
-    monkeypatch.setattr(google_drive, "download_range", download_range)
+    monkeypatch.setattr(google_drive, "delegated_read_token", delegated_read_token)
     return record
 
 
-def test_file_info_checks_the_pdf_as_the_user(client, drive, scan):
+def test_file_info_checks_the_pdf_and_hands_a_read_only_token(client, drive, scan):
     resp = client.get(f"{FILES_URL}/scan-1")
 
     assert resp.status_code == 200
     assert resp.json() == {
         "id": "scan-1",
         "name": "奇数1.pdf",
-        "size": len(scan["data"]),
-        "chunkBytes": 8 * 1024 * 1024,
+        "size": 16384,
+        "accessToken": "ya29.read-only",
+        "expiresAt": "2026-10-20T12:00:00+00:00",
     }
+    # 確かめるのも、トークンも、本人の代理（読み取り専用）。
     assert drive.delegated_emails == [TEST_EMAIL]
+    assert scan["tokens"] == [TEST_EMAIL]
+    # トークンを含むので、経路のどこにも残させない。
+    assert resp.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.parametrize(
@@ -83,106 +78,96 @@ def test_file_info_refuses_what_cannot_be_read(client, drive, scan, meta, messag
 
     assert resp.status_code == 400
     assert message in resp.json()["error"]
-
-
-def test_content_returns_the_asked_range_as_the_user(client, scan):
-    resp = client.get(f"{FILES_URL}/scan-1/content", params={"start": 10, "end": 19})
-
-    assert resp.status_code == 200
-    assert resp.content == scan["data"][10:20]
-    assert resp.headers["content-type"] == "application/octet-stream"
-    assert resp.headers["cache-control"] == "no-store"
-    assert scan["ranges"] == [(("delegated", TEST_EMAIL), "scan-1", 10, 19)]
-
-
-@pytest.mark.parametrize(
-    "params",
-    [
-        {"start": -1, "end": 5},
-        {"start": 5, "end": 4},
-        {"start": 0, "end": 8 * 1024 * 1024},
-        {"start": "a", "end": 3},
-        {"start": 0},
-    ],
-)
-def test_content_ranges_are_checked(client, scan, params):
-    resp = client.get(f"{FILES_URL}/scan-1/content", params=params)
-
-    assert resp.status_code in (400, 422)
-    assert scan["ranges"] == []
+    # 読めないものには、トークンを渡さない。
+    assert "accessToken" not in resp.json()
+    assert scan["tokens"] == []
 
 
 @pytest.mark.parametrize("file_id", ["a.b", "a%2Fb", "x" * 201])
 def test_only_drive_like_ids_are_read(client, scan, file_id):
-    info = client.get(f"{FILES_URL}/{file_id}")
-    content = client.get(f"{FILES_URL}/{file_id}/content", params={"start": 0, "end": 1})
+    resp = client.get(f"{FILES_URL}/{file_id}")
 
-    assert info.status_code in (400, 404)
-    assert content.status_code in (400, 404)
-    assert scan["ranges"] == []
+    assert resp.status_code in (400, 404)
+    assert scan["tokens"] == []
+
+
+def test_the_old_relay_is_gone(client, scan):
+    # 中身はサーバーを通さない（転送量を使わない）。
+    resp = client.get(f"{FILES_URL}/scan-1/content", params={"start": 0, "end": 1})
+
+    assert resp.status_code in (404, 405)
 
 
 def test_reading_requires_sign_in(anon_client, scan):
     assert anon_client.get(f"{FILES_URL}/scan-1").status_code == 401
-    assert anon_client.get(f"{FILES_URL}/scan-1/content", params={"start": 0, "end": 1}).status_code == 401
+    assert scan["tokens"] == []
 
 
-# --- Drive から一部だけ読む（google_drive.download_range） ----------------------
+# --- 読み取り専用の代理トークン（google_drive.delegated_read_token） -----------
 
 
-class RangeSession:
-    def __init__(self, response):
-        self.response = response
-        self.calls = []
+class FakeCredentials:
+    def __init__(self, token, expiry, fail=False):
+        self.token = token
+        self.expiry = expiry
+        self.fail = fail
+        self.refreshed = 0
 
-    def get(self, url, params=None, headers=None, stream=False):
-        self.calls.append((url, params, headers, stream))
-        return self.response
-
-
-class RangeResponse(FakeResponse):
-    def __init__(self, status_code, content=b"", payload=None):
-        super().__init__(status_code, payload)
-        self._content = content
-        self.read = False
-        self.closed = False
-
-    @property
-    def content(self):
-        self.read = True
-        return self._content
-
-    def close(self):
-        self.closed = True
+    def refresh(self, request):
+        if self.fail:
+            raise google.auth.exceptions.RefreshError("unauthorized_client")
+        self.refreshed += 1
+        self.token = f"fresh-{self.refreshed}"
+        self.expiry = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(
+            hours=1
+        )
 
 
-def test_download_range_asks_drive_for_part_of_the_file():
-    session = RangeSession(RangeResponse(206, b"cdef"))
+@pytest.fixture
+def credentials(monkeypatch):
+    asked = []
+    holder = {}
 
-    assert google_drive.download_range(session, "f1", 2, 5) == b"cdef"
-    ((url, params, headers, stream),) = session.calls
-    assert url.endswith("/files/f1")
-    assert params["alt"] == "media"
-    assert headers == {"Range": "bytes=2-5"}
-    assert stream is True
-    assert session.response.closed
+    def cached(scopes, subject):
+        asked.append((tuple(scopes), subject))
+        return holder["creds"]
+
+    monkeypatch.setattr(google_drive, "_cached_credentials", cached)
+    return holder, asked
 
 
-def test_download_range_refuses_the_whole_file_without_reading_it():
-    # 範囲を無視して全体が返ってきたら、本文を読まずに失敗にする（数百 MB を
-    # 範囲ごとに読むと、Cloud Run のメモリが足りなくなる）。
-    response = RangeResponse(200, b"abcdefgh")
-    session = RangeSession(response)
+def _in(minutes):
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(minutes=minutes)
 
-    with pytest.raises(DriveError, match="範囲を指定して読めませんでした") as caught:
-        google_drive.download_range(session, "f1", 2, 5)
+
+def test_read_token_is_drive_readonly_for_the_user(credentials):
+    holder, asked = credentials
+    holder["creds"] = FakeCredentials("ya29.cached", _in(50))
+
+    token, expiry = google_drive.delegated_read_token(TEST_EMAIL)
+
+    assert token == "ya29.cached"
+    assert expiry == holder["creds"].expiry
+    assert asked == [((google_drive.DRIVE_READONLY_SCOPE,), TEST_EMAIL)]
+    assert holder["creds"].refreshed == 0
+
+
+@pytest.mark.parametrize("token,minutes", [(None, None), ("ya29.old", 5), ("ya29.old", -1)])
+def test_read_token_is_renewed_when_missing_or_about_to_expire(credentials, token, minutes):
+    # 数百 MB を読み終える前に切れないよう、残りが短ければ取り直す。
+    holder, _ = credentials
+    holder["creds"] = FakeCredentials(token, _in(minutes) if minutes is not None else None)
+
+    renewed, expiry = google_drive.delegated_read_token(TEST_EMAIL)
+
+    assert renewed == "fresh-1"
+    assert expiry > _in(55)
+
+
+def test_read_token_failure_is_reported(credentials):
+    holder, _ = credentials
+    holder["creds"] = FakeCredentials(None, None, fail=True)
+
+    with pytest.raises(DriveError, match="代理アクセスを用意できませんでした") as caught:
+        google_drive.delegated_read_token(TEST_EMAIL)
     assert caught.value.status == 502
-    assert not response.read
-    assert response.closed
-
-
-def test_download_range_reports_drive_errors():
-    session = RangeSession(RangeResponse(404, payload={"error": {"message": "File not found"}}))
-
-    with pytest.raises(DriveError, match="File not found"):
-        google_drive.download_range(session, "f1", 0, 1)

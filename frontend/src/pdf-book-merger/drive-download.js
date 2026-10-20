@@ -1,31 +1,65 @@
-// Drive の PDF を読む（サーバー経由で、少しずつ）。
+// Drive の PDF を読む（ブラウザが Drive から直接）。
 //
-// ブラウザへ Drive のアクセストークンは渡さない（README「4. Drive のファイル
-// 選択」）ので、中身はサーバーが本人の代理で読んで中継する。スキャンした本は
-// 1 冊で数百 MB になり、1 回のリクエストでは Cloud Run と Hosting のリライトの
-// 上限に掛かるので、決まった大きさ（8 MiB）の範囲に分けて頼む
-// （backend/app/tools/pdf_book_merger.py の /files）。サーバーは Drive から
-// 範囲を読んで返すだけで、重い計算はしない。
+// スキャンした本は 1 冊で数百 MB になる。サーバー（Cloud Run・Hosting）を
+// 通して運ぶと、読み直すたびに転送量が掛かるので、中身は通さない。サーバーは
+// PDF か確かめて、本人の代理（読み取り専用）のアクセストークンを渡すだけで
+// （backend/app/tools/pdf_book_merger.py の /files）、画面がそのトークンで
+// Drive API から直接読む。
+//
+// トークンは本人の Drive を期限（1 時間ほど）まで読めるので、どこにも保存せず、
+// 読み終えたら手放す（この関数の外へは出さない）。
 
-import { apiGet, apiGetBytes } from '../api.js';
+import { apiGet } from '../api.js';
 
 const TOOL_API = '/api/tools/pdf-book-merger';
+const DRIVE_FILES = 'https://www.googleapis.com/drive/v3/files';
 
-/** 同時に頼む範囲の数（待ち時間を重ねて、運ぶ速さを上げる）。 */
-const IN_FLIGHT = 4;
-/** 1 つの範囲の読み込みが失敗したときに、頼み直す回数。 */
+/** 途中で切れたときに、続きから読み直す回数。 */
 const RETRIES = 2;
 
-async function fetchRange(path, start, end) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      const bytes = new Uint8Array(await apiGetBytes(`${path}/content?start=${start}&end=${end}`));
-      if (bytes.length !== end - start + 1) throw new Error('読み込んだ大きさが合いません。');
-      return bytes;
-    } catch (error) {
-      if (attempt >= RETRIES) throw error;
-    }
+/** 読み直しても変わらない失敗（権限が無い・ファイルが無いなど）。 */
+class DriveReadError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
   }
+}
+
+async function driveError(response) {
+  let detail = '';
+  try {
+    detail = (await response.json())?.error?.message || '';
+  } catch {
+    // 本文が JSON でない。
+  }
+  return new DriveReadError(detail ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`, response.status);
+}
+
+/**
+ * Drive から読み、bytes の state.received バイト目から書き込む（読み直しは続きから）。
+ * Drive が範囲を無視して頭から返したときは、頭から書き直す。
+ */
+async function readInto(info, bytes, state, onProgress) {
+  const headers = { Authorization: `Bearer ${info.accessToken}` };
+  if (state.received > 0) headers.Range = `bytes=${state.received}-`;
+  const url = `${DRIVE_FILES}/${encodeURIComponent(info.id)}?alt=media&supportsAllDrives=true`;
+  const response = await fetch(url, { headers, cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
+  if (!response.ok) throw await driveError(response);
+  if (state.received > 0 && response.status !== 206) state.received = 0;
+
+  const reader = response.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (state.received + value.length > bytes.length) {
+      await reader.cancel();
+      throw new DriveReadError('読み込んだ大きさが合いません。', 0);
+    }
+    bytes.set(value, state.received);
+    state.received += value.length;
+    onProgress?.(state.received, bytes.length);
+  }
+  if (state.received !== bytes.length) throw new Error('読み込みが途中で切れました。');
 }
 
 /**
@@ -37,32 +71,22 @@ async function fetchRange(path, start, end) {
  */
 export async function downloadDriveFile(file, { onProgress } = {}) {
   const path = `${TOOL_API}/files/${encodeURIComponent(file.id)}`;
-  let info;
   try {
-    info = await apiGet(path);
+    let info = await apiGet(path);
     const bytes = new Uint8Array(info.size);
-    const ranges = [];
-    for (let start = 0; start < info.size; start += info.chunkBytes) {
-      ranges.push([start, Math.min(info.size, start + info.chunkBytes) - 1]);
-    }
-    let next = 0;
-    let received = 0;
-    let failed = false; // 1 つでも読めなければ、残りは頼まない
-    const worker = async () => {
-      while (!failed && next < ranges.length) {
-        const [start, end] = ranges[next++];
-        try {
-          bytes.set(await fetchRange(path, start, end), start);
-        } catch (error) {
-          failed = true;
-          throw error;
-        }
-        received += end - start + 1;
-        onProgress?.(received, info.size);
+    const state = { received: 0 };
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await readInto(info, bytes, state, onProgress);
+        return bytes;
+      } catch (error) {
+        const expired = error.status === 401;
+        // 権限が無い・ファイルが無い・大きさが違う、は読み直しても同じ。
+        if (attempt >= RETRIES || (error instanceof DriveReadError && !expired && error.status < 500)) throw error;
+        // トークンが切れていたら、取り直してから続きを読む。
+        if (expired) info = await apiGet(path);
       }
-    };
-    await Promise.all(Array.from({ length: Math.min(IN_FLIGHT, ranges.length) }, worker));
-    return bytes;
+    }
   } catch (error) {
     throw new Error(`「${file.name}」を Drive から読み込めませんでした（${error?.message || error}）。`);
   }
