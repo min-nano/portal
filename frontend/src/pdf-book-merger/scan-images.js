@@ -16,7 +16,7 @@
 //
 // 頁の中身は pdf-lib で読む（結合にも使っているもの）。
 
-import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNull, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
 import { multiply } from './text-layer.js';
 
 // --- 頁の中身の命令を読む ------------------------------------------------------
@@ -174,13 +174,23 @@ export function inspectImage(context, stream) {
   const mask = Boolean(get('ImageMask')?.asBoolean?.());
   const space = mask ? { name: 'マスク', plain: false } : colorSpaceOf(context, dict.get(PDFName.of('ColorSpace')));
   const info = `${filters.join('+') || '無圧縮'} ${width}×${height} ${space.name}${bits ? ` ${bits}bit` : ''}`;
-  const result = (reason) => ({ reason, info, width, height });
+  // スキャナには、JPEG をさらに Flate で包んで入れるものがある（FlateDecode と
+  // DCTDecode の 2 段）。Flate を開けば、元の JPEG のバイト列になる。
+  const flate = filters.length === 2 && filters[0] === 'FlateDecode';
+  const result = (reason) => ({ reason, info, width, height, flate });
 
   if (!(stream instanceof PDFRawStream)) return result('画像を読めない');
-  if (filters.length !== 1 || filters[0] !== 'DCTDecode') return result(`JPEG でない画像（${filters.join('+') || '無圧縮'}）`);
+  if (filters.at(-1) !== 'DCTDecode' || !(filters.length === 1 || flate)) {
+    return result(`JPEG でない画像（${filters.join('+') || '無圧縮'}）`);
+  }
+  if (flate && typeof DecompressionStream === 'undefined') return result('Flate で包んだ JPEG を開けないブラウザ');
   if (mask) return result('マスクの画像');
   if (get('SMask') || get('Mask')) return result('透明・マスクの付いた画像');
-  if (get('DecodeParms')) return result('展開の指定が付いた JPEG');
+  // 展開の指定は、段ごとの「指定なし」（null の並び）だけ通す。
+  const parms = get('DecodeParms');
+  if (parms && !(parms instanceof PDFArray && parms.asArray().every((p) => context.lookup(p) === PDFNull))) {
+    return result('展開の指定が付いた JPEG');
+  }
   if (bits !== 8) return result(`${bits ?? '?'}bit の画像`);
   const decode = get('Decode');
   if (decode instanceof PDFArray) {
@@ -261,7 +271,7 @@ function collect(context, content, resources, ctm, found, depth) {
         found.infos.push(image.info);
         if (image.reason) return image.reason;
         if (found.images.length >= MAX_IMAGES) return '画像が多すぎる';
-        found.images.push({ jpeg: stream.contents, width: image.width, height: image.height, matrix: ctm });
+        found.images.push({ jpeg: stream.contents, flate: image.flate, width: image.width, height: image.height, matrix: ctm });
       } else {
         return 'XObject を読めない';
       }
@@ -281,9 +291,10 @@ function collect(context, content, resources, ctm, found, depth) {
  * 1 頁が、JPEG 画像をブラウザに展開させて描ける形か調べる。
  *
  * @param {import('pdf-lib').PDFPage} page
- * @returns {{scan: {images:{jpeg:Uint8Array, width:number, height:number, matrix:number[]}[]} | null,
+ * @returns {{scan: {images:{jpeg:Uint8Array, flate:boolean, width:number, height:number, matrix:number[]}[]} | null,
  *            reason: string|null, outline: string}}
  *   scan は描けるときだけ。reason は描けない理由、outline は頁の作り（記録に出す）。
+ *   jpeg は PDF の中のバイト列のまま（flate なら Flate で包んだまま。描くときに開く）。
  */
 export function inspectPage(page) {
   const { node } = page;
@@ -359,8 +370,15 @@ export function decodeSize(viewportTransform, image) {
   };
 }
 
+/** Flate（zlib）で包んだバイト列を開く（ブラウザ自身の展開。画面を固めない）。 */
+export async function inflate(bytes) {
+  const stream = new Response(bytes).body.pipeThrough(new DecompressionStream('deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
 async function decode(image, size) {
-  const blob = new Blob([image.jpeg], { type: 'image/jpeg' });
+  const jpeg = image.flate ? await inflate(image.jpeg) : image.jpeg;
+  const blob = new Blob([jpeg], { type: 'image/jpeg' });
   const options = {};
   if (size.width < image.width || size.height < image.height) {
     // 縮め方は粗いもの（low）にする。600dpi の頁（数千万画素）でも、全部を
@@ -381,7 +399,7 @@ async function decode(image, size) {
 /**
  * スキャンの画像を、viewport ごとの canvas に描く（画像ごとに展開は 1 回）。
  *
- * @param {{images:{jpeg:Uint8Array, width:number, height:number, matrix:number[]}[]}} scan
+ * @param {{images:{jpeg:Uint8Array, flate:boolean, width:number, height:number, matrix:number[]}[]}} scan
  * @param {{transform:number[], width:number, height:number}[]} viewports
  *   pdf.js の page.getViewport() の結果（帯を描くときは offsetY 付き）
  * @param {({width:number, height:number}|undefined)[]} [canvasSizes]

@@ -10,13 +10,15 @@
 //   - 画像を置く変換を、pdf.js の viewport と合わせて canvas の変換にする
 //   - 展開は 1 回で、要る大きさに縮めて頼む
 
-import { PDFDocument, PDFName, PDFNumber, StandardFonts } from 'pdf-lib';
+import { deflateSync } from 'node:zlib';
+import { PDFDocument, PDFName, PDFNumber, PDFRawStream, StandardFonts } from 'pdf-lib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   decodeSize,
   drawScan,
   findScanImages,
   imageTransform,
+  inflate,
   inspectPage,
   operations,
 } from '../src/pdf-book-merger/scan-images.js';
@@ -76,6 +78,37 @@ describe('頁から JPEG を取り出す', () => {
     expect([image.width, image.height]).toEqual([8, 6]);
     expect(image.matrix).toEqual([400, 0, 0, 600, 0, 0]);
     expect(outline).toBe('画像 1 枚（DCTDecode 8×6 DeviceGray 8bit）');
+  });
+
+  it('Flate で包んだ JPEG（スキャナがよく作る形）も、包んだまま取り出す', async () => {
+    const jpeg = bytesOf(GRAY_JPEG);
+    const page = await onePage(async (doc, page) => {
+      page.drawImage(await doc.embedJpg(jpeg), FULL);
+    });
+    const { context } = page.node;
+    const [, ref] = page.node.Resources().lookup(PDFName.of('XObject')).entries()[0];
+    const dict = context.lookup(ref).dict.clone(context);
+    const wrapped = deflateSync(jpeg);
+    dict.set(PDFName.of('Filter'), context.obj(['FlateDecode', 'DCTDecode']));
+    dict.set(PDFName.of('Length'), PDFNumber.of(wrapped.length));
+    context.assign(ref, PDFRawStream.of(dict, wrapped));
+
+    const { scan, reason, outline } = inspectPage(page);
+    expect(reason).toBeNull();
+    expect(outline).toBe('画像 1 枚（FlateDecode+DCTDecode 8×6 DeviceGray 8bit）');
+    expect(scan.images[0]).toMatchObject({ flate: true, width: 8, height: 6 });
+    expect(await inflate(scan.images[0].jpeg)).toEqual(jpeg);
+
+    // 段ごとの「指定なし」は通す。Flate の先読み（Predictor）などの指定は pdf.js に任せる。
+    dict.set(PDFName.of('DecodeParms'), context.obj([null, null]));
+    expect(inspectPage(page).reason).toBeNull();
+    dict.set(PDFName.of('DecodeParms'), context.obj([{ Predictor: 12 }, null]));
+    expect(inspectPage(page).reason).toBe('展開の指定が付いた JPEG');
+    dict.delete(PDFName.of('DecodeParms'));
+    dict.set(PDFName.of('Filter'), context.obj(['ASCIIHexDecode', 'DCTDecode']));
+    expect(inspectPage(page).reason).toBe('JPEG でない画像（ASCIIHexDecode+DCTDecode）');
+    dict.set(PDFName.of('Filter'), context.obj(['DCTDecode', 'FlateDecode']));
+    expect(inspectPage(page).reason).toBe('JPEG でない画像（DCTDecode+FlateDecode）');
   });
 
   it('画像より前に塗る下地は通す。画像の上に図形を描く頁は、pdf.js に任せる', async () => {
@@ -294,6 +327,16 @@ describe('canvas に描く', () => {
       });
       await drawScan(scan, [viewport]);
       expect(createImageBitmap).toHaveBeenCalledTimes(2);
+    });
+
+    it('Flate で包んだ JPEG は、開いてから展開させる', async () => {
+      fakeBitmaps();
+      const jpeg = bytesOf(GRAY_JPEG);
+      await drawScan({ images: [{ ...image, jpeg: deflateSync(jpeg), flate: true }] }, [viewport]);
+
+      const [blob] = createImageBitmap.mock.calls[0];
+      expect(blob.type).toBe('image/jpeg');
+      expect(new Uint8Array(await blob.arrayBuffer())).toEqual(jpeg);
     });
 
     it('展開できなければ、失敗を返す（呼んだ側が pdf.js で描く）', async () => {

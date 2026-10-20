@@ -43,6 +43,7 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
 vi.mock('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url', () => ({ default: 'worker.js' }));
 
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+const MAC_SAFARI = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15';
 const CHROME = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
 
 let source;
@@ -63,7 +64,9 @@ afterEach(() => {
 });
 
 describe('WebKit での pdf.js の設定と描き直し', () => {
-  it('WebKit では ImageDecoder を切り、OffscreenCanvas は使う。ほかのブラウザは両方使う', async () => {
+  it('Mac の Safari では ImageDecoder を切り、OffscreenCanvas は使う。iPhone は両方切る。ほかのブラウザは両方使う', async () => {
+    vi.stubGlobal('navigator', { userAgent: MAC_SAFARI, platform: 'MacIntel', maxTouchPoints: 0 });
+    await source.openPdf(new Uint8Array([1]));
     vi.stubGlobal('navigator', { userAgent: IPHONE });
     await source.openPdf(new Uint8Array([1]));
     vi.stubGlobal('navigator', { userAgent: CHROME });
@@ -71,12 +74,13 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
 
     expect(opened.map(({ params }) => [params.isImageDecoderSupported, params.isOffscreenCanvasSupported])).toEqual([
       [false, true],
+      [false, false],
       [true, true],
     ]);
   });
 
   it('WebKit で描けなければ、両方を切った文書で描き直し、以後はそちらで描く', async () => {
-    vi.stubGlobal('navigator', { userAgent: IPHONE });
+    vi.stubGlobal('navigator', { userAgent: MAC_SAFARI, platform: 'MacIntel', maxTouchPoints: 0 });
     globalThis.__failWithOffscreen = true;
     const doc = await source.openPdf(new Uint8Array([1, 2, 3]));
 

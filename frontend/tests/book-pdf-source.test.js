@@ -6,7 +6,7 @@
 // 画素を手放すことを縛る。
 
 import { describe, expect, it } from 'vitest';
-import { cropTransform, isWebKit, releaseCanvas } from '../src/pdf-book-merger/pdf-source.js';
+import { cropTransform, isIOS, isWebKit, releaseCanvas } from '../src/pdf-book-merger/pdf-source.js';
 
 const UA = {
   iphoneSafari:
@@ -34,6 +34,18 @@ describe('isWebKit', () => {
     ['分からない', undefined, false],
   ])('%s', (_, nav, expected) => {
     expect(isWebKit(nav)).toBe(expected);
+  });
+});
+
+describe('isIOS', () => {
+  it.each([
+    ['iPhone の Safari', { userAgent: UA.iphoneSafari }, true],
+    ['iPhone の Chrome', { userAgent: UA.iphoneChrome }, true],
+    ['iPad（Mac を名乗る）', { userAgent: UA.macSafari, platform: 'MacIntel', maxTouchPoints: 5 }, true],
+    ['Mac の Safari', { userAgent: UA.macSafari, platform: 'MacIntel', maxTouchPoints: 0 }, false],
+    ['分からない', undefined, false],
+  ])('%s', (_, nav, expected) => {
+    expect(isIOS(nav)).toBe(expected);
   });
 });
 

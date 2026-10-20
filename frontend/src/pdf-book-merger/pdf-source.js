@@ -39,6 +39,11 @@ export const PREVIEW_LONG_SIDE = 1600;
  */
 export async function openPdf(bytes, { safe = false } = {}) {
   const webkit = isWebKit(globalThis.navigator);
+  // iPhone・iPad では、はじめから OffscreenCanvas を切る。worker の中で
+  // 600dpi のスキャン（3000 万画素ほど）を OffscreenCanvas に描くと、canvas の
+  // 大きさの上限（1600 万画素ほど）を超えて「invalid state」になり、描き直す
+  // 間にメモリが尽きてページごと落ちた。
+  safe ||= isIOS(globalThis.navigator);
   const doc = await pdfjs.getDocument({
     data: bytes.slice(),
     isEvalSupported: false,
@@ -77,11 +82,21 @@ function safeDocOf(doc) {
 export function isWebKit(nav) {
   if (!nav) return false;
   const userAgent = nav.userAgent || '';
-  const ios =
-    /\b(?:iPad|iPhone|iPod)\b/.test(userAgent) ||
-    (nav.platform === 'MacIntel' && (nav.maxTouchPoints || 0) > 1);
   const safari = /Safari\//.test(userAgent) && !/Chrome\/|Chromium\/|Edg\/|Firefox\//.test(userAgent);
-  return ios || safari;
+  return isIOS(nav) || safari;
+}
+
+/**
+ * iPhone・iPad か（どのブラウザも WebKit。canvas とメモリの上限が小さい）。
+ *
+ * @param {{userAgent?:string, platform?:string, maxTouchPoints?:number}} [nav]
+ */
+export function isIOS(nav) {
+  if (!nav) return false;
+  return (
+    /\b(?:iPad|iPhone|iPod)\b/.test(nav.userAgent || '') ||
+    (nav.platform === 'MacIntel' && (nav.maxTouchPoints || 0) > 1)
+  );
 }
 
 /**
@@ -172,6 +187,17 @@ function inTurn(run) {
   return result;
 }
 
+// iPhone・iPad では、JPEG の展開も 1 頁ずつにする。600dpi の頁は、縮めて頼んでも
+// 展開の途中で 1 枚 100 MB を超えるメモリを使い、並べるとページごと落ちる。
+let scanTurn = Promise.resolve();
+
+function inScanTurn(run) {
+  if (!isIOS(globalThis.navigator)) return run();
+  const result = scanTurn.then(run);
+  scanTurn = result.catch(() => {});
+  return result;
+}
+
 /**
  * 頁を viewport ごとの canvas に描く。
  *
@@ -184,7 +210,7 @@ function inTurn(run) {
 async function drawViewports(doc, page, viewports, sizes, scan) {
   if (scan) {
     try {
-      return await drawScan(scan, viewports, sizes);
+      return await inScanTurn(() => drawScan(scan, viewports, sizes));
     } catch {
       // pdf.js で描き直す。
     }
