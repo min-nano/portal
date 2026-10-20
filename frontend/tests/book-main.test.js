@@ -564,22 +564,46 @@ describe('ファイルを足して並べる', () => {
     expect(fileItem('猫_奇数.pdf').textContent).not.toContain('余白を読み取り中');
   });
 
-  it('1 頁が描けなければ、そのファイルの残りの頁は描かない', async () => {
+  it('1 頁が描けなければ、描きかけの頁を待ってから失敗にし、残りの頁は描かない', async () => {
     const many = Array.from({ length: 12 }, (_, i) => page(`o${2 * i + 1}`, 2 * i + 1));
     const answer = mocks.renderPageImage.getMockImplementation();
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
     mocks.renderPageImage.mockImplementation(async (doc, index, ...rest) => {
       if (index === 0) throw new Error('The object is in an invalid state.');
-      await flush();
+      await gate;
       return answer(doc, index, ...rest);
     });
     drop([file('odd.pdf', pdf(many))]);
+    await vi.waitFor(() => expect(mocks.renderPageImage).toHaveBeenCalledTimes(3));
+    await flush();
+
+    // 描きかけの頁が終わるまでは、失敗にしない（次のファイルへ進まない）。
+    expect(fileItem('odd.pdf').classList.contains('error')).toBe(false);
+    release();
     await settled(1);
 
     expect(fileItem('odd.pdf').textContent).toContain('1 頁目の画像を描けませんでした');
-    await flush();
-    await flush();
     // 並べて描いていた分（同時に 3 頁）のほかは、始めない。
-    expect(mocks.renderPageImage.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(mocks.renderPageImage).toHaveBeenCalledTimes(3);
+    // 調べられなかったファイルの PDF は閉じる。
+    expect(mocks.closePdf.mock.calls.some(([doc]) => doc?.spec?.pages?.length === 12)).toBe(true);
+  });
+
+  it('番号の無い頁が多いファイルは JPEG を残さず、OCR を後から有効にしたときに調べ直す', async () => {
+    $('ocrToggle').checked = false;
+    const many = Array.from({ length: 40 }, (_, i) => page(`o${2 * i + 1}`, 2 * i + 1, { ocr: true }));
+    drop([file('odd.pdf', pdf(many))]);
+    await settled(1);
+    expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
+
+    $('ocrToggle').checked = true;
+    $('ocrToggle').dispatchEvent(new Event('change'));
+
+    await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalledTimes(40));
+    // 1 度だけ調べ直し、その JPEG で描く。
+    expect(mocks.findScanImages).toHaveBeenCalledTimes(2);
+    expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o1' });
   });
 
   it('ドラッグ中の枠と、手元のファイルの選択', async () => {
@@ -722,6 +746,27 @@ describe('結合と検証', () => {
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
     expect(mocks.mergePdf.mock.calls[1][0].order).toHaveLength(8);
+    expect($('downloadBtn').disabled).toBe(false);
+  });
+
+  it('結合する中身が変わらない操作や裏の処理では、結合した PDF を捨てない', async () => {
+    await addBook();
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    const answer = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementationOnce(async (args) => {
+      await gate;
+      return answer(args);
+    });
+
+    $('mergeBtn').click();
+    await flush();
+    // 本文のファイルの順は、本の並び（頁番号で決まる）を変えない。
+    fileItem('猫_奇数.pdf').querySelector('button[aria-label="ひとつ下へ"]').click();
+    release();
+
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    expect($('message').textContent).toBe('');
     expect($('downloadBtn').disabled).toBe(false);
   });
 

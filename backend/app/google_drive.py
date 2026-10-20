@@ -355,25 +355,23 @@ def download_file(
     return resp.content
 
 
-# ブラウザへ渡す代理トークンは、少なくともこれだけ有効な時間が残っているものに
-# する（数百 MB を読み終える前に切れないように）。残りが短ければ取り直す。
-_BROWSER_TOKEN_MIN_LIFETIME = datetime.timedelta(minutes=10)
-
-
 def delegated_read_token(user_email: str) -> tuple[str, datetime.datetime | None]:
     """user_email の代理（読み取り専用・drive.readonly）のアクセストークンと期限（UTC）。
 
     書籍スキャンの結合だけが使う。数百 MB のスキャンを Cloud Run と Hosting を
     通して運ぶと転送量が掛かるので、ブラウザがこのトークンで Drive から直接
     読む（README「書籍スキャン PDF 結合ツール」）。トークンは本人が Drive で
-    読めるものすべてを、期限（1 時間ほど）まで読めるので、ほかの用途には渡さない。
+    読めるものすべてを、期限（1 時間。代理の仕組みで決まり、短くできない）まで
+    読めるので、ほかの用途には渡さない。
+
+    サーバー自身が使う資格情報（_cached_credentials）とは分け、呼ぶたびに新しく
+    作る。ブラウザへ渡したトークンをサーバーが使い回さないように、また、
+    サーバーの AuthorizedSession が同じ資格情報を同時に取り直して競合しない
+    ように。
     """
-    creds = _cached_credentials([DRIVE_READONLY_SCOPE], subject=user_email)
-    expiry = creds.expiry
-    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
-    if not creds.token or expiry is None or expiry - now < _BROWSER_TOKEN_MIN_LIFETIME:
-        try:
-            creds.refresh(Request())
-        except google.auth.exceptions.GoogleAuthError as error:
-            raise DriveError(f"Drive の代理アクセスを用意できませんでした（{error}）。", 502) from error
+    creds = _credentials([DRIVE_READONLY_SCOPE], subject=user_email)
+    try:
+        creds.refresh(Request())
+    except google.auth.exceptions.GoogleAuthError as error:
+        raise DriveError(f"Drive の代理アクセスを用意できませんでした（{error}）。", 502) from error
     return creds.token, creds.expiry

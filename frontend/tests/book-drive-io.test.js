@@ -12,7 +12,18 @@ vi.mock('../src/api.js', () => ({
   apiGet: (...args) => apiGet(...args),
 }));
 
-const { downloadDriveFile } = await import('../src/pdf-book-merger/drive-download.js');
+const { downloadDriveFile: download } = await import('../src/pdf-book-merger/drive-download.js');
+
+/** 待たずに読み直す（待つ時間は記録する）。 */
+const waited = [];
+const downloadDriveFile = (file, options = {}) =>
+  download(file, {
+    delay: (attempt) => {
+      waited.push(attempt);
+      return 0;
+    },
+    ...options,
+  });
 
 const DATA = Uint8Array.from({ length: 25 }, (_, i) => i);
 const DRIVE = 'https://www.googleapis.com/drive/v3/files';
@@ -41,6 +52,7 @@ function body(bytes, { pieces = 3, cutAt = null } = {}) {
 let fetchMock;
 
 beforeEach(() => {
+  waited.length = 0;
   apiGet.mockReset();
   apiGet.mockResolvedValue({ id: 'scan/1', name: 'a.pdf', size: DATA.length, accessToken: 'tok-1', expiresAt: null });
   fetchMock = vi.fn(async () => new Response(body(DATA), { status: 200 }));
@@ -118,11 +130,66 @@ describe('downloadDriveFile', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('読み直しても切れるなら、あきらめる', async () => {
+  it('読み直しても切れるなら、間を空けて 4 回読み直してから、あきらめる', async () => {
     fetchMock.mockImplementation(async () => new Response(body(DATA, { cutAt: 0 }), { status: 200 }));
 
     await expect(downloadDriveFile({ id: 'f', name: 'a.pdf' })).rejects.toThrow('network error');
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(waited).toEqual([0, 1, 2, 3]);
+  });
+
+  it('待つ時間は、回ごとに倍にする（1, 2, 4, 8 秒）', async () => {
+    const delays = [];
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementation(async () => new Response('{}', { status: 503 }));
+      const reading = download({ id: 'f', name: 'a.pdf' }).catch((error) => error);
+      for (let i = 0; i < 4; i++) {
+        await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+        delays.push(vi.getTimerCount() && Math.round((await nextTimer()) / 1000));
+      }
+      expect(await reading).toBeInstanceOf(Error);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(delays).toEqual([1, 2, 4, 8]);
+
+    async function nextTimer() {
+      const before = Date.now();
+      await vi.runOnlyPendingTimersAsync();
+      return Date.now() - before;
+    }
+  });
+
+  it('流量を絞られたら（429・403 の rateLimitExceeded）、待ってから読み直す', async () => {
+    const limited = (status, reason) =>
+      new Response(JSON.stringify({ error: { message: 'Rate limit', errors: [{ reason }] } }), { status });
+    fetchMock
+      .mockImplementationOnce(async () => limited(429, 'rateLimitExceeded'))
+      .mockImplementationOnce(async () => limited(403, 'userRateLimitExceeded'))
+      .mockImplementationOnce(async () => limited(403, 'rateLimitExceeded'));
+
+    const bytes = await downloadDriveFile({ id: 'f', name: 'a.pdf' });
+
+    expect([...bytes]).toEqual([...DATA]);
+    expect(waited).toEqual([0, 1, 2]);
+  });
+
+  it('トークンの取り直しは、読み直しの回数に数えない', async () => {
+    let call = 0;
+    fetchMock.mockImplementation(async () => {
+      call++;
+      // 切れる → 401 → 切れる → 切れる → 切れる → 401 → 読める
+      if (call === 2 || call === 6) return new Response('{}', { status: 401 });
+      if (call < 7) return new Response(body(DATA, { cutAt: 0 }), { status: 200 });
+      return new Response(body(DATA), { status: 200 });
+    });
+
+    const bytes = await downloadDriveFile({ id: 'f', name: 'a.pdf' });
+
+    expect([...bytes]).toEqual([...DATA]);
+    expect(apiGet).toHaveBeenCalledTimes(3);
+    expect(waited).toEqual([0, 1, 2, 3]);
   });
 
   it('聞いた大きさより多く届いたら、読めなかったことにする', async () => {

@@ -125,48 +125,37 @@ class FakeCredentials:
 
 @pytest.fixture
 def credentials(monkeypatch):
-    asked = []
-    holder = {}
+    made = []
+
+    def make(scopes, subject, fail=False):
+        creds = FakeCredentials(None, None, fail=fail)
+        made.append(((tuple(scopes), subject), creds))
+        return creds
 
     def cached(scopes, subject):
-        asked.append((tuple(scopes), subject))
-        return holder["creds"]
+        raise AssertionError("ブラウザへ渡すトークンに、サーバーの資格情報を使い回さない")
 
+    monkeypatch.setattr(google_drive, "_credentials", make)
     monkeypatch.setattr(google_drive, "_cached_credentials", cached)
-    return holder, asked
+    return made, monkeypatch
 
 
-def _in(minutes):
-    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(minutes=minutes)
+def test_read_token_is_a_fresh_drive_readonly_token_for_the_user(credentials):
+    made, _ = credentials
 
+    first, expiry = google_drive.delegated_read_token(TEST_EMAIL)
+    second, _ = google_drive.delegated_read_token(TEST_EMAIL)
 
-def test_read_token_is_drive_readonly_for_the_user(credentials):
-    holder, asked = credentials
-    holder["creds"] = FakeCredentials("ya29.cached", _in(50))
-
-    token, expiry = google_drive.delegated_read_token(TEST_EMAIL)
-
-    assert token == "ya29.cached"
-    assert expiry == holder["creds"].expiry
-    assert asked == [((google_drive.DRIVE_READONLY_SCOPE,), TEST_EMAIL)]
-    assert holder["creds"].refreshed == 0
-
-
-@pytest.mark.parametrize("token,minutes", [(None, None), ("ya29.old", 5), ("ya29.old", -1)])
-def test_read_token_is_renewed_when_missing_or_about_to_expire(credentials, token, minutes):
-    # 数百 MB を読み終える前に切れないよう、残りが短ければ取り直す。
-    holder, _ = credentials
-    holder["creds"] = FakeCredentials(token, _in(minutes) if minutes is not None else None)
-
-    renewed, expiry = google_drive.delegated_read_token(TEST_EMAIL)
-
-    assert renewed == "fresh-1"
-    assert expiry > _in(55)
+    # 呼ぶたびに、サーバーの資格情報とは別に作って取る。
+    assert [key for key, _ in made] == [((google_drive.DRIVE_READONLY_SCOPE,), TEST_EMAIL)] * 2
+    assert all(creds.refreshed == 1 for _, creds in made)
+    assert first == second == "fresh-1"
+    assert expiry > datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(minutes=55)
 
 
 def test_read_token_failure_is_reported(credentials):
-    holder, _ = credentials
-    holder["creds"] = FakeCredentials(None, None, fail=True)
+    _, monkeypatch = credentials
+    monkeypatch.setattr(google_drive, "_credentials", lambda scopes, subject: FakeCredentials(None, None, fail=True))
 
     with pytest.raises(DriveError, match="代理アクセスを用意できませんでした") as caught:
         google_drive.delegated_read_token(TEST_EMAIL)

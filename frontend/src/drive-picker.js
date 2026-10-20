@@ -429,24 +429,24 @@ function openPicker(options) {
     updateChoose();
   };
 
-  /** 開いているフォルダのファイル（指定の種類のもの）を、続きまで読んで全部選ぶ。 */
+  /**
+   * 開いているフォルダのファイル（指定の種類のもの）を、続きまで読んで全部選ぶ。
+   * 最後まで読めたときだけ選ぶ（途中で別の場所へ移ったり失敗したりしたら、
+   * 1 つも選ばない。フォルダの一部だけを選んだまま決めてしまわないように）。
+   */
   async function selectAll() {
     const controller = new AbortController();
     selectingAll = controller;
     updateChoose();
     showStatus('このフォルダのファイルを読んでいます…');
-    let count = 0;
+    const found = [];
     let pageToken = null;
     try {
       do {
         const page = await apiGet(itemsQuery({ ...state, query: '' }, options, pageToken), {
           signal: controller.signal,
         });
-        for (const item of page.items) {
-          if (item.folder) continue;
-          picked.set(item.id, item);
-          count++;
-        }
+        found.push(...page.items.filter((item) => !item.folder));
         pageToken = page.nextPageToken || null;
       } while (pageToken);
     } catch (error) {
@@ -458,10 +458,11 @@ function openPicker(options) {
     }
     if (controller.signal.aborted) return;
     selectingAll = null;
+    found.forEach((item) => picked.set(item.id, item));
     list.querySelectorAll('.drive-picker-item[aria-pressed]').forEach((node) => {
       node.setAttribute('aria-pressed', String(picked.has(node.driveItem.id)));
     });
-    showStatus(count ? '' : 'このフォルダには選べるファイルがありません。');
+    showStatus(found.length ? '' : 'このフォルダには選べるファイルがありません。');
     updateChoose();
   }
 

@@ -671,6 +671,40 @@ describe('いくつも選ぶ', () => {
     await expect(picking).resolves.toHaveLength(2);
   });
 
+  it('すべて選ぶ途中で別の場所へ移ったら、1 つも選ばない（フォルダの一部だけを選ばない）', async () => {
+    respond({
+      'my-drive': { items: [folder('d1', 'スキャン'), pdf('p0', '表紙.pdf')] },
+      d1: { items: [pdf('p1', '1.pdf')], nextPageToken: 't2' },
+      'd1#t2': { items: [pdf('p2', '2.pdf')] },
+    });
+    const picking = pickFiles({ mimeTypes: PDF_MIME });
+    await flush();
+    itemNamed('表紙.pdf').click();
+    itemNamed('スキャン').click();
+    await flush();
+
+    // 1 ページ目を読んだところで、続きを待たせておく。
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    const answer = apiGet.getMockImplementation();
+    apiGet.mockImplementation(async (path, ...rest) => {
+      if (query(path).pageToken === 't2') await gate;
+      return answer(path, ...rest);
+    });
+    allButton().click();
+    await flush();
+    // 最上位へ戻る。
+    dialog().querySelector('.drive-picker-crumb[data-depth="0"]').click();
+    release();
+    await flush();
+    await flush();
+
+    expect(chooseButton().disabled).toBe(false);
+    expect(chooseButton().textContent).toBe('選択（1 個）');
+    chooseButton().click();
+    await expect(picking).resolves.toEqual([{ id: 'p0', name: '表紙.pdf', mimeType: PDF_MIME }]);
+  });
+
   it('すべて選ぶのに失敗したら理由を出し、やり直せる。空ならそう出す', async () => {
     respond({
       'my-drive': { items: [folder('d1', '空')] },
