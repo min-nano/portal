@@ -52,10 +52,7 @@ const mocks = vi.hoisted(() => ({
   renderMargins: vi.fn(),
   prepare: null,
   pickFiles: vi.fn(),
-  pickFile: vi.fn(),
   downloadDriveFile: vi.fn(),
-  askSaveAs: vi.fn(),
-  uploadToDrive: vi.fn(),
   prepareOcr: vi.fn(),
   readStrip: vi.fn(),
   renderPreview: vi.fn(),
@@ -70,19 +67,12 @@ vi.mock('../src/page-start.js', () => ({
 }));
 vi.mock('../src/drive-picker.js', () => ({
   pickFiles: (...args) => mocks.pickFiles(...args),
-  pickFile: (...args) => mocks.pickFile(...args),
 }));
 vi.mock('../src/pdf-book-merger/drive-download.js', () => ({
   downloadDriveFile: (...args) => mocks.downloadDriveFile(...args),
 }));
 vi.mock('../src/pdf-book-merger/scan-images.js', () => ({
   findScanImages: (...args) => mocks.findScanImages(...args),
-}));
-vi.mock('../src/save-dialogs.js', () => ({
-  askSaveAs: (...args) => mocks.askSaveAs(...args),
-}));
-vi.mock('../src/pdf-book-merger/drive-upload.js', () => ({
-  uploadToDrive: (...args) => mocks.uploadToDrive(...args),
 }));
 vi.mock('../src/pdf-book-merger/ocr.js', () => ({
   prepareOcr: (...args) => mocks.prepareOcr(...args),
@@ -600,40 +590,8 @@ describe('結合と検証', () => {
     expect($('mergeBtn').disabled).toBe(false);
   });
 
-  it('Drive に保存し、開くリンクを出す', async () => {
-    await addBook();
-    $('outputName').value = '吾輩は猫である';
-    $('outputName').dispatchEvent(new Event('input'));
-    $('mergeBtn').click();
-    await vi.waitFor(() => expect($('saveDriveBtn').disabled).toBe(false));
-
-    mocks.pickFile.mockResolvedValue({ id: 'folder-1', name: 'スキャン' });
-    mocks.askSaveAs.mockImplementation(async (options) => ({
-      fileName: options.ensureName('吾輩は猫である'),
-      folder: await options.pickFolder(),
-    }));
-    mocks.uploadToDrive.mockImplementation(async (bytes, destination, { onProgress }) => {
-      onProgress(5, 10);
-      return { fileName: destination.fileName, webViewLink: 'https://drive/merged' };
-    });
-
-    $('saveDriveBtn').click();
-    await vi.waitFor(() => expect($('result').hidden).toBe(false));
-
-    expect(mocks.askSaveAs.mock.calls[0][0].defaultName).toBe('吾輩は猫である.pdf');
-    expect(mocks.pickFile).toHaveBeenCalledWith(expect.objectContaining({ selectFolder: true }));
-    expect(mocks.uploadToDrive.mock.calls[0][1]).toEqual({ folderId: 'folder-1', fileName: '吾輩は猫である.pdf' });
-    expect($('message').textContent).toBe('「吾輩は猫である.pdf」を Drive に保存しました。');
-    expect($('resultLink').href).toBe('https://drive/merged');
-
-    // 保存に失敗したら理由を出す。キャンセルなら何もしない。
-    mocks.uploadToDrive.mockRejectedValue(new Error('Drive が続きを受け取りませんでした。'));
-    $('saveDriveBtn').click();
-    await vi.waitFor(() => expect($('message').textContent).toBe('Drive が続きを受け取りませんでした。'));
-    mocks.askSaveAs.mockResolvedValue(null);
-    mocks.uploadToDrive.mockClear();
-    $('saveDriveBtn').click();
-    await flush();
-    expect(mocks.uploadToDrive).not.toHaveBeenCalled();
+  it('結合した PDF はダウンロードするだけで、Drive へ保存するボタンは無い', () => {
+    expect($('saveDriveBtn')).toBeNull();
+    expect(document.querySelector('portal-save-dialogs')).toBeNull();
   });
 });

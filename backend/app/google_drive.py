@@ -13,8 +13,6 @@ GAS 版の「実行ユーザーの権限で DriveApp を読む」に相当し、
   * delegated_write_session() … drive + documents。構造計算安全証明書
     作成ツールが、雛形の Google ドキュメントを複製して差し替え、PDF を
     Drive へ保存するために使う。書き込みが必要な操作だけこちらを使う。
-    書籍スキャン PDF 結合ツールも、結合した PDF を Drive へ保存する
-    （再開可能なアップロード）ときにこちらを使う。
 
 JSON 鍵ファイルなしで動作するよう、Cloud Run 上ではランタイム
 サービスアカウントの IAM Credentials API（signJwt）で署名する。この方式には
@@ -23,12 +21,9 @@ JSON 鍵ファイルなしで動作するよう、Cloud Run 上ではランタ�
 GOOGLE_APPLICATION_CREDENTIALS に JSON 鍵を指定すればそのまま動く。
 """
 
-import re
 import threading
-from urllib.parse import parse_qs, urlparse
 
 import google.auth
-import requests
 from google.auth import iam
 from google.auth.transport.requests import AuthorizedSession, Request
 from google.oauth2 import service_account
@@ -373,99 +368,3 @@ def download_range(
         # 範囲を無視して全体を返された。要る部分だけを切り出す。
         content = content[start : end + 1]
     return content
-
-
-# --- 大きなファイルの保存（再開可能なアップロード） ----------------------------
-#
-# 書籍スキャンを結合した PDF は数百 MB になり、1 回のリクエストでは Cloud Run と
-# Firebase Hosting のリライトの上限（本文の大きさ・時間）に掛かる。Drive の
-# 「再開可能なアップロード」で、受け口を作ってから少しずつ送る。受け口は
-# upload_id で決まる、そのファイル 1 つにだけ書き込める使い捨ての宛先で、
-# 送る側に Authorization は要らない。
-#
-# 画面とやり取りするのは upload_id だけにして、送り先の URL はここで定数から
-# 組み立てる。画面から URL を受け取って中継すると、任意の宛先へサーバーに
-# 送らせる口（SSRF）になりうるため。
-
-# 受け口を作るときと、続きを送るときに同じものを付ける（Drive が返す送り先は
-# 「作ったときの問い合わせ + upload_id」なので、それと同じ URL になる）。
-_RESUMABLE_PARAMS = {
-    "uploadType": "resumable",
-    "supportsAllDrives": "true",
-    "fields": "id, name, webViewLink",
-}
-
-# upload_id に使われる文字（URL でそのまま使える文字）。
-_UPLOAD_ID = re.compile(r"[A-Za-z0-9._~-]{1,1024}")
-
-# 1 回に送る大きさは 256 KiB の倍数でなければならない（最後の 1 回を除く）。
-RESUMABLE_CHUNK_UNIT = 256 * 1024
-
-
-def start_resumable_upload(
-    session: AuthorizedSession,
-    folder_id: str,
-    name: str,
-    mime_type: str,
-    size: int,
-) -> str:
-    """フォルダに新しいファイルを作るアップロードを始め、upload_id を返す。
-
-    ファイルは最後の 1 回を受け取った時点で出来上がる。途中で送るのを
-    やめれば、何も残らない（Drive が 1 週間ほどで受け口を片付ける）。
-    """
-    resp = session.post(
-        _UPLOAD_URL,
-        params=_RESUMABLE_PARAMS,
-        json={"name": name, "parents": [folder_id], "mimeType": mime_type},
-        headers={
-            "X-Upload-Content-Type": mime_type,
-            "X-Upload-Content-Length": str(size),
-        },
-    )
-    _raise_for_status(resp, "保存の準備")
-    location = urlparse(resp.headers.get("Location", ""))
-    upload_ids = parse_qs(location.query).get("upload_id") or [""]
-    if (
-        location.scheme != "https"
-        or f"https://{location.netloc}{location.path}" != _UPLOAD_URL
-        or not is_upload_id(upload_ids[0])
-    ):
-        raise DriveError("保存の準備に失敗しました（送り先を受け取れませんでした）。", 502)
-    return upload_ids[0]
-
-
-def is_upload_id(value) -> bool:
-    """Drive の再開可能なアップロードの upload_id として使える文字列か。"""
-    return isinstance(value, str) and bool(_UPLOAD_ID.fullmatch(value))
-
-
-def upload_chunk(upload_id: str, offset: int, total: int, content: bytes) -> dict:
-    """再開可能なアップロードへ、offset から content を送る。
-
-    まだ続きがあれば {"done": False, "received": 受け取られた大きさ}、
-    最後の 1 回なら {"done": True, ...出来上がったファイル} を返す。
-    受け取られた大きさが送った分より小さいことがある（Drive の都合）ので、
-    次はそこから送り直す。
-    """
-    if not is_upload_id(upload_id):
-        raise DriveError("保存の送り先が正しくありません。", 400)
-    if not content:
-        raise DriveError("送る中身がありません。", 400)
-    end = offset + len(content) - 1
-    resp = requests.put(
-        _UPLOAD_URL,
-        params={**_RESUMABLE_PARAMS, "upload_id": upload_id},
-        data=content,
-        headers={"Content-Range": f"bytes {offset}-{end}/{total}"},
-        timeout=120,
-    )
-    if resp.status_code == 308:
-        # Range: bytes=0-12345（何も受け取っていなければ付かない）
-        received = 0
-        match = re.match(r"bytes=0-(\d+)$", resp.headers.get("Range", ""))
-        if match:
-            received = int(match.group(1)) + 1
-        return {"done": False, "received": received}
-    _raise_for_status(resp, "ファイルの保存")
-    return {"done": True, **resp.json()}

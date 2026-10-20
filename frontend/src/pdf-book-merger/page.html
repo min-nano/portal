@@ -5,8 +5,8 @@
   裁断した本を分けてスキャンした PDF（奇数頁の束・偶数頁の束・表紙・裏表紙など）を選ぶと、
   頁番号を読み取って 1 冊ぶんの順に並べ、1 つの PDF にまとめます。頁の抜け・重なりと、
   スキャンの傾き・ずれ・すじを確かめてから結合し、結合した PDF も元の頁と突き合わせて
-  検証します。頁番号の読み取り・検査・結合はすべてこの端末の中で行います（Drive との
-  読み書きだけはサーバーが中継します）。サーチャブル PDF の文字情報はそのまま残ります。
+  検証します。頁番号の読み取り・検査・結合はすべてこの端末の中で行います（Drive の
+  ファイルを読むときだけ、サーバーが中継します）。サーチャブル PDF の文字情報はそのまま残ります。
 </p>
 
 <portal-section class="card bm-step" id="filesSection">
@@ -62,12 +62,12 @@
   </div>
   <div id="verifyResult" class="bm-verify" hidden></div>
   <div class="bm-actions">
-    <button type="button" id="downloadBtn" class="secondary" disabled>ダウンロード</button>
-    <button type="button" id="saveDriveBtn" class="secondary" disabled>Drive に保存</button>
+    <button type="button" id="downloadBtn" disabled>ダウンロード</button>
   </div>
+  <p class="hint">
+    結合した PDF は、この端末に保存します。Drive に置くときは、端末の Google ドライブの
+    アプリなどからアップロードしてください。
+  </p>
 </portal-section>
 
 <div id="message"></div>
-<div id="result" hidden>
-  <a id="resultLink" target="_blank" rel="noopener"></a>
-</div>

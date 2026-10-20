@@ -1,33 +1,25 @@
 // @vitest-environment jsdom
 //
-// 書籍スキャン PDF 結合ツールの、Drive との受け渡し（どちらもサーバーの中継）。
+// 書籍スキャン PDF 結合ツールの、Drive の PDF の読み込み（サーバーの中継）。
 //
-//   読む: PDF の大きさを聞き、8 MiB ずつの範囲に分けて頼む
-//         （src/pdf-book-merger/drive-download.js）
-//   書く: サーバーが作った再開可能なアップロードへ、切って順に送る
-//         （src/pdf-book-merger/drive-upload.js）
+// PDF の大きさを聞き、8 MiB ずつの範囲に分けて頼んでつなぐ
+// （src/pdf-book-merger/drive-download.js）。結合した PDF はダウンロード
+// するだけなので、Drive へ書くものは無い。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const apiGet = vi.fn();
 const apiGetBytes = vi.fn();
-const apiSendJson = vi.fn();
-const apiPostForm = vi.fn();
 vi.mock('../src/api.js', () => ({
   apiGet: (...args) => apiGet(...args),
   apiGetBytes: (...args) => apiGetBytes(...args),
-  apiSendJson: (...args) => apiSendJson(...args),
-  apiPostForm: (...args) => apiPostForm(...args),
 }));
 
 const { downloadDriveFile } = await import('../src/pdf-book-merger/drive-download.js');
-const { uploadToDrive } = await import('../src/pdf-book-merger/drive-upload.js');
 
 beforeEach(() => {
   apiGet.mockReset();
   apiGetBytes.mockReset();
-  apiSendJson.mockReset();
-  apiPostForm.mockReset();
 });
 
 describe('downloadDriveFile', () => {
@@ -100,95 +92,5 @@ describe('downloadDriveFile', () => {
       '「memo.txt」を Drive から読み込めませんでした（PDF ファイルではありません。）。'
     );
     expect(apiGetBytes).not.toHaveBeenCalled();
-  });
-});
-
-describe('uploadToDrive', () => {
-  const SESSION = { uploadId: 'upload-x', chunkBytes: 4, fileName: '本.pdf' };
-
-  /** 送られたフォームを、読める形にして記録する。 */
-  async function sent() {
-    return Promise.all(
-      apiPostForm.mock.calls.map(async ([path, form]) => ({
-        path,
-        offset: Number(form.get('offset')),
-        total: Number(form.get('total')),
-        uploadId: form.get('uploadId'),
-        bytes: [...new Uint8Array(await form.get('chunk').arrayBuffer())],
-      }))
-    );
-  }
-
-  it('保存先を伝えて受け口を作り、決まった大きさに切って順に送る', async () => {
-    apiSendJson.mockResolvedValue(SESSION);
-    apiPostForm
-      .mockResolvedValueOnce({ done: false, received: 4 })
-      .mockResolvedValueOnce({ done: false, received: 8 })
-      .mockResolvedValueOnce({ done: true, fileId: 'f1', fileName: '本.pdf', webViewLink: 'https://drive/f1' });
-    const progress = [];
-
-    const saved = await uploadToDrive(
-      new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
-      { folderId: 'folder', fileName: '本.pdf' },
-      { onProgress: (s, t) => progress.push([s, t]) }
-    );
-
-    expect(saved.webViewLink).toBe('https://drive/f1');
-    expect(apiSendJson).toHaveBeenCalledWith('/api/tools/pdf-book-merger/uploads', 'POST', {
-      folderId: 'folder',
-      fileName: '本.pdf',
-      size: 10,
-    });
-    expect((await sent()).map(({ path, offset, total, uploadId, bytes }) => [path, offset, total, uploadId, bytes])).toEqual([
-      ['/api/tools/pdf-book-merger/uploads/chunk', 0, 10, 'upload-x', [0, 1, 2, 3]],
-      ['/api/tools/pdf-book-merger/uploads/chunk', 4, 10, 'upload-x', [4, 5, 6, 7]],
-      ['/api/tools/pdf-book-merger/uploads/chunk', 8, 10, 'upload-x', [8, 9]],
-    ]);
-    expect(progress).toEqual([
-      [4, 10],
-      [8, 10],
-      [10, 10],
-    ]);
-  });
-
-  it('Drive が受け取った分の続きから送り直す', async () => {
-    apiSendJson.mockResolvedValue(SESSION);
-    apiPostForm
-      .mockResolvedValueOnce({ done: false, received: 2 })
-      .mockResolvedValueOnce({ done: true, fileId: 'f1' });
-
-    await uploadToDrive(new Uint8Array([0, 1, 2, 3, 4, 5]), { folderId: 'f', fileName: 'x.pdf' });
-
-    expect((await sent()).map((call) => [call.offset, call.bytes])).toEqual([
-      [0, [0, 1, 2, 3]],
-      [2, [2, 3, 4, 5]],
-    ]);
-  });
-
-  it('送信の失敗は同じ位置から送り直し、続けば諦める', async () => {
-    apiSendJson.mockResolvedValue(SESSION);
-    apiPostForm
-      .mockRejectedValueOnce(new Error('network'))
-      .mockResolvedValueOnce({ done: true, fileId: 'f1' });
-
-    await uploadToDrive(new Uint8Array([1, 2]), { folderId: 'f', fileName: 'x.pdf' });
-    expect((await sent()).map((call) => call.offset)).toEqual([0, 0]);
-
-    apiPostForm.mockReset();
-    apiPostForm.mockRejectedValue(new Error('サーバーエラー'));
-    await expect(uploadToDrive(new Uint8Array([1, 2]), { folderId: 'f', fileName: 'x.pdf' })).rejects.toThrow(
-      'サーバーエラー'
-    );
-    expect(apiPostForm).toHaveBeenCalledTimes(4);
-  });
-
-  it('1 バイトも進まないことが続けば諦める', async () => {
-    apiSendJson.mockResolvedValue(SESSION);
-    apiPostForm.mockResolvedValue({ done: false, received: 0 });
-
-    await expect(uploadToDrive(new Uint8Array([1, 2, 3, 4, 5]), { folderId: 'f', fileName: 'x.pdf' })).rejects.toThrow(
-      'Drive が続きを受け取りませんでした'
-    );
-    expect(apiPostForm).toHaveBeenCalledTimes(4);
   });
 });

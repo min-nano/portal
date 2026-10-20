@@ -3,7 +3,7 @@
 // 裁断した本を分けてスキャンした PDF を、頁番号で 1 冊の順に並べて結合する。
 // 判断（番号の推定・検査・並べ替え）・画像の展開・OCR・結合・検証は、すべて
 // ブラウザの中で行う。サーバー（backend/app/tools/pdf_book_merger.py）が受け持つ
-// のは、Drive とのあいだでバイト列を中継することだけ（読む・保存する）。
+// のは、Drive の PDF を読むときの中継だけ。
 //
 //   1. ファイルを読む   Drive（サーバー経由で 8 MiB ずつ。drive-download.js）
 //                       か手元から
@@ -16,7 +16,7 @@
 //                       （ordering.js / review.js）
 //   6. 結合して検証     pdf-lib で頁をそのまま写し（merge.js）、読み直して
 //                       元の頁と突き合わせる（verify.js）
-//   7. 保存             ダウンロードか、Drive（drive-upload.js）
+//   7. 保存             ダウンロード（この端末へ。Drive へは端末のアプリで）
 //
 // 判断はどれも DOM に触らない部品に置いてあり、ここはそれをつなぐだけにする。
 
@@ -24,10 +24,8 @@ import '../styles.css';
 import './tool.css';
 import '../components/index.js';
 import { startPage } from '../page-start.js';
-import { pickFile, pickFiles } from '../drive-picker.js';
+import { pickFiles } from '../drive-picker.js';
 import { ensurePdfExtension } from '../pdf-file-ops.js';
-import { askSaveAs } from '../save-dialogs.js';
-import { uploadToDrive } from './drive-upload.js';
 import { downloadDriveFile } from './drive-download.js';
 import { compareScans } from './image-checks.js';
 import { measure } from './measure-client.js';
@@ -84,7 +82,6 @@ let view = { order: [], problems: [], issues: new Map(), numberings: new Map() }
 /** 結合した PDF と検証の結果。並びが変わったら捨てる。 */
 let merged = null;
 let filter = 'all';
-let lastFolder = null;
 // ファイルは 1 つずつ読む（pdf.js も OCR も、同時に動かすと遅くなるだけなので）。
 let queue = Promise.resolve();
 let ocrFailed = false;
@@ -391,9 +388,7 @@ function refresh() {
 function discardMerged() {
   merged = null;
   $('downloadBtn').disabled = true;
-  $('saveDriveBtn').disabled = true;
   $('verifyResult').hidden = true;
-  $('result').hidden = true;
 }
 
 // --- 描く：ファイルの一覧 ----------------------------------------------------
@@ -846,7 +841,6 @@ async function mergeAndVerify() {
     merged = { bytes, fileName, result, labelsOk, title: info?.Title || '' };
     renderVerify();
     $('downloadBtn').disabled = false;
-    $('saveDriveBtn').disabled = false;
   } catch (error) {
     showMessage(error.message || String(error), 'red');
   } finally {
@@ -898,43 +892,6 @@ function download() {
   link.remove();
   // すぐに消すと、ダウンロードが始まる前に中身が無くなるブラウザがある。
   setTimeout(() => URL.revokeObjectURL(url), 60 * 1000);
-}
-
-async function saveToDrive() {
-  if (!merged) return;
-  const chosen = await askSaveAs({
-    title: 'Drive に保存',
-    defaultName: merged.fileName,
-    initialFolder: lastFolder,
-    pickFolder: () => pickFile({ title: '保存先のフォルダを選択', selectFolder: true }),
-    ensureName: (name) => ensurePdfExtension(name, merged.fileName),
-  });
-  if (!chosen) return;
-  lastFolder = chosen.folder;
-
-  const button = $('saveDriveBtn');
-  button.disabled = true;
-  showMessage('');
-  try {
-    const saved = await uploadToDrive(
-      merged.bytes,
-      { folderId: chosen.folder.id, fileName: chosen.fileName },
-      {
-        onProgress: (sent, total) =>
-          showProgress(`Drive に保存しています（${megabytes(sent)} / ${megabytes(total)}）`, sent / total),
-      }
-    );
-    showMessage(`「${saved.fileName}」を Drive に保存しました。`, 'green');
-    const link = $('resultLink');
-    link.href = saved.webViewLink;
-    link.textContent = 'Drive で開く';
-    $('result').hidden = !saved.webViewLink;
-  } catch (error) {
-    showMessage(error.message || String(error), 'red');
-  } finally {
-    showProgress('');
-    button.disabled = false;
-  }
 }
 
 // --- 入口 --------------------------------------------------------------------
@@ -1029,7 +986,6 @@ function wireUp() {
   });
   $('mergeBtn').addEventListener('click', mergeAndVerify);
   $('downloadBtn').addEventListener('click', download);
-  $('saveDriveBtn').addEventListener('click', saveToDrive);
 
   $('previewPrevBtn').addEventListener('click', () => stepPreview(-1));
   $('previewNextBtn').addEventListener('click', () => stepPreview(1));
