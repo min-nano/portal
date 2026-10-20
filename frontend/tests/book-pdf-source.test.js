@@ -6,7 +6,7 @@
 // 画素を手放すことを縛る。
 
 import { describe, expect, it } from 'vitest';
-import { isWebKit, releaseCanvas } from '../src/pdf-book-merger/pdf-source.js';
+import { cropTransform, isWebKit, releaseCanvas } from '../src/pdf-book-merger/pdf-source.js';
 
 const UA = {
   iphoneSafari:
@@ -45,5 +45,26 @@ describe('releaseCanvas', () => {
     releaseCanvas(null);
 
     expect(canvas).toEqual({ width: 0, height: 0 });
+  });
+});
+
+describe('cropTransform', () => {
+  // 364×515pt の頁を、OCR の細かさ（scale 4）で 1 回だけ描いたもの。
+  const full = { transform: [4, 0, 0, -4, 0, 2060] };
+  const apply = (t, x, y) => [t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5]].map((v) => Math.round(v * 1000) / 1000 + 0);
+
+  it('粗い viewport（測る画像）へは、縮めて写す', () => {
+    const analysis = { transform: [2, 0, 0, -2, 0, 1030] };
+    const t = cropTransform(analysis, full);
+    expect(apply(t, 0, 0)).toEqual([0, 0]);
+    expect(apply(t, 1456, 2060)).toEqual([728, 1030]);
+  });
+
+  it('下にずらした viewport（下の余白の帯）へは、その帯の分だけ切り出す', () => {
+    // 頁の下 14% の帯（offsetY で上へずらしたもの）。
+    const bottom = { transform: [4, 0, 0, -4, 0, 2060 - 0.86 * 2060] };
+    const t = cropTransform(bottom, full);
+    expect(apply(t, 0, 0.86 * 2060)).toEqual([0, 0]);
+    expect(apply(t, 1456, 2060)).toEqual([1456, 288.4]);
   });
 });

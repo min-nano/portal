@@ -16,7 +16,7 @@ import workerSrc from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { toGray } from './image-checks.js';
 import { MARGIN_ZONE } from './page-numbers.js';
 import { drawScan } from './scan-images.js';
-import { textItems, textSignature } from './text-layer.js';
+import { multiply, textItems, textSignature } from './text-layer.js';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
@@ -37,18 +37,34 @@ export const PREVIEW_LONG_SIDE = 1600;
  *
  * @param {Uint8Array} bytes
  */
-export function openPdf(bytes) {
+export async function openPdf(bytes, { safe = false } = {}) {
   const webkit = isWebKit(globalThis.navigator);
-  return pdfjs.getDocument({
+  const doc = await pdfjs.getDocument({
     data: bytes.slice(),
     isEvalSupported: false,
     // Safari（と、中身が同じ WebKit の iPhone・iPad のブラウザ）では、worker の
-    // 中で画像を ImageDecoder・OffscreenCanvas で展開すると「The object is in
-    // an invalid state.」で失敗することがある（スキャンの JPEG で起きる）。
-    // pdf.js 自身の展開に任せる（少し遅くなるが確実に読める）。
+    // 中で画像を ImageDecoder で展開すると「The object is in an invalid
+    // state.」で失敗することがある（スキャンの JPEG で起きた）。ImageDecoder は
+    // 使わず、pdf.js 自身の展開に任せる。
     isImageDecoderSupported: !webkit,
-    isOffscreenCanvasSupported: !webkit,
+    // OffscreenCanvas は使う。使わないと、pdf.js はスキャンの画像を画面の
+    // スレッドで描くので、頁ごとに画面が固まる。ただし WebKit でこちらが失敗の
+    // 元だったときに備え、描けなければ両方を切った文書（safe）で描き直す
+    // （drawPage）。
+    isOffscreenCanvasSupported: !(webkit && safe),
   }).promise;
+  if (webkit && !safe) fallbacks.set(doc, { bytes, safe: null, failed: false });
+  return doc;
+}
+
+/** WebKit で開いた文書 → 描けなかったときに開き直す、安全な設定の文書。 */
+const fallbacks = new WeakMap();
+
+function safeDocOf(doc) {
+  const fallback = fallbacks.get(doc);
+  if (!fallback) return null;
+  fallback.safe ??= openPdf(fallback.bytes, { safe: true });
+  return fallback.safe;
 }
 
 /**
@@ -82,8 +98,12 @@ export function releaseCanvas(canvas) {
 }
 
 /** 開いた PDF を閉じる（worker の側に持っている中身も手放す）。 */
-export function closePdf(doc) {
-  return doc ? doc.loadingTask.destroy() : Promise.resolve();
+export async function closePdf(doc) {
+  if (!doc) return;
+  const safe = fallbacks.get(doc)?.safe;
+  fallbacks.delete(doc);
+  if (safe) await closePdf(await safe.catch(() => null));
+  await doc.loadingTask.destroy();
 }
 
 function canvasOf(width, height) {
@@ -94,10 +114,62 @@ function canvasOf(width, height) {
 }
 
 /** pdf.js で、viewport のとおりに描く。注釈（付箋・リンクの枠）は検査の邪魔なので描かない。 */
-async function drawPage(page, viewport, size = viewport) {
+async function renderTo(page, viewport, size) {
   const canvas = canvasOf(size.width, size.height);
-  await page.render({ canvas, viewport, annotationMode: pdfjs.AnnotationMode.DISABLE }).promise;
+  try {
+    await page.render({ canvas, viewport, annotationMode: pdfjs.AnnotationMode.DISABLE }).promise;
+  } catch (error) {
+    releaseCanvas(canvas);
+    throw error;
+  }
   return canvas;
+}
+
+/**
+ * pdf.js で描く。WebKit で描けなかったときは、OffscreenCanvas も切った文書で
+ * 描き直し、その文書の残りの頁もそちらで描く。
+ */
+async function drawPage(doc, page, viewport, size = viewport) {
+  const fallback = fallbacks.get(doc);
+  if (!fallback?.failed) {
+    try {
+      return await renderTo(page, viewport, size);
+    } catch (error) {
+      if (!fallback) throw error;
+      fallback.failed = true;
+    }
+  }
+  const safe = await safeDocOf(doc);
+  const safePage = await safe.getPage(page.pageNumber);
+  try {
+    return await renderTo(safePage, viewport, size);
+  } finally {
+    safePage.cleanup();
+  }
+}
+
+/** 変換行列の逆（画素 → 頁の座標を、頁の座標 → 画素に戻す）。 */
+function inverse([a, b, c, d, e, f]) {
+  const det = a * d - b * c;
+  return [d / det, -b / det, -c / det, a / det, (c * f - d * e) / det, (b * e - a * f) / det];
+}
+
+/**
+ * 頁全体を描いた canvas（full の viewport）から、別の viewport の canvas へ
+ * 写すときの変換。full の画素 → その viewport の画素。
+ */
+export function cropTransform(viewport, full) {
+  return multiply(viewport.transform, inverse(full.transform));
+}
+
+// pdf.js で描く頁は、1 頁ずつ描く。WebKit では大きなスキャンの画像を画面の
+// スレッドで描くので、何頁も並べて描くと画面が長く固まり、メモリも足りなくなる。
+let pdfjsTurn = Promise.resolve();
+
+function inTurn(run) {
+  const result = pdfjsTurn.then(run);
+  pdfjsTurn = result.catch(() => {});
+  return result;
 }
 
 /**
@@ -105,9 +177,11 @@ async function drawPage(page, viewport, size = viewport) {
  *
  * scan（scan-images.js の findScanImages が見つけた JPEG）があれば、それを
  * ブラウザに展開させて描く。描けなければ（古いブラウザ・壊れた JPEG など）、
- * その頁は pdf.js で描く。
+ * その頁は pdf.js で描く。pdf.js では、細かさの違う何枚か（測る画像と OCR の
+ * 帯）を、いちばん細かい大きさで頁を 1 回だけ描いてから切り出す（pdf.js は
+ * 描くたびにスキャンの画像を描き直すので、1 回にまとめる）。
  */
-async function drawViewports(page, viewports, sizes, scan) {
+async function drawViewports(doc, page, viewports, sizes, scan) {
   if (scan) {
     try {
       return await drawScan(scan, viewports, sizes);
@@ -115,9 +189,25 @@ async function drawViewports(page, viewports, sizes, scan) {
       // pdf.js で描き直す。
     }
   }
-  const canvases = [];
-  for (const [k, viewport] of viewports.entries()) canvases.push(await drawPage(page, viewport, sizes[k]));
-  return canvases;
+  return inTurn(async () => {
+    if (viewports.length === 1) return [await drawPage(doc, page, viewports[0], sizes[0])];
+    const finest = Math.max(...viewports.map((viewport) => Math.hypot(viewport.transform[0], viewport.transform[1])));
+    const full = page.getViewport({ scale: finest });
+    const source = await drawPage(doc, page, full);
+    try {
+      return viewports.map((viewport, k) => {
+        const size = sizes[k] ?? viewport;
+        const canvas = canvasOf(size.width, size.height);
+        const context = canvas.getContext('2d');
+        context.imageSmoothingQuality = 'high';
+        context.setTransform(...cropTransform(viewport, full));
+        context.drawImage(source, 0, 0);
+        return canvas;
+      });
+    } finally {
+      releaseCanvas(source);
+    }
+  });
 }
 
 function thumbnailUrl(source) {
@@ -202,6 +292,7 @@ export async function renderPageImage(doc, index, scan = null, { margins = false
     const viewport = page.getViewport({ scale: ANALYSIS_LONG_SIDE / Math.max(base.width, base.height) });
     const bands = margins ? marginViewports(page) : [];
     const [canvas, ...stripCanvases] = await drawViewports(
+      doc,
       page,
       [viewport, ...bands.map((band) => band.viewport)],
       [undefined, ...bands.map((band) => band.size)],
@@ -235,6 +326,7 @@ export async function renderMargins(doc, index, scan = null) {
   try {
     const bands = marginViewports(page);
     const canvases = await drawViewports(
+      doc,
       page,
       bands.map((band) => band.viewport),
       bands.map((band) => band.size),
@@ -258,7 +350,7 @@ export async function renderPreview(doc, index, longSide = PREVIEW_LONG_SIDE) {
   try {
     const base = page.getViewport({ scale: 1 });
     const viewport = page.getViewport({ scale: longSide / Math.max(base.width, base.height) });
-    const canvas = await drawPage(page, viewport);
+    const canvas = await inTurn(() => drawPage(doc, page, viewport));
     return await new Promise((resolve) => {
       canvas.toBlob(
         (blob) => {

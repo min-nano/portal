@@ -51,7 +51,9 @@ export async function savePdf(bytes, fileName, nav = globalThis.navigator) {
   const file = new File([bytes], fileName, { type: PDF_MIME });
   if (isMobile(nav) && typeof nav.share === 'function' && nav.canShare?.({ files: [file] })) {
     try {
-      await nav.share({ files: [file], title: fileName });
+      // ファイルだけを渡す（title などを添えると、iOS はそれを「テキスト.txt」と
+      // して一緒に渡してしまう）。
+      await nav.share({ files: [file] });
       return 'shared';
     } catch (error) {
       // 共有シートを閉じただけなら何もしない。開けなかったときはダウンロードする。

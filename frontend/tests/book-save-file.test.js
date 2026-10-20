@@ -59,8 +59,10 @@ describe('savePdf', () => {
 
     expect(await savePdf(bytes, '吾輩は猫である.pdf', nav)).toBe('shared');
 
-    const [{ files, title }] = share.mock.calls[0];
-    expect(title).toBe('吾輩は猫である.pdf');
+    // ファイルだけを渡す（title を添えると、iOS は「テキスト.txt」も一緒に渡す）。
+    const [shared] = share.mock.calls[0];
+    expect(Object.keys(shared)).toEqual(['files']);
+    const { files } = shared;
     expect([files[0].name, files[0].type]).toEqual(['吾輩は猫である.pdf', 'application/pdf']);
     expect(clicked).toEqual([]);
   });

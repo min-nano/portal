@@ -205,9 +205,15 @@ beforeEach(async () => {
   );
   mocks.renderPreview.mockResolvedValue('blob:preview');
   // 頁の仕様に jpeg: false と書いた頁のほかは、JPEG 1 枚の頁として見つかる。
-  mocks.findScanImages.mockImplementation(async (bytes) =>
-    specOf(bytes).pages.map((p) => (p.jpeg === false ? null : { jpeg: p.id }))
-  );
+  mocks.findScanImages.mockImplementation(async (bytes) => {
+    const pages = specOf(bytes).pages;
+    const fallback = pages.filter((p) => p.jpeg === false).length;
+    return {
+      scans: pages.map((p) => (p.jpeg === false ? null : { jpeg: p.id })),
+      reasons: new Map(fallback ? [['画像の上に図形を描いている', fallback]] : []),
+      example: fallback ? '2 頁目: 画像 1 枚（DCTDecode 100×140 DeviceGray 8bit）' : '',
+    };
+  });
   // 縮小画像の URL に、どちらで描いたか（JPEG を展開 / pdf.js）を残す。
   const strips = (doc, index) => [
     { zone: 'top', canvas: {}, top: 0, height: 0.14, page: doc.spec.pages[index] },
@@ -470,16 +476,25 @@ describe('ファイルを足して並べる', () => {
       [2, { jpeg: 'o5' }, { margins: false }],
     ]);
     expect(document.querySelector('#pageGrid [data-page-key="f1:1"] img').src).toBe('blob:pdfjs-o3');
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain(
+      '「odd.pdf」の 1 頁は pdf.js で描きます（画像の上に図形を描いている 1 頁）。2 頁目: 画像 1 枚（DCTDecode 100×140 DeviceGray 8bit）'
+    );
     expect(gridLabels()).toEqual(['1 頁', '-2 頁', '3 頁', '-4 頁', '5 頁']);
   });
 
   it('PDF の中を調べられなければ、すべての頁を pdf.js で描く', async () => {
-    mocks.findScanImages.mockResolvedValue([]);
+    mocks.findScanImages.mockResolvedValue({ scans: [], reasons: new Map([['PDF を読めない（暗号化）', 1]]), example: '' });
     drop([file('odd.pdf', pdf(ODD))]);
     await settled(1);
 
     expect(mocks.renderPageImage.mock.calls.every(([, , scan]) => scan === null)).toBe(true);
     expect(gridLabels()).toContain('5 頁');
+    // pdf.js で描いた頁と、その理由は記録に残す。
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('「odd.pdf」の 4 頁は pdf.js で描きます（PDF を読めない（暗号化） 1 頁）。');
   });
 
   it('Drive の選択画面で何も選ばずに閉じたら、何も足さない', async () => {

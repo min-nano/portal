@@ -291,8 +291,12 @@ async function readFile(file) {
     // 調べた JPEG は読み終えたら手放す（ファイルと同じだけの大きさがある）。
     showProgress(`「${file.name}」の頁の画像を調べています`, null);
     const imagesStarted = performance.now();
-    const scans = await findScanImages(file.bytes);
+    const { scans, reasons, example } = await findScanImages(file.bytes);
     const jpegPages = scans.filter(Boolean).length;
+    if (jpegPages < count) {
+      const why = [...reasons].map(([reason, pages]) => `${reason} ${pages} 頁`).join('、');
+      log(`「${file.name}」の ${count - jpegPages} 頁は pdf.js で描きます（${why || '理由不明'}）。${example}`);
+    }
     await analyzePages(file, scans, ocrPages);
     const byOcr = file.pages.filter((page) => page.ocr && page.candidates.some((c) => c.source === 'ocr')).length;
     log(
@@ -1140,7 +1144,7 @@ function wireUp() {
       if (pages.length === 0) continue;
       queue = queue
         .then(async () => {
-          await readMarginsWithOcr(file, await findScanImages(file.bytes), pages);
+          await readMarginsWithOcr(file, (await findScanImages(file.bytes)).scans, pages);
           file.status = 'ready';
           showProgress('');
           refresh();

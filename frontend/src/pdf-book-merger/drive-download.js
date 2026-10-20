@@ -12,7 +12,7 @@ import { apiGet, apiGetBytes } from '../api.js';
 const TOOL_API = '/api/tools/pdf-book-merger';
 
 /** 同時に頼む範囲の数（待ち時間を重ねて、運ぶ速さを上げる）。 */
-const IN_FLIGHT = 3;
+const IN_FLIGHT = 4;
 /** 1 つの範囲の読み込みが失敗したときに、頼み直す回数。 */
 const RETRIES = 2;
 
