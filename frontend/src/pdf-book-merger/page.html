@@ -31,6 +31,13 @@
     <progress id="progressBar" max="1" value="0"></progress>
     <span id="progressText"></span>
   </div>
+  <!-- 細かい経過と、ファイルごとの結果（大きさ・かかった時間など）。ふだんは畳んでおき、
+       うまく動かないときに開いてコピーしてもらう。 -->
+  <details id="logBox" class="bm-log" hidden>
+    <summary>処理の記録</summary>
+    <pre id="logText"></pre>
+    <button type="button" id="logCopyBtn" class="secondary">記録をコピー</button>
+  </details>
   <ul id="fileList" class="bm-files"></ul>
 </portal-section>
 

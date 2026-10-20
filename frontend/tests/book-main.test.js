@@ -368,6 +368,52 @@ describe('ファイルを足して並べる', () => {
     expect(fileItem('memo.pdf').textContent).toContain('PDF ファイルではありません。');
   });
 
+  it('進み具合はバーの横に短く出し、細かい経過は畳んだ記録に残す（開いてコピーできる）', async () => {
+    let release;
+    mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
+    mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress }) => {
+      await new Promise((done) => (release = done));
+      onProgress(10, 10);
+      return pdf(ODD);
+    });
+    expect($('logBox').hidden).toBe(true);
+
+    $('driveBtn').click();
+    await vi.waitFor(() => expect($('progress').hidden).toBe(false));
+    // バーの横は、何をしているかだけ。ファイルの下は状態だけ（経過の数字は出さない）。
+    expect($('progressText').textContent).toBe('ファイルを調べています（1 / 1）');
+    expect(fileItem('猫_奇数.pdf').querySelector('.hint').textContent).toBe('読み込み中');
+
+    // 記録はふだん畳んである。開くと、実行中の段まで読める。
+    expect($('logBox').hidden).toBe(false);
+    expect($('logBox').open).toBe(false);
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('「猫_奇数.pdf」を追加しました（Drive）');
+    expect($('logText').textContent).toContain('（実行中）「猫_奇数.pdf」を読み込んでいます');
+
+    release();
+    await settled(1);
+    const text = $('logText').textContent;
+    expect(text).toContain('「猫_奇数.pdf」を読み込みました（');
+    expect(text).toContain('「猫_奇数.pdf」の文字情報を読みました（4 頁、文字情報のある頁 4、番号が見つかった頁 3）');
+    expect(text).toContain('余白を OCR 1 頁・うち番号が読めた頁 1');
+    expect(text).toContain('「猫_奇数.pdf」を調べ終えました（本文');
+    expect(text).not.toContain('（実行中）');
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    $('logCopyBtn').click();
+    await vi.waitFor(() => expect($('logCopyBtn').textContent).toBe('コピーしました'));
+    expect(writeText).toHaveBeenCalledWith(text);
+
+    // 書き込めないブラウザでは、選んだ状態にして手でコピーしてもらう。
+    writeText.mockRejectedValue(new Error('denied'));
+    $('logCopyBtn').click();
+    await vi.waitFor(() => expect($('logCopyBtn').textContent).toBe('選びました。コピーしてください'));
+    expect(window.getSelection().toString()).toContain('を読み込みました');
+  });
+
   it('Drive から選んだファイルを、進み具合を出しながら読む', async () => {
     mocks.pickFiles.mockResolvedValue([
       { id: 'd-even', name: 'book-b-even.pdf' },

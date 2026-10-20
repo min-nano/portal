@@ -37,9 +37,37 @@
   color: var(--text-2);
 }
 
+.bm-progress span {
+  /* 見出しは短いので折り返さず、バーの方を縮める。 */
+  flex: none;
+  white-space: nowrap;
+}
+
 .bm-progress progress {
-  flex: 0 0 min(40%, 16rem);
+  flex: 1 1 auto;
+  min-width: 4rem;
+  max-width: 16rem;
   accent-color: var(--brand-600);
+}
+
+/* 処理の記録。畳んだ見出しは控えめにし、開いたら等幅で読めるようにする。 */
+.bm-log summary {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.bm-log pre {
+  max-height: 16rem;
+  overflow: auto;
+  margin: var(--s-2) 0;
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-sm);
+  line-height: var(--lh);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--n-100);
+  border-radius: var(--r-sm);
 }
 
 /* --- ファイルの一覧 ------------------------------------------------------ */
@@ -53,6 +81,8 @@
 }
 
 .bm-file {
+  /* 一覧（grid）の中で、長い選択肢の幅に押し広げられないようにする。 */
+  min-width: 0;
   padding: var(--s-3);
   background: var(--surface);
   border: 1px solid var(--border);
@@ -103,6 +133,7 @@
 
 .bm-inline {
   display: inline-flex;
+  max-width: 100%;
   align-items: center;
   gap: var(--s-2);
   font-size: var(--fs-sm);
@@ -113,6 +144,7 @@
 .bm-inline input {
   width: auto;
   min-width: 0;
+  max-width: 100%;
 }
 
 .bm-inline input {

@@ -98,14 +98,75 @@ function showMessage(text, color = '') {
   const box = $('message');
   box.style.color = color;
   box.textContent = text;
+  if (text) log(color === 'red' ? `【注意】${text}` : text);
 }
 
+// --- 進み具合と、処理の記録 ----------------------------------------------------
+//
+// 画面に出す進み具合は、プログレスバーとその横の短い見出し（何をしているか）
+// だけにする。いま何頁目を調べているかといった細かい経過と、ファイルごとの
+// 読み込み・調査の結果（大きさ・かかった時間など）は「処理の記録」に残す。
+// 記録はふだん畳んでおき、うまく動かないときに開いてコピーしてもらう。
+
+/** 進み具合の見出し（バーの横に出す短いもの）。段ごとに決める。 */
+let progressLabel = '';
+/** いま進めている細かい段（記録の末尾に、実行中のものとして出す）。 */
+let currentStep = '';
+const logLines = [];
+const LOG_LIMIT = 2000;
+
+/**
+ * 進み具合を出す。text は細かい経過（記録に出す）、バーの横には見出しを出す。
+ * text が空なら隠す。
+ */
 function showProgress(text, fraction) {
   $('progress').hidden = !text;
-  $('progressText').textContent = text || '';
+  $('progressText').textContent = text ? progressLabel || text : '';
   const bar = $('progressBar');
   if (fraction === null || fraction === undefined) bar.removeAttribute('value');
   else bar.value = Math.max(0, Math.min(1, fraction));
+  currentStep = text || '';
+  if (!text) progressLabel = '';
+  renderLog();
+}
+
+/** 処理の記録に 1 行足す（時刻付き）。 */
+function log(text) {
+  const time = new Date().toLocaleTimeString('ja-JP', { hour12: false });
+  logLines.push(`${time} ${text}`);
+  if (logLines.length > LOG_LIMIT) logLines.splice(0, logLines.length - LOG_LIMIT);
+  $('logBox').hidden = false;
+  renderLog();
+}
+
+function logText() {
+  return [...logLines, ...(currentStep ? [`（実行中）${currentStep}`] : [])].join('\n');
+}
+
+function renderLog() {
+  // 畳んでいる間は描かない（頁ごとに描き直すと無駄なので、開いたときに描く）。
+  if ($('logBox').open) $('logText').textContent = logText();
+}
+
+async function copyLog() {
+  const button = $('logCopyBtn');
+  try {
+    await navigator.clipboard.writeText(logText());
+    button.textContent = 'コピーしました';
+  } catch {
+    // 書き込めないブラウザでは、選んだ状態にして手でコピーしてもらう。
+    const range = document.createRange();
+    range.selectNodeContents($('logText'));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    button.textContent = '選びました。コピーしてください';
+  }
+  setTimeout(() => (button.textContent = '記録をコピー'), 2000);
+}
+
+function seconds(since) {
+  return `${((performance.now() - since) / 1000).toFixed(1)} 秒`;
 }
 
 function megabytes(bytes) {
@@ -135,7 +196,6 @@ function addFile(source) {
     name: source.name,
     driveId: source.driveId || '',
     status: 'waiting', // waiting → loading → loaded → reading → ocr → ready / error
-    detail: '',
     error: '',
     role: 'body',
     manual: null,
@@ -146,6 +206,7 @@ function addFile(source) {
   };
   files.push(file);
   renderFiles();
+  log(`「${file.name}」を追加しました（${source.driveId ? 'Drive' : 'この端末'}）`);
   file.loaded = downloads.then(() => loadBytes(file, source));
   downloads = file.loaded.catch(() => {});
   queue = queue.then(() => readFile(file)).catch(() => {});
@@ -156,16 +217,22 @@ async function loadBytes(file, source) {
   if (!files.includes(file)) return null;
   file.status = 'loading';
   renderFiles();
-  const bytes = await source.load((received, total) => {
-    const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
-    file.detail = amount;
-    // 調べる順番が来て、読み込みを待っているときだけ、上の進み具合に出す。
-    if (file.waiting) showProgress(`「${file.name}」を読み込んでいます（${amount}）`, total ? received / total : null);
-    renderFiles();
-  });
+  const started = performance.now();
+  let bytes;
+  try {
+    bytes = await source.load((received, total) => {
+      // 調べる順番が来て、読み込みを待っているときだけ、進み具合に出す。
+      if (!file.waiting) return;
+      const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
+      showProgress(`「${file.name}」を読み込んでいます（${amount}）`, total ? received / total : null);
+    });
+  } catch (error) {
+    log(`「${file.name}」を読み込めませんでした（${error?.message || error}）`);
+    throw error;
+  }
+  log(`「${file.name}」を読み込みました（${megabytes(bytes.length)}、${seconds(started)}）`);
   if (file.status === 'loading') {
     file.status = 'loaded';
-    file.detail = '';
     renderFiles();
   }
   return bytes;
@@ -173,7 +240,9 @@ async function loadBytes(file, source) {
 
 async function readFile(file) {
   if (!files.includes(file)) return; // 読む前に外された。
+  const started = performance.now();
   try {
+    progressLabel = `ファイルを調べています（${files.indexOf(file) + 1} / ${files.length}）`;
     file.waiting = true;
     if (file.status !== 'loaded') showProgress(`「${file.name}」を読み込んでいます`, null);
     file.bytes = await file.loaded;
@@ -182,7 +251,6 @@ async function readFile(file) {
     if (!isPdf(file.bytes)) throw new Error('PDF ファイルではありません。');
 
     file.status = 'reading';
-    file.detail = '';
     file.doc = await withContext('PDF として開けませんでした', () => openPdf(file.bytes));
     const count = file.doc.numPages;
 
@@ -204,6 +272,9 @@ async function readFile(file) {
       });
       if (index % 16 === 0) await breathe();
     }
+    const textPages = file.pages.filter((page) => page.signature.length > 0).length;
+    const textNumbers = file.pages.filter((page) => page.candidates.length > 0).length;
+    log(`「${file.name}」の文字情報を読みました（${count} 頁、文字情報のある頁 ${textPages}、番号が見つかった頁 ${textNumbers}）`);
 
     // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
     // もののほかは、役割を決める前に番号を読み切る（文字情報の無い束も、画像
@@ -218,15 +289,23 @@ async function readFile(file) {
     // 頁の画像を描いて測る（重いところ）。JPEG のまま描ける頁を先に調べておく。
     // 調べた JPEG は読み終えたら手放す（ファイルと同じだけの大きさがある）。
     showProgress(`「${file.name}」の頁の画像を調べています`, null);
+    const imagesStarted = performance.now();
     const scans = await findScanImages(file.bytes);
+    const jpegPages = scans.filter(Boolean).length;
     await analyzePages(file, scans, ocrPages);
+    const byOcr = file.pages.filter((page) => page.ocr && page.candidates.some((c) => c.source === 'ocr')).length;
+    log(
+      `「${file.name}」の頁の画像を調べました（JPEG のまま展開 ${jpegPages} / ${count} 頁、` +
+        `余白を OCR ${ocrPages.size} 頁・うち番号が読めた頁 ${byOcr}、${seconds(imagesStarted)}）`
+    );
 
     file.role = guessRole(file.name, file.pages);
     file.status = 'ready';
-    file.detail = '';
+    log(`「${file.name}」を調べ終えました（${ROLES[file.role]}、合計 ${seconds(started)}）`);
   } catch (error) {
     file.status = 'error';
     file.error = error.message || String(error);
+    log(`「${file.name}」を調べられませんでした（${file.error}）`);
   } finally {
     showProgress('');
     if (files.includes(file)) refresh();
@@ -293,7 +372,6 @@ async function analyzePages(file, scans, ocrPages) {
   const report = () => {
     const parts = [`頁の画像を調べています ${measured} / ${count}`];
     if (ocrPages.size) parts.push(`余白の読み取り ${read} / ${ocrPages.size}`);
-    file.detail = parts.join('・');
     showProgress(`「${file.name}」の${parts.join('・')}`, (measured + read) / (count + ocrPages.size));
     if ((measured + read) % 8 === 0) renderFiles();
   };
@@ -373,6 +451,8 @@ function isPdf(bytes) {
 async function readMarginsWithOcr(file, scans, pages) {
   if (pages.length === 0 || !(await startOcr())) return;
   file.status = 'ocr';
+  progressLabel = '余白を読み取っています';
+  log(`「${file.name}」の余白を OCR します（${pages.length} 頁）`);
   let done = 0;
   const ocrSlots = slots(OCR_IN_FLIGHT);
   const reading = [];
@@ -390,7 +470,6 @@ async function readMarginsWithOcr(file, scans, pages) {
       readStrips(file, page, strips).finally(() => {
         ocrSlots.give();
         done++;
-        file.detail = `画像から読み取り ${done} / ${pages.length} 頁`;
         showProgress(`「${file.name}」の余白を読み取っています（${done} / ${pages.length}）`, done / pages.length);
         if (done % 8 === 0) renderFiles();
       })
@@ -412,6 +491,7 @@ function removeFile(file) {
   const at = files.indexOf(file);
   if (at < 0) return;
   files.splice(at, 1);
+  log(`「${file.name}」を外しました`);
   for (const page of file.pages) {
     if (page.thumbUrl) URL.revokeObjectURL(page.thumbUrl);
     overrides.delete(page.key);
@@ -534,7 +614,7 @@ function fileItem(file, position) {
   if (file.status === 'error') {
     meta.textContent = file.error;
   } else if (file.status !== 'ready') {
-    meta.textContent = [STATUS_TEXT[file.status], file.detail].filter(Boolean).join('・');
+    meta.textContent = STATUS_TEXT[file.status];
   } else {
     meta.textContent = fileSummary(file);
   }
@@ -885,7 +965,9 @@ async function mergeAndVerify() {
     const ranges = pageLabelRanges(order);
     const sources = new Map(readyFiles().map((file) => [file.key, { bytes: file.bytes, name: file.name }]));
     const infoFrom = order.find((entry) => entry.role === 'body')?.fileKey;
+    progressLabel = '結合しています';
     showProgress('結合しています…', 0);
+    const started = performance.now();
     // 結合の道具（pdf-lib）は、結合するときになってから読み込む。
     const { mergePdf, pageDigests } = await import('./merge.js');
     const { bytes, digests } = await mergePdf({
@@ -898,6 +980,8 @@ async function mergeAndVerify() {
     });
 
     // 結合した PDF を読み直し、元の頁と突き合わせる（頁を描き直さないので軽い）。
+    log(`結合しました（${order.length} 頁、${megabytes(bytes.length)}、${seconds(started)}）`);
+    progressLabel = '検証しています';
     showProgress('結合した PDF を検証しています…', null);
     const mergedDigests = await pageDigests(bytes);
     const doc = await openPdf(bytes);
@@ -928,6 +1012,11 @@ async function mergeAndVerify() {
     const wantLabels = pageLabelTexts(ranges, order.length);
     const labelsOk = Array.isArray(labels) && labels.every((label, i) => label === wantLabels[i]);
     merged = { bytes, fileName, result, labelsOk, title: info?.Title || '' };
+    log(
+      result.ok && labelsOk
+        ? `検証しました（${result.pageCount.actual} 頁すべて一致）`
+        : `検証で食い違いが見つかりました（${result.mismatches.length} 頁${labelsOk ? '' : '、頁ラベルが違う'}）`
+    );
     renderVerify();
     $('downloadBtn').disabled = false;
   } catch (error) {
@@ -1055,7 +1144,6 @@ function wireUp() {
         .then(async () => {
           await readMarginsWithOcr(file, await findScanImages(file.bytes), pages);
           file.status = 'ready';
-          file.detail = '';
           showProgress('');
           refresh();
         })
@@ -1075,6 +1163,8 @@ function wireUp() {
   });
   $('mergeBtn').addEventListener('click', mergeAndVerify);
   $('downloadBtn').addEventListener('click', download);
+  $('logCopyBtn').addEventListener('click', copyLog);
+  $('logBox').addEventListener('toggle', renderLog);
 
   $('previewPrevBtn').addEventListener('click', () => stepPreview(-1));
   $('previewNextBtn').addEventListener('click', () => stepPreview(1));
