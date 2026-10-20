@@ -19,9 +19,7 @@
 // ここから返すのはファイルの ID・名前・種類だけ。
 //
 // いくつも選ぶ（pickFiles）こともできる。押すたびに選ぶ・外すが切り替わり、
-// 選んだものはフォルダを移っても残る。フォルダの中では「このフォルダの
-// ファイルをすべて選ぶ」で、中のファイル（指定の種類のもの）をまとめて選べる
-// （スキャンを 1 つのフォルダにまとめて結合する、といった使い方のため）。
+// 選んだものはフォルダを移っても残る。
 
 import { apiGet } from './api.js';
 import { el } from './components/form-field.js';
@@ -188,14 +186,10 @@ function buildDialog(doc) {
   const choose = el(doc, 'button', 'drive-picker-choose', '選択');
   choose.type = 'button';
   choose.dataset.action = 'choose';
-  const all = el(doc, 'button', 'secondary drive-picker-all', 'このフォルダのファイルをすべて選ぶ');
-  all.type = 'button';
-  all.dataset.action = 'all';
-  all.hidden = true;
   const cancel = el(doc, 'button', 'secondary', 'キャンセル');
   cancel.type = 'button';
   cancel.dataset.action = 'cancel';
-  actions.append(choose, all, cancel);
+  actions.append(choose, cancel);
 
   dialog.append(head, tabs, search, crumbs, body, actions);
   return dialog;
@@ -246,7 +240,6 @@ function openPicker(options) {
   const more = $('.drive-picker-more');
   const input = $('.drive-picker-search input');
   const choose = $('.drive-picker-choose');
-  const all = $('.drive-picker-all');
 
   $('#drivePickerTitle').textContent = options.title || '';
   input.value = '';
@@ -254,7 +247,6 @@ function openPicker(options) {
   const state = { ...lastPlace, path: [...lastPlace.path], query: '' };
   let selected = null; // 一覧で選んでいるファイル（1 つ選ぶとき）
   const picked = new Map(); // 選んだファイル（いくつも選ぶとき。ID → ファイル）
-  let selectingAll = null; // 「すべて選ぶ」の読み込み（AbortController）
   let nextPageToken = null;
   let loading = null; // 進行中の読み込み（AbortController）
   // 一覧に出した ID。同じものを指すショートカットが別のページに入っていても、
@@ -265,17 +257,11 @@ function openPicker(options) {
   const updateChoose = () => {
     if (options.multiple) {
       choose.textContent = picked.size ? `選択（${picked.size} 個）` : '選択';
-      // 「すべて選ぶ」が読み終えるまでは決めさせない（一部だけを選んだまま
-      // 決めてしまわないように）。
-      choose.disabled = picked.size === 0 || Boolean(selectingAll);
-      // フォルダの中にいるときだけ（マイドライブの最上位で全部を選ばないように）。
-      all.hidden = !(currentFolder(state) && state.path.length);
-      all.disabled = Boolean(selectingAll);
+      choose.disabled = picked.size === 0;
       return;
     }
     choose.textContent = options.selectFolder ? 'このフォルダを選択' : '選択';
     choose.disabled = options.selectFolder ? !currentFolder(state) : !selected;
-    all.hidden = true;
   };
 
   /** 状態の表示。retry を渡すと「再試行」を添え、押すとそれを呼ぶ。 */
@@ -344,12 +330,6 @@ function openPicker(options) {
   /** 一覧を取りに行く。append なら続き（次のページ）を足す。 */
   async function load(append = false) {
     if (loading) loading.abort();
-    // 別の場所へ移るときは「すべて選ぶ」を止める。同じフォルダの続きを読む
-    // だけ（スクロール・「さらに表示」）なら止めない。
-    if (selectingAll && !append) {
-      selectingAll.abort();
-      selectingAll = null;
-    }
     const controller = new AbortController();
     loading = controller;
     if (!append) {
@@ -429,43 +409,6 @@ function openPicker(options) {
     updateChoose();
   };
 
-  /**
-   * 開いているフォルダのファイル（指定の種類のもの）を、続きまで読んで全部選ぶ。
-   * 最後まで読めたときだけ選ぶ（途中で別の場所へ移ったり失敗したりしたら、
-   * 1 つも選ばない。フォルダの一部だけを選んだまま決めてしまわないように）。
-   */
-  async function selectAll() {
-    const controller = new AbortController();
-    selectingAll = controller;
-    updateChoose();
-    showStatus('このフォルダのファイルを読んでいます…');
-    const found = [];
-    let pageToken = null;
-    try {
-      do {
-        const page = await apiGet(itemsQuery({ ...state, query: '' }, options, pageToken), {
-          signal: controller.signal,
-        });
-        found.push(...page.items.filter((item) => !item.folder));
-        pageToken = page.nextPageToken || null;
-      } while (pageToken);
-    } catch (error) {
-      if (controller.signal.aborted) return;
-      selectingAll = null;
-      showStatus(error.message, selectAll);
-      updateChoose();
-      return;
-    }
-    if (controller.signal.aborted) return;
-    selectingAll = null;
-    found.forEach((item) => picked.set(item.id, item));
-    list.querySelectorAll('.drive-picker-item[aria-pressed]').forEach((node) => {
-      node.setAttribute('aria-pressed', String(picked.has(node.driveItem.id)));
-    });
-    showStatus(found.length ? '' : 'このフォルダには選べるファイルがありません。');
-    updateChoose();
-  }
-
   const result = () => {
     if (options.multiple) {
       return [...picked.values()].map(({ id, name, mimeType }) => ({ id, name, mimeType }));
@@ -491,7 +434,6 @@ function openPicker(options) {
       clearTimeout(searchTimer);
       if (observer) observer.disconnect();
       if (loading) loading.abort();
-      if (selectingAll) selectingAll.abort();
       restorePage();
       dialog.close();
       resolve(value);
@@ -502,7 +444,6 @@ function openPicker(options) {
       if (!target || !dialog.contains(target)) return;
       if (target.dataset.action === 'cancel') finish(null);
       else if (target.dataset.action === 'choose') finish(result());
-      else if (target.dataset.action === 'all') selectAll();
       else if (target.dataset.location) {
         input.value = '';
         go({ location: target.dataset.location, path: [], query: '', origin: '' });
