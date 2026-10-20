@@ -47,6 +47,7 @@ import {
 } from './ordering.js';
 import { describeNumbering, pageNumberCandidates } from './page-numbers.js';
 import { findScanImages } from './scan-images.js';
+import { pdfLibViews } from './pdf-lib-views.js';
 import {
   closePdf,
   openPdf,
@@ -77,11 +78,6 @@ const OCR_IN_FLIGHT = 3;
  * 0.2 秒ほど）が、展開は画面とは別のところで進むので、端末の芯を並べて使う。
  */
 const PAGES_IN_FLIGHT = 3;
-/**
- * あとから OCR を有効にしたときのために残しておく JPEG の頁数の上限（全ファイルで）。
- * 超えるファイルは残さず、OCR を有効にしたときに PDF を 1 度読み直す。
- */
-const KEPT_SCANS = 32;
 
 let nextKey = 1;
 /** 選んだファイル（画面の並び順）。中身は addFile() を参照。 */
@@ -224,9 +220,14 @@ function addFile(source) {
   queue = queue.then(() => readFile(file)).catch(() => {});
 }
 
-/** ファイルの中身を読む（Drive なら転送）。読む前に外されたら null。 */
+/**
+ * ファイルの中身を読み（Drive なら転送）、file.bytes に入れる。
+ *
+ * 中身は file.bytes にだけ持つ（読み込みの約束には残さない）。調べられなかった
+ * ファイルや外したファイルは、file.bytes を捨てればメモリが空く。
+ */
 async function loadBytes(file, source) {
-  if (!files.includes(file)) return null;
+  if (!files.includes(file)) return;
   file.status = 'loading';
   renderFiles();
   const started = performance.now();
@@ -243,26 +244,30 @@ async function loadBytes(file, source) {
     throw error;
   }
   log(`「${file.name}」を読み込みました（${megabytes(bytes.length)}、${seconds(started)}）`);
+  if (!files.includes(file)) return; // 読んでいる間に外された。
+  file.bytes = bytes;
   if (file.status === 'loading') {
     file.status = 'loaded';
     renderFiles();
   }
-  return bytes;
 }
 
 async function readFile(file) {
   if (!files.includes(file)) return; // 読む前に外された。
   const started = performance.now();
+  let held = false; // pdf.js で開いて使っているか（終えたら手放す）
   try {
     progressLabel = `ファイルを調べています（${files.indexOf(file) + 1} / ${files.length}）`;
     file.waiting = true;
     if (file.status !== 'loaded') showProgress(`「${file.name}」を読み込んでいます`, null);
-    file.bytes = await file.loaded;
+    await file.loaded;
     file.waiting = false;
     if (!file.bytes || !files.includes(file)) return;
     if (!isPdf(file.bytes)) throw new Error('PDF ファイルではありません。');
 
     file.status = 'reading';
+    holdDoc(file);
+    held = true;
     await withContext('PDF として開けませんでした', () => pdfOf(file));
     const count = file.doc.numPages;
 
@@ -311,15 +316,12 @@ async function readFile(file) {
       log(`「${file.name}」の ${count - jpegPages} 頁は pdf.js で描きます（${why || '理由不明'}）。${example}`);
     }
     await analyzePages(file, scans, ocrPages);
-    // あとから OCR を有効にしたときのために、番号の見つかっていない頁の JPEG
-    // を残す（PDF 全体を読み直さずに済む）。残すのは、OCR が切ってあり（後から
-    // 有効にしうる）、表紙のように OCR しないファイルでなく、頁が少ないときだけ。
-    // 多ければ残さず、有効にしたときに読み直す（数百頁ぶんの JPEG を抱えない）。
-    const unnumbered = file.pages.filter((page) => page.candidates.length === 0 && !page.ocr);
-    const kept = files.reduce((sum, f) => sum + f.pages.filter((page) => page.scan).length, 0);
-    file.scansKept =
-      !ocrAtStart && !$('ocrToggle').checked && !roleFromName(file.name) && kept + unnumbered.length <= KEPT_SCANS;
-    if (file.scansKept) unnumbered.forEach((page) => (page.scan = scans[page.index] ?? null));
+    // あとから OCR を有効にしたときのために、番号の見つかっていない頁の JPEG を
+    // 残す（PDF 全体を読み直さずに済む）。JPEG はファイルのバイト列の一部を指す
+    // だけなので（pdf-lib-views.js）、残してもメモリはほとんど使わない。
+    for (const page of file.pages) {
+      if (page.candidates.length === 0 && !page.ocr) page.scan = scans[page.index] ?? null;
+    }
     const byOcr = file.pages.filter((page) => page.ocr && page.candidates.some((c) => c.source === 'ocr')).length;
     log(
       `「${file.name}」の頁の画像を調べました（JPEG のまま展開 ${jpegPages} / ${count} 頁、` +
@@ -329,25 +331,23 @@ async function readFile(file) {
     file.role = guessRole(file.name, file.pages);
     file.status = 'ready';
     log(`「${file.name}」を調べ終えました（${ROLES[file.role]}、合計 ${seconds(started)}）`);
-    // pdf.js に渡した写し（ファイルと同じ大きさ）は、要るときまで手放す。
-    closeDoc(file);
     // 調べている間に OCR が有効にされていたら、ここで残りの頁を読む。
     if (!ocrAtStart && $('ocrToggle').checked) queueLateOcr(file);
   } catch (error) {
     file.status = 'error';
     file.error = error.message || String(error);
     log(`「${file.name}」を調べられませんでした（${file.error}）`);
-    // 調べられなかったファイルの PDF は、外されるのを待たずに閉じる（pdf.js の
-    // worker に中身を残さない）。
-    // 結合には使わないので、PDF の中身と縮小画像も手放す。
-    closeDoc(file);
+    // 調べられなかったファイルは結合に使わないので、外されるのを待たずに、
+    // PDF の中身（読み込みの結果に残るものも）と縮小画像を手放す。
     file.bytes = null;
+    file.loaded = null;
     for (const page of file.pages) {
       if (page.thumbUrl) URL.revokeObjectURL(page.thumbUrl);
       page.thumbUrl = '';
       page.scan = null;
     }
   } finally {
+    if (held) releaseDoc(file);
     showProgress('');
     if (files.includes(file)) refresh();
   }
@@ -509,17 +509,10 @@ function isPdf(bytes) {
  * （頁が抜けて見えないように）。読み終えたら並べ直す。
  *
  * @param {object} file
- * @param {object[]} pages 読む頁（page.scan の JPEG で描く。残していなければ調べ直す）
+ * @param {object[]} pages 読む頁（page.scan の JPEG で描く）
  */
 async function readMarginsWithOcr(file, pages) {
   if (pages.length === 0 || !(await startOcr())) return;
-  // 頁の JPEG を残していなければ、ここで 1 度だけ調べ直す（読む頁の分だけ取って
-  // おき、ほかの頁の分は手放す）。
-  if (!file.scansKept) {
-    showProgress(`「${file.name}」の頁の画像を調べ直しています`, null);
-    const { scans } = await findScanImages(file.bytes);
-    for (const page of pages) page.scan = scans[page.index] ?? null;
-  }
   progressLabel = '余白を読み取っています';
   log(`「${file.name}」の余白を OCR します（${pages.length} 頁）`);
   let done = 0;
@@ -557,10 +550,13 @@ function queueLateOcr(file) {
   file.ocrBusy = true;
   renderFiles();
   queue = queue
-    .then(() => readMarginsWithOcr(file, pages))
+    .then(() => {
+      // 読む間だけ開いておく（順番を待っている間は開かない）。
+      holdDoc(file);
+      return readMarginsWithOcr(file, pages).finally(() => releaseDoc(file));
+    })
     .finally(() => {
       file.ocrBusy = false;
-      closeDoc(file);
       for (const page of pages) page.scan = null;
       showProgress('');
       if (files.includes(file)) refresh();
@@ -573,17 +569,40 @@ function queueLateOcr(file) {
  *
  * pdf.js はファイルの写しを worker に持つので、開いたままにすると、ファイルの
  * 数だけ本がもう 1 冊ぶんメモリに乗る（iPhone・iPad では、結合のときに落ちた）。
- * 調べるとき・拡大表示・あとからの OCR のときだけ開き、済んだら閉じる（closeDoc）。
+ * 使う処理（調べる・あとからの OCR・拡大表示）が holdDoc で使い始めを知らせ、
+ * releaseDoc で済んだことを知らせる。使う処理が 1 つも無くなったら閉じる。
  */
 function pdfOf(file) {
-  file.opening ??= openPdf(file.bytes).then(
-    (doc) => (file.doc = doc),
-    (error) => {
-      file.opening = null;
-      throw error;
-    }
-  );
+  if (!file.opening) {
+    const opening = openPdf(file.bytes).then(
+      (doc) => {
+        // 開いている間に閉じられていたら、開いたものはすぐ閉じる（閉じた文書を残さない）。
+        if (file.opening !== opening) {
+          closePdf(doc).catch(() => {});
+          throw new Error('PDF を閉じました。');
+        }
+        file.doc = doc;
+        return doc;
+      },
+      (error) => {
+        if (file.opening === opening) file.opening = null;
+        throw error;
+      }
+    );
+    file.opening = opening;
+  }
   return file.opening;
+}
+
+/** ファイルを使い始める（使い終えるまで閉じない）。 */
+function holdDoc(file) {
+  file.docUsers = (file.docUsers || 0) + 1;
+}
+
+/** ファイルを使い終える。ほかに使っている処理が無ければ閉じる。 */
+function releaseDoc(file) {
+  file.docUsers = Math.max(0, (file.docUsers || 0) - 1);
+  if (file.docUsers === 0) closeDoc(file);
 }
 
 /** pdf.js で開いたファイルを閉じる（worker の写しを手放す）。 */
@@ -594,11 +613,18 @@ function closeDoc(file) {
   opening?.then(closePdf).catch(() => {});
 }
 
-/** 調べ終えて手の空いているファイル（except のほか）を閉じる。 */
-function closeIdleDocs(except = null) {
-  for (const file of files) {
-    if (file !== except && file.status === 'ready' && !file.ocrBusy) closeDoc(file);
-  }
+/**
+ * 拡大表示で開いておくファイル（最後に拡大表示したもの）。拡大表示を閉じても、
+ * 同じファイルの頁をまた見るときに開き直さないよう、結合するまで開いておく。
+ */
+let previewFile = null;
+
+function setPreviewFile(file) {
+  if (previewFile === file) return;
+  const previous = previewFile;
+  previewFile = file;
+  if (file) holdDoc(file);
+  if (previous) releaseDoc(previous);
 }
 
 function mergeCandidates(a, b) {
@@ -619,7 +645,11 @@ function removeFile(file) {
     if (page.thumbUrl) URL.revokeObjectURL(page.thumbUrl);
     overrides.delete(page.key);
   }
+  if (previewFile === file) previewFile = null;
+  file.docUsers = 0;
   closeDoc(file);
+  file.bytes = null;
+  file.loaded = null;
   refresh();
 }
 
@@ -673,7 +703,7 @@ function refresh() {
   // 裏の処理（ほかのファイルの読み込み・OCR）が終わっただけで、結合する中身
   // （頁・役割・頁番号と、名前）が変わらなければ、結合した PDF はそのまま使える。
   // 名前は提案し直すことがあるので、ここで一緒に比べる。
-  const key = [outputName(), ...order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}`)].join('\n');
+  const key = mergeKey();
   if (key !== orderKey) {
     orderKey = key;
     discardMerged();
@@ -681,6 +711,11 @@ function refresh() {
 
   renderFiles();
   renderReview();
+}
+
+/** 結合する中身（名前と、並びの頁・役割・頁番号）を 1 つの文字列にしたもの。 */
+function mergeKey() {
+  return [outputName(), ...view.order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}`)].join('\n');
 }
 
 function discardMerged() {
@@ -1034,8 +1069,9 @@ async function openPreview(pageKey) {
   const image = $('previewImage');
   image.src = file.pages[entry.pageIndex].thumbUrl;
   if (!dialog.open) dialog.showModal();
-  // 拡大表示するファイルのほかは閉じておく（何冊ぶんも開いたままにしない）。
-  closeIdleDocs(file);
+  // 拡大表示するファイルを開いておく（前に拡大表示していたファイルは、ほかで
+  // 使っていなければ閉じる）。
+  setPreviewFile(file);
   try {
     const url = await renderPreview(await pdfOf(file), entry.pageIndex);
     if (previewKey !== pageKey) {
@@ -1059,7 +1095,6 @@ function stepPreview(delta) {
 function closePreview() {
   $('previewDialog').close();
   previewKey = '';
-  closeIdleDocs();
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   previewUrl = '';
 }
@@ -1085,8 +1120,8 @@ async function mergeAndVerify() {
   button.disabled = true;
   discardMerged();
   showMessage('');
-  // 結合と検証はメモリを多く使うので、開いているファイルは閉じておく。
-  closeIdleDocs();
+  // 結合と検証はメモリを多く使うので、拡大表示のために開いていたファイルは閉じる。
+  setPreviewFile(null);
   const run = generation;
   const order = view.order;
   // 突き合わせに使う元の頁の情報は、始めるときに写しておく（結合の途中で
@@ -1107,6 +1142,7 @@ async function mergeAndVerify() {
     const ranges = pageLabelRanges(order);
     const sources = new Map(readyFiles().map((file) => [file.key, { bytes: file.bytes, name: file.name }]));
     const infoFrom = order.find((entry) => entry.role === 'body')?.fileKey;
+    if (!pdfLibViews) log('pdf-lib にバイト列を写させる設定が効いていません（結合でメモリを多く使います）');
     progressLabel = '結合しています';
     showProgress('結合しています…', 0);
     const started = performance.now();
@@ -1300,6 +1336,8 @@ function wireUp() {
   $('outputName').addEventListener('input', () => {
     $('outputName').dataset.suggested = 'false';
     discardMerged();
+    // 入力した名前を覚えておく（このあと裏の処理で並べ直しても、捨て直さない）。
+    orderKey = mergeKey();
   });
   $('mergeBtn').addEventListener('click', mergeAndVerify);
   $('downloadBtn').addEventListener('click', download);

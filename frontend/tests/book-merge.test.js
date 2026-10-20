@@ -19,6 +19,7 @@ import { pageLabelRanges, pageLabelTexts } from '../src/pdf-book-merger/ordering
 import { pageNumberCandidates } from '../src/pdf-book-merger/page-numbers.js';
 import { multiply, textItems, textSignature } from '../src/pdf-book-merger/text-layer.js';
 import { compareOutput } from '../src/pdf-book-merger/verify.js';
+import { pdfLibViews } from '../src/pdf-book-merger/pdf-lib-views.js';
 
 const SIZE = [364, 515]; // B6 くらい
 
@@ -176,6 +177,11 @@ describe('mergePdf', () => {
 });
 
 describe('pdf-lib にバイト列を写させない（pdf-lib-views.js）', () => {
+  it('いまの pdf-lib（1.17.1）の作りに合っていて、書き換えが効いている', () => {
+    // 版を上げて pdf-lib の中の作りが変わると、ここで気づく。
+    expect(pdfLibViews).toBe(true);
+  });
+
   it('読んだストリームも、別の文書へ写したストリームも、元のバイト列を指す', async () => {
     const bytes = await makeSource([1, 3]);
     const source = await loadSource(bytes, 'odd.pdf');

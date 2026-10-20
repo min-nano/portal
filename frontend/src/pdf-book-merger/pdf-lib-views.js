@@ -12,13 +12,25 @@
 
 import { PDFParser, PDFRawStream } from 'pdf-lib';
 
-// ByteStream は公開されていないので、読み手の持っているものからたどる。
-const ByteStream = PDFParser.forBytesWithOptions(new Uint8Array(0)).bytes.constructor;
+// pdf-lib の中の作りに頼っているので、版を 1.17.1 に固定している（package.json）。
+// 版を上げて作りが変わっていたら、書き換えずに pdfLibViews を false にする
+// （結合のときに記録に出す。tests/book-merge.test.js も気づく）。
 
-ByteStream.prototype.slice = function slice(start, end) {
-  return this.bytes.subarray(start, end);
-};
+/** 書き換えが効いているか。 */
+export let pdfLibViews = false;
 
-PDFRawStream.prototype.clone = function clone(context) {
-  return PDFRawStream.of(this.dict.clone(context), this.contents);
-};
+try {
+  // ByteStream は公開されていないので、読み手の持っているものからたどる。
+  const ByteStream = PDFParser.forBytesWithOptions(new Uint8Array(0)).bytes?.constructor;
+  if (typeof ByteStream?.prototype?.slice === 'function' && typeof PDFRawStream.prototype.clone === 'function') {
+    ByteStream.prototype.slice = function slice(start, end) {
+      return this.bytes.subarray(start, end);
+    };
+    PDFRawStream.prototype.clone = function clone(context) {
+      return PDFRawStream.of(this.dict.clone(context), this.contents);
+    };
+    pdfLibViews = true;
+  }
+} catch {
+  // 作りが違う。書き換えずに、写させたまま使う。
+}

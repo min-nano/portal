@@ -190,7 +190,13 @@ def test_signing_source_is_looked_up_once(monkeypatch):
 
     monkeypatch.setattr(google_drive, "_signing_source", None)
     monkeypatch.setattr(google_drive.google.auth, "default", default)
-    monkeypatch.setattr(google_drive.iam, "Signer", lambda request, source, email: ("signer", email))
+    signers = []
+
+    def signer(request, source, email):
+        signers.append((request, email))
+        return ("signer", len(signers))
+
+    monkeypatch.setattr(google_drive.iam, "Signer", signer)
 
     first = google_drive._credentials([google_drive.DRIVE_READONLY_SCOPE], TEST_EMAIL)
     second = google_drive._credentials([google_drive.DRIVE_READONLY_SCOPE], TEST_EMAIL)
@@ -198,6 +204,9 @@ def test_signing_source_is_looked_up_once(monkeypatch):
     assert calls == ["default"]
     assert first is not second
     assert first.service_account_email == "runtime@example.iam.gserviceaccount.com"
+    # 署名役は通信の道具を抱えるので、スレッドの間で分け合わないよう毎回作る。
+    assert len(signers) == 2
+    assert signers[0][0] is not signers[1][0]
 
 
 def test_read_token_failure_is_reported(credentials):

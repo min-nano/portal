@@ -474,12 +474,61 @@ describe('ファイルを足して並べる', () => {
 
     document.querySelector('#pageGrid .bm-thumb').click();
     await vi.waitFor(() => expect($('previewImage').src).toBe('blob:preview'));
-    // 拡大表示のときに開き直したものを渡し、閉じたら手放す。
+    // 拡大表示のときに開き直したものを渡す。
     const [shown] = mocks.renderPreview.mock.calls[0];
     expect(shown.spec.pages[0].id).toBe('o1');
+
+    // 拡大表示を閉じても、同じファイルをまた見るときのために開いておく。
     $('previewCloseBtn').click();
     await flush();
-    expect(mocks.closePdf.mock.calls.at(-1)[0]).toBe(shown);
+    expect(mocks.closePdf.mock.calls.some(([doc]) => doc === shown)).toBe(false);
+    document.querySelector('#pageGrid .bm-thumb').click();
+    await vi.waitFor(() => expect(mocks.renderPreview).toHaveBeenCalledTimes(2));
+    expect(mocks.renderPreview.mock.calls[1][0]).toBe(shown);
+    $('previewCloseBtn').click();
+
+    // 結合するときに閉じる。
+    $('mergeBtn').click();
+    await flush();
+    expect(mocks.closePdf.mock.calls.some(([doc]) => doc === shown)).toBe(true);
+  });
+
+  it('あとからの OCR が終わっても、拡大表示で開いている文書は閉じない', async () => {
+    $('ocrToggle').checked = false;
+    drop([file('猫_奇数.pdf', pdf(ODD))]);
+    await settled(1);
+    document.querySelector('#pageGrid .bm-thumb').click();
+    await vi.waitFor(() => expect(mocks.renderPreview).toHaveBeenCalled());
+    const [shown] = mocks.renderPreview.mock.calls[0];
+
+    $('ocrToggle').checked = true;
+    $('ocrToggle').dispatchEvent(new Event('change'));
+    await vi.waitFor(() =>
+      expect(document.querySelector('#pageGrid [data-page-key="f1:2"] .bm-status').textContent).toBe('読取')
+    );
+
+    // OCR は拡大表示と同じ文書を使い、終わっても閉じない。
+    expect(mocks.renderMargins.mock.calls[0][0]).toBe(shown);
+    expect(mocks.closePdf.mock.calls.some(([doc]) => doc === shown)).toBe(false);
+  });
+
+  it('名前を入力したあとに裏の処理が終わっても、結合した PDF は捨てない', async () => {
+    $('ocrToggle').checked = false;
+    drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+    $('outputName').value = '自分で付けた名前';
+    $('outputName').dispatchEvent(new Event('input'));
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('downloadBtn').disabled).toBe(false));
+
+    // 裏で OCR を読んでも、並び（番号の決まった頁）が変わらなければ捨てない。
+    mocks.readStrip.mockResolvedValue([]);
+    $('ocrToggle').checked = true;
+    $('ocrToggle').dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(mocks.readStrip).toHaveBeenCalled());
+    await vi.waitFor(() => expect(fileItem('猫_奇数.pdf').textContent).not.toContain('余白を読み取り中'));
+
+    expect($('downloadBtn').disabled).toBe(false);
   });
 
   it('JPEG 1 枚の形でない頁は、pdf.js で描いて読む', async () => {
@@ -632,7 +681,7 @@ describe('ファイルを足して並べる', () => {
     expect(mocks.renderMargins).toHaveBeenCalled();
   });
 
-  it('番号の無い頁が多いファイルは JPEG を残さず、OCR を後から有効にしたときに調べ直す', async () => {
+  it('番号の無い頁が多くても、OCR を後から有効にしたときに PDF を調べ直さない', async () => {
     $('ocrToggle').checked = false;
     const many = Array.from({ length: 40 }, (_, i) => page(`o${2 * i + 1}`, 2 * i + 1, { ocr: true }));
     drop([file('odd.pdf', pdf(many))]);
@@ -643,8 +692,8 @@ describe('ファイルを足して並べる', () => {
     $('ocrToggle').dispatchEvent(new Event('change'));
 
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalledTimes(40));
-    // 1 度だけ調べ直し、その JPEG で描く。
-    expect(mocks.findScanImages).toHaveBeenCalledTimes(2);
+    // 調べたときの JPEG（ファイルの一部を指すだけ）で描く。
+    expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
     expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o1' });
   });
 

@@ -190,6 +190,40 @@ describe('downloadDriveFile', () => {
     await expect(downloadDriveFile({ id: 'f', name: 'a.pdf' })).rejects.toThrow('Drive のファイルが差し替えられました');
   });
 
+  it('流量を絞られたら、Retry-After が読めなくても 5 秒から待つ', async () => {
+    const pauses = [];
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, ms) => {
+      pauses.push(ms);
+      callback();
+      return 0;
+    });
+    fetchMock.mockImplementationOnce(async () => new Response('{}', { status: 429 }));
+
+    await download({ id: 'f', name: 'a.pdf' });
+
+    expect(pauses).toEqual([5000]);
+  });
+
+  it.each([
+    ['大きい版に替わって、続きが聞いた大きさを超えた', 40, 206],
+    ['小さい版に替わって、続きが無い（416）', 8, 416],
+  ])('続きを読む間に%s ときも、版を聞き直して始めから読み直す', async (_, newSize, status) => {
+    const NEW = Uint8Array.from({ length: newSize }, (_, i) => 200 - i);
+    apiGet
+      .mockResolvedValueOnce({ id: 'f', name: 'a.pdf', size: DATA.length, accessToken: 'tok', revision: 'r1' })
+      .mockResolvedValueOnce({ id: 'f', name: 'a.pdf', size: NEW.length, accessToken: 'tok', revision: 'r2' });
+    fetchMock
+      .mockImplementationOnce(async () => new Response(body(DATA, { pieces: 5, cutAt: 10 }), { status: 200 }))
+      .mockImplementationOnce(async () =>
+        status === 416 ? new Response('{}', { status }) : new Response(body(NEW.slice(10)), { status })
+      )
+      .mockImplementationOnce(async () => new Response(body(NEW), { status: 200 }));
+
+    const bytes = await downloadDriveFile({ id: 'f', name: 'a.pdf' });
+
+    expect([...bytes]).toEqual([...NEW]);
+  });
+
   it('続きから読まずに 1 度で読めたときは、版を聞き直さない', async () => {
     await downloadDriveFile({ id: 'f', name: 'a.pdf' });
 

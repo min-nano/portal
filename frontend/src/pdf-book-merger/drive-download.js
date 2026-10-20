@@ -20,6 +20,11 @@ const RETRIES = 4;
 const TOKEN_RENEWALS = 2;
 /** 読み直す前に待つ時間（回ごとに倍にする）。 */
 const FIRST_DELAY_MS = 1000;
+/**
+ * 流量を絞られたときは、少なくともこの時間（回ごとに倍）は待つ。Drive の
+ * Retry-After は、ブラウザからは読めないことが多い（CORS で公開されていない）。
+ */
+const RATE_LIMIT_DELAY_MS = 5000;
 
 /** Retry-After で待つ時間の上限。 */
 const MAX_RETRY_AFTER_MS = 2 * 60 * 1000;
@@ -41,9 +46,19 @@ class DriveReadError extends Error {
     this.retryAfterMs = retryAfterMs;
   }
 
+  /** 流量を絞られたか。 */
+  get rateLimited() {
+    return this.status === 429 || this.reasons.some((reason) => RATE_LIMITS.has(reason));
+  }
+
   /** 待てば読める失敗か（流量の制限・Drive 側の不調）。 */
   get retryable() {
-    return this.status === 429 || this.status >= 500 || this.reasons.some((reason) => RATE_LIMITS.has(reason));
+    return this.rateLimited || this.status >= 500;
+  }
+
+  /** 読んでいる間にファイルが差し替えられたかもしれない失敗か（大きさが合わない・続きが無い）。 */
+  get changed() {
+    return this.status === 416 || this.reasons.includes('size');
   }
 }
 
@@ -105,7 +120,7 @@ async function readInto(info, bytes, state, onProgress) {
     if (done) break;
     if (state.received + value.length > bytes.length) {
       await reader.cancel();
-      throw new DriveReadError('読み込んだ大きさが合いません。', 0);
+      throw new DriveReadError('読み込んだ大きさが合いません。', 0, ['size']);
     }
     bytes.set(value, state.received);
     state.received += value.length;
@@ -120,7 +135,8 @@ async function readInto(info, bytes, state, onProgress) {
  * @param {{id:string, name:string}} file ファイル選択ダイアログが返したもの
  * @param {{onProgress?: (received:number, total:number) => void,
  *          delay?: (attempt:number) => number}} [options]
- *   delay は、attempt 回目の読み直しの前に待つミリ秒（既定は 1, 2, 4, 8 秒）
+ *   delay は、attempt 回目の読み直しの前に待つミリ秒（既定は 1, 2, 4, 8 秒。
+ *   流量を絞られたときは、その 5 倍）
  * @returns {Promise<Uint8Array>}
  */
 export async function downloadDriveFile(file, { onProgress, delay = (attempt) => FIRST_DELAY_MS * 2 ** attempt } = {}) {
@@ -137,7 +153,8 @@ export async function downloadDriveFile(file, { onProgress, delay = (attempt) =>
     /** 待ってから読み直す（回数を使い切っていれば、失敗を投げる）。 */
     const backoff = async (error) => {
       if (retries >= RETRIES) throw error;
-      await sleep(Math.max(delay(retries), error.retryAfterMs || 0));
+      const wait = delay(retries) * (error.rateLimited ? RATE_LIMIT_DELAY_MS / FIRST_DELAY_MS : 1);
+      await sleep(Math.max(wait, error.retryAfterMs || 0));
       retries++;
     };
     /** サーバーに聞き直す（トークンの取り直しと、版の確かめ）。一時的な失敗は待ってやり直す。 */
@@ -172,6 +189,14 @@ export async function downloadDriveFile(file, { onProgress, delay = (attempt) =>
         if (error.status === 401 && renewals < TOKEN_RENEWALS) {
           renewals++;
           follow(await askAgain());
+          continue;
+        }
+        // 続きから読んでいる間に大きさの違う版へ差し替えられると、大きさが合わ
+        // ないか、続きが無い（416）。版を聞き直し、違えば始めから読み直す。
+        if (error instanceof DriveReadError && error.changed) {
+          const next = await askAgain();
+          if (sameVersion(info, next)) throw error;
+          follow(next);
           continue;
         }
         // 権限が無い・ファイルが無い・大きさが違う、は読み直しても同じ。回線が

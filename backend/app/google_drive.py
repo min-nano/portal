@@ -58,15 +58,16 @@ class DriveError(PortalError):
         super().__init__(message, status)
 
 
-# 代理の資格情報の署名元（ADC と、Cloud Run での IAM の署名役）。探すのに
-# ADC の読み込みとメタデータサーバーへの問い合わせが要るので、1 度だけ作って
-# 使い回す。署名元は利用者によらない。
+# 代理の資格情報の署名元（ADC と、Cloud Run での SA のメール）。探すのに
+# ADC の読み込みとメタデータサーバーへの問い合わせが要るので、1 度だけ探して
+# 使い回す。署名元は利用者によらない。署名役（iam.Signer）は通信の道具
+# （requests.Session）を抱え、スレッドの間で分け合えないので、呼ぶたびに作る。
 _signing_source = None
 _signing_lock = threading.Lock()
 
 
 def _signing():
-    """("key", 鍵ファイルの資格情報) か ("iam", signer, SA のメール) を返す。"""
+    """("key", 鍵ファイルの資格情報) か ("iam", ADC の資格情報, SA のメール) を返す。"""
     global _signing_source
     with _signing_lock:
         if _signing_source is not None:
@@ -90,7 +91,7 @@ def _signing():
                 "サービスアカウントを特定できませんでした。環境変数 "
                 "DWD_SERVICE_ACCOUNT_EMAIL を設定してください。"
             )
-        found = ("iam", iam.Signer(Request(), source, sa_email), sa_email)
+        found = ("iam", source, sa_email)
     with _signing_lock:
         if _signing_source is None:
             _signing_source = found
@@ -106,7 +107,8 @@ def _credentials(scopes: list[str], subject: str) -> service_account.Credentials
             creds = creds.with_subject(subject)
         return creds
 
-    _, signer, sa_email = signing
+    _, source, sa_email = signing
+    signer = iam.Signer(Request(), source, sa_email)
     return service_account.Credentials(
         signer=signer,
         service_account_email=sa_email,
