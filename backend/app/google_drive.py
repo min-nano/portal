@@ -58,32 +58,55 @@ class DriveError(PortalError):
         super().__init__(message, status)
 
 
-def _credentials(scopes: list[str], subject: str) -> service_account.Credentials:
-    """subject のユーザー代理となるサービスアカウント資格情報を作る。"""
+# 代理の資格情報の署名元（ADC と、Cloud Run での IAM の署名役）。探すのに
+# ADC の読み込みとメタデータサーバーへの問い合わせが要るので、1 度だけ作って
+# 使い回す。署名元は利用者によらない。
+_signing_source = None
+_signing_lock = threading.Lock()
+
+
+def _signing():
+    """("key", 鍵ファイルの資格情報) か ("iam", signer, SA のメール) を返す。"""
+    global _signing_source
+    with _signing_lock:
+        if _signing_source is not None:
+            return _signing_source
     source, _ = google.auth.default()
 
     # ローカル開発: JSON 鍵ファイル（service_account.Credentials）ならそのまま使う。
     if isinstance(source, service_account.Credentials):
-        creds = source.with_scopes(scopes)
+        found = ("key", source)
+    else:
+        # Cloud Run: 鍵ファイルなし。IAM Credentials API で署名する。
+        sa_email = config.delegated_sa_email() or getattr(
+            source, "service_account_email", ""
+        )
+        if not sa_email or sa_email == "default":
+            # metadata server から実際のメールアドレスを確定させる。
+            source.refresh(Request())
+            sa_email = getattr(source, "service_account_email", "")
+        if not sa_email or sa_email == "default":
+            raise DriveError(
+                "サービスアカウントを特定できませんでした。環境変数 "
+                "DWD_SERVICE_ACCOUNT_EMAIL を設定してください。"
+            )
+        found = ("iam", iam.Signer(Request(), source, sa_email), sa_email)
+    with _signing_lock:
+        if _signing_source is None:
+            _signing_source = found
+        return _signing_source
+
+
+def _credentials(scopes: list[str], subject: str) -> service_account.Credentials:
+    """subject のユーザー代理となるサービスアカウント資格情報を作る。"""
+    signing = _signing()
+    if signing[0] == "key":
+        creds = signing[1].with_scopes(scopes)
         if subject:
             creds = creds.with_subject(subject)
         return creds
 
-    # Cloud Run: 鍵ファイルなし。IAM Credentials API で署名する。
-    sa_email = config.delegated_sa_email() or getattr(
-        source, "service_account_email", ""
-    )
-    if not sa_email or sa_email == "default":
-        # metadata server から実際のメールアドレスを確定させる。
-        source.refresh(Request())
-        sa_email = getattr(source, "service_account_email", "")
-    if not sa_email or sa_email == "default":
-        raise DriveError(
-            "サービスアカウントを特定できませんでした。環境変数 "
-            "DWD_SERVICE_ACCOUNT_EMAIL を設定してください。"
-        )
-
-    signer = iam.Signer(Request(), source, sa_email)
+    _, signer, sa_email = signing
     return service_account.Credentials(
         signer=signer,
         service_account_email=sa_email,
@@ -195,9 +218,10 @@ def get_file_metadata(session: AuthorizedSession, file_id: str) -> dict:
     resp = session.get(
         f"{_FILES_URL}/{file_id}",
         params={
-            # size は、Drive から直接 PDF を読むツール（書籍スキャンの結合）が、
-            # 読み終えたかを確かめるのに使う。
-            "fields": "id, name, mimeType, parents, trashed, webViewLink, size",
+            # size と headRevisionId は、Drive から直接 PDF を読むツール（書籍
+            # スキャンの結合）が、読み終えたか・途中で差し替えられていないかを
+            # 確かめるのに使う。
+            "fields": "id, name, mimeType, parents, trashed, webViewLink, size, headRevisionId, modifiedTime",
             "supportsAllDrives": "true",
         },
     )
@@ -369,8 +393,8 @@ def delegated_read_token(user_email: str) -> tuple[str, datetime.datetime | None
     サーバーの AuthorizedSession が同じ資格情報を同時に取り直して競合しない
     ように。
     """
-    creds = _credentials([DRIVE_READONLY_SCOPE], subject=user_email)
     try:
+        creds = _credentials([DRIVE_READONLY_SCOPE], subject=user_email)
         creds.refresh(Request())
     except google.auth.exceptions.GoogleAuthError as error:
         raise DriveError(f"Drive の代理アクセスを用意できませんでした（{error}）。", 502) from error

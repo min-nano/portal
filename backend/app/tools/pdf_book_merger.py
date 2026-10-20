@@ -73,6 +73,8 @@ def file_info(file_id: str, user: User = Depends(require_user)):
             "id": file_id,
             "name": meta.get("name", ""),
             "size": size,
+            # 読んでいる途中で差し替えられていないかを、画面が確かめる印。
+            "revision": meta.get("headRevisionId") or meta.get("modifiedTime"),
             "accessToken": token,
             "expiresAt": expiry.replace(tzinfo=datetime.timezone.utc).isoformat() if expiry else None,
         },

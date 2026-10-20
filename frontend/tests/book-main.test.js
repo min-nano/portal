@@ -586,8 +586,31 @@ describe('ファイルを足して並べる', () => {
     expect(fileItem('odd.pdf').textContent).toContain('1 頁目の画像を描けませんでした');
     // 並べて描いていた分（同時に 3 頁）のほかは、始めない。
     expect(mocks.renderPageImage).toHaveBeenCalledTimes(3);
-    // 調べられなかったファイルの PDF は閉じる。
+    // 調べられなかったファイルの PDF は閉じ、縮小画像も手放す。
     expect(mocks.closePdf.mock.calls.some(([doc]) => doc?.spec?.pages?.length === 12)).toBe(true);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:scan-o3');
+  });
+
+  it('調べている間に OCR を有効にしたら、調べ終えたところで残りの頁を読む', async () => {
+    $('ocrToggle').checked = false;
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    const answer = mocks.renderPageImage.getMockImplementation();
+    mocks.renderPageImage.mockImplementation(async (...args) => {
+      await gate;
+      return answer(...args);
+    });
+    drop([file('猫_奇数.pdf', pdf(ODD))]);
+    await vi.waitFor(() => expect(mocks.renderPageImage).toHaveBeenCalled());
+
+    $('ocrToggle').checked = true;
+    $('ocrToggle').dispatchEvent(new Event('change'));
+    release();
+
+    await vi.waitFor(() =>
+      expect(document.querySelector('#pageGrid [data-page-key="f1:2"] .bm-status').textContent).toBe('読取')
+    );
+    expect(mocks.renderMargins).toHaveBeenCalled();
   });
 
   it('番号の無い頁が多いファイルは JPEG を残さず、OCR を後から有効にしたときに調べ直す', async () => {
@@ -768,6 +791,20 @@ describe('結合と検証', () => {
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
     expect($('message').textContent).toBe('');
     expect($('downloadBtn').disabled).toBe(false);
+  });
+
+  it('提案する名前が変わったら、結合した PDF は捨てる（古い名前で保存しない）', async () => {
+    await addBook();
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('downloadBtn').disabled).toBe(false));
+    expect($('outputName').value).toBe('猫.pdf');
+
+    // 読めないファイルを足すと、並びは変わらず、提案する名前だけが変わる。
+    drop([file('犬_奇数.pdf', encoder.encode('not a pdf'))]);
+    await settled(4);
+
+    expect($('outputName').value).not.toBe('猫.pdf');
+    expect($('downloadBtn').disabled).toBe(true);
   });
 
   it('検証で読めない頁があっても、結合した PDF は閉じる', async () => {

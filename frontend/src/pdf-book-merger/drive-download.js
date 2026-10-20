@@ -21,38 +21,68 @@ const TOKEN_RENEWALS = 2;
 /** 読み直す前に待つ時間（回ごとに倍にする）。 */
 const FIRST_DELAY_MS = 1000;
 
-/** Drive が流量を絞ったときの理由（403 で返ってくる）。 */
-const RATE_LIMITS = new Set(['rateLimitExceeded', 'userRateLimitExceeded']);
+/** Retry-After で待つ時間の上限。 */
+const MAX_RETRY_AFTER_MS = 2 * 60 * 1000;
+/** 読んでいる間に Drive のファイルが差し替えられたとき、始めから読み直す回数。 */
+const RESTARTS = 1;
+
+/**
+ * Drive が流量を絞ったときの理由（403 でも返ってくる）。errors[].reason、
+ * details[].reason、status のどこかに入る。
+ */
+const RATE_LIMITS = new Set(['rateLimitExceeded', 'userRateLimitExceeded', 'RATE_LIMIT_EXCEEDED', 'RESOURCE_EXHAUSTED']);
 
 /** Drive が断った失敗。 */
 class DriveReadError extends Error {
-  constructor(message, status, reason = '') {
+  constructor(message, status, reasons = [], retryAfterMs = 0) {
     super(message);
     this.status = status;
-    this.reason = reason;
+    this.reasons = reasons;
+    this.retryAfterMs = retryAfterMs;
   }
 
   /** 待てば読める失敗か（流量の制限・Drive 側の不調）。 */
   get retryable() {
-    return this.status === 429 || this.status >= 500 || RATE_LIMITS.has(this.reason);
+    return this.status === 429 || this.status >= 500 || this.reasons.some((reason) => RATE_LIMITS.has(reason));
   }
+}
+
+/** Retry-After（秒か日時）を、待つミリ秒に直す。読めなければ 0。 */
+function retryAfterMs(value) {
+  if (!value) return 0;
+  const ms = /^\d+$/.test(value.trim()) ? Number(value) * 1000 : Date.parse(value) - Date.now();
+  return Number.isFinite(ms) ? Math.min(Math.max(ms, 0), MAX_RETRY_AFTER_MS) : 0;
 }
 
 async function driveError(response) {
   let detail = '';
-  let reason = '';
+  const reasons = [];
   try {
     const { error } = await response.json();
     detail = error?.message || '';
-    reason = error?.errors?.[0]?.reason || '';
+    for (const item of [...(error?.errors || []), ...(error?.details || [])]) {
+      if (item?.reason) reasons.push(item.reason);
+    }
+    if (error?.status) reasons.push(error.status);
   } catch {
     // 本文が JSON でない。
   }
   return new DriveReadError(
     detail ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}`,
     response.status,
-    reason
+    reasons,
+    retryAfterMs(response.headers.get('Retry-After'))
   );
+}
+
+/** サーバーへの問い合わせの、待てば通りうる失敗か（回線が切れた・サーバーの不調）。 */
+function transient(error) {
+  return error instanceof TypeError || error?.status === 429 || error?.status >= 500;
+}
+
+/** 同じ版のファイルか（大きさと、Drive の版）。 */
+function sameVersion(a, b) {
+  return a.size === b.size && (a.revision ?? null) === (b.revision ?? null);
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -75,7 +105,7 @@ async function readInto(info, bytes, state, onProgress) {
     if (done) break;
     if (state.received + value.length > bytes.length) {
       await reader.cancel();
-      throw new DriveReadError('読み込んだ大きさが合いません。', 0, 'size');
+      throw new DriveReadError('読み込んだ大きさが合いません。', 0);
     }
     bytes.set(value, state.received);
     state.received += value.length;
@@ -97,28 +127,65 @@ export async function downloadDriveFile(file, { onProgress, delay = (attempt) =>
   const path = `${TOOL_API}/files/${encodeURIComponent(file.id)}`;
   try {
     let info = await apiGet(path);
-    const bytes = new Uint8Array(info.size);
+    let bytes = new Uint8Array(info.size);
     const state = { received: 0 };
     let retries = 0;
     let renewals = 0;
+    let restarts = 0;
+    let resumed = false; // 続きから読んだことがあるか（別の版がつながりうる）
+
+    /** 待ってから読み直す（回数を使い切っていれば、失敗を投げる）。 */
+    const backoff = async (error) => {
+      if (retries >= RETRIES) throw error;
+      await sleep(Math.max(delay(retries), error.retryAfterMs || 0));
+      retries++;
+    };
+    /** サーバーに聞き直す（トークンの取り直しと、版の確かめ）。一時的な失敗は待ってやり直す。 */
+    const askAgain = async () => {
+      for (;;) {
+        try {
+          return await apiGet(path);
+        } catch (error) {
+          if (!transient(error)) throw error;
+          await backoff(error);
+        }
+      }
+    };
+    /** 聞き直した版が違えば、始めから読み直す。 */
+    const follow = (next) => {
+      if (!sameVersion(info, next)) {
+        if (restarts >= RESTARTS) throw new Error('読んでいる間に、Drive のファイルが差し替えられました。');
+        restarts++;
+        bytes = new Uint8Array(next.size);
+        state.received = 0;
+        resumed = false;
+      }
+      info = next;
+    };
+
     for (;;) {
+      if (state.received > 0) resumed = true;
       try {
         await readInto(info, bytes, state, onProgress);
-        return bytes;
       } catch (error) {
         // トークンが切れていたら、取り直してから続きを読む（読み直しには数えない）。
         if (error.status === 401 && renewals < TOKEN_RENEWALS) {
           renewals++;
-          info = await apiGet(path);
+          follow(await askAgain());
           continue;
         }
         // 権限が無い・ファイルが無い・大きさが違う、は読み直しても同じ。回線が
         // 切れた・流量を絞られた・Drive の不調は、待ってから続きを読む。
-        const drive = error instanceof DriveReadError;
-        if (retries >= RETRIES || (drive && !error.retryable)) throw error;
-        await sleep(delay(retries));
-        retries++;
+        if (error instanceof DriveReadError && !error.retryable) throw error;
+        await backoff(error);
+        continue;
       }
+      // 続きから読んだときは、読み終えたあとも同じ版か確かめる。始めと終わりで
+      // 版が同じなら、その間に読んだ部分もすべてその版（版は戻らない）。
+      if (!resumed) return bytes;
+      const after = await askAgain();
+      if (sameVersion(info, after)) return bytes;
+      follow(after);
     }
   } catch (error) {
     throw new Error(`「${file.name}」を Drive から読み込めませんでした（${error?.message || error}）。`);

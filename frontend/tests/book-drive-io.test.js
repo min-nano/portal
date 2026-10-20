@@ -61,6 +61,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('downloadDriveFile', () => {
@@ -117,6 +118,82 @@ describe('downloadDriveFile', () => {
 
     expect([...bytes]).toEqual([...DATA]);
     expect(fetchMock.mock.calls.map(([, init]) => init.headers.Authorization)).toEqual(['Bearer old', 'Bearer new']);
+  });
+
+  it('流量制限の理由は、errors のどこにあっても、details や status にあっても読み取る', async () => {
+    const limited = (error) => new Response(JSON.stringify({ error }), { status: 403 });
+    fetchMock
+      .mockImplementationOnce(async () => limited({ errors: [{ reason: 'forbidden' }, { reason: 'userRateLimitExceeded' }] }))
+      .mockImplementationOnce(async () => limited({ details: [{ reason: 'RATE_LIMIT_EXCEEDED' }] }))
+      .mockImplementationOnce(async () => limited({ status: 'RESOURCE_EXHAUSTED' }));
+
+    const bytes = await downloadDriveFile({ id: 'f', name: 'a.pdf' });
+
+    expect([...bytes]).toEqual([...DATA]);
+    expect(waited).toEqual([0, 1, 2]);
+  });
+
+  it('Retry-After があれば、その間は待つ', async () => {
+    const pauses = [];
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, ms) => {
+      pauses.push(ms);
+      callback();
+      return 0;
+    });
+    fetchMock.mockImplementationOnce(async () => new Response('{}', { status: 429, headers: { 'Retry-After': '30' } }));
+
+    const bytes = await download({ id: 'f', name: 'a.pdf' });
+
+    expect([...bytes]).toEqual([...DATA]);
+    expect(pauses).toContain(30000);
+  });
+
+  it('トークンを取り直すときの一時的な失敗も、待ってやり直す', async () => {
+    apiGet
+      .mockResolvedValueOnce({ id: 'f', name: 'a.pdf', size: DATA.length, accessToken: 'old' })
+      .mockRejectedValueOnce(Object.assign(new Error('サーバーエラーが発生しました (HTTP 503)。'), { status: 503 }))
+      .mockResolvedValueOnce({ id: 'f', name: 'a.pdf', size: DATA.length, accessToken: 'new' });
+    fetchMock.mockImplementationOnce(async () => new Response('{}', { status: 401 }));
+
+    const bytes = await downloadDriveFile({ id: 'f', name: 'a.pdf' });
+
+    expect([...bytes]).toEqual([...DATA]);
+    expect(waited).toEqual([0]);
+    expect(fetchMock.mock.calls.at(-1)[1].headers.Authorization).toBe('Bearer new');
+  });
+
+  it('続きから読んだら、読み終えたあとに同じ版か確かめ、違えば始めから読み直す', async () => {
+    const NEW = Uint8Array.from({ length: 30 }, (_, i) => 100 + i);
+    apiGet
+      .mockResolvedValueOnce({ id: 'f', name: 'a.pdf', size: DATA.length, accessToken: 'tok', revision: 'r1' })
+      .mockResolvedValueOnce({ id: 'f', name: 'a.pdf', size: NEW.length, accessToken: 'tok', revision: 'r2' })
+      .mockResolvedValueOnce({ id: 'f', name: 'a.pdf', size: NEW.length, accessToken: 'tok', revision: 'r2' });
+    fetchMock
+      .mockImplementationOnce(async () => new Response(body(DATA, { pieces: 5, cutAt: 10 }), { status: 200 }))
+      .mockImplementationOnce(async () => new Response(body(DATA.slice(10)), { status: 206 }))
+      .mockImplementationOnce(async () => new Response(body(NEW), { status: 200 }));
+
+    const bytes = await downloadDriveFile({ id: 'f', name: 'a.pdf' });
+
+    // 差し替えられたあとの版を、始めから読んだもの（古い版の前半とつながない）。
+    expect([...bytes]).toEqual([...NEW]);
+    expect(fetchMock.mock.calls[2][1].headers.Range).toBeUndefined();
+  });
+
+  it('トークンを取り直したら版が変わっていたときも、始めから読み直す。何度も変わるならあきらめる', async () => {
+    apiGet
+      .mockResolvedValueOnce({ id: 'f', name: 'a.pdf', size: DATA.length, accessToken: 'tok', revision: 'r1' })
+      .mockResolvedValueOnce({ id: 'f', name: 'a.pdf', size: DATA.length, accessToken: 'tok', revision: 'r2' })
+      .mockResolvedValueOnce({ id: 'f', name: 'a.pdf', size: DATA.length, accessToken: 'tok', revision: 'r3' });
+    fetchMock.mockImplementation(async () => new Response('{}', { status: 401 }));
+
+    await expect(downloadDriveFile({ id: 'f', name: 'a.pdf' })).rejects.toThrow('Drive のファイルが差し替えられました');
+  });
+
+  it('続きから読まずに 1 度で読めたときは、版を聞き直さない', async () => {
+    await downloadDriveFile({ id: 'f', name: 'a.pdf' });
+
+    expect(apiGet).toHaveBeenCalledTimes(1);
   });
 
   it('権限が無いなど、読み直しても同じ失敗は、Drive の理由を添えてすぐ止める', async () => {

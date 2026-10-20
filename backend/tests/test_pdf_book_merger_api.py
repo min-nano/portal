@@ -34,6 +34,7 @@ def scan(monkeypatch, drive):
         "name": "奇数1.pdf",
         "mimeType": PDF_MIME,
         "size": "16384",
+        "headRevisionId": "rev-7",
     }
 
     def delegated_read_token(email):
@@ -52,6 +53,7 @@ def test_file_info_checks_the_pdf_and_hands_a_read_only_token(client, drive, sca
         "id": "scan-1",
         "name": "奇数1.pdf",
         "size": 16384,
+        "revision": "rev-7",
         "accessToken": "ya29.read-only",
         "expiresAt": "2026-10-20T12:00:00+00:00",
     }
@@ -151,6 +153,51 @@ def test_read_token_is_a_fresh_drive_readonly_token_for_the_user(credentials):
     assert all(creds.refreshed == 1 for _, creds in made)
     assert first == second == "fresh-1"
     assert expiry > datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(minutes=55)
+
+
+def test_file_info_revision_falls_back_to_the_modified_time(client, drive, scan):
+    # 版の印が無いファイルは、最終更新日時で差し替えを見分ける。
+    del drive.metadata["scan-1"]["headRevisionId"]
+    drive.metadata["scan-1"]["modifiedTime"] = "2026-10-20T01:02:03.000Z"
+
+    assert client.get(f"{FILES_URL}/scan-1").json()["revision"] == "2026-10-20T01:02:03.000Z"
+
+
+def test_read_token_failure_while_making_credentials_is_reported(credentials):
+    # 資格情報を作るところ（ADC・署名元）で失敗しても、分かる 502 にする。
+    _, monkeypatch = credentials
+
+    def broken(scopes, subject):
+        raise google.auth.exceptions.TransportError("metadata server unavailable")
+
+    monkeypatch.setattr(google_drive, "_credentials", broken)
+
+    with pytest.raises(DriveError, match="代理アクセスを用意できませんでした") as caught:
+        google_drive.delegated_read_token(TEST_EMAIL)
+    assert caught.value.status == 502
+
+
+def test_signing_source_is_looked_up_once(monkeypatch):
+    # ADC とメタデータサーバーへの問い合わせは、資格情報を作るたびにはしない。
+    calls = []
+
+    class Source:
+        service_account_email = "runtime@example.iam.gserviceaccount.com"
+
+    def default():
+        calls.append("default")
+        return Source(), "project"
+
+    monkeypatch.setattr(google_drive, "_signing_source", None)
+    monkeypatch.setattr(google_drive.google.auth, "default", default)
+    monkeypatch.setattr(google_drive.iam, "Signer", lambda request, source, email: ("signer", email))
+
+    first = google_drive._credentials([google_drive.DRIVE_READONLY_SCOPE], TEST_EMAIL)
+    second = google_drive._credentials([google_drive.DRIVE_READONLY_SCOPE], TEST_EMAIL)
+
+    assert calls == ["default"]
+    assert first is not second
+    assert first.service_account_email == "runtime@example.iam.gserviceaccount.com"
 
 
 def test_read_token_failure_is_reported(credentials):

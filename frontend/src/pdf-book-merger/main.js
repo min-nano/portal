@@ -78,7 +78,7 @@ const OCR_IN_FLIGHT = 3;
  */
 const PAGES_IN_FLIGHT = 3;
 /**
- * あとから OCR を有効にしたときのために残しておく JPEG の頁数の上限（1 ファイル）。
+ * あとから OCR を有効にしたときのために残しておく JPEG の頁数の上限（全ファイルで）。
  * 超えるファイルは残さず、OCR を有効にしたときに PDF を 1 度読み直す。
  */
 const KEPT_SCANS = 32;
@@ -292,8 +292,9 @@ async function readFile(file) {
     // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
     // もののほかは、役割を決める前に番号を読み切る（文字情報の無い束も、画像
     // から番号が読めれば本文と分かる）。OCR の準備は、画像を描く間に進める。
+    const ocrAtStart = $('ocrToggle').checked;
     const ocrPages = new Set(
-      !roleFromName(file.name) && $('ocrToggle').checked
+      !roleFromName(file.name) && ocrAtStart
         ? file.pages.filter((page) => page.candidates.length === 0).map((page) => page.index)
         : []
     );
@@ -315,7 +316,9 @@ async function readFile(file) {
     // 有効にしうる）、表紙のように OCR しないファイルでなく、頁が少ないときだけ。
     // 多ければ残さず、有効にしたときに読み直す（数百頁ぶんの JPEG を抱えない）。
     const unnumbered = file.pages.filter((page) => page.candidates.length === 0 && !page.ocr);
-    file.scansKept = !$('ocrToggle').checked && !roleFromName(file.name) && unnumbered.length <= KEPT_SCANS;
+    const kept = files.reduce((sum, f) => sum + f.pages.filter((page) => page.scan).length, 0);
+    file.scansKept =
+      !ocrAtStart && !$('ocrToggle').checked && !roleFromName(file.name) && kept + unnumbered.length <= KEPT_SCANS;
     if (file.scansKept) unnumbered.forEach((page) => (page.scan = scans[page.index] ?? null));
     const byOcr = file.pages.filter((page) => page.ocr && page.candidates.some((c) => c.source === 'ocr')).length;
     log(
@@ -326,14 +329,23 @@ async function readFile(file) {
     file.role = guessRole(file.name, file.pages);
     file.status = 'ready';
     log(`「${file.name}」を調べ終えました（${ROLES[file.role]}、合計 ${seconds(started)}）`);
+    // 調べている間に OCR が有効にされていたら、ここで残りの頁を読む。
+    if (!ocrAtStart && $('ocrToggle').checked) queueLateOcr(file);
   } catch (error) {
     file.status = 'error';
     file.error = error.message || String(error);
     log(`「${file.name}」を調べられませんでした（${file.error}）`);
     // 調べられなかったファイルの PDF は、外されるのを待たずに閉じる（pdf.js の
     // worker に中身を残さない）。
+    // 結合には使わないので、PDF の中身と縮小画像も手放す。
     closePdf(file.doc).catch(() => {});
     file.doc = null;
+    file.bytes = null;
+    for (const page of file.pages) {
+      if (page.thumbUrl) URL.revokeObjectURL(page.thumbUrl);
+      page.thumbUrl = '';
+      page.scan = null;
+    }
   } finally {
     showProgress('');
     if (files.includes(file)) refresh();
@@ -375,22 +387,20 @@ function slots(limit) {
 /** items を、同時に limit 個までの run で処理する。 */
 async function inPool(items, limit, run) {
   let next = 0;
-  let failed = false; // 1 つ失敗したら、残りは始めない（ほかの run も止まる）
+  let failure = null; // 最初の失敗（1 つ失敗したら、残りは始めない）
   const worker = async () => {
-    while (!failed && next < items.length) {
+    while (!failure && next < items.length) {
       try {
         await run(items[next++]);
       } catch (error) {
-        failed = true;
-        throw error;
+        failure ??= { error };
       }
     }
   };
-  // 失敗しても、動いている run が終わるまで待ってから失敗を返す（描きかけの
-  // 頁を残したまま、次のファイルへ進まないように）。
-  const results = await Promise.allSettled(Array.from({ length: Math.min(limit, items.length) }, worker));
-  const rejected = results.find((result) => result.status === 'rejected');
-  if (rejected) throw rejected.reason;
+  // 失敗しても、動いている run が終わるまで待ってから、最初の失敗を返す（描き
+  // かけの頁を残したまま、次のファイルへ進まないように）。
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  if (failure) throw failure.error;
 }
 
 /**
@@ -498,12 +508,17 @@ function isPdf(bytes) {
  * （頁が抜けて見えないように）。読み終えたら並べ直す。
  *
  * @param {object} file
- * @param {object[]} pages 読む頁（残してあれば page.scan の JPEG で描く）
+ * @param {object[]} pages 読む頁（page.scan の JPEG で描く。残していなければ調べ直す）
  */
 async function readMarginsWithOcr(file, pages) {
   if (pages.length === 0 || !(await startOcr())) return;
-  // 頁の JPEG を残していなければ、ここで 1 度だけ調べ直す。
-  const scans = file.scansKept ? null : (await findScanImages(file.bytes)).scans;
+  // 頁の JPEG を残していなければ、ここで 1 度だけ調べ直す（読む頁の分だけ取って
+  // おき、ほかの頁の分は手放す）。
+  if (!file.scansKept) {
+    showProgress(`「${file.name}」の頁の画像を調べ直しています`, null);
+    const { scans } = await findScanImages(file.bytes);
+    for (const page of pages) page.scan = scans[page.index] ?? null;
+  }
   progressLabel = '余白を読み取っています';
   log(`「${file.name}」の余白を OCR します（${pages.length} 頁）`);
   let done = 0;
@@ -514,7 +529,7 @@ async function readMarginsWithOcr(file, pages) {
     await ocrSlots.take();
     let strips;
     try {
-      strips = await renderMargins(file.doc, page.index, scans ? (scans[page.index] ?? null) : page.scan);
+      strips = await renderMargins(file.doc, page.index, page.scan);
     } catch {
       ocrSlots.give();
       continue;
@@ -529,6 +544,26 @@ async function readMarginsWithOcr(file, pages) {
     );
   }
   await Promise.all(reading);
+}
+
+/** 読み終えたファイルの、番号の見つかっていない頁の OCR を頼む（あとから OCR を有効にしたとき）。 */
+function queueLateOcr(file) {
+  // 読んでいる最中のファイルは、もう一度は頼まない（切り替えを繰り返しても
+  // 同じ頁を 2 度読まない）。
+  if (file.role !== 'body' || file.ocrBusy) return;
+  const pages = file.pages.filter((page) => page.candidates.length === 0 && !page.ocr);
+  if (pages.length === 0) return;
+  file.ocrBusy = true;
+  renderFiles();
+  queue = queue
+    .then(() => readMarginsWithOcr(file, pages))
+    .finally(() => {
+      file.ocrBusy = false;
+      for (const page of pages) page.scan = null;
+      showProgress('');
+      if (files.includes(file)) refresh();
+    })
+    .catch(() => {});
 }
 
 function mergeCandidates(a, b) {
@@ -595,17 +630,18 @@ function refresh() {
   const issues = pageIssues(order, problems, compareScans(bodyPages), textless);
 
   view = { order, problems, issues, numberings };
-  // 裏の処理（ほかのファイルの読み込み・OCR）が終わっただけで、結合する中身が
-  // 変わらなければ、結合した PDF はそのまま使える。
-  const key = order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}`).join(',');
-  if (key !== orderKey) {
-    orderKey = key;
-    discardMerged();
-  }
   if (!$('outputName').value.trim() || $('outputName').dataset.suggested === 'true') {
     const suggested = suggestBookName(files.map((file) => file.name));
     $('outputName').value = suggested;
     $('outputName').dataset.suggested = 'true';
+  }
+  // 裏の処理（ほかのファイルの読み込み・OCR）が終わっただけで、結合する中身
+  // （頁・役割・頁番号と、名前）が変わらなければ、結合した PDF はそのまま使える。
+  // 名前は提案し直すことがあるので、ここで一緒に比べる。
+  const key = [outputName(), ...order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}`)].join('\n');
+  if (key !== orderKey) {
+    orderKey = key;
+    discardMerged();
   }
 
   renderFiles();
@@ -1212,23 +1248,7 @@ function wireUp() {
   // 後から OCR を有効にしたときは、読み終えたファイルの残りの頁を読む。
   $('ocrToggle').addEventListener('change', () => {
     if (!$('ocrToggle').checked) return;
-    for (const file of readyFiles()) {
-      // 読んでいる最中のファイルは、もう一度は頼まない（切り替えを繰り返しても
-      // 同じ頁を 2 度読まない）。
-      if (file.role !== 'body' || file.ocrBusy) continue;
-      const pages = file.pages.filter((page) => page.candidates.length === 0 && !page.ocr);
-      if (pages.length === 0) continue;
-      file.ocrBusy = true;
-      renderFiles();
-      queue = queue
-        .then(() => readMarginsWithOcr(file, pages))
-        .finally(() => {
-          file.ocrBusy = false;
-          showProgress('');
-          if (files.includes(file)) refresh();
-        })
-        .catch(() => {});
-    }
+    readyFiles().forEach(queueLateOcr);
   });
 
   document.querySelectorAll('input[name="pageFilter"]').forEach((radio) =>

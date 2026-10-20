@@ -25,7 +25,8 @@ async function raiseForError(resp) {
   } catch {
     // JSON でないエラー応答（プロキシ等）はそのまま既定メッセージを使う。
   }
-  throw new Error(message);
+  // 呼び出し側が、待てば通りうる失敗（5xx など）かを見分けられるように。
+  throw Object.assign(new Error(message), { status: resp.status });
 }
 
 /**
