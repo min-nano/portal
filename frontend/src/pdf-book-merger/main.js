@@ -1062,9 +1062,12 @@ function renderVerify() {
 
 async function download() {
   if (!merged) return;
-  const how = await savePdf(merged.bytes, merged.fileName);
-  if (how === 'shared') log(`「${merged.fileName}」を共有シートに渡しました`);
-  else if (how === 'downloaded') log(`「${merged.fileName}」をダウンロードしました`);
+  // 共有シートを開いている間に、名前を変えるなどして結合した PDF が捨てられる
+  // ことがあるので、渡すものは先に取っておく。
+  const { bytes, fileName } = merged;
+  const how = await savePdf(bytes, fileName);
+  if (how === 'shared') log(`「${fileName}」を共有シートに渡しました`);
+  else if (how === 'downloaded') log(`「${fileName}」をダウンロードしました`);
 }
 
 // --- 入口 --------------------------------------------------------------------

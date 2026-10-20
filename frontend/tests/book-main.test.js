@@ -600,10 +600,14 @@ describe('結合と検証', () => {
     expect(click).toHaveBeenCalled();
     expect(URL.createObjectURL).toHaveBeenCalled();
 
-    // 並びが変わったら、結合した PDF は捨てる。
+    // 並びが変わったら、結合した PDF は捨てる（保存し終える前でも、保存は続ける）。
     change(fileItem('猫_表紙.pdf').querySelector('select'), 'front');
     expect($('downloadBtn').disabled).toBe(true);
     expect($('verifyResult').hidden).toBe(true);
+    await flush();
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('「猫.pdf」をダウンロードしました');
   });
 
   it('問題が残っていれば確かめてから結合し、食い違いは頁ごとに挙げる', async () => {
