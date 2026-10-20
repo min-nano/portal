@@ -12,7 +12,11 @@
   "dependencies": {
     "@clerk/clerk-js": "^6.39.1",
     "@clerk/localizations": "^4.23.0",
-    "@clerk/ui": "^1.40.2"
+    "@clerk/ui": "^1.40.2",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.3.289",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.12",

@@ -9,6 +9,7 @@
 """
 
 from .excel_report_formatter import TOOL as excel_report_formatter
+from .pdf_book_merger import TOOL as pdf_book_merger
 from .structural_cert_formatter import TOOL as structural_cert_formatter
 from .timber_panel_shear_calculator import TOOL as timber_panel_shear_calculator
 from .wall_quantity_calculator import TOOL as wall_quantity_calculator
@@ -18,4 +19,5 @@ TOOLS = (
     structural_cert_formatter,
     timber_panel_shear_calculator,
     wall_quantity_calculator,
+    pdf_book_merger,
 )

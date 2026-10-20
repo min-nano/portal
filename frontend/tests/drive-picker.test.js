@@ -52,6 +52,7 @@ const crumbs = () =>
 const status = () => dialog().querySelector('.drive-picker-status');
 
 let pickFile;
+let pickFiles;
 
 beforeEach(async () => {
   vi.resetModules();
@@ -64,7 +65,7 @@ beforeEach(async () => {
   HTMLDialogElement.prototype.close = function close() {
     this.removeAttribute('open');
   };
-  ({ pickFile } = await import('../src/drive-picker.js'));
+  ({ pickFile, pickFiles } = await import('../src/drive-picker.js'));
 });
 
 afterEach(() => {
@@ -550,5 +551,130 @@ describe('失敗', () => {
     expect(itemNamed('設計部')).toBeTruthy();
     button('キャンセル').click();
     await picking;
+  });
+});
+
+describe('いくつも選ぶ', () => {
+  const chooseButton = () => dialog().querySelector('.drive-picker-choose');
+  const allButton = () => dialog().querySelector('.drive-picker-all');
+
+  it('押すたびに選ぶ・外すが切り替わり、フォルダを移っても残る', async () => {
+    respond({
+      'my-drive': { items: [folder('d1', 'スキャン'), pdf('p0', '表紙.pdf')] },
+      d1: { items: [pdf('p1', '奇数1.pdf'), pdf('p2', '偶数1.pdf')] },
+    });
+
+    const picking = pickFiles({ title: 'スキャンを選ぶ', mimeTypes: PDF_MIME });
+    await flush();
+    expect(chooseButton().disabled).toBe(true);
+    // マイドライブの最上位では「すべて選ぶ」を出さない。
+    expect(allButton().hidden).toBe(true);
+
+    itemNamed('表紙.pdf').click();
+    expect(chooseButton().textContent).toBe('選択（1 個）');
+    itemNamed('スキャン').click();
+    await flush();
+    itemNamed('奇数1.pdf').click();
+    itemNamed('偶数1.pdf').click();
+    itemNamed('偶数1.pdf').click(); // 外す
+    expect(itemNamed('偶数1.pdf').getAttribute('aria-pressed')).toBe('false');
+
+    // 戻っても、選んだ印は残っている。
+    dialog().querySelector('.drive-picker-crumb[data-depth="0"]').click();
+    await flush();
+    expect(itemNamed('表紙.pdf').getAttribute('aria-pressed')).toBe('true');
+    expect(chooseButton().textContent).toBe('選択（2 個）');
+
+    chooseButton().click();
+    await expect(picking).resolves.toEqual([
+      { id: 'p0', name: '表紙.pdf', mimeType: PDF_MIME },
+      { id: 'p1', name: '奇数1.pdf', mimeType: PDF_MIME },
+    ]);
+  });
+
+  it('ダブルクリックでは決めない', async () => {
+    respond({ 'my-drive': { items: [pdf('p1', 'a.pdf')] } });
+    const picking = pickFiles({});
+    await flush();
+    const row = itemNamed('a.pdf');
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }));
+    row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    expect(dialog().hasAttribute('open')).toBe(true);
+    expect(row.getAttribute('aria-pressed')).toBe('true');
+    button('キャンセル').click();
+    await expect(picking).resolves.toEqual([]);
+  });
+
+  it('このフォルダのファイルを、続きまで読んですべて選ぶ', async () => {
+    respond({
+      'my-drive': { items: [folder('d1', 'スキャン')] },
+      d1: { items: [folder('d9', '下書き'), pdf('p1', '1.pdf')], nextPageToken: 't2' },
+      'd1#t2': { items: [pdf('p2', '2.pdf')] },
+    });
+    const picking = pickFiles({ mimeTypes: PDF_MIME });
+    await flush();
+    itemNamed('スキャン').click();
+    await flush();
+    expect(allButton().hidden).toBe(false);
+
+    allButton().click();
+    await flush();
+    await flush();
+
+    expect(chooseButton().textContent).toBe('選択（2 個）');
+    expect(itemNamed('1.pdf').getAttribute('aria-pressed')).toBe('true');
+    // 種類の絞り込みも付けて、そのフォルダを頼む。
+    const asked = apiGet.mock.calls.map(([path]) => query(path)).filter((q) => q.folder === 'd1');
+    expect(asked.at(-1)).toEqual({ folder: 'd1', mimeTypes: PDF_MIME, pageToken: 't2' });
+
+    chooseButton().click();
+    await expect(picking).resolves.toEqual([
+      { id: 'p1', name: '1.pdf', mimeType: PDF_MIME },
+      { id: 'p2', name: '2.pdf', mimeType: PDF_MIME },
+    ]);
+  });
+
+  it('すべて選ぶのに失敗したら理由を出し、やり直せる。空ならそう出す', async () => {
+    respond({
+      'my-drive': { items: [folder('d1', '空')] },
+      d1: { items: [folder('d2', '中')] },
+    });
+    const picking = pickFiles({});
+    await flush();
+    itemNamed('空').click();
+    await flush();
+
+    allButton().click();
+    await flush();
+    expect(status().textContent).toBe('このフォルダには選べるファイルがありません。');
+
+    apiGet.mockRejectedValueOnce(new Error('Drive の一覧の取得に失敗しました。'));
+    allButton().click();
+    await flush();
+    expect(status().textContent).toContain('Drive の一覧の取得に失敗しました。');
+    status().querySelector('button').click();
+    await flush();
+    expect(status().textContent).toBe('このフォルダには選べるファイルがありません。');
+
+    button('キャンセル').click();
+    await expect(picking).resolves.toEqual([]);
+  });
+
+  it('1 つ選ぶダイアログに戻すと、すべて選ぶは出ない', async () => {
+    respond({ 'my-drive': { items: [folder('d1', 'スキャン')] }, d1: { items: [pdf('p1', 'a.pdf')] } });
+    const many = pickFiles({});
+    await flush();
+    itemNamed('スキャン').click();
+    await flush();
+    button('キャンセル').click();
+    await many;
+
+    const one = pickFile({});
+    await flush();
+    expect(allButton().hidden).toBe(true);
+    expect(button('選択')).toBeTruthy();
+    button('キャンセル').click();
+    await expect(one).resolves.toBeNull();
   });
 });

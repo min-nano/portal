@@ -1,0 +1,73 @@
+<div class="page-head">
+  <h2>書籍スキャン PDF の結合</h2>
+</div>
+<p class="hint">
+  裁断した本を分けてスキャンした PDF（奇数頁の束・偶数頁の束・表紙・裏表紙など）を選ぶと、
+  頁番号を読み取って 1 冊ぶんの順に並べ、1 つの PDF にまとめます。頁の抜け・重なりと、
+  スキャンの傾き・ずれ・すじを確かめてから結合し、結合した PDF も元の頁と突き合わせて
+  検証します。頁番号の読み取り・検査・結合はすべてこの端末の中で行います（Drive との
+  読み書きだけはサーバーが中継します）。サーチャブル PDF の文字情報はそのまま残ります。
+</p>
+
+<portal-section class="card bm-step" id="filesSection">
+  <h3 slot="title">1. スキャンしたファイル</h3>
+  <div class="bm-actions">
+    <button type="button" id="driveBtn">Drive から選ぶ</button>
+    <button type="button" id="localBtn" class="secondary">手元の PDF を追加</button>
+    <input type="file" id="localInput" accept="application/pdf,.pdf" multiple hidden>
+  </div>
+  <p class="hint">
+    Drive の選択画面では、PDF を押すたびに選ぶ・外すが切り替わり、いくつでも選べます
+    （フォルダを移っても残ります）。スキャンを 1 つのフォルダにまとめておけば、「このフォルダの
+    ファイルをすべて選ぶ」で一度に選べます。手元のファイルは、この枠へドラッグ＆ドロップしても追加できます。
+    最後の頁から並んでいるファイル（給紙の都合で逆順になったもの）も、頁番号から自動で
+    並べ直します。番号の無い表紙などは、ファイルごとに「逆順」を選べます。
+  </p>
+  <label class="choice-option bm-ocr">
+    <input type="checkbox" id="ocrToggle" checked>
+    文字情報に頁番号が見つからない頁は、画像の余白から読み取る（初回だけ数 MB の読み込みがあります）
+  </label>
+  <div id="progress" class="bm-progress" hidden>
+    <progress id="progressBar" max="1" value="0"></progress>
+    <span id="progressText"></span>
+  </div>
+  <ul id="fileList" class="bm-files"></ul>
+</portal-section>
+
+<portal-section class="card bm-step" id="checkSection" hidden>
+  <h3 slot="title">2. 並びとスキャンの確認</h3>
+  <div id="summary" class="result-summary"></div>
+  <ul id="problems" class="bm-problems"></ul>
+  <div class="bm-filter" role="group" aria-label="表示する頁">
+    <label class="choice-option"><input type="radio" name="pageFilter" value="all" checked> すべての頁</label>
+    <label class="choice-option"><input type="radio" name="pageFilter" value="issues"> 確認が要る頁だけ</label>
+  </div>
+  <p class="hint">
+    頁を押すと拡大して見られます。番号が違うときは、頁の下の欄に正しい番号を入れてください
+    （間に入れたいときは 16.5 のように小数で）。
+  </p>
+  <ol id="pageGrid" class="bm-grid"></ol>
+</portal-section>
+
+<portal-section class="card bm-step" id="outputSection" hidden>
+  <h3 slot="title">3. 結合と検証</h3>
+  <div class="field">
+    <label for="outputName">ファイル名</label>
+    <div class="field-row">
+      <input type="text" id="outputName" placeholder="書名.pdf">
+    </div>
+  </div>
+  <div class="bm-actions">
+    <button type="button" id="mergeBtn">結合して検証する</button>
+  </div>
+  <div id="verifyResult" class="bm-verify" hidden></div>
+  <div class="bm-actions">
+    <button type="button" id="downloadBtn" class="secondary" disabled>ダウンロード</button>
+    <button type="button" id="saveDriveBtn" class="secondary" disabled>Drive に保存</button>
+  </div>
+</portal-section>
+
+<div id="message"></div>
+<div id="result" hidden>
+  <a id="resultLink" target="_blank" rel="noopener"></a>
+</div>

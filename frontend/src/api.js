@@ -73,6 +73,11 @@ export async function apiSendJson(path, method, body) {
 export async function apiPostFile(path, file) {
   const form = new FormData();
   form.append('file', file);
+  return apiPostForm(path, form);
+}
+
+/** フォーム（ファイルと値の組）を送って JSON を受け取るエンドポイント用。 */
+export async function apiPostForm(path, form) {
   // Content-Type は指定しない。境界文字列付きの multipart/form-data を
   // ブラウザに組み立てさせる必要がある。
   const resp = await authorizedFetch(path, { method: 'POST', body: form });

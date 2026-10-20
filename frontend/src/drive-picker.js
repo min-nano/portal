@@ -17,6 +17,11 @@
 //
 // 選んだファイルの読み書きは、これまで通りバックエンドが代理権限で行う。
 // ここから返すのはファイルの ID・名前・種類だけ。
+//
+// いくつも選ぶ（pickFiles）こともできる。押すたびに選ぶ・外すが切り替わり、
+// 選んだものはフォルダを移っても残る。フォルダの中では「このフォルダの
+// ファイルをすべて選ぶ」で、中のファイル（指定の種類のもの）をまとめて選べる
+// （スキャンを 1 つのフォルダにまとめて結合する、といった使い方のため）。
 
 import { apiGet } from './api.js';
 import { el } from './components/form-field.js';
@@ -183,10 +188,14 @@ function buildDialog(doc) {
   const choose = el(doc, 'button', 'drive-picker-choose', '選択');
   choose.type = 'button';
   choose.dataset.action = 'choose';
+  const all = el(doc, 'button', 'secondary drive-picker-all', 'このフォルダのファイルをすべて選ぶ');
+  all.type = 'button';
+  all.dataset.action = 'all';
+  all.hidden = true;
   const cancel = el(doc, 'button', 'secondary', 'キャンセル');
   cancel.type = 'button';
   cancel.dataset.action = 'cancel';
-  actions.append(choose, cancel);
+  actions.append(choose, all, cancel);
 
   dialog.append(head, tabs, search, crumbs, body, actions);
   return dialog;
@@ -212,6 +221,23 @@ function dialogFor(doc) {
  *   キャンセルされた場合は null。
  */
 export function pickFile(options = {}) {
+  return openPicker({ ...options, multiple: false });
+}
+
+/**
+ * Drive のファイルをいくつも選ぶダイアログを開き、選ばれたものを返す。
+ *
+ * @param {object} options
+ * @param {string} options.title ダイアログの見出し。
+ * @param {string} [options.mimeTypes] 選択できる種類（カンマ区切り）。
+ * @returns {Promise<{id: string, name: string, mimeType: string}[]>}
+ *   選んだ順。キャンセルされた場合は空の配列。
+ */
+export async function pickFiles(options = {}) {
+  return (await openPicker({ ...options, selectFolder: false, multiple: true })) || [];
+}
+
+function openPicker(options) {
   const doc = document;
   const dialog = dialogFor(doc);
   const $ = (selector) => dialog.querySelector(selector);
@@ -220,13 +246,15 @@ export function pickFile(options = {}) {
   const more = $('.drive-picker-more');
   const input = $('.drive-picker-search input');
   const choose = $('.drive-picker-choose');
+  const all = $('.drive-picker-all');
 
   $('#drivePickerTitle').textContent = options.title || '';
-  choose.textContent = options.selectFolder ? 'このフォルダを選択' : '選択';
   input.value = '';
 
   const state = { ...lastPlace, path: [...lastPlace.path], query: '' };
-  let selected = null; // 一覧で選んでいるファイル（ファイルを選ぶとき）
+  let selected = null; // 一覧で選んでいるファイル（1 つ選ぶとき）
+  const picked = new Map(); // 選んだファイル（いくつも選ぶとき。ID → ファイル）
+  let selectingAll = null; // 「すべて選ぶ」の読み込み（AbortController）
   let nextPageToken = null;
   let loading = null; // 進行中の読み込み（AbortController）
   // 一覧に出した ID。同じものを指すショートカットが別のページに入っていても、
@@ -235,7 +263,17 @@ export function pickFile(options = {}) {
   let incomplete = false; // Drive が一部の共有ドライブを探さずに返したか
 
   const updateChoose = () => {
+    if (options.multiple) {
+      choose.textContent = picked.size ? `選択（${picked.size} 個）` : '選択';
+      choose.disabled = picked.size === 0;
+      // フォルダの中にいるときだけ（マイドライブの最上位で全部を選ばないように）。
+      all.hidden = !(currentFolder(state) && state.path.length);
+      all.disabled = Boolean(selectingAll);
+      return;
+    }
+    choose.textContent = options.selectFolder ? 'このフォルダを選択' : '選択';
     choose.disabled = options.selectFolder ? !currentFolder(state) : !selected;
+    all.hidden = true;
   };
 
   /** 状態の表示。retry を渡すと「再試行」を添え、押すとそれを呼ぶ。 */
@@ -291,7 +329,7 @@ export function pickFile(options = {}) {
     const button = el(doc, 'button', 'drive-picker-item');
     button.type = 'button';
     button.dataset.id = item.id;
-    if (!item.folder) button.setAttribute('aria-pressed', 'false');
+    if (!item.folder) button.setAttribute('aria-pressed', String(picked.has(item.id)));
     const name = el(doc, 'span', 'drive-picker-name', item.name);
     const date = el(doc, 'span', 'drive-picker-date', formatDate(item.modifiedTime));
     button.append(icon(doc, item.folder ? 'folder' : 'file'), name, date);
@@ -304,6 +342,8 @@ export function pickFile(options = {}) {
   /** 一覧を取りに行く。append なら続き（次のページ）を足す。 */
   async function load(append = false) {
     if (loading) loading.abort();
+    if (selectingAll) selectingAll.abort();
+    selectingAll = null;
     const controller = new AbortController();
     loading = controller;
     if (!append) {
@@ -366,6 +406,15 @@ export function pickFile(options = {}) {
   };
 
   const select = (button) => {
+    if (options.multiple) {
+      // 押すたびに選ぶ・外すを切り替える。
+      const item = button.driveItem;
+      if (picked.has(item.id)) picked.delete(item.id);
+      else picked.set(item.id, item);
+      button.setAttribute('aria-pressed', String(picked.has(item.id)));
+      updateChoose();
+      return;
+    }
     list.querySelectorAll('[aria-pressed="true"]').forEach((node) => {
       node.setAttribute('aria-pressed', 'false');
     });
@@ -374,7 +423,46 @@ export function pickFile(options = {}) {
     updateChoose();
   };
 
+  /** 開いているフォルダのファイル（指定の種類のもの）を、続きまで読んで全部選ぶ。 */
+  async function selectAll() {
+    const controller = new AbortController();
+    selectingAll = controller;
+    updateChoose();
+    showStatus('このフォルダのファイルを読んでいます…');
+    let count = 0;
+    let pageToken = null;
+    try {
+      do {
+        const page = await apiGet(itemsQuery({ ...state, query: '' }, options, pageToken), {
+          signal: controller.signal,
+        });
+        for (const item of page.items) {
+          if (item.folder) continue;
+          picked.set(item.id, item);
+          count++;
+        }
+        pageToken = page.nextPageToken || null;
+      } while (pageToken);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      selectingAll = null;
+      showStatus(error.message, selectAll);
+      updateChoose();
+      return;
+    }
+    if (controller.signal.aborted) return;
+    selectingAll = null;
+    list.querySelectorAll('.drive-picker-item[aria-pressed]').forEach((node) => {
+      node.setAttribute('aria-pressed', String(picked.has(node.driveItem.id)));
+    });
+    showStatus(count ? '' : 'このフォルダには選べるファイルがありません。');
+    updateChoose();
+  }
+
   const result = () => {
+    if (options.multiple) {
+      return [...picked.values()].map(({ id, name, mimeType }) => ({ id, name, mimeType }));
+    }
     if (options.selectFolder) {
       const folder = currentFolder(state);
       return folder && { id: folder.id, name: folder.name, mimeType: FOLDER_MIME };
@@ -396,6 +484,7 @@ export function pickFile(options = {}) {
       clearTimeout(searchTimer);
       if (observer) observer.disconnect();
       if (loading) loading.abort();
+      if (selectingAll) selectingAll.abort();
       restorePage();
       dialog.close();
       resolve(value);
@@ -406,6 +495,7 @@ export function pickFile(options = {}) {
       if (!target || !dialog.contains(target)) return;
       if (target.dataset.action === 'cancel') finish(null);
       else if (target.dataset.action === 'choose') finish(result());
+      else if (target.dataset.action === 'all') selectAll();
       else if (target.dataset.location) {
         input.value = '';
         go({ location: target.dataset.location, path: [], query: '', origin: '' });
@@ -441,6 +531,8 @@ export function pickFile(options = {}) {
     // 1 回目でフォルダが開き、dblclick は開いた先の（触っていない）行に届く
     // ことがあるため（フォルダを開くと選択は外れるので、ここで弾ける）。
     on(dialog, 'dblclick', (event) => {
+      // いくつも選ぶときは、ダブルクリックで決めない（選ぶ・外すの切り替えだけ）。
+      if (options.multiple) return;
       const target = event.target.closest('.drive-picker-item');
       if (target && target.driveItem && selected === target.driveItem) {
         finish(result());

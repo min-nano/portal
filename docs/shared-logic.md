@@ -48,7 +48,7 @@
 | 画面の見た目 | `src/styles/`（tokens・base・layout・components） | 色・余白・部品。ツールは生の値を書かない |
 | 画面の共通部品 | `src/components/` | ヘッダー・読み込み中・サインインゲート・折り畳み節・入力欄と選択肢（`form-field.js`）・PDF のファイル操作欄 |
 | PDF のファイル操作 | `src/pdf-file-ops.js` / `src/save-dialogs.js` | 「保存 / 別名で保存 / 未保存の確認」の判断と文言 |
-| ファイル選択 | `src/drive-picker.js` | Drive のファイル選択ダイアログ |
+| ファイル選択 | `src/drive-picker.js` | Drive のファイル選択ダイアログ（1 つ / 複数） |
 
 以下に挙げるのは、**この表に入っていないのに 2 か所以上で同じことをしている**ものです。
 
