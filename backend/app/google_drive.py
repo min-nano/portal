@@ -3,8 +3,8 @@
 Clerk JWT で確認したメールアドレスのユーザーとして Drive を読み書きする。
 GAS 版の「実行ユーザーの権限で DriveApp を読む」に相当し、雛形ファイルに
 アクセス権のあるユーザーだけが雛形を取得できるという権限モデルをそのまま
-維持する。ファイルを選ぶ操作自体はブラウザ側の公式 Google Picker が担うが、
-選ばれた ID を実際に開けるかどうかはここでの代理アクセスで決まる。
+維持する。ファイルを選ぶ画面に出す一覧（drive_browser）も同じ代理アクセスで
+取るので、選べるのも開けるのも本人に権限のあるものだけになる。
 
 スコープは用途で 2 段階に分けている:
 
@@ -14,18 +14,12 @@ GAS 版の「実行ユーザーの権限で DriveApp を読む」に相当し、
     作成ツールが、雛形の Google ドキュメントを複製して差し替え、PDF を
     Drive へ保存するために使う。書き込みが必要な操作だけこちらを使う。
 
-同じ仕組みで、ブラウザの Google Picker に渡す読み取り専用トークンも発行する
-（delegated_access_token）。サーバーが API を呼ぶのではなくトークンだけを
-返す点だけが違う。
-
 JSON 鍵ファイルなしで動作するよう、Cloud Run 上ではランタイム
 サービスアカウントの IAM Credentials API（signJwt）で署名する。この方式には
 ランタイム SA が自分自身に対して roles/iam.serviceAccountTokenCreator を
 持っている必要がある（README 参照）。ローカル開発では
 GOOGLE_APPLICATION_CREDENTIALS に JSON 鍵を指定すればそのまま動く。
 """
-
-import datetime
 
 import google.auth
 from google.auth import iam
@@ -106,51 +100,6 @@ def delegated_write_session(user_email: str) -> AuthorizedSession:
     return AuthorizedSession(
         _credentials([DRIVE_SCOPE, DOCUMENTS_SCOPE], subject=user_email)
     )
-
-
-def _seconds_until(expiry) -> int:
-    """トークンの残り有効秒数。
-
-    google-auth の expiry は UTC の naive datetime だが、実装が変わっても
-    壊れないよう aware も受け付ける。
-    """
-    if not expiry:
-        return 0
-    if expiry.tzinfo is None:
-        expiry = expiry.replace(tzinfo=datetime.timezone.utc)
-    remaining = (expiry - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
-    return max(0, int(remaining))
-
-
-def delegated_access_token(user_email: str) -> tuple[str, int]:
-    """user_email 本人の読み取り専用アクセストークンを発行する。
-
-    ブラウザの公式 Google Picker へ渡すためのもの。Picker は選択画面を描く
-    ために Drive を読むトークンを要求する。ブラウザ側で OAuth の同意を取る
-    方式（Google Identity Services）もあるが、それだと画面の URL を OAuth
-    クライアントの「承認済みの JavaScript 生成元」へ登録する必要があり、
-    URL が毎回変わる PR プレビューでは使えない（この欄はワイルドカードが
-    使えず、追加するための API も無い）。ここでは既にある代理アクセスの
-    仕組みで本人のトークンを発行する。
-
-    渡すのは drive.readonly のトークンで、本人が既に Drive で見られる範囲を
-    超えない。書き込みは従来どおりサーバー側でしか行わない。
-    """
-    creds = _credentials([DRIVE_READONLY_SCOPE], subject=user_email)
-    try:
-        creds.refresh(Request())
-    except Exception as error:  # RefreshError など。原因は Google の応答にある。
-        detail = " ".join(str(error).split())
-        if len(detail) > 300:
-            detail = detail[:300] + "…"
-        raise DriveError(
-            "Google Drive のアクセストークンを取得できませんでした。"
-            "domain-wide delegation の設定（クライアント ID とスコープの登録）を"
-            "確認してください。"
-            + (f"（Google からの応答: {detail}）" if detail else ""),
-            502,
-        )
-    return creds.token, _seconds_until(creds.expiry)
 
 
 def _escape_query_value(value: str) -> str:

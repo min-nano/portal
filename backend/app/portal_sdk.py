@@ -162,7 +162,7 @@ def build_file_name(
 #
 # 雛形を Drive に置くツールは、ファイルの ID ではなく「親フォルダの ID +
 # ファイル名」で覚える。同じフォルダへ同名で置き直せば、それが自動的に最新版に
-# なるため。Picker から届くのはファイル ID だけなので、ゴミ箱・種類・親フォルダ
+# なるため。ファイル選択ダイアログから届くのはファイル ID だけなので、ゴミ箱・種類・親フォルダ
 # の確認は必ず実行ユーザーの代理セッションから行う（本人に閲覧権限の無いファイル
 # ID を送りつけても設定できない）。
 #
@@ -222,7 +222,7 @@ class Template:
         return folder_id, file_name
 
     def save(self, session, file_id) -> dict:
-        """Picker で選ばれたファイルを確かめ、共有設定へ書く（PUT /template）。"""
+        """ファイル選択ダイアログで選ばれたファイルを確かめ、共有設定へ書く（PUT /template）。"""
         if not file_id or not isinstance(file_id, str):
             raise self.error("ファイルが選択されていません。")
 
@@ -294,7 +294,7 @@ def resolve_pdf_destination(
             raise error("上書きできるのは PDF ファイルだけです。")
         return {"mode": mode, "fileId": file_id}
 
-    # 新規保存の保存先は、そのつど画面の Picker で選ばれたフォルダ。
+    # 新規保存の保存先は、そのつど画面のファイル選択ダイアログで選ばれたフォルダ。
     folder_id = save.get("folderId")
     if not folder_id or not isinstance(folder_id, str):
         raise error("保存先のフォルダが選択されていません。")

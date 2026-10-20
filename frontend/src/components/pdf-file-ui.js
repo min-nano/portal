@@ -49,8 +49,7 @@ export class PortalEditBar extends HTMLElement {
 
       const actions = doc.createElement('div');
       actions.className = 'file-actions';
-      // 読み込むだけで Drive には保存しないため、Picker のアップロード画面
-      // ではなくブラウザのファイル選択を使う。
+      // 読み込むだけで Drive には保存しないため、ブラウザのファイル選択を使う。
       const upload = doc.createElement('input');
       upload.type = 'file';
       upload.id = 'uploadInput';
@@ -108,9 +107,8 @@ export class PortalSaveBar extends HTMLElement {
 /**
  * 未保存の確認と「名前を付けて保存」のダイアログ。
  *
- * Google Picker は「ファイルを選ぶ」画面で、保存する名前を入力させることは
- * できない。そのため保存ダイアログは自前で持ち、場所の選択だけを Picker に
- * 任せている（../save-dialogs.js）。
+ * 保存ダイアログでは名前を入力させ、場所（フォルダ）の選択だけを Drive の
+ * ファイル選択（../drive-picker.js）に任せる（../save-dialogs.js）。
  */
 export class PortalSaveDialogs extends HTMLElement {
   connectedCallback() {

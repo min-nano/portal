@@ -29,7 +29,7 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
    - 確認したメールアドレスのユーザーとして、サービスアカウントが **読み取り専用スコープ** (`drive.readonly`) の代理トークンを取得し、Workspace の Drive API を呼ぶ。
    - つまり雛形の取得は常に **本人の Drive 権限の範囲内** で行われる。雛形にアクセス権の無いユーザーは、サインインできても雛形を読めない（GAS 版と同じ UX・同じ境界）。
 
-ファイルを選ぶ画面は Google 公式の **Google Picker** です。Picker が使うアクセストークンも上と同じ代理アクセスで発行しますが、スコープは `drive.readonly` で、**選択画面を出すためだけ**のもの。ブラウザから届くのは選ばれたファイル ID だけなので、種類・ゴミ箱・親フォルダの確認と実際の読み書きは、サーバー側の代理アクセスで行います（「Google Picker」参照）。
+ファイルを選ぶ画面はポータル自前の **Drive のファイル選択ダイアログ** です。一覧も上と同じ代理アクセス（`drive.readonly`）でバックエンドが取るので、出てくるのは本人が Drive で見られるものだけです。ブラウザから届くのは選ばれたファイル ID だけなので、種類・ゴミ箱・親フォルダの確認と実際の読み書きは、サーバー側の代理アクセスで行います（「4. Drive のファイル選択」参照）。
 
 全利用者共通の設定（雛形フォルダ ID・ファイル名。GAS 版のスクリプトプロパティ相当）は **Firestore** に保存します。人が直接編集できる Drive 上の JSON ファイルと違い、管理ユーザーの誤操作で設定が壊れるリスクがなく、アクセスはランタイム SA の IAM（`roles/datastore.user`）だけで完結します。delegation のスコープも広げません。保存先は環境（チャンネル）ごとに分かれています（「共有設定（Firestore）」参照）。
 
@@ -57,7 +57,7 @@ GAS 版の機能をそのまま移植しています。
 * 出力前の簡易バリデーション（警告のみ。しきい値等は `backend/app/mapping.json` の `validation`）
 * `傾斜測定` シートへの正確なセルマッピング（`backend/app/mapping.json` で一元管理）
 * 雛形（社外秘フォーマット）は Drive 上のファイルを参照。同フォルダに同名で差し替えると自動で最新版を使用
-* 雛形は滅多に変えないため、設定はタイトル右の小さな「設定」ボタンにまとめてある（**公式の Google Picker**。Drive と同じ操作感でフォルダをたどれる。表示されるのは本人に閲覧権限のあるファイルだけ）
+* 雛形は滅多に変えないため、設定はタイトル右の小さな「設定」ボタンにまとめてある（**Drive のファイル選択ダイアログ**。マイドライブ・共有ドライブ・最近・共有アイテムからフォルダをたどれ、名前で検索もできる。表示されるのは本人に閲覧権限のあるファイルだけ）
 * 生成した xlsx のダウンロード
 
 **GAS 版からの改善**: フォーム定義とバリデーション設定は `/api/tools/excel-report-formatter/config` が `mapping.json` から導出して配信するため、フロントエンドの定数（旧 `MEASUREMENT_GROUPS` / `VALIDATION`）を手動で同期する作業が不要になりました。`mapping.json` が単一の情報源です。
@@ -67,13 +67,13 @@ GAS 版の機能をそのまま移植しています。
 建築士法第 20 条第 2 項の「構造計算によって建築物の安全性を確かめた旨の証明書」（第四号書式）を作成します。
 
 * 雛形は **Google ドキュメント**。記入欄は `{{委託者名}}` のような **プレースホルダー**で書いておく
-* 雛形は現況検査レポート作成ツールと同じく Drive から（公式 Picker で）選択し、設定（フォルダ ID + ファイル名）は Firestore に保存。同じフォルダに同名で差し替えると自動で最新版を使用。設定はタイトル右の小さな「設定」ボタンにまとめてある
+* 雛形は現況検査レポート作成ツールと同じく Drive から（ファイル選択ダイアログで）選択し、設定（フォルダ ID + ファイル名）は Firestore に保存。同じフォルダに同名で差し替えると自動で最新版を使用。設定はタイトル右の小さな「設定」ボタンにまとめてある
 * フォーム入力でプレースホルダーを置換し、PDF へ書き出したうえで、**該当する選択肢に印を描き込む**。番号の選択肢（建築物の区分 / 構造計算の種類 / 構造計算の方法）は番号を **正円**で囲み、大臣認定の有無は **□ の中にレ点**を入れる
 * 証明日は **日付ピッカー**で入力し、和暦（`{{年号年}} 年 {{月}} 月 {{日}} 日`）へ自動で変換する。元号と年数の間は半角スペースで区切る（`令和 8`）。新規作成では当日を初期値にし、印字される文字列を画面で確認できる
 * **ファイル操作は通常のアプリと同じ考え方**（新規作成 / 開く / 保存 / 別名で保存）。保存先は共通設定として持たない
   * **開く**: 作成済みの PDF を Drive から選択、または手元からアップロードすると、内容を解析してフォームへ流し込む
   * **保存**: 編集中のファイル（Drive 上の PDF）への上書き。名前も場所も変わらないので何も尋ねない（Drive の版履歴が残る）
-  * **別名で保存**（新規作成からの保存も同じ）: 「名前を付けて保存」にあたる保存ダイアログで、ファイル名と保存先フォルダを指定する。フォルダの選択だけを Picker に任せているのは、Picker が**ファイルを選ぶ画面**で、保存する名前を入力させられないため（Picker はモーダルダイアログの下に隠れてしまうので、開いている間だけダイアログを閉じて開き直す）
+  * **別名で保存**（新規作成からの保存も同じ）: 「名前を付けて保存」にあたる保存ダイアログで、ファイル名と保存先フォルダを指定する。フォルダの選択は Drive のファイル選択ダイアログで行う（保存ダイアログの上に重なって開き、入力中の名前はそのまま残る）
   * 未保存の入力があるまま新規作成・読み込みへ移ろうとしたときは、保存するかどうかを尋ねる
   * 上書きは同じファイルの内容差し替えで行うため、直前の版は Drive の版履歴から復元できます。`keepRevisionForever` は付けていないので、古い版は Drive の自動整理に任せ、一定期間が過ぎたら最新のものだけが残ります
 
@@ -366,7 +366,7 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   src/clerk-frontend-api.js   # Publishable Key から Clerk の接続先を取り出す（preconnect 用）
   src/api.js                  # Bearer 付き fetch ラッパー（バックエンドの起こし方も）
   src/core.js                 # 計算実装（wasm）の読み込みと呼び出し（ツール共通）
-  src/google-picker.js        # 公式 Google Picker（Drive のファイル選択）
+  src/drive-picker.js         # Drive のファイル・フォルダ選択ダイアログ（一覧は /api/drive/items）
   src/pdf-file-ops.js         # PDF ツール共通のファイル操作（保存の判断・文言）
   src/save-dialogs.js         # PDF ツール共通の保存 / 未保存確認ダイアログ
                               # ツール（1 つにつき 1 ディレクトリ。tool.js が名乗り、
@@ -454,10 +454,8 @@ REGION=asia-northeast1
 # docs.googleapis.com は構造計算安全証明書 作成ツール（雛形の Google ドキュメントの
 # プレースホルダー置換）で使う。有効化を忘れると、スコープを正しく登録していても
 # 置換の呼び出しが HTTP 403（SERVICE_DISABLED）で失敗する。
-# picker.googleapis.com は画面から Drive のファイルを選ぶ Google Picker で使う（「4. Google Picker」）。
 gcloud services enable run.googleapis.com iamcredentials.googleapis.com \
   drive.googleapis.com docs.googleapis.com firestore.googleapis.com \
-  picker.googleapis.com \
   cloudbuild.googleapis.com artifactregistry.googleapis.com \
   --project "$PROJECT_ID"
 
@@ -495,7 +493,7 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 
    | スコープ | 使う場面 |
    | --- | --- |
-   | `drive.readonly` | 選ばれたファイルの確認と雛形の取得、編集する PDF の読み込み、Google Picker へ渡すトークン（現況検査レポート作成ツールはこれだけで完結） |
+   | `drive.readonly` | 選ばれたファイルの確認と雛形の取得、編集する PDF の読み込み、ファイル選択ダイアログに出す一覧（現況検査レポート作成ツールはこれだけで完結） |
    | `drive` | PDF の Drive への保存（構造計算安全証明書・釘配列諸定数の計算書に共通） |
    | `documents` | 構造計算安全証明書の雛形（Google ドキュメント）のプレースホルダー置換 |
 
@@ -503,30 +501,17 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 
    **スコープを登録したのに HTTP 403 になる場合**: スコープ不足ではなく、GCP プロジェクトで API 自体が有効になっていない（`SERVICE_DISABLED`）ことがあります。特に Google Docs API は有効化を忘れやすいので、「2. GCP プロジェクト」の `gcloud services enable` に `docs.googleapis.com` が含まれているか確認してください。画面に出るエラーには Google からの応答がそのまま添えられるので、そちらでどちらの原因かを判別できます。
 
-### 4. Google Picker（Drive のファイル選択 UI）
+### 4. Drive のファイル選択（設定不要）
 
-雛形・開く PDF・保存先フォルダを選ぶ画面には、Google 公式の **Google Picker** を使います（`frontend/src/google-picker.js`）。用意するのは **API キー 1 つだけ**です（Picker API の有効化は「2. GCP プロジェクト」で済んでいます）。
+雛形・開く PDF・保存先フォルダを選ぶ画面は、ポータル自前のダイアログです（`frontend/src/drive-picker.js`）。**追加の設定は要りません**（API キーも OAuth クライアントも使いません）。
 
-**認証情報 → API キー** を作成し、**アプリケーションの制限**を「HTTP リファラー」、**API の制限**を「Google Picker API」にします。リファラーはワイルドカードが使えるので、PR プレビューもまとめて許可できます:
+* 一覧はバックエンドの `GET /api/drive/items` が、実行ユーザー本人の代理アクセス（`drive.readonly`）で Drive API から取ります（`backend/app/drive_browser.py`）。見えるのは本人が Drive で見られるものだけで、アクセストークンはブラウザへ渡しません。
+* 場所はマイドライブ・共有ドライブ・最近・共有アイテムの 4 つ。フォルダをたどる、名前で検索する、続きを読み込む（100 件ずつ）ができます。ショートカットは指す先として出ます。
+* 選ばれたファイル ID の確認（種類・ゴミ箱・親フォルダ）と実際の読み書きは、これまで通り各ツールがサーバー側で行います。
 
-```
-https://<カスタムドメイン>/*
-https://<サイトID>.web.app/*
-https://<サイトID>--pr-*.web.app/*
-http://localhost:5173/*
-```
-
-作成したキーは **リポジトリ変数 `GOOGLE_PICKER_API_KEY`** に設定します。本番・プレビューとも、デプロイのたびにワークフローがバックエンドの環境変数として渡します（「ランタイム環境変数の出どころ」参照）。キーはページに埋め込まれる公開情報で、悪用の防止は上のリファラー制限で行います。ビルドに焼き込まず `/api/picker/config` から配っているので、値を変えてもフロントエンドの再ビルドは不要です。未設定のときは画面が「Google Picker が未設定です」と環境変数名を挙げて案内します。
-
-#### アクセストークンは代理アクセスで発行する
-
-Picker は選択画面を描くために Drive を読むトークンを要求します。これは `/api/picker/token` が、既にある domain-wide delegation で **実行ユーザー本人の `drive.readonly` トークン** として発行します（`google_drive.delegated_access_token`）。そのため **OAuth クライアント ID は不要**です。
-
-ブラウザ側で OAuth の同意を取る方式（Google Identity Services）を採らなかったのは、その場合に画面の URL を OAuth クライアントの「承認済みの JavaScript 生成元」へ登録する必要があるためです。この欄は**ワイルドカードが使えず、追加するための API も公開されていない**（Cloud Console からの手動操作のみ）ので、URL が毎回変わる PR プレビューでは登録が追いつきません。代理発行にすれば、本番・プレビュー・ローカルのどこでも登録なしに動き、利用者に追加の同意画面も出ません。
-
-権限モデルは変わりません。渡すのは読み取り専用のトークンで、本人が既に Drive で見られる範囲を超えず、書き込みは従来どおりサーバー側でしか行いません。ブラウザから届くのは選ばれたファイル ID だけなので、種類・ゴミ箱・親フォルダの確認と実際の読み書きは、これまで通りバックエンドが代理アクセスで行います。
-
-> **複数の Google アカウントでログインしている場合**: Picker の画面は Google 側の iframe で、ブラウザのログイン状態も参照します。サインイン中の業務アカウントとブラウザの既定アカウントが食い違っていると、意図しないアカウントのファイルが出る・エラーになることがあります。その場合は、業務アカウントを既定にするか、別プロファイル / シークレットウィンドウで開いてください。
+> **以前は Google 公式の Google Picker を使っていました。** Picker は Google の iframe をページに埋め込み、その中で Google の Cookie（サードパーティ Cookie）を要求します。Safari（iOS を含む）はこれを既定で遮るため、「Google が必要な Cookie にアクセスするのを許可してください」と表示されて選べなくなりました。自前のダイアログはポータルと同じオリジンで動くので、この制限を受けません。
+>
+> Picker 用に作ったもの（リポジトリ変数 `GOOGLE_PICKER_API_KEY` / `GOOGLE_PICKER_APP_ID`、Picker 用の API キー、`picker.googleapis.com` の有効化）は使わなくなったので、削除して構いません。Cloud Run の同名の環境変数は、次のデプロイで自動的に外れます（`--set-env-vars` は環境変数をまるごと置き換えるため）。
 
 ### 5. 共有設定（Firestore）
 
@@ -624,8 +609,6 @@ gcloud run deploy portal-api \
 | `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り） | 同名のリポジトリ変数 |
 | `DWD_SERVICE_ACCOUNT_EMAIL` | 代理トークンに使う SA のメール（省略時は ADC から推定） | `RUNTIME_SA_EMAIL` |
 | `SETTINGS_CHANNEL_PATH` | 共有設定を置くチャンネルの Firestore ドキュメントパス。**未設定だと development チャンネルを指す**（「共有設定（Firestore）」参照） | `static-channels/production` 固定（環境の別はワークフローが決めるので変数にしない） |
-| `GOOGLE_PICKER_API_KEY` | Google Picker に渡す API キー（「Google Picker」参照）。未設定だと画面からファイルを選べない | 同名のリポジトリ変数。未設定なら渡さない（警告は出るがデプロイは続行） |
-| `GOOGLE_PICKER_APP_ID` | （任意）Picker のアプリ ID（GCP のプロジェクト番号）。渡さなくても動く | 同名のリポジトリ変数。未設定なら渡さない |
 | `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。既定 `(default)` | 同名のリポジトリ変数。未設定なら渡さない |
 | `CORS_ALLOWED_ORIGINS` | （任意）CORS 許可オリジン。既定 `http://localhost:5173` | 渡さない（Hosting のリライトで同一オリジンになるため本番では不要。ローカル開発用） |
 
@@ -686,8 +669,6 @@ Hosting は `https://<サイトID>.firebaseapp.com` でも同じアプリを配�
 | `CANONICAL_HOST` | 本番のカスタムドメイン（例 `portal.example.com`）。`.web.app` へのアクセスをここへリダイレクトし、許可オリジンにも加える。未設定ならどちらも行わない | 本番 |
 | `PORTAL_TITLE` | ポータルの表示名（各ページのヘッダーと、トップページのタブ名）。ビルド時に `VITE_PORTAL_TITLE` として渡され HTML に埋め込まれる。未設定なら `社内ポータル` | 両方 |
 | `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。未設定なら既定の `(default)` | 本番 |
-| `GOOGLE_PICKER_API_KEY` | Google Picker に渡す API キー（「Google Picker」参照）。未設定でもデプロイは通るが、画面からファイルを選べない | 両方 |
-| `GOOGLE_PICKER_APP_ID` | （任意）Picker のアプリ ID（GCP のプロジェクト番号）。渡さなくても動く | 両方 |
 
 `CLERK_ISSUER` と `CLERK_AUTHORIZED_PARTIES` に対応する変数が無いのは、他の変数から導出しているためです（「ランタイム環境変数の出どころ」参照）。
 
@@ -780,16 +761,13 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
    ```
    （サイト ID は Hosting の既定サイトのサブドメイン。プロジェクト ID と異なる場合がある。）
 2. リポジトリ変数 `CLERK_PUBLISHABLE_KEY_TEST` / `SITE_ID` / `RUNTIME_SA_EMAIL` / `ALLOWED_EMAIL_DOMAINS` を設定する（前掲の表）。本番と同じく、`CLERK_ISSUER` は `CLERK_PUBLISHABLE_KEY_TEST` から導出されるので別途の設定は不要です。
-3. ファイル選択（Google Picker）まで試すなら、リポジトリ変数 `GOOGLE_PICKER_API_KEY` を設定する。API キーのリファラー制限に `https://<サイトID>--pr-*.web.app/*` を入れておけば、プレビュー URL ごとの登録作業はありません（Picker のトークンは代理発行なので、OAuth クライアントへのオリジン登録も不要です）。未設定でもプレビューは作られますが（ジョブは警告のみ）、画面は「Google Picker が未設定です」と表示してファイルを選べません。
-4. デプロイ用 SA に `roles/run.admin`・`roles/artifactregistry.repoAdmin`・`roles/datastore.user` があること（前掲のコマンドで付与済み）。`run.admin` は `--no-invoker-iam-check` に必要です — **このフラグは `run.services.setIamPolicy` を要求します**（`--allow-unauthenticated` と同じ権限。`roles/run.developer` では新規サービスの作成が `Changes to invoker_iam_disabled require run.services.setIamPolicy permissions` で失敗します）。残り 2 つは PR クローズ時の後片付けに使います。
+3. デプロイ用 SA に `roles/run.admin`・`roles/artifactregistry.repoAdmin`・`roles/datastore.user` があること（前掲のコマンドで付与済み）。`run.admin` は `--no-invoker-iam-check` に必要です — **このフラグは `run.services.setIamPolicy` を要求します**（`--allow-unauthenticated` と同じ権限。`roles/run.developer` では新規サービスの作成が `Changes to invoker_iam_disabled require run.services.setIamPolicy permissions` で失敗します）。残り 2 つは PR クローズ時の後片付けに使います。
 
    > 本番の `deploy.yml` は環境変数とランタイム SA こそ毎回渡しますが、このフラグだけは渡さず、サービスに設定済みの値をそのまま引き継ぎます（初回セットアップから変わらない値のため）。アノテーションを変更しないので `setIamPolicy` は不要です。
 
 > プレビュー用サービスも本番と同じく `--no-invoker-iam-check` で呼び出しを許可します（「Cloud Run 初回デプロイ」参照）。`--allow-unauthenticated` は組織ポリシー `constraints/iam.allowedPolicyMemberDomains` のある環境では `FAILED_PRECONDITION: One or more users named in the policy do not belong to a permitted customer` で拒否されるため使いません。リライトが実際に届いているかは、ワークフローが毎回 `/api/healthz` への疎通確認で検証します。
 
 > リポジトリ変数が未設定・不正な間は、プレビューのジョブは失敗します（本番と同じ確認。「GitHub Actions（CI/CD）」参照）。壊れたプレビューが「成功」として出来上がるのを防ぐためです。
->
-> 例外は `GOOGLE_PICKER_API_KEY` で、こちらは警告にとどめてプレビューを作ります。渡さなければバックエンドが `configured: false` を返し、画面が「Google Picker が未設定です」と環境変数名を挙げて案内するため、壊れ方が黙って隠れることがないからです。ファイル選択以外の変更はそのまま確認できます。
 
 > 同じ理由で、デプロイの成否だけでなく **プレビュー URL から `/api/healthz` に実際に届くか** を毎回確かめます。`gcloud run deploy` が成功しても、リライト先が届かなければプレビューは使い物になりません。それを URL を渡された人が最初に踏むのではなく、ジョブの失敗として先に出します。
 
@@ -810,14 +788,10 @@ cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 CLERK_ISSUER=https://xxxx.clerk.accounts.dev \
 GOOGLE_APPLICATION_CREDENTIALS=~/keys/portal-api-dev.json \
-GOOGLE_PICKER_API_KEY=<API キー> \
 .venv/bin/uvicorn app.main:app --reload --port 8080
 # SETTINGS_CHANNEL_PATH は未設定でよい。既定の development チャンネル
 # （static-channels/development）を読み書きするため、ADC を持っていても
 # 本番の共有設定には触れない。
-# GOOGLE_PICKER_API_KEY はファイル選択（Google Picker）を試すときだけ必要。
-# API キーのリファラー制限に http://localhost:5173/* を入れておくこと
-# （「4. Google Picker」参照）。
 
 # フロントエンド（/api は vite が localhost:8080 へプロキシ）
 cd frontend
@@ -850,9 +824,9 @@ cd backend && python -m pytest
 
 # フロントエンド: フォームの純粋ロジック（バリデーション・数値正規化・ファイル名の組み立て・
 # 釘配列図の縮尺）、画面とデータの往復、画面共通の部品（セクションの開閉・
-# 各ページが id で探すマークアップ）、Google Picker の呼び出し、
+# 各ページが id で探すマークアップ）、Drive のファイル選択ダイアログ、
 # ビルドした .wasm を実際に読み込んでの計算
-# （gapi / GIS / Picker はテスト内でフェイク）
+# （バックエンドの API はテスト内でフェイク）
 cd frontend && npm test
 
 # Firestore ルール: クライアント SDK からのアクセスが全面拒否されること

@@ -35,8 +35,6 @@ class FakeDrive:
         self.fetch_calls = []  # fetch_latest_template の呼び出し記録
         self.delegated_emails = []  # 読み取り代理セッションを要求されたメール
         self.write_emails = []  # 書き込み代理セッションを要求されたメール
-        self.token_emails = []  # Picker 用トークンを要求されたメール
-        self.access_token = ("picker-token", 3600)  # (トークン, 残り秒数)
 
         # 構造計算安全証明書ツール用。
         self.doc_template = None  # find_latest_file が返すメタデータ
@@ -66,7 +64,7 @@ class FakeDrive:
     ):
         """雛形（Google ドキュメント）を設定済みにする。
 
-        新規保存の保存先は設定ではなく保存時に Picker で選ばれるため、
+        新規保存の保存先は設定ではなく保存時にファイル選択ダイアログで選ばれるため、
         テストからその ID を渡せるよう、選ばれたことにするフォルダの
         メタデータもここで用意する。
         """
@@ -99,14 +97,6 @@ def drive(monkeypatch):
         return ("delegated", email)
 
     monkeypatch.setattr(google_drive, "delegated_session", delegated_session)
-
-    def delegated_access_token(email):
-        fake.token_emails.append(email)
-        return fake.access_token
-
-    monkeypatch.setattr(
-        google_drive, "delegated_access_token", delegated_access_token
-    )
 
     monkeypatch.setattr(
         settings_store,

@@ -3,9 +3,8 @@
 // PDF を成果物とするツール（構造計算安全証明書・釘配列諸定数の計算書）が
 // 共通で使う。マークアップは各ツールの index.html に同じ id で置いてある。
 //
-// Google Picker は「ファイルを選ぶ」画面で、保存する名前を入力させることは
-// できない。そのため保存ダイアログは自前で持ち、場所（フォルダ）の選択だけを
-// Picker に任せている。
+// 保存ダイアログは名前を入力させ、場所（フォルダ）の選択だけを Drive の
+// ファイル選択（drive-picker.js）に任せる。
 
 /**
  * 未保存の入力があるまま別のファイルへ移ってよいかを尋ねる。
@@ -51,9 +50,8 @@ export function askUnsaved(message) {
  * 保存ダイアログ。ファイル名と保存先フォルダが決まったら
  * { fileName, folder } を返す。キャンセルなら null。
  *
- * フォルダを選ぶ Picker は Google 側の重ね表示で、モーダルダイアログ
- * （最前面レイヤー）の下に隠れてしまう。そのため Picker を出す間だけ
- * ダイアログを閉じ、選び終えたら開き直す（入力中の名前はそのまま残る）。
+ * フォルダの選択もモーダルの <dialog> なので、このダイアログの上に重なって
+ * 開く（閉じる必要はなく、入力中の名前もそのまま残る）。
  *
  * @param {{title:string, defaultName:string, initialFolder:?object,
  *          pickFolder:function, ensureName:function}} options
@@ -91,11 +89,9 @@ export function askSaveAs({ title, defaultName, initialFolder, pickFolder, ensur
       if (event.key === 'Enter' && !confirmBtn.disabled) confirmBtn.click();
     });
     on(document.getElementById('saveAsFolderBtn'), 'click', async () => {
-      dialog.close();
       const picked = await pickFolder();
       if (picked) folder = picked;
       showFolder();
-      dialog.showModal();
     });
     on(confirmBtn, 'click', () => finish({ fileName: ensureName(nameInput.value), folder }));
     on(document.getElementById('saveAsCancelBtn'), 'click', () => finish(null));
