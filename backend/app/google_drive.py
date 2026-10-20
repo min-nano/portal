@@ -101,12 +101,16 @@ def _cached_credentials(scopes: list[str], subject: str) -> service_account.Cred
     key = (tuple(scopes), subject)
     with _credentials_lock:
         creds = _CREDENTIALS_CACHE.get(key)
-        if creds is None:
-            if len(_CREDENTIALS_CACHE) >= _CREDENTIALS_CACHE_LIMIT:
-                _CREDENTIALS_CACHE.clear()
-            creds = _credentials(scopes, subject)
-            _CREDENTIALS_CACHE[key] = creds
-    return creds
+    if creds is not None:
+        return creds
+    # 作るときは（Cloud Run ではメタデータサーバーと通信するので）ロックの外で。
+    # 他の利用者の取得を待たせない。同じ利用者が同時に作っても、先に入った
+    # ほうを使う。
+    creds = _credentials(scopes, subject)
+    with _credentials_lock:
+        if len(_CREDENTIALS_CACHE) >= _CREDENTIALS_CACHE_LIMIT:
+            _CREDENTIALS_CACHE.clear()
+        return _CREDENTIALS_CACHE.setdefault(key, creds)
 
 
 def delegated_session(user_email: str) -> AuthorizedSession:

@@ -157,7 +157,11 @@ describe('ファイルを選ぶ', () => {
 
     const picking = pickFile({});
     await flush();
-    itemNamed('証明書.pdf').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    // ブラウザは click（detail 1）・click（detail 2）・dblclick の順に送る。
+    const row = itemNamed('証明書.pdf');
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }));
+    row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
 
     await expect(picking).resolves.toMatchObject({ id: 'p1' });
   });
@@ -290,6 +294,25 @@ describe('たどる', () => {
     expect(crumbs()).toEqual(['マイドライブ', '案件']);
     button('キャンセル').click();
     await picking;
+  });
+
+  it('フォルダのダブルクリックで、開いた先のファイルを確定しない', async () => {
+    respond({
+      'my-drive': { items: [folder('d1', '案件')] },
+      d1: { items: [pdf('p1', '証明書.pdf')] },
+    });
+
+    const picking = pickFile({});
+    await flush();
+    itemNamed('案件').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    await flush();
+    // dblclick は、開いた先の同じ位置にある（触っていない）ファイルに届く。
+    itemNamed('証明書.pdf').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    await flush();
+
+    expect(dialog().hasAttribute('open')).toBe(true);
+    button('キャンセル').click();
+    await expect(picking).resolves.toBeNull();
   });
 
   it('続きがあれば「さらに表示」で足す', async () => {

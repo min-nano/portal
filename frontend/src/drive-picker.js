@@ -436,11 +436,13 @@ export function pickFile(options = {}) {
       }
     });
 
-    // ファイルはダブルクリック（タップ 2 回）でそのまま決める。
+    // ファイルはダブルクリック（タップ 2 回）でそのまま決める。1 回目の
+    // クリックで選んだ行のときだけ決める。フォルダをダブルクリックすると
+    // 1 回目でフォルダが開き、dblclick は開いた先の（触っていない）行に届く
+    // ことがあるため（フォルダを開くと選択は外れるので、ここで弾ける）。
     on(dialog, 'dblclick', (event) => {
       const target = event.target.closest('.drive-picker-item');
-      if (target && target.driveItem && !target.driveItem.folder) {
-        select(target);
+      if (target && target.driveItem && selected === target.driveItem) {
         finish(result());
       }
     });
