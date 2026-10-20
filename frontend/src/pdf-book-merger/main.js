@@ -28,6 +28,7 @@ import { pickFiles } from '../drive-picker.js';
 import { ensurePdfExtension } from '../pdf-file-ops.js';
 import { downloadDriveFile } from './drive-download.js';
 import { compareScans } from './image-checks.js';
+import { savePdf } from './save-file.js';
 import { measure } from './measure-client.js';
 import { prepareOcr, readStrip } from './ocr.js';
 import {
@@ -1059,17 +1060,11 @@ function renderVerify() {
   box.hidden = false;
 }
 
-function download() {
+async function download() {
   if (!merged) return;
-  const url = URL.createObjectURL(new Blob([merged.bytes], { type: PDF_MIME }));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = merged.fileName;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  // すぐに消すと、ダウンロードが始まる前に中身が無くなるブラウザがある。
-  setTimeout(() => URL.revokeObjectURL(url), 60 * 1000);
+  const how = await savePdf(merged.bytes, merged.fileName);
+  if (how === 'shared') log(`「${merged.fileName}」を共有シートに渡しました`);
+  else if (how === 'downloaded') log(`「${merged.fileName}」をダウンロードしました`);
 }
 
 // --- 入口 --------------------------------------------------------------------
