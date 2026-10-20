@@ -17,6 +17,7 @@
 // 頁の中身は pdf-lib で読む（結合にも使っているもの）。
 
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNull, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
+import './pdf-lib-views.js';
 import { multiply } from './text-layer.js';
 
 // --- 頁の中身の命令を読む ------------------------------------------------------

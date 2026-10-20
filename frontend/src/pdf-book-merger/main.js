@@ -263,7 +263,7 @@ async function readFile(file) {
     if (!isPdf(file.bytes)) throw new Error('PDF ファイルではありません。');
 
     file.status = 'reading';
-    file.doc = await withContext('PDF として開けませんでした', () => openPdf(file.bytes));
+    await withContext('PDF として開けませんでした', () => pdfOf(file));
     const count = file.doc.numPages;
 
     // 文字情報（画像を展開しないので軽い）。
@@ -329,6 +329,8 @@ async function readFile(file) {
     file.role = guessRole(file.name, file.pages);
     file.status = 'ready';
     log(`「${file.name}」を調べ終えました（${ROLES[file.role]}、合計 ${seconds(started)}）`);
+    // pdf.js に渡した写し（ファイルと同じ大きさ）は、要るときまで手放す。
+    closeDoc(file);
     // 調べている間に OCR が有効にされていたら、ここで残りの頁を読む。
     if (!ocrAtStart && $('ocrToggle').checked) queueLateOcr(file);
   } catch (error) {
@@ -338,8 +340,7 @@ async function readFile(file) {
     // 調べられなかったファイルの PDF は、外されるのを待たずに閉じる（pdf.js の
     // worker に中身を残さない）。
     // 結合には使わないので、PDF の中身と縮小画像も手放す。
-    closePdf(file.doc).catch(() => {});
-    file.doc = null;
+    closeDoc(file);
     file.bytes = null;
     for (const page of file.pages) {
       if (page.thumbUrl) URL.revokeObjectURL(page.thumbUrl);
@@ -529,7 +530,7 @@ async function readMarginsWithOcr(file, pages) {
     await ocrSlots.take();
     let strips;
     try {
-      strips = await renderMargins(file.doc, page.index, page.scan);
+      strips = await renderMargins(await pdfOf(file), page.index, page.scan);
     } catch {
       ocrSlots.give();
       continue;
@@ -559,11 +560,45 @@ function queueLateOcr(file) {
     .then(() => readMarginsWithOcr(file, pages))
     .finally(() => {
       file.ocrBusy = false;
+      closeDoc(file);
       for (const page of pages) page.scan = null;
       showProgress('');
       if (files.includes(file)) refresh();
     })
     .catch(() => {});
+}
+
+/**
+ * ファイルを pdf.js で開く（閉じていれば開き直す）。
+ *
+ * pdf.js はファイルの写しを worker に持つので、開いたままにすると、ファイルの
+ * 数だけ本がもう 1 冊ぶんメモリに乗る（iPhone・iPad では、結合のときに落ちた）。
+ * 調べるとき・拡大表示・あとからの OCR のときだけ開き、済んだら閉じる（closeDoc）。
+ */
+function pdfOf(file) {
+  file.opening ??= openPdf(file.bytes).then(
+    (doc) => (file.doc = doc),
+    (error) => {
+      file.opening = null;
+      throw error;
+    }
+  );
+  return file.opening;
+}
+
+/** pdf.js で開いたファイルを閉じる（worker の写しを手放す）。 */
+function closeDoc(file) {
+  const opening = file.opening;
+  file.opening = null;
+  file.doc = null;
+  opening?.then(closePdf).catch(() => {});
+}
+
+/** 調べ終えて手の空いているファイル（except のほか）を閉じる。 */
+function closeIdleDocs(except = null) {
+  for (const file of files) {
+    if (file !== except && file.status === 'ready' && !file.ocrBusy) closeDoc(file);
+  }
 }
 
 function mergeCandidates(a, b) {
@@ -584,7 +619,7 @@ function removeFile(file) {
     if (page.thumbUrl) URL.revokeObjectURL(page.thumbUrl);
     overrides.delete(page.key);
   }
-  closePdf(file.doc).catch(() => {});
+  closeDoc(file);
   refresh();
 }
 
@@ -999,8 +1034,10 @@ async function openPreview(pageKey) {
   const image = $('previewImage');
   image.src = file.pages[entry.pageIndex].thumbUrl;
   if (!dialog.open) dialog.showModal();
+  // 拡大表示するファイルのほかは閉じておく（何冊ぶんも開いたままにしない）。
+  closeIdleDocs(file);
   try {
-    const url = await renderPreview(file.doc, entry.pageIndex);
+    const url = await renderPreview(await pdfOf(file), entry.pageIndex);
     if (previewKey !== pageKey) {
       URL.revokeObjectURL(url);
       return;
@@ -1022,6 +1059,7 @@ function stepPreview(delta) {
 function closePreview() {
   $('previewDialog').close();
   previewKey = '';
+  closeIdleDocs();
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   previewUrl = '';
 }
@@ -1047,6 +1085,8 @@ async function mergeAndVerify() {
   button.disabled = true;
   discardMerged();
   showMessage('');
+  // 結合と検証はメモリを多く使うので、開いているファイルは閉じておく。
+  closeIdleDocs();
   const run = generation;
   const order = view.order;
   // 突き合わせに使う元の頁の情報は、始めるときに写しておく（結合の途中で

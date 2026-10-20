@@ -175,6 +175,35 @@ describe('mergePdf', () => {
   });
 });
 
+describe('pdf-lib にバイト列を写させない（pdf-lib-views.js）', () => {
+  it('読んだストリームも、別の文書へ写したストリームも、元のバイト列を指す', async () => {
+    const bytes = await makeSource([1, 3]);
+    const source = await loadSource(bytes, 'odd.pdf');
+    const contents = source.getPage(0).node.Contents();
+    const stream = source.context.lookup(contents.get?.(0) ?? contents) ?? contents;
+    // 写さずに、元のバイト列の一部を指している。
+    expect(stream.contents.buffer).toBe(bytes.buffer);
+
+    const target = await PDFDocument.create();
+    const [copied] = await target.copyPages(source, [0]);
+    const copiedContents = copied.node.Contents();
+    const copiedStream = target.context.lookup(copiedContents.get?.(0) ?? copiedContents) ?? copiedContents;
+    expect(copiedStream.contents.buffer).toBe(bytes.buffer);
+  });
+
+  it('写さなくても、結合した PDF は元の頁と同じ指紋になり、元のバイト列は変わらない', async () => {
+    const odd = await makeSource([1, 3]);
+    const before = odd.slice();
+    const sources = new Map([['f1', { bytes: odd, name: 'odd.pdf' }]]);
+    const order = [{ fileKey: 'f1', pageIndex: 1 }, { fileKey: 'f1', pageIndex: 0 }];
+
+    const { bytes, digests } = await mergePdf({ sources, order, title: 't' });
+
+    expect(await pageDigests(bytes)).toEqual(digests);
+    expect(odd).toEqual(before);
+  });
+});
+
 describe('compareOutput', () => {
 
   const page = (overrides = {}) => ({

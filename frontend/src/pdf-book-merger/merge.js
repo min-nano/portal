@@ -25,6 +25,7 @@ import {
   PDFRawStream,
   PDFStream,
 } from 'pdf-lib';
+import './pdf-lib-views.js';
 
 /** 画面に名乗る、このツールの名前（文書の情報の「作成アプリ」に入れる）。 */
 const CREATOR = '書籍スキャン PDF 結合ツール';

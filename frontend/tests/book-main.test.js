@@ -463,6 +463,25 @@ describe('ファイルを足して並べる', () => {
     await vi.waitFor(() => expect($('message').textContent).toContain('すでに追加してあります'));
   });
 
+  it('調べ終えたファイルは pdf.js で開いたままにせず、拡大表示のときだけ開き直す', async () => {
+    drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+    await flush();
+
+    // 調べ終えたファイルは、2 つとも閉じてある（worker に写しを残さない）。
+    const closedFiles = () => mocks.closePdf.mock.calls.map(([doc]) => doc?.spec?.pages?.[0]?.id).filter(Boolean);
+    expect(closedFiles().sort()).toEqual(['e8', 'o1']);
+
+    document.querySelector('#pageGrid .bm-thumb').click();
+    await vi.waitFor(() => expect($('previewImage').src).toBe('blob:preview'));
+    // 拡大表示のときに開き直したものを渡し、閉じたら手放す。
+    const [shown] = mocks.renderPreview.mock.calls[0];
+    expect(shown.spec.pages[0].id).toBe('o1');
+    $('previewCloseBtn').click();
+    await flush();
+    expect(mocks.closePdf.mock.calls.at(-1)[0]).toBe(shown);
+  });
+
   it('JPEG 1 枚の形でない頁は、pdf.js で描いて読む', async () => {
     const pages = [page('o1', 1), page('o3', 3, { ocr: true, jpeg: false }), page('o5', 5)];
     drop([file('odd.pdf', pdf(pages))]);
