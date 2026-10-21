@@ -13,10 +13,12 @@ import excelReportFormatter from './src/excel-report-formatter/tool.js';
 import structuralCertFormatter from './src/structural-cert-formatter/tool.js';
 import timberPanelShearCalculator from './src/timber-panel-shear-calculator/tool.js';
 import wallQuantityCalculator from './src/wall-quantity-calculator/tool.js';
+import pdfBookMerger from './src/pdf-book-merger/tool.js';
 
 export default [
   excelReportFormatter,
   structuralCertFormatter,
   timberPanelShearCalculator,
   wallQuantityCalculator,
+  pdfBookMerger,
 ];

@@ -52,6 +52,7 @@ const crumbs = () =>
 const status = () => dialog().querySelector('.drive-picker-status');
 
 let pickFile;
+let pickFiles;
 
 beforeEach(async () => {
   vi.resetModules();
@@ -64,7 +65,7 @@ beforeEach(async () => {
   HTMLDialogElement.prototype.close = function close() {
     this.removeAttribute('open');
   };
-  ({ pickFile } = await import('../src/drive-picker.js'));
+  ({ pickFile, pickFiles } = await import('../src/drive-picker.js'));
 });
 
 afterEach(() => {
@@ -550,5 +551,73 @@ describe('失敗', () => {
     expect(itemNamed('設計部')).toBeTruthy();
     button('キャンセル').click();
     await picking;
+  });
+});
+
+describe('いくつも選ぶ', () => {
+  const chooseButton = () => dialog().querySelector('.drive-picker-choose');
+
+  it('押すたびに選ぶ・外すが切り替わり、フォルダを移っても残る', async () => {
+    respond({
+      'my-drive': { items: [folder('d1', 'スキャン'), pdf('p0', '表紙.pdf')] },
+      d1: { items: [pdf('p1', '奇数1.pdf'), pdf('p2', '偶数1.pdf')] },
+    });
+
+    const picking = pickFiles({ title: 'スキャンを選ぶ', mimeTypes: PDF_MIME });
+    await flush();
+    expect(chooseButton().disabled).toBe(true);
+    // 1 つずつ選ぶ（フォルダのファイルをまとめて選ぶボタンは無い）。
+    expect(dialog().querySelectorAll('.dialog-actions button')).toHaveLength(2);
+
+    itemNamed('表紙.pdf').click();
+    expect(chooseButton().textContent).toBe('選択（1 個）');
+    itemNamed('スキャン').click();
+    await flush();
+    itemNamed('奇数1.pdf').click();
+    itemNamed('偶数1.pdf').click();
+    itemNamed('偶数1.pdf').click(); // 外す
+    expect(itemNamed('偶数1.pdf').getAttribute('aria-pressed')).toBe('false');
+
+    // 戻っても、選んだ印は残っている。
+    dialog().querySelector('.drive-picker-crumb[data-depth="0"]').click();
+    await flush();
+    expect(itemNamed('表紙.pdf').getAttribute('aria-pressed')).toBe('true');
+    expect(chooseButton().textContent).toBe('選択（2 個）');
+
+    chooseButton().click();
+    await expect(picking).resolves.toEqual([
+      { id: 'p0', name: '表紙.pdf', mimeType: PDF_MIME },
+      { id: 'p1', name: '奇数1.pdf', mimeType: PDF_MIME },
+    ]);
+  });
+
+  it('ダブルクリックでは決めない', async () => {
+    respond({ 'my-drive': { items: [pdf('p1', 'a.pdf')] } });
+    const picking = pickFiles({});
+    await flush();
+    const row = itemNamed('a.pdf');
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }));
+    row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    expect(dialog().hasAttribute('open')).toBe(true);
+    expect(row.getAttribute('aria-pressed')).toBe('true');
+    button('キャンセル').click();
+    await expect(picking).resolves.toEqual([]);
+  });
+
+  it('1 つ選ぶダイアログに戻すと、選んだ数は出ない', async () => {
+    respond({ 'my-drive': { items: [folder('d1', 'スキャン')] }, d1: { items: [pdf('p1', 'a.pdf')] } });
+    const many = pickFiles({});
+    await flush();
+    itemNamed('スキャン').click();
+    await flush();
+    button('キャンセル').click();
+    await many;
+
+    const one = pickFile({});
+    await flush();
+    expect(button('選択')).toBeTruthy();
+    button('キャンセル').click();
+    await expect(one).resolves.toBeNull();
   });
 });

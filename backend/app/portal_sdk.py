@@ -256,6 +256,15 @@ def delegated_session(email: str):
     return google_drive.delegated_session(email)
 
 
+def delegated_read_token(email: str):
+    """本人の代理で Drive を**読む**アクセストークンと期限（ブラウザへ渡す）。
+
+    ブラウザへ渡してよいのは、Cloud Run を通さずに大きなファイルを Drive から
+    直接読むときだけ（書籍スキャンの結合）。google_drive.delegated_read_token を参照。
+    """
+    return google_drive.delegated_read_token(email)
+
+
 def delegated_write_session(email: str):
     """本人の代理で Drive を**読み書きする**セッション。"""
     return google_drive.delegated_write_session(email)
