@@ -634,6 +634,35 @@ describe('ファイルを足して並べる', () => {
     await settled(1);
   });
 
+  it('Drive を待っている間は、残りの秒数を数え直し、待ち終えたら読み直していると出す', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: 'book-a-odd.pdf' }]);
+      let release;
+      const gate = new Promise((resolve) => (release = resolve));
+      mocks.downloadDriveFile.mockImplementation(async (picked, { onWait }) => {
+        onWait(3000, 'Drive の流量制限');
+        await gate;
+        return pdf(ODD);
+      });
+
+      $('driveBtn').click();
+      await vi.waitFor(() => expect($('progressText').textContent).toContain('あと 3 秒ほど'));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect($('progressText').textContent).toContain('あと 2 秒ほど');
+      await vi.advanceTimersByTimeAsync(2000);
+      expect($('progressText').textContent).not.toContain('待っています');
+      $('logBox').open = true;
+      $('logBox').dispatchEvent(new Event('toggle'));
+      expect($('logText').textContent).toContain('（実行中）「book-a-odd.pdf」を読み直しています');
+
+      release();
+      await settled(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('Drive の選択画面で何も選ばずに閉じたら、何も足さない', async () => {
     mocks.pickFiles.mockResolvedValue([]);
 
@@ -963,10 +992,13 @@ describe('結合と検証', () => {
 
     release();
     await vi.waitFor(() => expect($('downloadBtn').disabled).toBe(false));
+    // 開いたままの拡大表示は、結合が済んだら大きく描き直す。
+    await vi.waitFor(() => expect(mocks.renderPreview).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect($('previewImage').src).toBe('blob:preview'));
     $('previewCloseBtn').click();
     // 結合が済めば、また大きく描く。
     document.querySelector('#pageGrid .bm-thumb').click();
-    await vi.waitFor(() => expect(mocks.renderPreview).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mocks.renderPreview).toHaveBeenCalledTimes(2));
   });
 
   it('検証で読めない頁があっても、結合した PDF は閉じる', async () => {

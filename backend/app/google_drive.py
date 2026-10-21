@@ -110,11 +110,30 @@ def _signing():
         return _signing_kind
 
 
+class _LockedSource:
+    """ADC の資格情報を、取り直しを lock の中で行う形で iam.Signer に渡す。
+
+    iam.Signer は signBlob を頼むたびに（やり直しを含めて）before_request を呼び、
+    そこで期限が切れていれば取り直す。その取り直しも 1 つずつにする。
+    """
+
+    def __init__(self, source):
+        self._source = source
+
+    @property
+    def universe_domain(self):
+        return self._source.universe_domain
+
+    def before_request(self, request, method, url, headers):
+        with _adc_lock:
+            self._source.before_request(request, method, url, headers)
+
+
 class _IamSigner(crypt.Signer):
     """IAM Credentials API で署名する。ADC の取り直しは 1 つずつ、通信はスレッドごと。"""
 
     def __init__(self, source, sa_email: str):
-        self._source = source
+        self._source = _LockedSource(source)
         self._sa_email = sa_email
 
     @property
@@ -122,11 +141,8 @@ class _IamSigner(crypt.Signer):
         return None
 
     def sign(self, message):
-        request = _thread_request()
-        with _adc_lock:
-            if not self._source.valid:
-                self._source.refresh(request)
-        return iam.Signer(request, self._source, self._sa_email).sign(message)
+        # signBlob との通信は lock の外（ほかのスレッドの署名を待たせない）。
+        return iam.Signer(_thread_request(), self._source, self._sa_email).sign(message)
 
 
 def _credentials(scopes: list[str], subject: str) -> service_account.Credentials:

@@ -223,11 +223,22 @@ function addFile(source) {
   queue = queue.then(() => readFile(file)).catch(() => {});
 }
 
-/** Drive の読み込みを待っていることを、見出しに出す（見出しより先に知らせる）。 */
+/**
+ * Drive の読み込みを待っていることを、見出しに出す（見出しより先に知らせる）。
+ * 待っている間は 1 秒ごとに残りの秒数を出し直し、待ち終えたら読み直していると出す
+ * （最初のデータが届けば、進み具合に替わる）。
+ */
 function showWaiting(file) {
-  const left = Math.max(1, Math.ceil((file.waitUntil - Date.now()) / 1000));
-  const heading = `「${file.name}」の読み込みを待っています（${file.waitReason}・あと ${left} 秒ほど）`;
+  clearTimeout(file.waitTimer);
+  if (!file.waiting || !file.waitUntil || !files.includes(file)) return;
+  const ms = file.waitUntil - Date.now();
+  if (ms <= 0) {
+    showProgress(`「${file.name}」を読み直しています`, null);
+    return;
+  }
+  const heading = `「${file.name}」の読み込みを待っています（${file.waitReason}・あと ${Math.ceil(ms / 1000)} 秒ほど）`;
   showProgress(heading, null, heading);
+  file.waitTimer = setTimeout(() => showWaiting(file), ms % 1000 || 1000);
 }
 
 /**
@@ -246,6 +257,7 @@ async function loadBytes(file, source) {
     bytes = await source.load(
       (received, total) => {
         file.waitUntil = 0; // 届き始めた（待ち終えた）
+        clearTimeout(file.waitTimer);
         // 調べる順番が来て、読み込みを待っているときだけ、進み具合に出す。
         if (!file.waiting) return;
         const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
@@ -284,6 +296,7 @@ async function readFile(file) {
     else if (file.status !== 'loaded') showProgress(`「${file.name}」を読み込んでいます`, null);
     await file.loaded;
     file.waiting = false;
+    clearTimeout(file.waitTimer);
     if (!file.bytes || !files.includes(file)) return;
     if (!isPdf(file.bytes)) throw new Error('PDF ファイルではありません。');
 
@@ -1262,6 +1275,8 @@ async function mergeAndVerify() {
     merging = false;
     showProgress('');
     button.disabled = false;
+    // 結合の途中に開いた拡大表示は縮小画像だけなので、大きく描き直す。
+    if (previewKey) openPreview(previewKey);
   }
 }
 

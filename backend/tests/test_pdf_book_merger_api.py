@@ -188,15 +188,25 @@ def test_signing_shares_adc_but_not_the_request_across_threads(monkeypatch):
 
     class Source:
         service_account_email = "runtime@example.iam.gserviceaccount.com"
+        universe_domain = "googleapis.com"
         valid = False
 
         def refresh(self, request):
+            # 取り直しは、いつも lock の中で。
+            assert google_drive._adc_lock.locked()
             refreshed.append(request)
             self.valid = True
 
+        def before_request(self, request, method, url, headers):
+            if not self.valid:
+                self.refresh(request)
+            headers["authorization"] = "Bearer adc"
+
+    adc = Source()
+
     def default():
         defaults.append(1)
-        return Source(), "project"
+        return adc, "project"
 
     signed = []
 
@@ -205,6 +215,15 @@ def test_signing_shares_adc_but_not_the_request_across_threads(monkeypatch):
             self.args = (request, source, email)
 
         def sign(self, message):
+            # 本物の iam.Signer と同じく、signBlob を頼むたびに before_request を呼ぶ
+            # （やり直しの分も）。
+            # 最初の署名では、やり直す間に ADC のトークンが古くなったことにする。
+            request, source, _ = self.args
+            source.before_request(request, "POST", "https://iam", {})
+            if not signed:
+                adc.valid = False
+            source.before_request(request, "POST", "https://iam", {})
+            assert source.universe_domain == "googleapis.com"
             signed.append(self.args)
             return b"signature"
 
@@ -223,8 +242,9 @@ def test_signing_shares_adc_but_not_the_request_across_threads(monkeypatch):
     google_drive._credentials([google_drive.DRIVE_READONLY_SCOPE], "other@example.com")
 
     assert defaults == [1]
-    # ADC は 1 つで、取り直したのは 1 度だけ。
-    assert len(refreshed) == 1
+    # ADC は 1 つで、取り直したのは、始めと、古くなったやり直しの 2 度だけ
+    # （どちらも lock の中で。Source.refresh）。
+    assert len(refreshed) == 2
     (r1, s1, _), (r2, s2, _), (r3, s3, _) = signed
     assert s1 is s2 is s3
     # 同じスレッドでは Request を使い回し、別のスレッドでは別のものを使う。
