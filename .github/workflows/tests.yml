@@ -20,9 +20,14 @@ name: Tests
 #       コンパイラもテストランナーも動かさないので、ここが赤いのは
 #       **報告の失敗か、しきい値割れ（表の 🔴）** であってテストの失敗ではない。
 #
-# カバレッジは GitHub Actions の中だけで完結する（Codecov 等の外部サービスに
-# 依存しない）。レポートは貼り替え式の PR コメント 1 つと、成果物として残る
-# XML の 2 か所に出る。
+#   codecov
+#       上の 3 つが通ってから、その計測をスイートごとに Codecov へ送る。
+#       coverage ジョブとは独立していて、Codecov 側で失敗してもテストや
+#       しきい値の判定には影響しない。
+#
+# レポートは貼り替え式の PR コメント 1 つ、成果物として残る XML、Codecov の
+# 3 か所に出る。しきい値で CI を守るのは coverage ジョブだけで、Codecov は
+# 推移やファイル別の閲覧のために使う。
 
 on:
   push:
@@ -199,6 +204,48 @@ jobs:
         run: |
           cd firestore
           npm test
+
+  codecov:
+    name: Codecov upload (${{ matrix.suite }})
+    # 3 つのテストジョブが上げた Cobertura XML を Codecov へ送る。スイートごとに
+    # flag（core / backend / frontend）を付けて別々に送るので、Codecov 上でも
+    # スイート別に見られる。ここでは何もビルドせず、テストも走らせない。
+    #
+    # 上の coverage ジョブ（PR コメントとしきい値）とは独立している。Codecov 側の
+    # 障害や設定漏れで送れなくても、テストの結果やしきい値の判定には影響しない
+    # （fail_ci_if_error: false。送れなかったことはこのジョブのログに出る）。
+    #
+    # 認証はリポジトリシークレット CODECOV_TOKEN（Codecov のリポジトリ設定で
+    # 発行する Repository Upload Token）。fork からの PR ではシークレットが
+    # 渡らないが、公開リポジトリなら Codecov はトークン無しでも受け付ける。
+    needs: [test-core, test-backend, test-frontend]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [core, backend, frontend]
+    steps:
+      - name: Checkout
+        # Codecov はコミットと、XML 中のパス（リポジトリ相対に正規化済み）を
+        # 実際のファイルに突き合わせるので、ソースが手元に要る。
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Download coverage measurement
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-${{ matrix.suite }}
+          path: .
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-${{ matrix.suite }}.xml
+          # 指定したファイルだけを送る（チェックアウト内の他の XML を拾わない）。
+          disable_search: true
+          flags: ${{ matrix.suite }}
+          name: ${{ matrix.suite }}
+          fail_ci_if_error: false
 
   coverage:
     name: Coverage report
