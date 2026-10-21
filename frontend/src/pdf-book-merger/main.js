@@ -88,6 +88,8 @@ const overrides = new Map();
 let view = { order: [], problems: [], issues: new Map(), numberings: new Map() };
 /** 結合した PDF と検証の結果。並びが変わったら捨てる。 */
 let merged = null;
+/** 結合と検証の途中か（その間は、拡大表示のために PDF を開かない）。 */
+let merging = false;
 /** 結合する中身（並び・名前）が変わるたびに進める番号（結合の途中で変わったら、その結合は捨てる）。 */
 let generation = 0;
 /** いまの並びのうち、結合する PDF を決める部分（頁・役割・頁番号）。変わったときだけ結合した PDF を捨てる。 */
@@ -125,11 +127,12 @@ const LOG_LIMIT = 2000;
 
 /**
  * 進み具合を出す。text は細かい経過（記録に出す）、バーの横には見出しを出す。
- * text が空なら隠す。
+ * text が空なら隠す。heading を渡すと、見出しの代わりにそれを出す（Drive を
+ * 待っているときなど、見出しより先に知らせたいこと）。
  */
-function showProgress(text, fraction) {
+function showProgress(text, fraction, heading = '') {
   $('progress').hidden = !text;
-  $('progressText').textContent = text ? progressLabel || text : '';
+  $('progressText').textContent = text ? heading || progressLabel || text : '';
   const bar = $('progressBar');
   if (fraction === null || fraction === undefined) bar.removeAttribute('value');
   else bar.value = Math.max(0, Math.min(1, fraction));
@@ -220,6 +223,13 @@ function addFile(source) {
   queue = queue.then(() => readFile(file)).catch(() => {});
 }
 
+/** Drive の読み込みを待っていることを、見出しに出す（見出しより先に知らせる）。 */
+function showWaiting(file) {
+  const left = Math.max(1, Math.ceil((file.waitUntil - Date.now()) / 1000));
+  const heading = `「${file.name}」の読み込みを待っています（${file.waitReason}・あと ${left} 秒ほど）`;
+  showProgress(heading, null, heading);
+}
+
 /**
  * ファイルの中身を読み（Drive なら転送）、file.bytes に入れる。
  *
@@ -235,16 +245,19 @@ async function loadBytes(file, source) {
   try {
     bytes = await source.load(
       (received, total) => {
+        file.waitUntil = 0; // 届き始めた（待ち終えた）
         // 調べる順番が来て、読み込みを待っているときだけ、進み具合に出す。
         if (!file.waiting) return;
         const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
         showProgress(`「${file.name}」を読み込んでいます（${amount}）`, total ? received / total : null);
       },
-      // 読み直す前に待つときは、記録に残し、待っていることを画面に出す。
+      // 読み直す前に待つときは、記録に残し、待っていることを画面に出す（先読みの
+      // 途中なら、調べる順番が来たときに出す。readFile）。
       (ms, reason) => {
-        const wait = `${Math.round(ms / 1000)} 秒`;
-        log(`「${file.name}」の読み込みを ${wait}待ってから読み直します（${reason}）`);
-        if (file.waiting) showProgress(`「${file.name}」の読み込みを ${wait}待っています（${reason}）`, null);
+        log(`「${file.name}」の読み込みを ${Math.round(ms / 1000)} 秒待ってから読み直します（${reason}）`);
+        file.waitUntil = Date.now() + ms;
+        file.waitReason = reason;
+        if (file.waiting) showWaiting(file);
       }
     );
   } catch (error) {
@@ -267,7 +280,8 @@ async function readFile(file) {
   try {
     progressLabel = `ファイルを調べています（${files.indexOf(file) + 1} / ${files.length}）`;
     file.waiting = true;
-    if (file.status !== 'loaded') showProgress(`「${file.name}」を読み込んでいます`, null);
+    if (file.waitUntil > Date.now()) showWaiting(file);
+    else if (file.status !== 'loaded') showProgress(`「${file.name}」を読み込んでいます`, null);
     await file.loaded;
     file.waiting = false;
     if (!file.bytes || !files.includes(file)) return;
@@ -524,6 +538,7 @@ function isPdf(bytes) {
  */
 async function readMarginsWithOcr(file, pages) {
   if (pages.length === 0 || !(await startOcr())) return;
+  if (!files.includes(file)) return; // 順番を待つ間に外された。
   // JPEG を残していなければ（pdf-lib の書き換えが効いていないとき）、ここで
   // 1 度だけ調べ直し、読む頁の分だけを取っておく。
   if (!pdfLibViews) {
@@ -542,6 +557,8 @@ async function readMarginsWithOcr(file, pages) {
     let strips;
     try {
       strips = await renderMargins(await pdfOf(file), page.index, page.scan);
+      // 描いたら JPEG は要らない（書き換えが効かないときは写しなので、早く手放す）。
+      page.scan = null;
     } catch {
       ocrSlots.give();
       continue;
@@ -1093,6 +1110,9 @@ async function openPreview(pageKey) {
   const image = $('previewImage');
   image.src = file.pages[entry.pageIndex].thumbUrl;
   if (!dialog.open) dialog.showModal();
+  // 結合と検証の途中は、縮小画像だけを出す（いちばんメモリを使う間に、PDF を
+  // 丸ごと開き直さない）。
+  if (merging) return;
   // 拡大表示するファイルを開いておく（前に拡大表示していたファイルは、ほかで
   // 使っていなければ閉じる）。
   setPreviewFile(file);
@@ -1163,6 +1183,7 @@ async function mergeAndVerify() {
     log('結合している間に並びか名前が変わったので、結合した PDF を捨てました');
     showMessage('結合している間に並びか名前が変わりました。もう一度「結合して検証する」を押してください。', 'red');
   };
+  merging = true;
   try {
     const fileName = outputName();
     const ranges = pageLabelRanges(order);
@@ -1238,6 +1259,7 @@ async function mergeAndVerify() {
   } catch (error) {
     showMessage(error.message || String(error), 'red');
   } finally {
+    merging = false;
     showProgress('');
     button.disabled = false;
   }

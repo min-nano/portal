@@ -613,6 +613,27 @@ describe('ファイルを足して並べる', () => {
     expect($('logText').textContent).toContain('「odd.pdf」の 4 頁は pdf.js で描きます（PDF を読めない（暗号化） 1 頁）。');
   });
 
+  it('Drive を待っている間は、見出しに待っていることを出す', async () => {
+    mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: 'book-a-odd.pdf' }]);
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    mocks.downloadDriveFile.mockImplementation(async (picked, { onWait }) => {
+      onWait(40000, 'Drive の流量制限');
+      await gate;
+      return pdf(ODD);
+    });
+
+    $('driveBtn').click();
+    await vi.waitFor(() => expect($('progressText').textContent).toContain('待っています'));
+    expect($('progressText').textContent).toContain('Drive の流量制限');
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('「book-a-odd.pdf」の読み込みを 40 秒待ってから読み直します（Drive の流量制限）');
+
+    release();
+    await settled(1);
+  });
+
   it('Drive の選択画面で何も選ばずに閉じたら、何も足さない', async () => {
     mocks.pickFiles.mockResolvedValue([]);
 
@@ -921,6 +942,31 @@ describe('結合と検証', () => {
 
     expect($('outputName').value).not.toBe('猫.pdf');
     expect($('downloadBtn').disabled).toBe(true);
+  });
+
+  it('結合している間の拡大表示は、縮小画像だけを出す（PDF を開き直さない）', async () => {
+    await addBook();
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    const answer = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementationOnce(async (args) => {
+      await gate;
+      return answer(args);
+    });
+
+    $('mergeBtn').click();
+    await flush();
+    document.querySelector('#pageGrid .bm-thumb').click();
+    await flush();
+    expect($('previewDialog').open).toBe(true);
+    expect(mocks.renderPreview).not.toHaveBeenCalled();
+
+    release();
+    await vi.waitFor(() => expect($('downloadBtn').disabled).toBe(false));
+    $('previewCloseBtn').click();
+    // 結合が済めば、また大きく描く。
+    document.querySelector('#pageGrid .bm-thumb').click();
+    await vi.waitFor(() => expect(mocks.renderPreview).toHaveBeenCalledTimes(1));
   });
 
   it('検証で読めない頁があっても、結合した PDF は閉じる', async () => {

@@ -30,7 +30,7 @@ import threading
 
 import google.auth
 import google.auth.exceptions
-from google.auth import iam
+from google.auth import crypt, iam
 from google.auth.transport.requests import AuthorizedSession, Request
 from google.oauth2 import service_account
 
@@ -59,55 +59,74 @@ class DriveError(PortalError):
 
 
 # 代理の資格情報の署名元。ADC の読み込みとメタデータサーバーへの問い合わせが
-# 要るので、1 度だけ探して使い回す（署名元は利用者によらない）。ただし ADC の
-# 資格情報と通信の道具（Request。requests.Session を抱える）は、スレッドの間で
-# 分け合うと、同時に取り直したときに壊れうるので、スレッドごとに持つ（FastAPI
-# は同期の処理をスレッドプールで動かす）。スレッドごとに持てば、IAM への接続も
-# 使い回せる。
-_signing_kind = None  # ("key", 鍵ファイルの資格情報) か ("iam", SA のメール)
+# 要るので、1 度だけ探してプロセス全体で使い回す（署名元は利用者によらない）。
+#
+# FastAPI は同期の処理をスレッドプールで動かすので、いくつものスレッドが同時に
+# 署名しうる。ADC の資格情報の取り直しは lock で 1 つずつにし、通信の道具
+# （Request。requests.Session を抱える）はスレッドごとに持つ（接続も使い回せる）。
+# 署名役（_IamSigner）は、署名するときにそれらを引くので、利用者ごとに
+# キャッシュした資格情報（_cached_credentials）を別のスレッドが使っても安全。
+_signing_kind = None  # ("key", 鍵ファイルの資格情報) か ("iam", ADC の資格情報, SA のメール)
 _signing_lock = threading.Lock()
+_adc_lock = threading.Lock()
 _thread = threading.local()
 
 
-def _thread_adc():
-    """このスレッドの ADC の資格情報と Request（無ければ作る）。"""
-    if getattr(_thread, "adc", None) is None:
-        _thread.adc, _ = google.auth.default()
+def _thread_request() -> Request:
+    """このスレッドの Request（無ければ作る）。"""
+    if getattr(_thread, "request", None) is None:
         _thread.request = Request()
-    return _thread.adc, _thread.request
+    return _thread.request
 
 
 def _signing():
-    """("key", 鍵ファイルの資格情報) か ("iam", SA のメール) を返す。"""
+    """("key", 鍵ファイルの資格情報) か ("iam", ADC の資格情報, SA のメール) を返す。"""
     global _signing_kind
     with _signing_lock:
         if _signing_kind is not None:
             return _signing_kind
-    source, request = _thread_adc()
+        source, _ = google.auth.default()
 
-    # ローカル開発: JSON 鍵ファイル（service_account.Credentials）ならそのまま使う。
-    # 鍵で署名するので、取り直しの通信は無い（分け合ってよい）。
-    if isinstance(source, service_account.Credentials):
-        found = ("key", source)
-    else:
+        # ローカル開発: JSON 鍵ファイル（service_account.Credentials）ならそのまま使う。
+        # 鍵で署名するので、取り直しの通信は無い（分け合ってよい）。
+        if isinstance(source, service_account.Credentials):
+            _signing_kind = ("key", source)
+            return _signing_kind
+
         # Cloud Run: 鍵ファイルなし。IAM Credentials API で署名する。
         sa_email = config.delegated_sa_email() or getattr(
             source, "service_account_email", ""
         )
         if not sa_email or sa_email == "default":
             # metadata server から実際のメールアドレスを確定させる。
-            source.refresh(request)
+            source.refresh(_thread_request())
             sa_email = getattr(source, "service_account_email", "")
         if not sa_email or sa_email == "default":
             raise DriveError(
                 "サービスアカウントを特定できませんでした。環境変数 "
                 "DWD_SERVICE_ACCOUNT_EMAIL を設定してください。"
             )
-        found = ("iam", sa_email)
-    with _signing_lock:
-        if _signing_kind is None:
-            _signing_kind = found
+        _signing_kind = ("iam", source, sa_email)
         return _signing_kind
+
+
+class _IamSigner(crypt.Signer):
+    """IAM Credentials API で署名する。ADC の取り直しは 1 つずつ、通信はスレッドごと。"""
+
+    def __init__(self, source, sa_email: str):
+        self._source = source
+        self._sa_email = sa_email
+
+    @property
+    def key_id(self):
+        return None
+
+    def sign(self, message):
+        request = _thread_request()
+        with _adc_lock:
+            if not self._source.valid:
+                self._source.refresh(request)
+        return iam.Signer(request, self._source, self._sa_email).sign(message)
 
 
 def _credentials(scopes: list[str], subject: str) -> service_account.Credentials:
@@ -119,10 +138,9 @@ def _credentials(scopes: list[str], subject: str) -> service_account.Credentials
             creds = creds.with_subject(subject)
         return creds
 
-    _, sa_email = signing
-    source, request = _thread_adc()
+    _, source, sa_email = signing
     return service_account.Credentials(
-        signer=iam.Signer(request, source, sa_email),
+        signer=_IamSigner(source, sa_email),
         service_account_email=sa_email,
         token_uri=_TOKEN_URI,
         scopes=scopes,

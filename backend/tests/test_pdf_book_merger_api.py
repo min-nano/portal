@@ -177,46 +177,59 @@ def test_read_token_failure_while_making_credentials_is_reported(credentials):
     assert caught.value.status == 502
 
 
-def test_signing_source_is_kept_per_thread(monkeypatch):
-    # ADC とメタデータサーバーへの問い合わせは、資格情報を作るたびにはしない。
-    # ADC の資格情報と Request は、スレッドの間で分け合わない（同時に取り直すと
-    # 壊れうる）。同じスレッドでは使い回す（IAM への接続も使い回せる）。
+def test_signing_shares_adc_but_not_the_request_across_threads(monkeypatch):
+    # ADC はプロセス全体で 1 度だけ探す。取り直しは 1 つずつ、通信の道具（Request）は
+    # スレッドごと。利用者ごとにキャッシュした資格情報を別のスレッドが使っても、
+    # 署名するスレッドの Request を使う。
     import threading
 
-    sources = []
+    defaults = []
+    refreshed = []
 
     class Source:
         service_account_email = "runtime@example.iam.gserviceaccount.com"
+        valid = False
+
+        def refresh(self, request):
+            refreshed.append(request)
+            self.valid = True
 
     def default():
-        source = Source()
-        sources.append(source)
-        return source, "project"
+        defaults.append(1)
+        return Source(), "project"
+
+    signed = []
+
+    class FakeIamSigner:
+        def __init__(self, request, source, email):
+            self.args = (request, source, email)
+
+        def sign(self, message):
+            signed.append(self.args)
+            return b"signature"
 
     monkeypatch.setattr(google_drive, "_signing_kind", None)
     monkeypatch.setattr(google_drive, "_thread", threading.local())
     monkeypatch.setattr(google_drive.google.auth, "default", default)
-    signers = []
-    monkeypatch.setattr(
-        google_drive.iam, "Signer", lambda request, source, email: signers.append((request, source, email)) or "signer"
-    )
+    monkeypatch.setattr(google_drive.iam, "Signer", FakeIamSigner)
 
-    def make():
-        return google_drive._credentials([google_drive.DRIVE_READONLY_SCOPE], TEST_EMAIL)
-
-    first, second = make(), make()
-    other = []
-    worker = threading.Thread(target=lambda: other.append(make()))
+    creds = google_drive._credentials([google_drive.DRIVE_READONLY_SCOPE], TEST_EMAIL)
+    assert creds.service_account_email == "runtime@example.iam.gserviceaccount.com"
+    assert creds.signer.sign(b"x") == b"signature"
+    creds.signer.sign(b"y")
+    worker = threading.Thread(target=lambda: creds.signer.sign(b"z"))
     worker.start()
     worker.join()
+    google_drive._credentials([google_drive.DRIVE_READONLY_SCOPE], "other@example.com")
 
-    assert first is not second
-    assert first.service_account_email == "runtime@example.iam.gserviceaccount.com"
-    # このスレッドで 1 つ、別のスレッドで 1 つ。
-    assert len(sources) == 2
-    (r1, s1, _), (r2, s2, _), (r3, s3, _) = signers
-    assert (r1, s1) == (r2, s2)
-    assert r3 is not r1 and s3 is not s1
+    assert defaults == [1]
+    # ADC は 1 つで、取り直したのは 1 度だけ。
+    assert len(refreshed) == 1
+    (r1, s1, _), (r2, s2, _), (r3, s3, _) = signed
+    assert s1 is s2 is s3
+    # 同じスレッドでは Request を使い回し、別のスレッドでは別のものを使う。
+    assert r1 is r2
+    assert r3 is not r1
 
 
 def test_read_token_failure_is_reported(credentials):
