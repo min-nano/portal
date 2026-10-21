@@ -94,17 +94,9 @@ jobs:
         # toolchain を固定してあるため、どのジョブで作っても同じバイト列。
         run: core/build.sh
       - name: Read the Python version from backend/Dockerfile
-        # 本番（Cloud Run）のイメージと同じ系列でテストするため、バージョンは
-        # Dockerfile の FROM 行だけを正とする。dependabot が Dockerfile を
-        # 上げれば、ここも自動で追従する。
+        # 本番（Cloud Run）のイメージと同じ系列でテストする。
         id: python-version
-        run: |
-          version="$(sed -nE 's/^FROM python:([0-9]+\.[0-9]+)([-.@ ].*)?$/\1/p' backend/Dockerfile | head -n 1)"
-          if [ -z "$version" ]; then
-            echo "::error file=backend/Dockerfile::FROM python:X.Y の行が見つかりません"
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+        run: .github/scripts/backend-python-version.sh
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
