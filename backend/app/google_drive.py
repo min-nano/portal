@@ -58,23 +58,35 @@ class DriveError(PortalError):
         super().__init__(message, status)
 
 
-# 代理の資格情報の署名元（ADC と、Cloud Run での SA のメール）。探すのに
-# ADC の読み込みとメタデータサーバーへの問い合わせが要るので、1 度だけ探して
-# 使い回す。署名元は利用者によらない。署名役（iam.Signer）は通信の道具
-# （requests.Session）を抱え、スレッドの間で分け合えないので、呼ぶたびに作る。
-_signing_source = None
+# 代理の資格情報の署名元。ADC の読み込みとメタデータサーバーへの問い合わせが
+# 要るので、1 度だけ探して使い回す（署名元は利用者によらない）。ただし ADC の
+# 資格情報と通信の道具（Request。requests.Session を抱える）は、スレッドの間で
+# 分け合うと、同時に取り直したときに壊れうるので、スレッドごとに持つ（FastAPI
+# は同期の処理をスレッドプールで動かす）。スレッドごとに持てば、IAM への接続も
+# 使い回せる。
+_signing_kind = None  # ("key", 鍵ファイルの資格情報) か ("iam", SA のメール)
 _signing_lock = threading.Lock()
+_thread = threading.local()
+
+
+def _thread_adc():
+    """このスレッドの ADC の資格情報と Request（無ければ作る）。"""
+    if getattr(_thread, "adc", None) is None:
+        _thread.adc, _ = google.auth.default()
+        _thread.request = Request()
+    return _thread.adc, _thread.request
 
 
 def _signing():
-    """("key", 鍵ファイルの資格情報) か ("iam", ADC の資格情報, SA のメール) を返す。"""
-    global _signing_source
+    """("key", 鍵ファイルの資格情報) か ("iam", SA のメール) を返す。"""
+    global _signing_kind
     with _signing_lock:
-        if _signing_source is not None:
-            return _signing_source
-    source, _ = google.auth.default()
+        if _signing_kind is not None:
+            return _signing_kind
+    source, request = _thread_adc()
 
     # ローカル開発: JSON 鍵ファイル（service_account.Credentials）ならそのまま使う。
+    # 鍵で署名するので、取り直しの通信は無い（分け合ってよい）。
     if isinstance(source, service_account.Credentials):
         found = ("key", source)
     else:
@@ -84,18 +96,18 @@ def _signing():
         )
         if not sa_email or sa_email == "default":
             # metadata server から実際のメールアドレスを確定させる。
-            source.refresh(Request())
+            source.refresh(request)
             sa_email = getattr(source, "service_account_email", "")
         if not sa_email or sa_email == "default":
             raise DriveError(
                 "サービスアカウントを特定できませんでした。環境変数 "
                 "DWD_SERVICE_ACCOUNT_EMAIL を設定してください。"
             )
-        found = ("iam", source, sa_email)
+        found = ("iam", sa_email)
     with _signing_lock:
-        if _signing_source is None:
-            _signing_source = found
-        return _signing_source
+        if _signing_kind is None:
+            _signing_kind = found
+        return _signing_kind
 
 
 def _credentials(scopes: list[str], subject: str) -> service_account.Credentials:
@@ -107,10 +119,10 @@ def _credentials(scopes: list[str], subject: str) -> service_account.Credentials
             creds = creds.with_subject(subject)
         return creds
 
-    _, source, sa_email = signing
-    signer = iam.Signer(Request(), source, sa_email)
+    _, sa_email = signing
+    source, request = _thread_adc()
     return service_account.Credentials(
-        signer=signer,
+        signer=iam.Signer(request, source, sa_email),
         service_account_email=sa_email,
         token_uri=_TOKEN_URI,
         scopes=scopes,

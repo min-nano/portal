@@ -224,6 +224,26 @@ describe('downloadDriveFile', () => {
     expect([...bytes]).toEqual([...NEW]);
   });
 
+  it('待つときは知らせる。待つ時間の合計が 3 分を超えるなら、あきらめる', async () => {
+    const pauses = [];
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, ms) => {
+      pauses.push(ms);
+      callback();
+      return 0;
+    });
+    const told = [];
+    fetchMock.mockImplementation(
+      async () => new Response('{}', { status: 429, headers: { 'Retry-After': '100' } })
+    );
+
+    await expect(download({ id: 'f', name: 'a.pdf' }, { onWait: (ms, reason) => told.push([ms, reason]) })).rejects.toThrow(
+      'HTTP 429'
+    );
+    // 100 秒を 1 回待ったあと、もう 1 回待つと 3 分を超えるので、やめる。
+    expect(pauses).toEqual([100000]);
+    expect(told).toEqual([[100000, 'Drive の流量制限']]);
+  });
+
   it('続きから読まずに 1 度で読めたときは、版を聞き直さない', async () => {
     await downloadDriveFile({ id: 'f', name: 'a.pdf' });
 

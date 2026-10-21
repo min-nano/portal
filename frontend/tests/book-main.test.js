@@ -57,6 +57,8 @@ const mocks = vi.hoisted(() => ({
   readStrip: vi.fn(),
   renderPreview: vi.fn(),
   closePdf: vi.fn(),
+  // pdf-lib に写させない書き換えが効いているか（pdf-lib-views.js）。
+  views: true,
   mergePdf: vi.fn(),
 }));
 
@@ -73,6 +75,11 @@ vi.mock('../src/pdf-book-merger/drive-download.js', () => ({
 }));
 vi.mock('../src/pdf-book-merger/scan-images.js', () => ({
   findScanImages: (...args) => mocks.findScanImages(...args),
+}));
+vi.mock('../src/pdf-book-merger/pdf-lib-views.js', () => ({
+  get pdfLibViews() {
+    return mocks.views;
+  },
 }));
 vi.mock('../src/pdf-book-merger/ocr.js', () => ({
   prepareOcr: (...args) => mocks.prepareOcr(...args),
@@ -227,6 +234,7 @@ beforeEach(async () => {
   }));
   mocks.renderMargins.mockImplementation(async (doc, index) => strips(doc, index));
   mocks.closePdf.mockResolvedValue(undefined);
+  mocks.views = true;
   mocks.mergePdf.mockImplementation(async ({ sources, order, title, labels, onProgress }) => {
     const { pageLabelTexts } = await import('../src/pdf-book-merger/ordering.js');
     const pages = order.map((entry) => specOf(sources.get(entry.fileKey).bytes).pages[entry.pageIndex]);
@@ -478,19 +486,59 @@ describe('ファイルを足して並べる', () => {
     const [shown] = mocks.renderPreview.mock.calls[0];
     expect(shown.spec.pages[0].id).toBe('o1');
 
-    // 拡大表示を閉じても、同じファイルをまた見るときのために開いておく。
-    $('previewCloseBtn').click();
-    await flush();
-    expect(mocks.closePdf.mock.calls.some(([doc]) => doc === shown)).toBe(false);
-    document.querySelector('#pageGrid .bm-thumb').click();
+    // 拡大表示の間は、同じファイルの頁へ移っても開き直さない。
+    document.querySelector('#pageGrid [data-page-key="f1:1"] .bm-thumb').click();
     await vi.waitFor(() => expect(mocks.renderPreview).toHaveBeenCalledTimes(2));
     expect(mocks.renderPreview.mock.calls[1][0]).toBe(shown);
-    $('previewCloseBtn').click();
+    expect(mocks.closePdf.mock.calls.some(([doc]) => doc === shown)).toBe(false);
 
-    // 結合するときに閉じる。
-    $('mergeBtn').click();
+    // 拡大表示を閉じたら手放す。
+    $('previewCloseBtn').click();
     await flush();
     expect(mocks.closePdf.mock.calls.some(([doc]) => doc === shown)).toBe(true);
+  });
+
+  it('調べている途中で外したファイルは、描き終えてから閉じる（描いている文書を壊さない）', async () => {
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    const answer = mocks.renderPageImage.getMockImplementation();
+    mocks.renderPageImage.mockImplementation(async (...args) => {
+      await gate;
+      return answer(...args);
+    });
+    drop([file('猫_奇数.pdf', pdf(ODD))]);
+    await vi.waitFor(() => expect(mocks.renderPageImage).toHaveBeenCalled());
+    const [doc] = mocks.renderPageImage.mock.calls[0];
+
+    fileItem('猫_奇数.pdf').querySelector('button[aria-label="このファイルを外す"]').click();
+    await flush();
+    expect(mocks.closePdf.mock.calls.some(([closed]) => closed === doc)).toBe(false);
+
+    release();
+    await vi.waitFor(() => expect(mocks.closePdf.mock.calls.some(([closed]) => closed === doc)).toBe(true));
+  });
+
+  it('pdf-lib の書き換えが効いていなければ、はじめに知らせ、JPEG は残さずにあとで調べ直す', async () => {
+    mocks.views = false;
+    vi.resetModules();
+    installPage();
+    await import('../src/pdf-book-merger/main.js');
+    await mocks.prepare?.();
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('pdf-lib にバイト列を写させない設定が効いていません');
+
+    $('ocrToggle').checked = false;
+    drop([file('猫_奇数.pdf', pdf(ODD))]);
+    await settled(1);
+    expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
+
+    $('ocrToggle').checked = true;
+    $('ocrToggle').dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalled());
+    // 写しの JPEG は残していないので、1 度だけ調べ直して、その JPEG で描く。
+    expect(mocks.findScanImages).toHaveBeenCalledTimes(2);
+    expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o5' });
   });
 
   it('あとからの OCR が終わっても、拡大表示で開いている文書は閉じない', async () => {

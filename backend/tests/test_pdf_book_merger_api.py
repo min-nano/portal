@@ -177,36 +177,46 @@ def test_read_token_failure_while_making_credentials_is_reported(credentials):
     assert caught.value.status == 502
 
 
-def test_signing_source_is_looked_up_once(monkeypatch):
+def test_signing_source_is_kept_per_thread(monkeypatch):
     # ADC とメタデータサーバーへの問い合わせは、資格情報を作るたびにはしない。
-    calls = []
+    # ADC の資格情報と Request は、スレッドの間で分け合わない（同時に取り直すと
+    # 壊れうる）。同じスレッドでは使い回す（IAM への接続も使い回せる）。
+    import threading
+
+    sources = []
 
     class Source:
         service_account_email = "runtime@example.iam.gserviceaccount.com"
 
     def default():
-        calls.append("default")
-        return Source(), "project"
+        source = Source()
+        sources.append(source)
+        return source, "project"
 
-    monkeypatch.setattr(google_drive, "_signing_source", None)
+    monkeypatch.setattr(google_drive, "_signing_kind", None)
+    monkeypatch.setattr(google_drive, "_thread", threading.local())
     monkeypatch.setattr(google_drive.google.auth, "default", default)
     signers = []
+    monkeypatch.setattr(
+        google_drive.iam, "Signer", lambda request, source, email: signers.append((request, source, email)) or "signer"
+    )
 
-    def signer(request, source, email):
-        signers.append((request, email))
-        return ("signer", len(signers))
+    def make():
+        return google_drive._credentials([google_drive.DRIVE_READONLY_SCOPE], TEST_EMAIL)
 
-    monkeypatch.setattr(google_drive.iam, "Signer", signer)
+    first, second = make(), make()
+    other = []
+    worker = threading.Thread(target=lambda: other.append(make()))
+    worker.start()
+    worker.join()
 
-    first = google_drive._credentials([google_drive.DRIVE_READONLY_SCOPE], TEST_EMAIL)
-    second = google_drive._credentials([google_drive.DRIVE_READONLY_SCOPE], TEST_EMAIL)
-
-    assert calls == ["default"]
     assert first is not second
     assert first.service_account_email == "runtime@example.iam.gserviceaccount.com"
-    # 署名役は通信の道具を抱えるので、スレッドの間で分け合わないよう毎回作る。
-    assert len(signers) == 2
-    assert signers[0][0] is not signers[1][0]
+    # このスレッドで 1 つ、別のスレッドで 1 つ。
+    assert len(sources) == 2
+    (r1, s1, _), (r2, s2, _), (r3, s3, _) = signers
+    assert (r1, s1) == (r2, s2)
+    assert r3 is not r1 and s3 is not s1
 
 
 def test_read_token_failure_is_reported(credentials):

@@ -233,12 +233,20 @@ async function loadBytes(file, source) {
   const started = performance.now();
   let bytes;
   try {
-    bytes = await source.load((received, total) => {
-      // 調べる順番が来て、読み込みを待っているときだけ、進み具合に出す。
-      if (!file.waiting) return;
-      const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
-      showProgress(`「${file.name}」を読み込んでいます（${amount}）`, total ? received / total : null);
-    });
+    bytes = await source.load(
+      (received, total) => {
+        // 調べる順番が来て、読み込みを待っているときだけ、進み具合に出す。
+        if (!file.waiting) return;
+        const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
+        showProgress(`「${file.name}」を読み込んでいます（${amount}）`, total ? received / total : null);
+      },
+      // 読み直す前に待つときは、記録に残し、待っていることを画面に出す。
+      (ms, reason) => {
+        const wait = `${Math.round(ms / 1000)} 秒`;
+        log(`「${file.name}」の読み込みを ${wait}待ってから読み直します（${reason}）`);
+        if (file.waiting) showProgress(`「${file.name}」の読み込みを ${wait}待っています（${reason}）`, null);
+      }
+    );
   } catch (error) {
     log(`「${file.name}」を読み込めませんでした（${error?.message || error}）`);
     throw error;
@@ -318,9 +326,12 @@ async function readFile(file) {
     await analyzePages(file, scans, ocrPages);
     // あとから OCR を有効にしたときのために、番号の見つかっていない頁の JPEG を
     // 残す（PDF 全体を読み直さずに済む）。JPEG はファイルのバイト列の一部を指す
-    // だけなので（pdf-lib-views.js）、残してもメモリはほとんど使わない。
-    for (const page of file.pages) {
-      if (page.candidates.length === 0 && !page.ocr) page.scan = scans[page.index] ?? null;
+    // だけなので（pdf-lib-views.js）、残してもメモリはほとんど使わない。その
+    // 書き換えが効いていないと JPEG は写しなので、残さずに、あとで調べ直す。
+    if (pdfLibViews) {
+      for (const page of file.pages) {
+        if (page.candidates.length === 0 && !page.ocr) page.scan = scans[page.index] ?? null;
+      }
     }
     const byOcr = file.pages.filter((page) => page.ocr && page.candidates.some((c) => c.source === 'ocr')).length;
     log(
@@ -513,6 +524,13 @@ function isPdf(bytes) {
  */
 async function readMarginsWithOcr(file, pages) {
   if (pages.length === 0 || !(await startOcr())) return;
+  // JPEG を残していなければ（pdf-lib の書き換えが効いていないとき）、ここで
+  // 1 度だけ調べ直し、読む頁の分だけを取っておく。
+  if (!pdfLibViews) {
+    showProgress(`「${file.name}」の頁の画像を調べ直しています`, null);
+    const { scans } = await findScanImages(file.bytes);
+    for (const page of pages) page.scan = scans[page.index] ?? null;
+  }
   progressLabel = '余白を読み取っています';
   log(`「${file.name}」の余白を OCR します（${pages.length} 頁）`);
   let done = 0;
@@ -601,7 +619,11 @@ function holdDoc(file) {
 
 /** ファイルを使い終える。ほかに使っている処理が無ければ閉じる。 */
 function releaseDoc(file) {
-  file.docUsers = Math.max(0, (file.docUsers || 0) - 1);
+  file.docUsers = (file.docUsers || 0) - 1;
+  if (file.docUsers < 0) {
+    log(`「${file.name}」の PDF を使い終える数が合いません（内部の食い違い）`);
+    file.docUsers = 0;
+  }
   if (file.docUsers === 0) closeDoc(file);
 }
 
@@ -614,8 +636,8 @@ function closeDoc(file) {
 }
 
 /**
- * 拡大表示で開いておくファイル（最後に拡大表示したもの）。拡大表示を閉じても、
- * 同じファイルの頁をまた見るときに開き直さないよう、結合するまで開いておく。
+ * 拡大表示で開いておくファイル。拡大表示の間は、同じファイルの頁を行き来しても
+ * 開き直さない。拡大表示を閉じたら手放す。
  */
 let previewFile = null;
 
@@ -645,11 +667,13 @@ function removeFile(file) {
     if (page.thumbUrl) URL.revokeObjectURL(page.thumbUrl);
     overrides.delete(page.key);
   }
-  if (previewFile === file) previewFile = null;
-  file.docUsers = 0;
-  closeDoc(file);
+  // 使っている処理（調べる・OCR）があれば、その最後の releaseDoc で閉じる
+  // （描いている途中の文書を壊さない）。使っていなければ、ここで閉じる。
+  if (previewFile === file) setPreviewFile(null);
+  if (!file.docUsers) closeDoc(file);
   file.bytes = null;
   file.loaded = null;
+  for (const page of file.pages) page.scan = null; // バイト列の一部を指しているので
   refresh();
 }
 
@@ -1095,6 +1119,8 @@ function stepPreview(delta) {
 function closePreview() {
   $('previewDialog').close();
   previewKey = '';
+  // 拡大表示のために開いた文書は、閉じたら手放す（結合の途中でも残さない）。
+  setPreviewFile(null);
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   previewUrl = '';
 }
@@ -1142,7 +1168,6 @@ async function mergeAndVerify() {
     const ranges = pageLabelRanges(order);
     const sources = new Map(readyFiles().map((file) => [file.key, { bytes: file.bytes, name: file.name }]));
     const infoFrom = order.find((entry) => entry.role === 'body')?.fileKey;
-    if (!pdfLibViews) log('pdf-lib にバイト列を写させる設定が効いていません（結合でメモリを多く使います）');
     progressLabel = '結合しています';
     showProgress('結合しています…', 0);
     const started = performance.now();
@@ -1278,7 +1303,7 @@ function addDriveFiles(picked) {
       addFile({
         name: file.name,
         driveId: file.id,
-        load: (onProgress) => downloadDriveFile(file, { onProgress }),
+        load: (onProgress, onWait) => downloadDriveFile(file, { onProgress, onWait }),
       })
     );
 }
@@ -1302,6 +1327,10 @@ function addLocal(fileList) {
 }
 
 function wireUp() {
+  if (!pdfLibViews) {
+    // ファイルを読む前に知らせる（読み込んだ時点で、写しはもう作られる）。
+    log('pdf-lib にバイト列を写させない設定が効いていません。大きな本ではメモリが足りなくなることがあります');
+  }
   $('driveBtn').addEventListener('click', addFromDrive);
   $('localBtn').addEventListener('click', () => $('localInput').click());
   $('localInput').addEventListener('change', (event) => {

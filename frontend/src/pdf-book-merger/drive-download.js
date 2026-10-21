@@ -28,6 +28,8 @@ const RATE_LIMIT_DELAY_MS = 5000;
 
 /** Retry-After で待つ時間の上限。 */
 const MAX_RETRY_AFTER_MS = 2 * 60 * 1000;
+/** 1 つのファイルで、読み直しのために待つ時間の合計の上限。 */
+const MAX_TOTAL_WAIT_MS = 3 * 60 * 1000;
 /** 読んでいる間に Drive のファイルが差し替えられたとき、始めから読み直す回数。 */
 const RESTARTS = 1;
 
@@ -102,6 +104,11 @@ function sameVersion(a, b) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 読み直す前に待つ時間の既定（回ごとに倍。流量を絞られたときは長め）。 */
+function defaultDelay(attempt, rateLimited) {
+  return (rateLimited ? RATE_LIMIT_DELAY_MS : FIRST_DELAY_MS) * 2 ** attempt;
+}
+
 /**
  * Drive から読み、bytes の state.received バイト目から書き込む（読み直しは続きから）。
  * Drive が範囲を無視して頭から返したときは、頭から書き直す。
@@ -134,12 +141,14 @@ async function readInto(info, bytes, state, onProgress) {
  *
  * @param {{id:string, name:string}} file ファイル選択ダイアログが返したもの
  * @param {{onProgress?: (received:number, total:number) => void,
- *          delay?: (attempt:number) => number}} [options]
+ *          onWait?: (ms:number, reason:string) => void,
+ *          delay?: (attempt:number, rateLimited:boolean) => number}} [options]
+ *   onWait は、読み直す前に待ち始めるときに呼ぶ（画面と記録に出すため）。
  *   delay は、attempt 回目の読み直しの前に待つミリ秒（既定は 1, 2, 4, 8 秒。
- *   流量を絞られたときは、その 5 倍）
+ *   流量を絞られたときは 5, 10, 20, 40 秒）
  * @returns {Promise<Uint8Array>}
  */
-export async function downloadDriveFile(file, { onProgress, delay = (attempt) => FIRST_DELAY_MS * 2 ** attempt } = {}) {
+export async function downloadDriveFile(file, { onProgress, onWait, delay = defaultDelay } = {}) {
   const path = `${TOOL_API}/files/${encodeURIComponent(file.id)}`;
   try {
     let info = await apiGet(path);
@@ -149,12 +158,17 @@ export async function downloadDriveFile(file, { onProgress, delay = (attempt) =>
     let renewals = 0;
     let restarts = 0;
     let resumed = false; // 続きから読んだことがあるか（別の版がつながりうる）
+    let waited = 0;
 
-    /** 待ってから読み直す（回数を使い切っていれば、失敗を投げる）。 */
+    /** 待ってから読み直す（回数か、待つ時間の合計を使い切っていれば、失敗を投げる）。 */
     const backoff = async (error) => {
       if (retries >= RETRIES) throw error;
-      const wait = delay(retries) * (error.rateLimited ? RATE_LIMIT_DELAY_MS / FIRST_DELAY_MS : 1);
-      await sleep(Math.max(wait, error.retryAfterMs || 0));
+      const rateLimited = Boolean(error.rateLimited);
+      const wait = Math.max(delay(retries, rateLimited), error.retryAfterMs || 0);
+      if (waited + wait > MAX_TOTAL_WAIT_MS) throw error;
+      onWait?.(wait, rateLimited ? 'Drive の流量制限' : error?.message || String(error));
+      await sleep(wait);
+      waited += wait;
       retries++;
     };
     /** サーバーに聞き直す（トークンの取り直しと、版の確かめ）。一時的な失敗は待ってやり直す。 */
