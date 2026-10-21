@@ -1,5 +1,6 @@
 # Cloud Run 用コンテナ。gcloud run deploy --source backend でもこの Dockerfile が使われる。
-FROM python:3.14-slim
+# CI は .github/scripts/backend-python-version.sh でこの FROM 行から Python の X.Y を読み取り、同じ系列でテストする。
+FROM python:3.15-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
