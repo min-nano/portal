@@ -1,0 +1,394 @@
+/* 書籍スキャン PDF 結合ツール にしか出てこない形。
+ *
+ * 骨組み（styles/layout.css）と部品（styles/components.css）で足りるものは
+ * ここには書かない。色・余白・字送りは必ず styles/tokens.css の変数を使う。 */
+
+/* 手順の節。中身は縦に積む（入力欄の桝目にはしない）。 */
+.bm-step::part(body) {
+  display: block;
+}
+
+.bm-step > :not([slot]) + :not([slot]) {
+  margin-top: var(--s-3);
+}
+
+/* ファイルをドラッグしている間は、落とせる場所だと分かるようにする。 */
+#filesSection.dragging {
+  border-style: dashed;
+  border-color: var(--brand-400);
+  background: var(--surface-hover);
+}
+
+.bm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.bm-ocr {
+  align-items: flex-start;
+}
+
+.bm-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.bm-progress span {
+  /* 見出しは短いので折り返さず、バーの方を縮める。 */
+  flex: none;
+  white-space: nowrap;
+}
+
+.bm-progress progress {
+  flex: 1 1 auto;
+  min-width: 4rem;
+  max-width: 16rem;
+  accent-color: var(--brand-600);
+}
+
+/* 処理の記録。畳んだ見出しは控えめにし、開いたら等幅で読めるようにする。 */
+.bm-log summary {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.bm-log pre {
+  max-height: 16rem;
+  overflow: auto;
+  margin: var(--s-2) 0;
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-sm);
+  line-height: var(--lh);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--n-100);
+  border-radius: var(--r-sm);
+}
+
+/* --- ファイルの一覧 ------------------------------------------------------ */
+
+.bm-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-2);
+}
+
+.bm-file {
+  /* 一覧（grid）の中で、長い選択肢の幅に押し広げられないようにする。 */
+  min-width: 0;
+  padding: var(--s-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.bm-file.error {
+  border-color: var(--ng-500);
+  background: var(--ng-50);
+}
+
+.bm-file-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.bm-file-head .name {
+  font-weight: 700;
+  word-break: break-all;
+}
+
+.bm-file .hint {
+  margin: var(--s-1) 0 0;
+}
+
+.bm-file-buttons {
+  display: flex;
+  gap: var(--s-1);
+}
+
+.bm-file-buttons button,
+.bm-problem button {
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
+}
+
+.bm-file-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-4);
+  margin-top: var(--s-2);
+}
+
+.bm-inline {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.bm-inline select,
+.bm-inline input {
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.bm-inline input {
+  max-width: 6em;
+}
+
+/* --- 指摘 ---------------------------------------------------------------- */
+
+.bm-problems {
+  list-style: none;
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-1);
+}
+
+.bm-problem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-sm);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.bm-problem.error {
+  color: var(--ng-700);
+  background: var(--ng-50);
+  border-color: var(--ng-100);
+  border-left-color: var(--ng-500);
+}
+
+.bm-problem.warn {
+  color: var(--warn-700);
+  background: var(--warn-50);
+  border-color: var(--warn-100);
+  border-left-color: var(--warn-500);
+}
+
+.bm-problem.info {
+  color: var(--text-2);
+  border-left-color: var(--brand-300);
+}
+
+.bm-problem.ok {
+  color: var(--ok-700);
+  background: var(--ok-50);
+  border-color: var(--ok-100);
+  border-left-color: var(--ok-500);
+}
+
+.bm-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+/* --- 頁の一覧 ------------------------------------------------------------ */
+
+.bm-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: var(--s-3);
+}
+
+.bm-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-size: var(--fs-xs);
+  scroll-margin-top: calc(var(--header-h) + var(--s-4));
+  transition: box-shadow var(--dur) var(--ease);
+}
+
+.bm-page.warn {
+  border-color: var(--warn-500);
+}
+
+.bm-page.error {
+  border-color: var(--ng-500);
+  border-width: 2px;
+}
+
+.bm-page.focus {
+  box-shadow: var(--focus-ring);
+}
+
+/* 抜けている頁の札。並ぶはずの位置に、空の枠として置く。 */
+.bm-page.missing {
+  align-items: center;
+  justify-content: center;
+  min-height: 8rem;
+  color: var(--ng-600);
+  background: var(--ng-50);
+  border: 2px dashed var(--ng-500);
+}
+
+.bm-missing-label {
+  font-weight: 700;
+  font-size: var(--fs-sm);
+}
+
+/* 縮小画像を押すと拡大する。ボタンの塗りは使わず、絵だけを見せる。 */
+button.bm-thumb {
+  display: block;
+  min-height: 0;
+  padding: 0;
+  background: var(--n-100);
+  border: 1px solid var(--divider);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+button.bm-thumb:hover {
+  background: var(--n-100);
+  border-color: var(--brand-300);
+}
+
+.bm-thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.bm-page-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-1);
+  font-size: var(--fs-sm);
+}
+
+.bm-status {
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+
+.bm-status.conflict,
+.bm-status.uncertain {
+  color: var(--warn-700);
+  font-weight: 700;
+}
+
+.bm-status.unknown {
+  color: var(--ng-600);
+  font-weight: 700;
+}
+
+.bm-page-source {
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.bm-page-issues {
+  margin: 0;
+  padding-left: var(--s-4);
+}
+
+.bm-page-issues .error {
+  color: var(--ng-600);
+}
+
+.bm-page-issues .warn {
+  color: var(--warn-700);
+}
+
+.bm-page-issues .info {
+  color: var(--text-2);
+}
+
+input.bm-page-number {
+  min-height: 32px;
+  font-size: var(--fs-xs);
+}
+
+/* --- 検証の結果 ---------------------------------------------------------- */
+
+.bm-verify {
+  padding: var(--s-3) var(--s-4);
+  font-size: var(--fs-sm);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand-400);
+  border-right: 3px solid var(--brand-400);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.bm-verify.ok {
+  color: var(--ok-700);
+  background: var(--ok-50);
+  border-color: var(--ok-100);
+  border-left-color: var(--ok-500);
+  border-right-color: var(--ok-500);
+}
+
+.bm-verify.ng {
+  color: var(--ng-700);
+  background: var(--ng-50);
+  border-color: var(--ng-100);
+  border-left-color: var(--ng-500);
+  border-right-color: var(--ng-500);
+}
+
+.bm-verify p {
+  margin: 0;
+  max-width: none;
+}
+
+.bm-verify p + p {
+  margin-top: var(--s-1);
+}
+
+.bm-mismatches {
+  margin: var(--s-2) 0 0;
+  padding-left: var(--s-5);
+}
+
+/* --- 拡大表示 ------------------------------------------------------------ */
+
+.bm-preview {
+  width: min(96vw, 60rem);
+  max-width: none;
+}
+
+.bm-preview-image {
+  max-height: 72vh;
+  overflow: auto;
+  background: var(--n-100);
+  border-radius: var(--r-sm);
+}
+
+.bm-preview-image img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
