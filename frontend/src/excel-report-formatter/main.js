@@ -2,7 +2,7 @@
 //
 // GAS 版 gas/index.html のフォームロジックを移植したもの。
 //   - google.script.run → Clerk トークン付きの fetch（/api/**）
-//   - Google Picker → GAS 版と同じ公式 Picker（../google-picker.js）
+//   - Google Picker → Drive をたどるファイル選択（../drive-picker.js）
 //   - フォーム定義（MEASUREMENT_GROUPS / VALIDATION）→ /config API から取得
 //     （mapping.json が単一の情報源になり、手動同期が不要になった）
 
@@ -11,13 +11,13 @@ import './tool.css';
 import '../components/index.js';
 import { startPage } from '../page-start.js';
 import { apiGet, apiPostForBlob, apiSendJson } from '../api.js';
-import { pickFile, preloadPicker } from '../google-picker.js';
+import { pickFile } from '../drive-picker.js';
 import { collectWarnings, selectFocusTarget } from './form-logic.js';
 
 const TOOL_API = '/api/tools/excel-report-formatter';
 
 // 雛形はネイティブの .xlsx のみ（Google スプレッドシートは openpyxl が
-// 読めないため、Picker の時点で選べないようにする）。
+// 読めないため、選ぶ時点で一覧に出さない）。
 const XLSX_MIME =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
@@ -73,7 +73,7 @@ async function chooseTemplate() {
     showMessage(error.message, 'red');
     return;
   }
-  if (!file) return; // Picker をキャンセルした。
+  if (!file) return; // ファイル選択をキャンセルした。
 
   showMessage('雛形を保存しています...', '#333');
   try {
@@ -364,9 +364,6 @@ function bindStickyHeadWorkarounds() {
 // このツールの準備。ここが終わった時点で「入力できる」とみなされ、
 // page-start.js が画面を出す（それまでは読み込み中の表示のまま）。
 async function prepare() {
-  // Picker の準備（設定の取得と Google のスクリプトの読み込み）は、ボタンが
-  // 押される前に始めておく（google-picker.js のコメント参照）。
-  preloadPicker();
 
   document.getElementById('templateBtn').addEventListener('click', chooseTemplate);
   document.getElementById('addRoomBtn').addEventListener('click', addRoom);

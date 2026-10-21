@@ -51,9 +51,9 @@ async def get_template_status(user: User = Depends(require_user)):
 
 @router.put("/template")
 async def save_template_selection(request: Request, user: User = Depends(require_user)):
-    """公式 Google Picker で選ばれた雛形の親フォルダ ID とファイル名を保存する。
+    """ファイル選択ダイアログで選ばれた雛形の親フォルダ ID とファイル名を保存する。
 
-    Picker はブラウザ側でファイルを選ぶだけなので、種類の確認は土台が行う
+    ダイアログはファイルを選ぶだけなので、種類の確認は土台が行う
     （GAS 版 saveTemplateSelection と同じルール: ネイティブ .xlsx のみ許可し、
     親フォルダを特定できないファイルは拒否する）。
     """

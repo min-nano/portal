@@ -48,7 +48,7 @@
 | 画面の見た目 | `src/styles/`（tokens・base・layout・components） | 色・余白・部品。ツールは生の値を書かない |
 | 画面の共通部品 | `src/components/` | ヘッダー・読み込み中・サインインゲート・折り畳み節・入力欄と選択肢（`form-field.js`）・PDF のファイル操作欄 |
 | PDF のファイル操作 | `src/pdf-file-ops.js` / `src/save-dialogs.js` | 「保存 / 別名で保存 / 未保存の確認」の判断と文言 |
-| Picker | `src/google-picker.js` | Drive のファイル選択 |
+| ファイル選択 | `src/drive-picker.js` | Drive のファイル選択ダイアログ（1 つ / 複数） |
 
 以下に挙げるのは、**この表に入っていないのに 2 か所以上で同じことをしている**ものです。
 
@@ -66,7 +66,7 @@
 **ファイルの ID ではなく「親フォルダの ID + ファイル名」**で覚えています
 （同じフォルダへ同名で置き直せば、それが自動的に最新版になるため）。
 
-Picker で選ばれた `fileId` を受け取り、**ゴミ箱・種類・親フォルダを確かめて
+ファイル選択ダイアログで選ばれた `fileId` を受け取り、**ゴミ箱・種類・親フォルダを確かめて
 共有設定へ保存する**という段取りが、`tools/excel_report_formatter.py` と
 `tools/structural_cert_formatter.py` に**ほぼ同じ形で 2 つ**あります
 （合わせて 90 行ほど）。違うのは**許す種類（.xlsx / Google ドキュメント）と、
@@ -248,7 +248,7 @@ Picker で選ばれた `fileId` を受け取り、**ゴミ箱・種類・親フ�
 ### 3.3 雛形を設定する画面
 
 現況検査レポートと安全証明書の `main.js` に、
-「雛形を設定ボタン → Picker → `PUT /template` → 表示の更新 → 未設定なら
+「雛形を設定ボタン → ファイル選択 → `PUT /template` → 表示の更新 → 未設定なら
 送信ボタンを無効化」という同じ流れがあります。2.1 の画面側です。
 
 **寄せ先**: `src/components/`（`pdf-file-ui.js` の隣）。

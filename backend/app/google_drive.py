@@ -3,8 +3,8 @@
 Clerk JWT で確認したメールアドレスのユーザーとして Drive を読み書きする。
 GAS 版の「実行ユーザーの権限で DriveApp を読む」に相当し、雛形ファイルに
 アクセス権のあるユーザーだけが雛形を取得できるという権限モデルをそのまま
-維持する。ファイルを選ぶ操作自体はブラウザ側の公式 Google Picker が担うが、
-選ばれた ID を実際に開けるかどうかはここでの代理アクセスで決まる。
+維持する。ファイルを選ぶ画面に出す一覧（drive_browser）も同じ代理アクセスで
+取るので、選べるのも開けるのも本人に権限のあるものだけになる。
 
 スコープは用途で 2 段階に分けている:
 
@@ -14,9 +14,9 @@ GAS 版の「実行ユーザーの権限で DriveApp を読む」に相当し、
     作成ツールが、雛形の Google ドキュメントを複製して差し替え、PDF を
     Drive へ保存するために使う。書き込みが必要な操作だけこちらを使う。
 
-同じ仕組みで、ブラウザの Google Picker に渡す読み取り専用トークンも発行する
-（delegated_access_token）。サーバーが API を呼ぶのではなくトークンだけを
-返す点だけが違う。
+アクセストークンはブラウザへ渡さないのが原則。例外は delegated_read_token()
+（drive.readonly）だけで、書籍スキャン PDF 結合ツールが数百 MB のスキャンを
+Drive から直接読むのに使う。
 
 JSON 鍵ファイルなしで動作するよう、Cloud Run 上ではランタイム
 サービスアカウントの IAM Credentials API（signJwt）で署名する。この方式には
@@ -26,9 +26,11 @@ GOOGLE_APPLICATION_CREDENTIALS に JSON 鍵を指定すればそのまま動く�
 """
 
 import datetime
+import threading
 
 import google.auth
-from google.auth import iam
+import google.auth.exceptions
+from google.auth import crypt, iam
 from google.auth.transport.requests import AuthorizedSession, Request
 from google.oauth2 import service_account
 
@@ -56,34 +58,105 @@ class DriveError(PortalError):
         super().__init__(message, status)
 
 
+# 代理の資格情報の署名元。ADC の読み込みとメタデータサーバーへの問い合わせが
+# 要るので、1 度だけ探してプロセス全体で使い回す（署名元は利用者によらない）。
+#
+# FastAPI は同期の処理をスレッドプールで動かすので、いくつものスレッドが同時に
+# 署名しうる。ADC の資格情報の取り直しは lock で 1 つずつにし、通信の道具
+# （Request。requests.Session を抱える）はスレッドごとに持つ（接続も使い回せる）。
+# 署名役（_IamSigner）は、署名するときにそれらを引くので、利用者ごとに
+# キャッシュした資格情報（_cached_credentials）を別のスレッドが使っても安全。
+_signing_kind = None  # ("key", 鍵ファイルの資格情報) か ("iam", ADC の資格情報, SA のメール)
+_signing_lock = threading.Lock()
+_adc_lock = threading.Lock()
+_thread = threading.local()
+
+
+def _thread_request() -> Request:
+    """このスレッドの Request（無ければ作る）。"""
+    if getattr(_thread, "request", None) is None:
+        _thread.request = Request()
+    return _thread.request
+
+
+def _signing():
+    """("key", 鍵ファイルの資格情報) か ("iam", ADC の資格情報, SA のメール) を返す。"""
+    global _signing_kind
+    with _signing_lock:
+        if _signing_kind is not None:
+            return _signing_kind
+        source, _ = google.auth.default()
+
+        # ローカル開発: JSON 鍵ファイル（service_account.Credentials）ならそのまま使う。
+        # 鍵で署名するので、取り直しの通信は無い（分け合ってよい）。
+        if isinstance(source, service_account.Credentials):
+            _signing_kind = ("key", source)
+            return _signing_kind
+
+        # Cloud Run: 鍵ファイルなし。IAM Credentials API で署名する。
+        sa_email = config.delegated_sa_email() or getattr(
+            source, "service_account_email", ""
+        )
+        if not sa_email or sa_email == "default":
+            # metadata server から実際のメールアドレスを確定させる。
+            source.refresh(_thread_request())
+            sa_email = getattr(source, "service_account_email", "")
+        if not sa_email or sa_email == "default":
+            raise DriveError(
+                "サービスアカウントを特定できませんでした。環境変数 "
+                "DWD_SERVICE_ACCOUNT_EMAIL を設定してください。"
+            )
+        _signing_kind = ("iam", source, sa_email)
+        return _signing_kind
+
+
+class _LockedSource:
+    """ADC の資格情報を、取り直しを lock の中で行う形で iam.Signer に渡す。
+
+    iam.Signer は signBlob を頼むたびに（やり直しを含めて）before_request を呼び、
+    そこで期限が切れていれば取り直す。その取り直しも 1 つずつにする。
+    """
+
+    def __init__(self, source):
+        self._source = source
+
+    @property
+    def universe_domain(self):
+        return self._source.universe_domain
+
+    def before_request(self, request, method, url, headers):
+        with _adc_lock:
+            self._source.before_request(request, method, url, headers)
+
+
+class _IamSigner(crypt.Signer):
+    """IAM Credentials API で署名する。ADC の取り直しは 1 つずつ、通信はスレッドごと。"""
+
+    def __init__(self, source, sa_email: str):
+        self._source = _LockedSource(source)
+        self._sa_email = sa_email
+
+    @property
+    def key_id(self):
+        return None
+
+    def sign(self, message):
+        # signBlob との通信は lock の外（ほかのスレッドの署名を待たせない）。
+        return iam.Signer(_thread_request(), self._source, self._sa_email).sign(message)
+
+
 def _credentials(scopes: list[str], subject: str) -> service_account.Credentials:
     """subject のユーザー代理となるサービスアカウント資格情報を作る。"""
-    source, _ = google.auth.default()
-
-    # ローカル開発: JSON 鍵ファイル（service_account.Credentials）ならそのまま使う。
-    if isinstance(source, service_account.Credentials):
-        creds = source.with_scopes(scopes)
+    signing = _signing()
+    if signing[0] == "key":
+        creds = signing[1].with_scopes(scopes)
         if subject:
             creds = creds.with_subject(subject)
         return creds
 
-    # Cloud Run: 鍵ファイルなし。IAM Credentials API で署名する。
-    sa_email = config.delegated_sa_email() or getattr(
-        source, "service_account_email", ""
-    )
-    if not sa_email or sa_email == "default":
-        # metadata server から実際のメールアドレスを確定させる。
-        source.refresh(Request())
-        sa_email = getattr(source, "service_account_email", "")
-    if not sa_email or sa_email == "default":
-        raise DriveError(
-            "サービスアカウントを特定できませんでした。環境変数 "
-            "DWD_SERVICE_ACCOUNT_EMAIL を設定してください。"
-        )
-
-    signer = iam.Signer(Request(), source, sa_email)
+    _, source, sa_email = signing
     return service_account.Credentials(
-        signer=signer,
+        signer=_IamSigner(source, sa_email),
         service_account_email=sa_email,
         token_uri=_TOKEN_URI,
         scopes=scopes,
@@ -91,9 +164,37 @@ def _credentials(scopes: list[str], subject: str) -> service_account.Credentials
     )
 
 
+# 代理の資格情報は、利用者（とスコープ）ごとに使い回す。作るたびに ADC の
+# 読み込み・IAM での署名・トークンの取得が要り、ファイル選択ダイアログは
+# フォルダを開くたび・検索のたびに一覧を取りに来るため。トークンが切れれば
+# AuthorizedSession が使う前に取り直すので、捨てる必要はない。利用者は社内の
+# 人数ぶんしかいないが、念のため上限を超えたら一度空にする。
+_CREDENTIALS_CACHE: dict[tuple, service_account.Credentials] = {}
+_CREDENTIALS_CACHE_LIMIT = 256
+_credentials_lock = threading.Lock()
+
+
+def _cached_credentials(scopes: list[str], subject: str) -> service_account.Credentials:
+    key = (tuple(scopes), subject)
+    with _credentials_lock:
+        creds = _CREDENTIALS_CACHE.get(key)
+    if creds is not None:
+        return creds
+    # 作るときは（Cloud Run ではメタデータサーバーと通信するので）ロックの外で。
+    # 他の利用者の取得を待たせない。同じ利用者が同時に作っても、先に入った
+    # ほうを使う。
+    creds = _credentials(scopes, subject)
+    with _credentials_lock:
+        if len(_CREDENTIALS_CACHE) >= _CREDENTIALS_CACHE_LIMIT:
+            _CREDENTIALS_CACHE.clear()
+        return _CREDENTIALS_CACHE.setdefault(key, creds)
+
+
 def delegated_session(user_email: str) -> AuthorizedSession:
     """user_email の代理（読み取り専用）で Drive を呼ぶセッション。"""
-    return AuthorizedSession(_credentials([DRIVE_READONLY_SCOPE], subject=user_email))
+    return AuthorizedSession(
+        _cached_credentials([DRIVE_READONLY_SCOPE], subject=user_email)
+    )
 
 
 def delegated_write_session(user_email: str) -> AuthorizedSession:
@@ -104,53 +205,8 @@ def delegated_write_session(user_email: str) -> AuthorizedSession:
     権限で行う。本人が書き込めない場所には保存できない。
     """
     return AuthorizedSession(
-        _credentials([DRIVE_SCOPE, DOCUMENTS_SCOPE], subject=user_email)
+        _cached_credentials([DRIVE_SCOPE, DOCUMENTS_SCOPE], subject=user_email)
     )
-
-
-def _seconds_until(expiry) -> int:
-    """トークンの残り有効秒数。
-
-    google-auth の expiry は UTC の naive datetime だが、実装が変わっても
-    壊れないよう aware も受け付ける。
-    """
-    if not expiry:
-        return 0
-    if expiry.tzinfo is None:
-        expiry = expiry.replace(tzinfo=datetime.timezone.utc)
-    remaining = (expiry - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
-    return max(0, int(remaining))
-
-
-def delegated_access_token(user_email: str) -> tuple[str, int]:
-    """user_email 本人の読み取り専用アクセストークンを発行する。
-
-    ブラウザの公式 Google Picker へ渡すためのもの。Picker は選択画面を描く
-    ために Drive を読むトークンを要求する。ブラウザ側で OAuth の同意を取る
-    方式（Google Identity Services）もあるが、それだと画面の URL を OAuth
-    クライアントの「承認済みの JavaScript 生成元」へ登録する必要があり、
-    URL が毎回変わる PR プレビューでは使えない（この欄はワイルドカードが
-    使えず、追加するための API も無い）。ここでは既にある代理アクセスの
-    仕組みで本人のトークンを発行する。
-
-    渡すのは drive.readonly のトークンで、本人が既に Drive で見られる範囲を
-    超えない。書き込みは従来どおりサーバー側でしか行わない。
-    """
-    creds = _credentials([DRIVE_READONLY_SCOPE], subject=user_email)
-    try:
-        creds.refresh(Request())
-    except Exception as error:  # RefreshError など。原因は Google の応答にある。
-        detail = " ".join(str(error).split())
-        if len(detail) > 300:
-            detail = detail[:300] + "…"
-        raise DriveError(
-            "Google Drive のアクセストークンを取得できませんでした。"
-            "domain-wide delegation の設定（クライアント ID とスコープの登録）を"
-            "確認してください。"
-            + (f"（Google からの応答: {detail}）" if detail else ""),
-            502,
-        )
-    return creds.token, _seconds_until(creds.expiry)
 
 
 def _escape_query_value(value: str) -> str:
@@ -210,7 +266,10 @@ def get_file_metadata(session: AuthorizedSession, file_id: str) -> dict:
     resp = session.get(
         f"{_FILES_URL}/{file_id}",
         params={
-            "fields": "id, name, mimeType, parents, trashed, webViewLink",
+            # size と headRevisionId は、Drive から直接 PDF を読むツール（書籍
+            # スキャンの結合）が、読み終えたか・途中で差し替えられていないかを
+            # 確かめるのに使う。
+            "fields": "id, name, mimeType, parents, trashed, webViewLink, size, headRevisionId, modifiedTime",
             "supportsAllDrives": "true",
         },
     )
@@ -366,3 +425,25 @@ def download_file(
     )
     _raise_for_status(resp, context)
     return resp.content
+
+
+def delegated_read_token(user_email: str) -> tuple[str, datetime.datetime | None]:
+    """user_email の代理（読み取り専用・drive.readonly）のアクセストークンと期限（UTC）。
+
+    書籍スキャンの結合だけが使う。数百 MB のスキャンを Cloud Run と Hosting を
+    通して運ぶと転送量が掛かるので、ブラウザがこのトークンで Drive から直接
+    読む（README「書籍スキャン PDF 結合ツール」）。トークンは本人が Drive で
+    読めるものすべてを、期限（1 時間。代理の仕組みで決まり、短くできない）まで
+    読めるので、ほかの用途には渡さない。
+
+    サーバー自身が使う資格情報（_cached_credentials）とは分け、呼ぶたびに新しく
+    作る。ブラウザへ渡したトークンをサーバーが使い回さないように、また、
+    サーバーの AuthorizedSession が同じ資格情報を同時に取り直して競合しない
+    ように。
+    """
+    try:
+        creds = _credentials([DRIVE_READONLY_SCOPE], subject=user_email)
+        creds.refresh(Request())
+    except google.auth.exceptions.GoogleAuthError as error:
+        raise DriveError(f"Drive の代理アクセスを用意できませんでした（{error}）。", 502) from error
+    return creds.token, creds.expiry

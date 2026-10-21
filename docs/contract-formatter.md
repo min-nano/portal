@@ -31,7 +31,7 @@
 | --- | --- |
 | 社内ユーザーの認証 | **ある**（Clerk。Google ログイン + 許可ドメイン） |
 | Google ドキュメントの雛形を複製して置換し、PDF へ書き出す | **ある**（`google_docs.replace_all_text` / `google_drive.export_file`） |
-| 雛形とファイルを Drive から選ぶ | **ある**（Google Picker。代理アクセストークンで発行） |
+| 雛形とファイルを Drive から選ぶ | **ある**（Drive のファイル選択ダイアログ。一覧は代理アクセスで取得） |
 | PDF を Drive へ保存（上書き / 別名で保存）し、版履歴を残す | **ある**（`<portal-edit-bar>` / `<portal-save-bar>` / `<portal-save-dialogs>`） |
 | PDF に入力を埋め込み、開き直して復元する | **ある**（`structural_cert.finalize_pdf` / `parse_pdf`） |
 | 雛形が改訂されて置換が起きなかったことの検知 | **ある**（`missing_placeholder_warnings`） |
@@ -44,7 +44,7 @@
 **新しく書くのは「式の評価器」と「重ねを差し込む仕組み」、そして告示のルールだけです。**
 **事務所が独自に決めたものは、コードではなくデータとして事務所が持ちます**（§4・§6.5）。
 独立したシステムにすると、
-Clerk・domain-wide delegation・Picker の APIキー・Cloud Run・CI・デザインシステムを
+Clerk・domain-wide delegation・Cloud Run・CI・デザインシステムを
 もう一組**運用し続ける**ことになり、得られるものは「リポジトリが分かれていること」だけでした。
 このツールを使うのは事務所の人間だけで、それは portal の他のツールと同じ性質です。
 
@@ -909,7 +909,7 @@ portal の `settings_store` と `resource_store` を使います。
 
 | キー | 内容 |
 | --- | --- |
-| `resource_folder_id` | **設定フォルダ**（雛形と定義の置き場所）。Picker で選ぶ |
+| `resource_folder_id` | **設定フォルダ**（雛形と定義の置き場所）。ファイル選択ダイアログで選ぶ |
 | `office` | 事務所の情報（名称・所在地・一級／二級／木造の別・開設者名）**＝フォームの初期値** |
 | `architects` | 所属建築士（氏名・資格区分・登録番号・管理建築士か）**＝同上** |
 | `fee` | 報酬算定の設定値（§6.5）。式が `set.*` で読む |

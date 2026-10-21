@@ -18,7 +18,7 @@ import '../styles.css';
 import '../components/index.js';
 import { startPage } from '../page-start.js';
 import { apiGet, apiPostFile, apiSendJson } from '../api.js';
-import { pickFile, preloadPicker } from '../google-picker.js';
+import { pickFile } from '../drive-picker.js';
 import { askSaveAs, askUnsaved } from '../save-dialogs.js';
 import {
   applyFormData,
@@ -116,9 +116,9 @@ async function refreshTemplateStatus() {
   updateSubmitState();
 }
 
-// --- Drive からの選択（公式 Google Picker） ---------------------------------
+// --- Drive からの選択（../drive-picker.js） ---------------------------------
 
-// 雛形・開く PDF・保存先フォルダの 3 用途。選ぶ画面は Picker に任せ、
+// 雛形・開く PDF・保存先フォルダの 3 用途。選ぶ画面は drive-picker.js に任せ、
 // ここでは「何を選ばせるか」だけを持つ。選ばれた後の処理は呼び出し側。
 const PICKERS = {
   template: {
@@ -135,7 +135,7 @@ const PICKERS = {
   },
 };
 
-/** Picker を開いて選択結果を返す。キャンセル・失敗はどちらも null。 */
+/** ファイル選択を開いて選択結果を返す。キャンセル・失敗はどちらも null。 */
 async function chooseFromDrive(kind) {
   try {
     return await pickFile(PICKERS[kind]);
@@ -175,8 +175,8 @@ async function openFromDrive() {
   }
 }
 
-// Drive ではなく手元の PDF から読み込む経路。Picker の「アップロード」は
-// Drive へ保存してしまうため、解析するだけのこちらは別に用意する。
+// Drive ではなく手元の PDF から読み込む経路（解析するだけで Drive には
+// 保存しない）。
 async function openUploaded() {
   if (!(await confirmDiscardChanges('読み込み'))) return;
   document.getElementById('uploadInput').click();
@@ -407,9 +407,6 @@ async function sendSaveRequest(data, saveSpec) {
 // このツールの準備。ここが終わった時点で「入力できる」とみなされ、
 // page-start.js が画面を出す（それまでは読み込み中の表示のまま）。
 async function prepare() {
-  // Picker の準備（設定の取得と Google のスクリプトの読み込み）は、ボタンが
-  // 押される前に始めておく（google-picker.js のコメント参照）。
-  preloadPicker();
 
   document.getElementById('templateBtn').addEventListener('click', chooseTemplate);
   document.getElementById('newBtn').addEventListener('click', newDocument);

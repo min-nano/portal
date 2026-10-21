@@ -30,13 +30,13 @@ EXAMPLE_PANEL = {
     "edgeDistance": 10,
 }
 
-# 新規保存の保存先は、そのつど画面の Picker で選ばれたフォルダが送られてくる。
+# 新規保存の保存先は、そのつど画面のファイル選択ダイアログで選ばれたフォルダが送られてくる。
 NEW_SAVE = {"mode": "new", "folderId": "out-folder"}
 
 
 @pytest.fixture
 def folder(drive):
-    """Picker で選ばれたことにする保存先フォルダ。"""
+    """ファイル選択ダイアログで選ばれたことにする保存先フォルダ。"""
     drive.metadata["out-folder"] = {
         "id": "out-folder",
         "name": "計算書",

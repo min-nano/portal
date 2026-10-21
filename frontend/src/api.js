@@ -25,7 +25,8 @@ async function raiseForError(resp) {
   } catch {
     // JSON でないエラー応答（プロキシ等）はそのまま既定メッセージを使う。
   }
-  throw new Error(message);
+  // 呼び出し側が、待てば通りうる失敗（5xx など）かを見分けられるように。
+  throw Object.assign(new Error(message), { status: resp.status });
 }
 
 /**
@@ -45,8 +46,9 @@ export function warmUpApi() {
   fetch('/api/healthz', { cache: 'no-store' }).catch(() => {});
 }
 
-export async function apiGet(path) {
-  const resp = await authorizedFetch(path);
+/** options.signal を渡すと、途中でやめた読み込みの通信も打ち切る。 */
+export async function apiGet(path, options = {}) {
+  const resp = await authorizedFetch(path, options);
   await raiseForError(resp);
   return resp.json();
 }

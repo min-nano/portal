@@ -145,6 +145,7 @@ label > textarea {
 }
 
 input[type='text'],
+input[type='search'],
 input[type='number'],
 input[type='date'],
 select,
@@ -988,6 +989,237 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
 .folder-row button {
   margin-left: auto;
   flex: none;
+}
+
+/* --- Drive のファイル選択（src/drive-picker.js） -------------------------
+ * タブ（最初に開く場所）・検索欄・パンくず・一覧・決定ボタンの縦並び。
+ * 一覧だけがスクロールし、ほかは常に見えている。スマホでは画面いっぱいに
+ * 広げ、広い画面では大きめのダイアログにする。 */
+
+.app-dialog.drive-picker {
+  display: none;
+  flex-direction: column;
+  gap: var(--s-3);
+  width: min(40rem, calc(100vw - 2rem));
+  height: min(40rem, calc(100dvh - 2rem));
+  max-height: none;
+  padding: var(--s-4);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.app-dialog.drive-picker[open] {
+  display: flex;
+}
+
+@media (max-width: 640px) {
+  .app-dialog.drive-picker {
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+    margin: 0;
+    border-radius: 0;
+    /* ノッチやホームバーの下に決定ボタンが潜らないようにする。 */
+    padding-top: max(var(--s-3), env(safe-area-inset-top));
+    padding-bottom: max(var(--s-3), env(safe-area-inset-bottom));
+  }
+}
+
+.drive-picker-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.app-dialog .drive-picker-head h3 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drive-picker-close {
+  flex: none;
+  width: var(--tap);
+  padding: 0;
+  font-size: var(--fs-lg);
+}
+
+/* タブは横に並べ、入り切らなければ横にずらして見る（折り返さない）。 */
+.drive-picker-tabs {
+  display: flex;
+  gap: var(--s-1);
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.drive-picker-tab {
+  flex: none;
+  padding: 0 var(--s-3);
+  color: var(--text-2);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+}
+
+.drive-picker-tab:hover {
+  color: var(--text-brand);
+  background: var(--surface-hover);
+}
+
+.drive-picker-tab[aria-selected='true'] {
+  color: var(--text-brand);
+  border-bottom-color: var(--brand-600);
+}
+
+.drive-picker-search {
+  margin: 0;
+}
+
+.drive-picker-crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.drive-picker-crumbs li {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.drive-picker-crumbs li + li::before {
+  content: '›';
+  padding: 0 var(--s-1);
+  color: var(--text-muted);
+}
+
+.drive-picker-crumbs [aria-current] {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.drive-picker-crumb {
+  min-height: auto;
+  padding: var(--s-1) var(--s-1);
+  font-weight: 400;
+  color: var(--text-brand);
+  background: none;
+}
+
+.drive-picker-crumb:hover {
+  background: var(--surface-hover);
+}
+
+.drive-picker-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.drive-picker-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.drive-picker-list li + li {
+  border-top: 1px solid var(--divider);
+}
+
+/* 一覧の 1 行。ボタンの形はしているが、見た目は表の行に近づける。 */
+.drive-picker-item {
+  display: flex;
+  justify-content: flex-start;
+  gap: var(--s-3);
+  width: 100%;
+  padding: 0 var(--s-3);
+  font-weight: 400;
+  font-size: var(--fs-base);
+  text-align: left;
+  color: var(--text);
+  background: none;
+  border-radius: 0;
+}
+
+.drive-picker-item:hover {
+  background: var(--surface-hover);
+}
+
+.drive-picker-item:active {
+  transform: none;
+}
+
+.drive-picker-item[aria-pressed='true'] {
+  background: var(--brand-100);
+  box-shadow: inset 3px 0 0 var(--brand-600);
+}
+
+.drive-picker-icon {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.drive-picker-icon.folder {
+  fill: var(--brand-100);
+  stroke: var(--brand-500);
+}
+
+.drive-picker-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drive-picker-date {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.drive-picker-status {
+  padding: var(--s-4);
+  text-align: center;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.drive-picker-status[hidden] {
+  display: none;
+}
+
+.drive-picker-more {
+  display: flex;
+  width: calc(100% - 2 * var(--s-3));
+  margin: var(--s-2) auto var(--s-3);
+}
+
+.drive-picker-more[hidden] {
+  display: none;
+}
+
+.drive-picker .dialog-actions {
+  margin-top: 0;
 }
 
 /* --- 読み込み中 ----------------------------------------------------------

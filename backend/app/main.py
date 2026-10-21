@@ -9,7 +9,7 @@
 
 このファイルが持つのは **組み立てだけ** で、ツールの中身は 1 行も無い:
 
-  - どのツールにも同じように効くもの（/healthz・/me・/picker/**）
+  - どのツールにも同じように効くもの（/healthz・/me・/drive/items）
   - 失敗の返し方（PortalError なら status と日本語、それ以外は 500）
   - 載せるツール（app/tools/）のルーターを /api/tools/<id> へ載せる
 
@@ -18,11 +18,11 @@
 wasm）は portal_sdk にある。
 """
 
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import config, google_drive, portal_sdk
+from . import config, drive_browser, google_drive, portal_sdk
 from .clerk_auth import User
 from .errors import PortalError
 from .portal_sdk import require_user
@@ -79,39 +79,37 @@ async def me(user: User = Depends(require_user)):
     return {"email": user.email}
 
 
-@app.get("/api/picker/config")
-async def get_picker_config(user: User = Depends(require_user)):
-    """公式 Google Picker の初期化に必要な設定を返す（全ツール共通）。
+@app.get("/api/drive/items")
+def list_drive_items(
+    location: str | None = None,
+    folder: str | None = None,
+    q: str | None = None,
+    mimeTypes: str | None = None,
+    foldersOnly: bool = False,
+    pageToken: str | None = None,
+    user: User = Depends(require_user),
+):
+    """ファイル選択ダイアログに出す一覧（全ツール共通）。
 
-    ページに埋め込まれる公開情報だが、環境（本番 / PR プレビュー / ローカル）
-    ごとに違うため、ビルドに焼き込まずここから配る。未設定でもエラーには
-    せず configured: false を返し、画面側が「Picker が未設定」と案内する
-    （設定漏れの症状を、正体不明の失敗ではなく明示的な案内にする）。
+    Drive の中をたどる画面はポータル側で描き、一覧だけをここで本人の代理
+    （drive.readonly）で取る（Google Picker をやめた理由は drive_browser 参照）。
+    指定は folder（フォルダの中身）→ q（名前と本文で検索）→ location（最初の場所:
+    my-drive / shared-drives / recent / shared-with-me）の順に見る。
+
+    Drive の呼び出しは同期処理（requests）なので、async にせず普通の関数に
+    しておく（FastAPI がスレッドプールで動かし、待つ間もイベントループを
+    止めない）。フォルダを開くたび・検索のたびに呼ばれるため。
     """
-    api_key = config.picker_api_key()
-    return {
-        "configured": bool(api_key),
-        "apiKey": api_key,
-        "appId": config.picker_app_id(),
-    }
-
-
-@app.get("/api/picker/token")
-async def get_picker_token(response: Response, user: User = Depends(require_user)):
-    """Picker が選択画面を描くための、本人の読み取り専用トークンを発行する。
-
-    ブラウザで OAuth の同意を取る方式ではなく、既にある代理アクセス
-    （domain-wide delegation）を使う理由は google_drive.delegated_access_token
-    のコメントを参照（PR プレビューのように URL が毎回変わる環境でも、
-    OAuth クライアントへの登録なしに動かすため）。
-
-    渡すのは本人が Drive で見られる範囲の読み取り権限だけで、書き込みは
-    従来どおりサーバー側でしか行わない。
-    """
-    token, expires_in = google_drive.delegated_access_token(user.email)
-    # 短命とはいえ資格情報なので、経路のどこにも残さない。
-    response.headers["Cache-Control"] = "no-store"
-    return {"token": token, "expiresIn": expires_in}
+    session = google_drive.delegated_session(user.email)
+    return drive_browser.list_items(
+        session,
+        location=location,
+        folder=folder,
+        query=q,
+        mime_types=drive_browser.parse_mime_types(mimeTypes),
+        folders_only=foldersOnly,
+        page_token=pageToken,
+    )
 
 
 # --- ツール ------------------------------------------------------------------
