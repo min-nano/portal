@@ -38,10 +38,22 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Read the Python version from backend/Dockerfile
+        # 本番（Cloud Run）のイメージと同じ系列でテストするため、バージョンは
+        # Dockerfile の FROM 行だけを正とする。dependabot が Dockerfile を
+        # 上げれば、ここも自動で追従する。
+        id: python-version
+        run: |
+          version="$(sed -nE 's/^FROM python:([0-9]+\.[0-9]+)([-.@ ].*)?$/\1/p' backend/Dockerfile | head -n 1)"
+          if [ -z "$version" ]; then
+            echo "::error file=backend/Dockerfile::FROM python:X.Y の行が見つかりません"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.15'
+          python-version: ${{ steps.python-version.outputs.version }}
 
       - name: Compare with the distribution page
         id: check
