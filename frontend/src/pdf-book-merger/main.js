@@ -111,11 +111,11 @@ function showMessage(text, color = '') {
   if (text) log(color === 'red' ? `【注意】${text}` : text);
 }
 
-// --- 進み具合と、処理の記録 ----------------------------------------------------
+// --- 進み具合と、ログ ------------------------------------------------------------
 //
 // 画面に出す進み具合は、プログレスバーとその横の短い見出し（何をしているか）
 // だけにする。いま何頁目を調べているかといった細かい経過と、ファイルごとの
-// 読み込み・調査の結果（大きさ・かかった時間など）は「処理の記録」に残す。
+// 読み込み・調査の結果（大きさ・かかった時間など）は「ログ」に残す。
 // 記録はふだん畳んでおき、うまく動かないときに開いてコピーしてもらう。
 
 /** 進み具合の見出し（バーの横に出す短いもの）。段ごとに決める。 */
@@ -141,7 +141,7 @@ function showProgress(text, fraction, heading = '') {
   renderLog();
 }
 
-/** 処理の記録に 1 行足す（時刻付き）。 */
+/** ログに 1 行足す（時刻付き）。 */
 function log(text) {
   const time = new Date().toLocaleTimeString('ja-JP', { hour12: false });
   logLines.push(`${time} ${text}`);
@@ -173,7 +173,7 @@ async function copyLog() {
     selection.addRange(range);
     button.textContent = '選びました。コピーしてください';
   }
-  setTimeout(() => (button.textContent = '記録をコピー'), 2000);
+  setTimeout(() => (button.textContent = 'ログをコピー'), 2000);
 }
 
 function seconds(since) {
@@ -332,9 +332,8 @@ async function readFile(file) {
     // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
     // もののほかは、役割を決める前に番号を読み切る（文字情報の無い束も、画像
     // から番号が読めれば本文と分かる）。OCR の準備は、画像を描く間に進める。
-    const ocrAtStart = $('ocrToggle').checked;
     const ocrPages = new Set(
-      !roleFromName(file.name) && ocrAtStart
+      !roleFromName(file.name)
         ? file.pages.filter((page) => page.candidates.length === 0).map((page) => page.index)
         : []
     );
@@ -351,10 +350,11 @@ async function readFile(file) {
       log(`「${file.name}」の ${count - jpegPages} 頁は pdf.js で描きます（${why || '理由不明'}）。${example}`);
     }
     await analyzePages(file, scans, ocrPages);
-    // あとから OCR を有効にしたときのために、番号の見つかっていない頁の JPEG を
-    // 残す（PDF 全体を読み直さずに済む）。JPEG はファイルのバイト列の一部を指す
-    // だけなので（pdf-lib-views.js）、残してもメモリはほとんど使わない。その
-    // 書き換えが効いていないと JPEG は写しなので、残さずに、あとで調べ直す。
+    // あとから本文に変えたとき（名前で表紙と見て OCR しなかったファイル）の
+    // ために、番号の見つかっていない頁の JPEG を残す（PDF 全体を読み直さずに
+    // 済む）。JPEG はファイルのバイト列の一部を指すだけなので（pdf-lib-views.js）、
+    // 残してもメモリはほとんど使わない。その書き換えが効いていないと JPEG は
+    // 写しなので、残さずに、あとで調べ直す。
     if (pdfLibViews) {
       for (const page of file.pages) {
         if (page.candidates.length === 0 && !page.ocr) page.scan = scans[page.index] ?? null;
@@ -369,8 +369,6 @@ async function readFile(file) {
     file.role = guessRole(file.name, file.pages);
     file.status = 'ready';
     log(`「${file.name}」を調べ終えました（${ROLES[file.role]}、合計 ${seconds(started)}）`);
-    // 調べている間に OCR が有効にされていたら、ここで残りの頁を読む。
-    if (!ocrAtStart && $('ocrToggle').checked) queueLateOcr(file);
   } catch (error) {
     file.status = 'error';
     file.error = error.message || String(error);
@@ -543,7 +541,7 @@ function isPdf(bytes) {
 
 /**
  * 読み終えたファイルの、番号の見つかっていない頁の余白を OCR する（あとから
- * OCR を有効にしたとき）。読んでいる間も、ファイルは並びに入れたままにする
+ * 本文に変えたとき）。読んでいる間も、ファイルは並びに入れたままにする
  * （頁が抜けて見えないように）。読み終えたら並べ直す。
  *
  * @param {object} file
@@ -588,7 +586,7 @@ async function readMarginsWithOcr(file, pages) {
   await Promise.all(reading);
 }
 
-/** 読み終えたファイルの、番号の見つかっていない頁の OCR を頼む（あとから OCR を有効にしたとき）。 */
+/** 読み終えたファイルの、番号の見つかっていない頁の OCR を頼む（あとから本文に変えたとき）。 */
 function queueLateOcr(file) {
   // 読んでいる最中のファイルは、もう一度は頼まない（切り替えを繰り返しても
   // 同じ頁を 2 度読まない）。
@@ -692,7 +690,7 @@ function removeFile(file) {
   const at = files.indexOf(file);
   if (at < 0) return;
   files.splice(at, 1);
-  log(`「${file.name}」を外しました`);
+  log(`「${file.name}」を削除しました`);
   for (const page of file.pages) {
     if (page.thumbUrl) URL.revokeObjectURL(page.thumbUrl);
     overrides.delete(page.key);
@@ -815,7 +813,7 @@ function fileItem(file, position) {
   actions.append(
     smallButton('↑', 'ひとつ上へ（先頭・末尾に置くファイルの順番）', () => moveFile(file, -1)),
     smallButton('↓', 'ひとつ下へ', () => moveFile(file, 1)),
-    smallButton('外す', 'このファイルを外す', () => removeFile(file), 'secondary danger')
+    smallButton('削除', 'このファイルを削除', () => removeFile(file), 'secondary danger')
   );
   actions.firstChild.disabled = position === 0;
   actions.children[1].disabled = position === files.length - 1;
@@ -866,6 +864,8 @@ function fileControls(file) {
   }
   role.addEventListener('change', () => {
     file.role = role.value;
+    // 名前で表紙と見て余白を読まなかったファイルも、本文にしたら読む。
+    if (file.status === 'ready') queueLateOcr(file);
     refresh();
   });
   roleField.append(role);
@@ -1363,6 +1363,34 @@ function addLocal(fileList) {
     );
 }
 
+/**
+ * 見出しの「?」。押すと説明を開き（もう一度押すか、外を押すか、Esc で閉じる）、
+ * マウスでは載せている間だけ開く（tool.css）。見出しの中にあるので、押しても
+ * 節の開け閉めにはしない。
+ */
+function wireHelp() {
+  const helps = [...document.querySelectorAll('.bm-help')];
+  const setOpen = (help, open) => {
+    help.classList.toggle('open', open);
+    help.querySelector('.bm-help-btn').setAttribute('aria-expanded', String(open));
+  };
+  for (const help of helps) {
+    help.querySelector('.bm-help-btn').addEventListener('click', () => {
+      const open = !help.classList.contains('open');
+      helps.forEach((other) => setOpen(other, false));
+      setOpen(help, open);
+    });
+    // 説明の文を押しても節を畳まない（文を選んで読めるように）。
+    help.querySelector('.bm-help-body').addEventListener('click', (event) => event.stopPropagation());
+  }
+  document.addEventListener('click', (event) => {
+    for (const help of helps) if (!help.contains(event.target)) setOpen(help, false);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') helps.forEach((help) => setOpen(help, false));
+  });
+}
+
 function wireUp() {
   if (!pdfLibViews) {
     // ファイルを読む前に知らせる（読み込んだ時点で、写しはもう作られる）。
@@ -1387,11 +1415,7 @@ function wireUp() {
     if (event.dataTransfer?.files?.length) addLocal(event.dataTransfer.files);
   });
 
-  // 後から OCR を有効にしたときは、読み終えたファイルの残りの頁を読む。
-  $('ocrToggle').addEventListener('change', () => {
-    if (!$('ocrToggle').checked) return;
-    readyFiles().forEach(queueLateOcr);
-  });
+  wireHelp();
 
   document.querySelectorAll('input[name="pageFilter"]').forEach((radio) =>
     radio.addEventListener('change', () => {

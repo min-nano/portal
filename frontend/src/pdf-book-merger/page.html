@@ -1,31 +1,33 @@
+<!-- 説明は長いので、見出しの「?」に畳む（押すか、マウスを載せると開く）。
+     説明の文は、途中で改行すると空白が入って見えるので 1 行に書く。 -->
 <div class="page-head">
-  <h2>書籍スキャン PDF の結合</h2>
+  <h2 class="bm-help-host">
+    書籍スキャン PDF の結合
+    <span class="bm-help">
+      <button type="button" class="bm-help-btn" aria-label="このツールの説明" aria-expanded="false" aria-controls="helpIntro">?</button>
+      <span class="bm-help-body" id="helpIntro" role="tooltip">
+        裁断した本を分けてスキャンした PDF（奇数頁の束・偶数頁の束・表紙・裏表紙など）を選ぶと、頁番号を読み取って 1 冊ぶんの順に並べ、1 つの PDF にまとめます。頁の抜け・重なりと、スキャンの傾き・ずれ・すじを確かめてから結合し、結合した PDF も元の頁と突き合わせて検証します。頁番号の読み取り・検査・結合はすべてこの端末の中で行い、Drive のファイルもこの端末が Drive から直接読みます。サーチャブル PDF の文字情報はそのまま残ります。
+      </span>
+    </span>
+  </h2>
 </div>
-<p class="hint">
-  裁断した本を分けてスキャンした PDF（奇数頁の束・偶数頁の束・表紙・裏表紙など）を選ぶと、
-  頁番号を読み取って 1 冊ぶんの順に並べ、1 つの PDF にまとめます。頁の抜け・重なりと、
-  スキャンの傾き・ずれ・すじを確かめてから結合し、結合した PDF も元の頁と突き合わせて
-  検証します。頁番号の読み取り・検査・結合はすべてこの端末の中で行い、Drive の
-  ファイルもこの端末が Drive から直接読みます。サーチャブル PDF の文字情報はそのまま残ります。
-</p>
 
-<portal-section class="card bm-step" id="filesSection">
-  <h3 slot="title">1. スキャンしたファイル</h3>
+<!-- 見出しに「?」を入れるので、開閉ボタンの読み上げ名は label で渡す。 -->
+<portal-section class="card bm-step" id="filesSection" label="1. スキャンしたファイル">
+  <h3 slot="title" class="bm-help-host">
+    1. スキャンしたファイル
+    <span class="bm-help">
+      <button type="button" class="bm-help-btn" aria-label="ファイルの選び方" aria-expanded="false" aria-controls="helpFiles">?</button>
+      <span class="bm-help-body" id="helpFiles" role="tooltip">
+        Drive の選択画面では、PDF を押すたびに選ぶ・外すが切り替わり、いくつでも選べます（フォルダを移っても残ります）。手元のファイルは、この枠へドラッグ＆ドロップしても追加できます。最後の頁から並んでいるファイル（給紙の都合で逆順になったもの）も、頁番号から自動で並べ直します。番号の無い表紙などは、ファイルごとに「逆順」を選べます。文字情報に頁番号が見つからない頁は、画像の余白から読み取ります（初回だけ数 MB の読み込みがあります）。
+      </span>
+    </span>
+  </h3>
   <div class="bm-actions">
     <button type="button" id="driveBtn">Drive から選ぶ</button>
     <button type="button" id="localBtn" class="secondary">手元の PDF を追加</button>
     <input type="file" id="localInput" accept="application/pdf,.pdf" multiple hidden>
   </div>
-  <p class="hint">
-    Drive の選択画面では、PDF を押すたびに選ぶ・外すが切り替わり、いくつでも選べます
-    （フォルダを移っても残ります）。手元のファイルは、この枠へドラッグ＆ドロップしても追加できます。
-    最後の頁から並んでいるファイル（給紙の都合で逆順になったもの）も、頁番号から自動で
-    並べ直します。番号の無い表紙などは、ファイルごとに「逆順」を選べます。
-  </p>
-  <label class="choice-option bm-ocr">
-    <input type="checkbox" id="ocrToggle" checked>
-    文字情報に頁番号が見つからない頁は、画像の余白から読み取る（初回だけ数 MB の読み込みがあります）
-  </label>
   <div id="progress" class="bm-progress" hidden>
     <progress id="progressBar" max="1" value="0"></progress>
     <span id="progressText"></span>
@@ -33,9 +35,9 @@
   <!-- 細かい経過と、ファイルごとの結果（大きさ・かかった時間など）。ふだんは畳んでおき、
        うまく動かないときに開いてコピーしてもらう。 -->
   <details id="logBox" class="bm-log" hidden>
-    <summary>処理の記録</summary>
+    <summary>ログを表示する</summary>
     <pre id="logText"></pre>
-    <button type="button" id="logCopyBtn" class="secondary">記録をコピー</button>
+    <button type="button" id="logCopyBtn" class="secondary">ログをコピー</button>
   </details>
   <ul id="fileList" class="bm-files"></ul>
 </portal-section>
