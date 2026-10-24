@@ -42,7 +42,7 @@ async function viaAgentSdk() {
     options: { model: MODEL, maxTurns: 1, allowedTools: [], settingSources: [] },
   })) {
     if (message.type === 'system' && message.subtype === 'init') {
-      console.log(JSON.stringify({ init: { model: message.model, apiKeySource: message.apiKeySource } }, null, 2));
+      console.log(JSON.stringify({ init: { model: message.model } }, null, 2));
     }
     if (message.type === 'assistant') {
       const text = message.message.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
