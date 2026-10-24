@@ -428,28 +428,139 @@ describe('ファイルを足して並べる', () => {
     expect(window.getSelection().toString()).toContain('を読み込みました');
   });
 
-  it('バーは段ごとに空へ戻さず、すべてのファイルを通した進み具合を出す', async () => {
-    const values = [];
+  /**
+   * バーに出した値と、そのときの見出しを記録する（進み具合が分からない表示は null）。
+   * 返す関数で記録をやめる。
+   */
+  function watchBar() {
+    const seen = [];
     const bar = $('progressBar');
     const { set } = Object.getOwnPropertyDescriptor(HTMLProgressElement.prototype, 'value');
     Object.defineProperty(bar, 'value', {
       configurable: true,
       set(value) {
-        values.push(value);
+        seen.push({ value, label: $('progressText').textContent });
         set.call(this, value);
       },
     });
-    try {
-      drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
-      await settled(2);
-    } finally {
+    const removeAttribute = bar.removeAttribute.bind(bar);
+    bar.removeAttribute = (name) => {
+      if (name === 'value') seen.push({ value: null, label: $('progressText').textContent });
+      removeAttribute(name);
+    };
+    seen.stop = () => {
       delete bar.value;
-    }
+      delete bar.removeAttribute;
+    };
+    return seen;
+  }
+
+  /** 記録したバーの値（分からない表示は除く）が、一度も戻っていないこと。 */
+  function expectNeverBack(seen) {
+    const values = seen.map((s) => s.value).filter((value) => value !== null);
     expect(values.length).toBeGreaterThan(4);
     values.forEach((value, i) => expect(value).toBeGreaterThanOrEqual(values[i - 1] ?? 0));
-    // 1 つめのファイルを調べている間は半分まで、2 つめで残りの半分へ進む。
-    expect(values.some((value) => value > 0 && value <= 0.5)).toBe(true);
-    expect(values.at(-1)).toBeGreaterThan(0.9);
+  }
+
+  /** name の頁 id の画像を描くのを、返す関数を呼ぶまで止める。 */
+  function holdImage(id) {
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    const render = mocks.renderPageImage.getMockImplementation();
+    mocks.renderPageImage.mockImplementation(async (doc, index, ...rest) => {
+      if (doc.spec.pages[index].id === id) await gate;
+      return render(doc, index, ...rest);
+    });
+    return release;
+  }
+
+  it('バーは段ごとに空へ戻さず、すべてのファイルを通した進み具合を出す', async () => {
+    const seen = watchBar();
+    drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+    seen.stop();
+
+    expectNeverBack(seen);
+    // 1 つめのファイルは前半、2 つめは後半に写す。
+    const at = (label) => seen.filter((s) => s.label === label && s.value !== null).map((s) => s.value);
+    const first = at('ファイルを調べています（1 / 2）');
+    const second = at('ファイルを調べています（2 / 2）');
+    expect(first.length).toBeGreaterThan(2);
+    expect(second.length).toBeGreaterThan(2);
+    expect(Math.max(...first)).toBeLessThanOrEqual(0.5);
+    expect(Math.min(...second)).toBeGreaterThanOrEqual(0.5);
+    expect(Math.max(...first)).toBeGreaterThan(0.4);
+    expect(Math.max(...second)).toBeGreaterThan(0.9);
+  });
+
+  it('調べている途中でファイルを足しても、バーは戻らない', async () => {
+    const release = holdImage('o3');
+    const seen = watchBar();
+    drop([file('猫_奇数.pdf', pdf(ODD))]);
+    await vi.waitFor(() => expect(mocks.renderPageImage).toHaveBeenCalled());
+    const before = seen.at(-1).value;
+    expect(before).toBeGreaterThan(0.1);
+
+    drop([file('猫_偶数.pdf', pdf(EVEN)), file('猫_表紙.pdf', pdf(COVER))]);
+    await flush();
+    release();
+    await settled(3);
+    seen.stop();
+
+    expectNeverBack(seen);
+    expect(seen.map((s) => s.label)).toContain('ファイルを調べています（1 / 3）');
+    expect(seen.map((s) => s.label)).toContain('ファイルを調べています（3 / 3）');
+  });
+
+  it('進み具合が分からないあいだは、バーを分からない表示にする', async () => {
+    let release;
+    mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
+    mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress }) => {
+      onProgress(5, 0); // 大きさの分からない読み込み
+      await new Promise((done) => (release = done));
+      return pdf(ODD);
+    });
+    $('driveBtn').click();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    expect($('progress').hidden).toBe(false);
+    expect($('progressBar').hasAttribute('value')).toBe(false);
+    release();
+    await settled(1);
+  });
+
+  it('調べている途中に結合しても、済んだら調べている方の見出しとバーに戻す', async () => {
+    drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+    const release = holdImage('c2');
+    drop([file('猫_表紙.pdf', pdf(COVER))]);
+    await vi.waitFor(() => expect($('progressText').textContent).toBe('ファイルを調べています（3 / 3）'));
+    const reading = $('progressBar').value;
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('downloadBtn').disabled).toBe(false));
+    expect($('progress').hidden).toBe(false);
+    expect($('progressText').textContent).toBe('ファイルを調べています（3 / 3）');
+    expect($('progressBar').value).toBe(reading);
+
+    release();
+    await settled(3);
+  });
+
+  it('あとからの OCR は、ファイルの数に数えない', async () => {
+    drop([file('猫_表紙.pdf', pdf(ODD))]);
+    await settled(1);
+    const release = holdImage('e4');
+    drop([file('猫_偶数.pdf', pdf(EVEN))]);
+    await vi.waitFor(() => expect(mocks.renderPageImage.mock.calls.some(([doc]) => doc.spec.pages[0].id === 'e8')).toBe(true));
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
+    await flush();
+    expect($('progressText').textContent).toBe('ファイルを調べています（2 / 2）');
+
+    release();
+    await vi.waitFor(() =>
+      expect(document.querySelector('#pageGrid [data-page-key="f1:2"] .bm-status').textContent).toBe('読取')
+    );
+    await settled(2);
   });
 
   it('Drive から選んだファイルを、進み具合を出しながら読む', async () => {

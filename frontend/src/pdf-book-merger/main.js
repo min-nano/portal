@@ -121,63 +121,111 @@ function showMessage(text, color = '') {
 // 読み込み・調査の結果（大きさ・かかった時間など）は「ログ」に残す。
 // 記録はふだん畳んでおき、うまく動かないときに開いてコピーしてもらう。
 //
-// バーは全体の進み具合を出す。ファイルを調べるときは、待っている仕事
+// バーは全体の進み具合を出す。仕事の流れ（ファイルを調べる流れと、結合）
+// ごとに createProgress で進み具合を持ち、流れの中は段（読み込み・文字情報・
+// 画像など）ごとに受け持つ区間を決め、段の中の割合をその区間に写す（段が
+// 変わるたびにバーが空に戻らないように）。調べる流れは、待っている仕事
 // （ファイルを調べる・あとからの OCR）のうち済んだ数に、いまの仕事の中の
-// 進み具合を足したもの。仕事の中は段（読み込み・文字情報・画像）ごとに
-// 受け持つ区間を決め、段の中の割合をその区間に写す（段が変わるたびにバーが
-// 空に戻らないように）。
+// 進み具合を足したもの。結合は読み込みの途中でもできるので、結合している
+// 間は結合を出し、済んだら調べる流れに戻す。
 
-/** 進み具合の見出し（バーの横に出す短いもの）。段ごとに決める（関数なら出すたびに呼ぶ）。 */
-let progressLabel = '';
-/** いまの段が、いまの仕事の中で受け持つ区間（0〜1）。 */
-let progressStage = { from: 0, to: 1 };
-/** 一続きの仕事の数と、済んだ数（すべて済んだら 0 に戻す）。 */
-const work = { total: 0, done: 0 };
-/** いま進めている細かい段（記録の末尾に、実行中のものとして出す）。 */
-let currentStep = '';
 const logLines = [];
 const LOG_LIMIT = 2000;
 
-/** いまの段が、仕事の中で受け持つ区間を決める。 */
-function progressSpan(from, to) {
-  progressStage = { from, to };
-}
-
-/** 仕事を 1 つ足す（ファイルを調べる・あとからの OCR）。 */
-function addWork() {
-  work.total++;
-}
-
-/** 仕事を 1 つ済ませる。すべて済んだら数え直す。 */
-function finishWork() {
-  work.done++;
-  if (work.done >= work.total) work.total = work.done = 0;
-}
-
-/** 段の中の割合（0〜1）を、全体の割合に直す。 */
-function overallFraction(fraction) {
-  const { from, to } = progressStage;
-  const inStage = from + (to - from) * Math.max(0, Math.min(1, fraction ?? 0));
-  return work.total ? Math.min(1, (work.done + inStage) / work.total) : inStage;
-}
-
 /**
- * 進み具合を出す。text は細かい経過（記録に出す）、バーの横には見出しを出す。
- * fraction はいまの段の中の割合（分からなければ null。段の始めに留める）。
- * text が空なら隠す。heading を渡すと、見出しの代わりにそれを出す（Drive を
- * 待っているときなど、見出しより先に知らせたいこと）。
+ * 仕事の流れ 1 つの進み具合を作る。
+ *
+ * label は見出しを返す関数（バーの横に出す。出すたびに呼ぶ）。stage(from, to)
+ * でいまの段の区間を決め、show(text, fraction, heading) で経過を出す。text は
+ * 細かい経過（記録に出す）で、空なら済んだとして隠す。fraction は段の中の割合
+ * （分からなければ null。バーは進み具合の分からない表示にする）。heading を
+ * 渡すと、見出しの代わりにそれを出す（Drive を待っているときなど、見出しより
+ * 先に知らせたいこと）。
+ *
+ * jobs を持つ流れでは、仕事を足しても（addJob）バーが戻らないように、足した
+ * ときの位置から残りを数え直す。
  */
-function showProgress(text, fraction, heading = '') {
-  $('progress').hidden = !text;
-  const label = typeof progressLabel === 'function' ? progressLabel() : progressLabel;
-  $('progressText').textContent = text ? heading || label || text : '';
-  if (text) $('progressBar').value = overallFraction(fraction);
-  currentStep = text || '';
-  if (!text) {
-    progressLabel = '';
-    progressSpan(0, 1);
-  }
+function createProgress({ jobs = false } = {}) {
+  const progress = {
+    label: () => '',
+    from: 0,
+    to: 1,
+    text: '',
+    fraction: null,
+    heading: '',
+    // 仕事の数・済んだ数と、数え直したときのバーの位置（base）と仕事の位置（start）。
+    jobs: jobs ? { total: 0, done: 0, base: 0, start: 0 } : null,
+    stage(from, to) {
+      progress.from = from;
+      progress.to = to;
+    },
+    show(text, fraction, heading = '') {
+      Object.assign(progress, { text, fraction, heading });
+      if (!text) {
+        progress.label = () => '';
+        progress.stage(0, 1);
+        progress.fraction = null;
+      }
+      renderProgress();
+    },
+    /** いまの仕事の中の位置（0〜1）。 */
+    inJob() {
+      const fraction = Math.max(0, Math.min(1, progress.fraction ?? 0));
+      return progress.from + (progress.to - progress.from) * fraction;
+    },
+    /** 流れ全体の位置（0〜1）。 */
+    overall() {
+      const { jobs } = progress;
+      if (!jobs?.total) return progress.inJob();
+      const at = jobs.done + progress.inJob();
+      return Math.min(1, jobs.base + ((1 - jobs.base) * (at - jobs.start)) / (jobs.total - jobs.start));
+    },
+    addJob() {
+      const { jobs } = progress;
+      // 途中で足したときは、いまの位置から残りを数え直す（バーを戻さない）。
+      if (jobs.total > jobs.done) {
+        jobs.base = progress.overall();
+        jobs.start = jobs.done + progress.inJob();
+      }
+      jobs.total++;
+    },
+    finishJob() {
+      const { jobs } = progress;
+      jobs.done++;
+      if (jobs.done >= jobs.total) Object.assign(jobs, { total: 0, done: 0, base: 0, start: 0 });
+    },
+  };
+  return progress;
+}
+
+/** ファイルを調べる流れ（あとからの OCR も）。 */
+const readProgress = createProgress({ jobs: true });
+/** 結合と検証。 */
+const mergeProgress = createProgress();
+
+/** 進み具合を描く。結合している間は結合を、そうでなければ調べる流れを出す。 */
+function renderProgress() {
+  const progress = mergeProgress.text ? mergeProgress : readProgress;
+  $('progress').hidden = !progress.text;
+  $('progressText').textContent = progress.text ? progress.heading || progress.label() || progress.text : '';
+  const bar = $('progressBar');
+  if (progress.fraction === null) bar.removeAttribute('value');
+  else if (progress.text) bar.value = progress.overall();
   renderLog();
+}
+
+/** 調べる流れの進み具合を出す（ほとんどの経過はこちら）。 */
+function showProgress(text, fraction, heading = '') {
+  readProgress.show(text, fraction, heading);
+}
+
+/** 仕事を順番待ちに足す（ファイルを調べる・あとからの OCR）。済んだら数える。 */
+function enqueue(task) {
+  readProgress.addJob();
+  queue = queue
+    .then(task)
+    .catch(() => {})
+    .then(() => readProgress.finishJob());
 }
 
 /** ログに 1 行足す（時刻付き）。 */
@@ -190,7 +238,8 @@ function log(text) {
 }
 
 function logText() {
-  return [...logLines, ...(currentStep ? [`（実行中）${currentStep}`] : [])].join('\n');
+  const running = [mergeProgress.text, readProgress.text].filter(Boolean).map((text) => `（実行中）${text}`);
+  return [...logLines, ...running].join('\n');
 }
 
 function renderLog() {
@@ -259,11 +308,14 @@ function addFile(source) {
   log(`「${file.name}」を追加しました（${source.driveId ? 'Drive' : 'この端末'}）`);
   file.loaded = downloads.then(() => loadBytes(file, source));
   downloads = file.loaded.catch(() => {});
-  addWork();
-  queue = queue
-    .then(() => readFile(file))
-    .catch(() => {})
-    .then(finishWork);
+  file.pending = true; // 調べ終えるまで（見出しの「n / m」に使う）
+  enqueue(async () => {
+    try {
+      await readFile(file);
+    } finally {
+      file.pending = false;
+    }
+  });
 }
 
 /**
@@ -333,8 +385,14 @@ async function readFile(file) {
   const started = performance.now();
   let held = false; // pdf.js で開いて使っているか（終えたら手放す）
   try {
-    progressLabel = () => `ファイルを調べています（${work.done + 1} / ${work.total}）`;
-    progressSpan(0, 0.1);
+    // 何番目かは、調べ終えたファイルの数から数える（あとからの OCR は数えない）。
+    readProgress.label = () =>
+      `ファイルを調べています（${files.filter((f) => !f.pending).length + 1} / ${files.length}）`;
+    // 段ごとの区間。読み込みを待つ（先読みが済んでいない）ときは、読み込みにも
+    // 区間を分ける（大きな Drive のファイルは読み込みに数分かかる）。
+    const loadEnd = file.bytes ? 0 : 0.3;
+    const textEnd = loadEnd + (1 - loadEnd) * 0.1;
+    readProgress.stage(0, loadEnd);
     file.waiting = true;
     if (file.waitUntil > Date.now()) showWaiting(file);
     else if (file.status !== 'loaded') showProgress(`「${file.name}」を読み込んでいます`, null);
@@ -351,7 +409,7 @@ async function readFile(file) {
     const count = file.doc.numPages;
 
     // 文字情報（画像を展開しないので軽い）。
-    progressSpan(0.1, 0.2);
+    readProgress.stage(loadEnd, textEnd);
     for (let index = 0; index < count; index++) {
       if (!files.includes(file)) return;
       showProgress(`「${file.name}」の文字情報を読んでいます（${index + 1} / ${count}）`, index / count);
@@ -383,7 +441,7 @@ async function readFile(file) {
         : []
     );
     if (ocrPages.size) startOcr();
-    progressSpan(0.2, 1);
+    readProgress.stage(textEnd, 1);
 
     // 頁の画像を描いて測る（重いところ）。JPEG のまま描ける頁を先に調べておく。
     // 調べた JPEG は読み終えたら手放す（ファイルと同じだけの大きさがある）。
@@ -596,16 +654,16 @@ function isPdf(bytes) {
 async function readMarginsWithOcr(file, pages) {
   if (pages.length === 0 || !(await startOcr())) return;
   if (!files.includes(file)) return; // 順番を待つ間に外された。
+  readProgress.label = () => '余白を読み取っています';
   // JPEG を残していなければ（pdf-lib の書き換えが効いていないとき）、ここで
   // 1 度だけ調べ直し、読む頁の分だけを取っておく。
   if (!pdfLibViews) {
-    progressSpan(0, 0.1);
+    readProgress.stage(0, 0.1);
     showProgress(`「${file.name}」の頁の画像を調べ直しています`, null);
     const { scans } = await findScanImages(file.bytes);
     for (const page of pages) page.scan = scans[page.index] ?? null;
+    readProgress.stage(0.1, 1);
   }
-  progressLabel = '余白を読み取っています';
-  progressSpan(pdfLibViews ? 0 : 0.1, 1);
   log(`「${file.name}」の余白を OCR します（${pages.length} 頁）`);
   let done = 0;
   const ocrSlots = slots(OCR_IN_FLIGHT);
@@ -643,21 +701,18 @@ function queueLateOcr(file) {
   if (pages.length === 0) return;
   file.ocrBusy = true;
   renderFiles();
-  addWork();
-  queue = queue
-    .then(() => {
+  enqueue(async () => {
+    try {
       // 読む間だけ開いておく（順番を待っている間は開かない）。
       holdDoc(file);
-      return readMarginsWithOcr(file, pages).finally(() => releaseDoc(file));
-    })
-    .finally(() => {
+      await readMarginsWithOcr(file, pages).finally(() => releaseDoc(file));
+    } finally {
       file.ocrBusy = false;
       for (const page of pages) page.scan = null;
       showProgress('');
       if (files.includes(file)) refresh();
-    })
-    .catch(() => {})
-    .then(finishWork);
+    }
+  });
 }
 
 /**
@@ -1253,9 +1308,9 @@ async function mergeAndVerify() {
     const sources = new Map(readyFiles().map((file) => [file.key, { bytes: file.bytes, name: file.name }]));
     const infoFrom = order.find((entry) => entry.role === 'body')?.fileKey;
     // 結合と検証で、バーの前半と後半を受け持つ。
-    progressLabel = '結合しています';
-    progressSpan(0, 0.5);
-    showProgress('結合しています…', 0);
+    mergeProgress.label = () => '結合しています';
+    mergeProgress.stage(0, 0.5);
+    mergeProgress.show('結合しています…', 0);
     const started = performance.now();
     // 結合の道具（pdf-lib）は、結合するときになってから読み込む。
     const { mergePdf, pageDigests } = await import('./merge.js');
@@ -1265,7 +1320,7 @@ async function mergeAndVerify() {
       title: fileName.replace(/\.pdf$/i, ''),
       labels: ranges,
       infoFrom,
-      onProgress: (done, total) => showProgress(`結合しています（${done} / ${total} 頁）`, done / total),
+      onProgress: (done, total) => mergeProgress.show(`結合しています（${done} / ${total} 頁）`, done / total),
     });
 
     // 結合した PDF を読み直し、元の頁と突き合わせる（頁を描き直さないので軽い）。
@@ -1274,9 +1329,9 @@ async function mergeAndVerify() {
       abandon();
       return;
     }
-    progressLabel = '検証しています';
-    progressSpan(0.5, 1);
-    showProgress('結合した PDF を検証しています…', null);
+    mergeProgress.label = () => '検証しています';
+    mergeProgress.stage(0.5, 1);
+    mergeProgress.show('結合した PDF を検証しています…', null);
     const mergedDigests = await pageDigests(bytes);
     const doc = await openPdf(bytes);
     const actual = [];
@@ -1285,7 +1340,7 @@ async function mergeAndVerify() {
     try {
       for (let index = 0; index < doc.numPages; index++) {
         if (stale()) break;
-        showProgress(`結合した PDF を検証しています（${index + 1} / ${doc.numPages} 頁）`, index / doc.numPages);
+        mergeProgress.show(`結合した PDF を検証しています（${index + 1} / ${doc.numPages} 頁）`, index / doc.numPages);
         const page = await withContext(`結合した PDF の ${index + 1} 頁目を検証できませんでした`, () =>
           readPageText(doc, index)
         );
@@ -1326,7 +1381,7 @@ async function mergeAndVerify() {
     showMessage(error.message || String(error), 'red');
   } finally {
     merging = false;
-    showProgress('');
+    mergeProgress.show('');
     button.disabled = false;
     // 結合の途中に開いた拡大表示は縮小画像だけなので、大きく描き直す。
     if (previewKey) openPreview(previewKey);
