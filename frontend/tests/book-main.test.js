@@ -428,6 +428,30 @@ describe('ファイルを足して並べる', () => {
     expect(window.getSelection().toString()).toContain('を読み込みました');
   });
 
+  it('バーは段ごとに空へ戻さず、すべてのファイルを通した進み具合を出す', async () => {
+    const values = [];
+    const bar = $('progressBar');
+    const { set } = Object.getOwnPropertyDescriptor(HTMLProgressElement.prototype, 'value');
+    Object.defineProperty(bar, 'value', {
+      configurable: true,
+      set(value) {
+        values.push(value);
+        set.call(this, value);
+      },
+    });
+    try {
+      drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+      await settled(2);
+    } finally {
+      delete bar.value;
+    }
+    expect(values.length).toBeGreaterThan(4);
+    values.forEach((value, i) => expect(value).toBeGreaterThanOrEqual(values[i - 1] ?? 0));
+    // 1 つめのファイルを調べている間は半分まで、2 つめで残りの半分へ進む。
+    expect(values.some((value) => value > 0 && value <= 0.5)).toBe(true);
+    expect(values.at(-1)).toBeGreaterThan(0.9);
+  });
+
   it('Drive から選んだファイルを、進み具合を出しながら読む', async () => {
     mocks.pickFiles.mockResolvedValue([
       { id: 'd-even', name: 'book-b-even.pdf' },
