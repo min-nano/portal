@@ -83,8 +83,32 @@ jobs:
         run: |
           .github/scripts/require-vars.sh \
             ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID ANTHROPIC_SERVICE_ACCOUNT_ID
+      - name: Check that this workflow matches the default branch
+        # Claude GitHub App は、このワークフローが既定ブランチのものと同一で
+        # なければトークンを出さない（PR から書き換えたワークフローで App の
+        # 権限を使わせないための仕組み）。その場合アクションは何もせず緑で
+        # 終わるので、このワークフロー自体を足す・変える PR は Claude では
+        # レビューできない。未レビューの赤（後段）と区別するため、ここで
+        # 判定して警告を出し、以降を飛ばす。
+        id: workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW: .github/workflows/claude-review.yml
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/claude-review.base.yml"
+          if gh api -H 'Accept: application/vnd.github.raw' \
+              "repos/$GITHUB_REPOSITORY/contents/$WORKFLOW?ref=$DEFAULT_BRANCH" > "$base" 2>/dev/null \
+            && cmp -s "$base" "$WORKFLOW"; then
+            echo "same=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "same=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::この PR は $WORKFLOW を追加・変更しているため（$DEFAULT_BRANCH と内容が違う）、Claude のレビューは行えません。人がレビューしてください。"
+          fi
       - name: Check for an existing review
         id: before
+        if: steps.workflow.outputs.same == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: .github/scripts/claude-review-status.sh
