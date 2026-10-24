@@ -26,7 +26,8 @@
 }
 
 /* 見出しの「?」と、その説明。説明は見出しの幅いっぱいの下に重ねて出す
-   （「?」の位置に合わせると、狭い画面では右へはみ出す）。 */
+   （「?」の位置に合わせると、狭い画面では右へはみ出す）。開け閉めは
+   main.js の open だけで表す（マウスを載せたときも）。 */
 .bm-help-host {
   position: relative;
 }
@@ -82,13 +83,6 @@ button.bm-help-btn:hover,
 
 .bm-help.open .bm-help-body {
   display: block;
-}
-
-/* マウスでは載せている間も開く（タッチでは押したときだけ）。 */
-@media (hover: hover) {
-  .bm-help:hover .bm-help-body {
-    display: block;
-  }
 }
 
 .bm-progress {
