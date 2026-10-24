@@ -1,14 +1,18 @@
 name: Claude review
 
-# PR エージェント（Claude Code）による自動レビュー。レビューの中身は Anthropic
-# 公式の code-review プラグイン（`/code-review:code-review`）に任せ、ここでは
+# PR エージェントによる自動レビュー。レビューの中身は Anthropic 公式の
+# code-review プラグイン（`/code-review:code-review`）に任せ、ここでは
 # プロンプトを書かない。何を見るか・どの指摘を捨てるかはプラグインが決める
 # （並列のエージェントで CLAUDE.md 準拠とバグを見て、確信度の低い指摘を捨てる）。
 # リポジトリ固有の観点は CLAUDE.md に書けば、プラグインがそれに照らして見る。
 #
+# プラグインは Claude Agent SDK で動かす（.github/scripts/claude-review.mjs）。
+# claude-code-action は中身が Claude Code で、Max / Team プランに付く API
+# クレジットの対象外のため使わない（Agent SDK は対象）。
+#
 # API は Claude Platform を Workload Identity Federation（WIF）で使う。GitHub の
 # OIDC トークンを短命の Anthropic トークンに交換するので、API キー（Secrets）は
-# 持たない。
+# 持たない。コメントと判定は GITHUB_TOKEN（github-actions[bot]）の名義で付く。
 #
 # 無駄打ちを防ぐため、レビューするのは **Ready の PR に 1 回だけ**。運用は
 #
@@ -37,8 +41,12 @@ name: Claude review
 # （判定はここで機械的に行い、プラグインには何も足さない）。
 #
 # bot（Dependabot など）の PR は対象外。依存の更新は CI とプレビューで見る。
+# フォークからの PR も対象外（OIDC トークンが出ないので、WIF が通らない）。
 #
-# 必要な設定（Claude Console 側の WIF、GitHub App、リポジトリ変数）は
+# PR のイベントでは、PR 側のこのワークフローが動く。つまりこのファイルを
+# 変える PR も、変えた後の内容でレビューされる。
+#
+# 必要な設定（Claude Console 側の WIF、リポジトリ変数）は
 # README「Claude による PR レビュー（PR エージェント）」を参照。
 
 on:
@@ -58,15 +66,17 @@ permissions:
 jobs:
   review:
     name: Review
-    if: github.event.pull_request.draft == false && github.event.pull_request.user.type != 'Bot'
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.type != 'Bot' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: write
       issues: read
-      # GitHub の OIDC トークンの取得に使う（Anthropic への WIF と、Claude
-      # GitHub App のトークン取得の両方）。
+      # GitHub の OIDC トークンの取得に使う（Anthropic への WIF）。
       id-token: write
     env:
       PR: ${{ github.event.pull_request.number }}
@@ -85,42 +95,9 @@ jobs:
         run: |
           .github/scripts/require-vars.sh \
             ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID ANTHROPIC_SERVICE_ACCOUNT_ID
-      - name: Check that this workflow matches the default branch
-        # Claude GitHub App は、このワークフローが既定ブランチのものと同一で
-        # なければトークンを出さない（PR から書き換えたワークフローで App の
-        # 権限を使わせないための仕組み）。その場合アクションは何もせず緑で
-        # 終わるので、このワークフロー自体を足す・変える PR は Claude では
-        # レビューできない。未レビューの赤（後段）と区別するため、ここで
-        # 判定して警告を出し、以降を飛ばす。
-        id: workflow
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          WORKFLOW: .github/workflows/claude-review.yml
-        # 取得の失敗（5xx・レート制限など）は「違う」と区別して落とす。
-        # 同じ扱いにすると、誤った理由の警告だけで未レビューのまま緑になる。
-        run: |
-          set -euo pipefail
-          base="$RUNNER_TEMP/claude-review.base.yml"
-          err="$RUNNER_TEMP/claude-review.base.err"
-          if gh api -H 'Accept: application/vnd.github.raw' \
-              "repos/$GITHUB_REPOSITORY/contents/$WORKFLOW?ref=$DEFAULT_BRANCH" > "$base" 2> "$err"; then
-            if cmp -s "$base" "$WORKFLOW"; then
-              echo "same=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          elif ! grep -q 'HTTP 404' "$err"; then
-            cat "$err" >&2
-            echo "::error::$DEFAULT_BRANCH の $WORKFLOW を取得できませんでした。一時的な障害であれば、このジョブを再実行してください。"
-            exit 1
-          fi
-          # 既定ブランチに無い（404）か、内容が違う。
-          echo "same=false" >> "$GITHUB_OUTPUT"
-          echo "::warning::この PR は $WORKFLOW を追加・変更しているため（$DEFAULT_BRANCH と内容が違う）、Claude のレビューは行えません。人がレビューしてください。"
       - name: Check for an existing verdict
         # 判定（Approve / Request changes）まで済んでいれば、ここで終える。
         id: before
-        if: steps.workflow.outputs.same == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: .github/scripts/claude-review-status.sh
@@ -130,29 +107,48 @@ jobs:
         id: start
         if: steps.before.outputs.verdict == 'false'
         run: echo "since=$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-      - uses: anthropics/claude-code-action@16f9f71ab9c490faf367f94dd294897edc25be33 # v1.0.261
+      - name: Set up Node.js
         if: steps.before.outputs.verdict == 'false'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          node-version: '22'
+      - name: Install the Agent SDK and the plugin
+        # SDK は固定する（レビューを動かす仕組みなので、他のアクションと同じ扱い）。
+        # プラグインはレビューの指示そのもので、このリポジトリのコードの動作には
+        # 関わらないため、固定せず毎回 anthropics/claude-code の最新を取る。
+        # どちらもワークスペースの外（RUNNER_TEMP）に置く（レビュー対象に混ぜない）。
+        if: steps.before.outputs.verdict == 'false'
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/claude-review"
+          mkdir -p "$dir"
+          cp .github/scripts/claude-review.mjs "$dir/"
+          (
+            cd "$dir"
+            npm init -y > /dev/null
+            npm install --no-audit --no-fund --ignore-scripts \
+              @anthropic-ai/claude-agent-sdk@0.3.310 zod@4.6.7
+          )
+          git clone -q --depth 1 https://github.com/anthropics/claude-code.git "$dir/claude-code"
+          echo "プラグイン: anthropics/claude-code@$(git -C "$dir/claude-code" rev-parse HEAD)"
+          {
+            echo "PLUGIN_DIR=$dir/claude-code/plugins/code-review"
+            echo "ANTHROPIC_IDENTITY_TOKEN_FILE=$RUNNER_TEMP/anthropic-identity-token"
+          } >> "$GITHUB_ENV"
+      - name: Review with the code-review plugin
+        if: steps.before.outputs.verdict == 'false'
+        env:
           # WIF。これらは ID であって秘密ではないので、Variables に置く。
-          # anthropic_api_key は渡さないこと（静的な鍵があると WIF より優先される）。
-          anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
-          anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
-          anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          # ANTHROPIC_API_KEY は渡さないこと（静的な鍵があると WIF より優先される）。
+          ANTHROPIC_FEDERATION_RULE_ID: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+          ANTHROPIC_ORGANIZATION_ID: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+          ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
           # ルールが 1 つのワークスペースだけを対象にしているなら空でよい。
-          anthropic_workspace_id: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
-          # レビューの指示そのもので、このリポジトリのコードの動作には関わらない
-          # ため、バージョンは固定せず毎回最新を取る（公式のマーケットプレイス）。
-          plugin_marketplaces: https://github.com/anthropics/claude-code.git
-          plugins: code-review@claude-code-plugins
-          # track_progress は使わない。進捗コメントを先に付けると、プラグインが
-          # 「Claude が既にコメントした PR」と見なしてレビューを飛ばす。
-          prompt: /code-review:code-review --comment ${{ github.event.pull_request.html_url }}
-          # この実行（agent モード）では、ここに挙げたツールしか使えない。
-          # プラグインのコマンドが宣言しているもの（gh と、インライン
-          # コメントの MCP）に、サブエージェントの起動と読み取りを足したもの。
-          claude_args: |
-            --model claude-opus-5-5
-            --allowedTools "Agent,Task,TodoWrite,Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),mcp__github_inline_comment__create_inline_comment"
+          ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: node "$RUNNER_TEMP/claude-review/claude-review.mjs"
       - name: Check that the review was posted
         id: after
         if: steps.before.outputs.verdict == 'false'
@@ -166,7 +162,7 @@ jobs:
         if: steps.before.outputs.verdict == 'false' && steps.after.outputs.state == 'open' && steps.after.outputs.reviewed != 'true'
         run: |
           echo "::error::PR #${PR} は Ready ですが、レビューが付きませんでした。プラグインが「レビュー不要」または「Claude が既にコメント済み」と判断した可能性があります。実行ログを確認してください。"
-          echo "::error::PR に claude[bot] のコメントが既にある場合（\`@claude\` とのやり取りや、中断された実行の残りなど）は、プラグインが毎回同じ理由で飛ばすため、再実行では解消しません。人がレビューするか、それらのコメントを消してから再実行してください。"
+          echo "::error::PR に Claude のコメントが既にある場合（\`@claude\` とのやり取りや、中断された実行の残りなど）は、プラグインが毎回同じ理由で飛ばすため、再実行では解消しません。人がレビューするか、それらのコメントを消してから再実行してください。"
           exit 1
       - name: Submit the review verdict
         # 指摘あり（インラインコメントがある）→ Request changes、
@@ -176,11 +172,9 @@ jobs:
         # 本文の目印（claude-review-status.sh の MARKER）が「判定まで済んだ」の
         # 印になる。
         #
-        # 出すのは GITHUB_TOKEN（github-actions[bot]）。Claude GitHub App の
-        # トークンはアクションの終わりで失効するため、ここでは使えない。
-        # Approve には Settings → Actions → General の「Allow GitHub Actions to
-        # create and approve pull requests」が要る（howtec-worksheet-check.yml の
-        # PR 作成と同じ設定）。
+        # 出すのは GITHUB_TOKEN（github-actions[bot]）。Approve には Settings →
+        # Actions → General の「Allow GitHub Actions to create and approve pull
+        # requests」が要る（howtec-worksheet-check.yml の PR 作成と同じ設定）。
         if: steps.before.outputs.verdict == 'false' && steps.after.outputs.state == 'open' && steps.after.outputs.reviewed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
