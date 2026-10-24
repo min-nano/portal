@@ -865,7 +865,7 @@ function fileControls(file) {
   role.addEventListener('change', () => {
     file.role = role.value;
     // 名前で表紙と見て余白を読まなかったファイルも、本文にしたら読む。
-    if (file.status === 'ready') queueLateOcr(file);
+    queueLateOcr(file);
     refresh();
   });
   roleField.append(role);

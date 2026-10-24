@@ -791,6 +791,8 @@ describe('ファイルを足して並べる', () => {
     document.body.click();
     expect(isOpen(files)).toBe(false);
     button(files).click();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    expect(isOpen(files)).toBe(true);
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     expect(isOpen(files)).toBe(false);
   });
