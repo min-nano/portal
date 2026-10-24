@@ -460,7 +460,7 @@ firestore/                    # Firestore セキュリティルールとその�
   firestore.rules             # クライアント SDK からのアクセスを全面拒否（deny-all）
   tests/rules.test.js         # エミュレータでルールを検証
 firebase.json                 # Hosting 設定（/api/** → Cloud Run リライト）・Firestore ルールの参照
-.github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml・preview-cleanup.yml（PR プレビュー）
+.github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml・preview-cleanup.yml（PR プレビュー）/ claude-review.yml・claude.yml（PR エージェント）
                               # howtec-worksheet-check.yml（表計算ツールの改訂の定期確認）
 .github/scripts/              # ワークフロー間で共有するスクリプト
   require-vars.sh             # 必須のリポジトリ変数が空でないことの確認
@@ -711,6 +711,7 @@ Hosting は `https://<サイトID>.firebaseapp.com` でも同じアプリを配�
 | `CANONICAL_HOST` | 本番のカスタムドメイン（例 `portal.example.com`）。`.web.app` へのアクセスをここへリダイレクトし、許可オリジンにも加える。未設定ならどちらも行わない | 本番 |
 | `PORTAL_TITLE` | ポータルの表示名（各ページのヘッダーと、トップページのタブ名）。ビルド時に `VITE_PORTAL_TITLE` として渡され HTML に埋め込まれる。未設定なら `社内ポータル` | 両方 |
 | `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。未設定なら既定の `(default)` | 本番 |
+| `ANTHROPIC_FEDERATION_RULE_ID` / `ANTHROPIC_ORGANIZATION_ID` / `ANTHROPIC_SERVICE_ACCOUNT_ID` / `ANTHROPIC_WORKSPACE_ID` | PR エージェント（Claude）の WIF。値と作り方は「Claude による PR レビュー（PR エージェント）」 | PR エージェント |
 
 `CLERK_ISSUER` と `CLERK_AUTHORIZED_PARTIES` に対応する変数が無いのは、他の変数から導出しているためです（「ランタイム環境変数の出どころ」参照）。
 
@@ -816,6 +817,80 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 > **注意**: 分離されるのは Hosting・Clerk・バックエンド・共有設定です。**Drive 上の雛形ファイルは本番と共有** されます（同じ Workspace の同じファイルのため）。プレビューの共有設定は空の状態から始まるので、雛形フォルダはプレビュー内で改めて指定してください。テスト用のフォルダを指定すれば、Drive も実質的に分離できます。
 
 > PR ごとにコンテナをビルドするため、プレビューのデプロイは push ごとに数分かかります（`gcloud run deploy --source` が Cloud Build を経由するため）。
+
+### 10. Claude による PR レビュー（PR エージェント）
+
+PR のレビューを Claude Code（[`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action)）に任せます。API は Claude Platform を **Workload Identity Federation（WIF）** で使い、GitHub Actions の OIDC トークンを短命の Anthropic トークンに交換します。デプロイ（GCP）と同じく **API キーを Secrets に置きません**。
+
+| ワークフロー | いつ動くか | 何をするか |
+| --- | --- | --- |
+| `claude-review.yml` | PR が **Ready for review になったとき**（下書きを経ずに開いた PR は opened / reopened 時） | 差分を読み、インラインコメントと所見をまとめたコメントを付ける。コードは変えない |
+| `claude.yml` | PR / issue のコメント・レビューに `@claude` と書いたとき（下書きでも動く） | 書かれた依頼に応える（再レビュー・質問への回答・修正の push など） |
+
+#### 運用: PR は下書きで作る
+
+レビューは 1 回ごとに API の利用料がかかります。作業途中の push のたびに走らせても同じ指摘の繰り返しになるので、**下書き（draft）の PR は自動レビューしません**。
+
+1. PR は **下書きで作成** する（GitHub の「Create draft pull request」。Claude Code に PR を作らせる場合も下書きで作る。`CLAUDE.md` に明記してある）。
+2. 案がまとまったら **「Ready for review」に切り替える**。ここで自動レビューが 1 回走る。
+3. 指摘を直した後にもう一度見てほしければ、PR に `@claude 修正したので再レビューしてください` のようにコメントする。大きく作り直す場合は、下書きに戻して手順 2 からやり直してもよい。
+
+push（`synchronize`）では自動レビューは走りません。bot（Dependabot など）の PR も対象外です。
+
+#### 初回の設定
+
+**1. Claude GitHub App をリポジトリにインストールする**
+
+<https://github.com/apps/claude> からこのリポジトリにインストールします（リポジトリの管理者権限が要る）。コメントや push は App の名義（`claude[bot]`）で行われます。
+
+**2. Claude Console で WIF を設定する**（Anthropic 組織の admin / owner 権限が要る）
+
+[Workload identity](https://platform.claude.com/settings/workload-identity-federation) → **Connect workload** → **GitHub Actions** を選ぶと、ウィザードが次の 3 つをまとめて作ります。
+
+| リソース | 設定する値 |
+| --- | --- |
+| Federation issuer（`fdis_...`） | Issuer URL `https://token.actions.githubusercontent.com`、JWKS は `discovery` |
+| Service account（`svac_...`） | 例 `github-portal-pr-agent`。利用料を寄せたいワークスペースのメンバーにする |
+| Federation rule（`fdrl_...`） | 下記 |
+
+Federation rule の match は **このリポジトリだけ** に絞ります。
+
+| 項目 | 値 | 理由 |
+| --- | --- | --- |
+| `subject_prefix` | `repo:<owner>/<repo>:*` | PR のイベント（`pull_request` / `pull_request_review*`）の `sub` は `repo:<owner>/<repo>:pull_request`、`issue_comment` は既定ブランチの `repo:<owner>/<repo>:ref:refs/heads/main` になる。両方を通すため末尾を `*` にする |
+| `audience` | `https://api.anthropic.com` | アクションが OIDC トークンを要求するときの既定の audience |
+| `claims` | `repository_owner: <owner>`、`repository: <owner>/<repo>` | `sub` の解釈に頼らない念押し |
+| `oauth_scope` | `workspace:developer`（既定） | |
+| `token_lifetime_seconds` | `3600` 程度 | レビューは数分〜数十分かかる。ウィザードの既定 600 秒でも SDK が更新するが、余裕を持たせる |
+
+> `ref`（ブランチ）では絞りません。PR のイベントの `ref` は `refs/pull/<番号>/merge` になるため、ブランチで絞ると PR レビューが通らなくなります。代わりに `subject_prefix` と `claims` でリポジトリに閉じます。フォークからの PR は（プライベートリポジトリでフォークを許可していなければ）そもそも来ません。公開リポジトリにする場合は、フォーク PR で動かないことを確認してください（`pull_request` イベントでは、フォークからの実行に `id-token: write` は与えられません）。
+
+ウィザードの最後の **Test the connection**（15 分間の待ち受け）は、下の 3 を済ませた後に、適当な PR で `@claude` とコメントすれば通せます。失敗した場合は [authentication history](https://platform.claude.com/settings/workload-identity-federation?tab=history) に理由（`match_subject_prefix` など）が出ます。
+
+**3. リポジトリ変数を設定する**
+
+Settings → Secrets and variables → Actions → **Variables**。いずれも ID であって秘密ではありません（WIF の安全性は rule の match が担う）。
+
+| 変数 | 値 | 必須 |
+| --- | --- | --- |
+| `ANTHROPIC_FEDERATION_RULE_ID` | `fdrl_...` | ✅ |
+| `ANTHROPIC_ORGANIZATION_ID` | 組織の UUID（Console の [Organization](https://platform.claude.com/settings/organization) ページ） | ✅ |
+| `ANTHROPIC_SERVICE_ACCOUNT_ID` | `svac_...` | ✅ |
+| `ANTHROPIC_WORKSPACE_ID` | `wrkspc_...`。rule が複数のワークスペースにまたがる場合だけ必要 | 任意 |
+
+```bash
+gh variable set ANTHROPIC_FEDERATION_RULE_ID  -R <owner/repo> --body fdrl_...
+gh variable set ANTHROPIC_ORGANIZATION_ID     -R <owner/repo> --body <組織の UUID>
+gh variable set ANTHROPIC_SERVICE_ACCOUNT_ID  -R <owner/repo> --body svac_...
+```
+
+> **`ANTHROPIC_API_KEY` を Secrets に置かないでください。** 静的な鍵が渡ると WIF より優先され、鍵の管理が必要な状態に戻ります（ワークフローは鍵を渡していません）。
+
+> 変数が欠けていると、ジョブは先頭で変数名を挙げて失敗します（`.github/scripts/require-vars.sh`。デプロイと同じ確認）。WIF の交換は失敗理由を返さない（`401 Authentication failed` のみ）ため、設定漏れはここで先に分かるようにしています。
+
+**4.（推奨）Console で利用上限を決める**
+
+サービスアカウントを入れたワークスペースに、Console のワークスペース設定で利用上限（spend limit）を設定しておくと、想定外の呼び出しが続いても費用が青天井になりません。
 
 ## 🧑‍💻 ローカル開発
 
