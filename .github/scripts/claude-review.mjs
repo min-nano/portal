@@ -9,22 +9,25 @@
 //     プロンプトは書き足さない
 //   - インラインコメントのツール（mcp__github_inline_comment__create_inline_comment）。
 //     アクションの同名ツールと同じ引数を受け、GitHub の API で付ける
-//   - GitHub の OIDC トークンの更新。トークンは約 5 分で切れ、1 回の交換にしか
-//     使えない（jti）ので、CLI がアクセストークンを取り直すときに備えて、
-//     ANTHROPIC_IDENTITY_TOKEN_FILE を 4 分おきに新しいものへ書き換える
+//   - GitHub の OIDC トークンの取得。起動時に 1 回だけ取り、環境変数
+//     ANTHROPIC_IDENTITY_TOKEN として CLI に渡す（ファイルには書かない）
+//
+// 環境変数は起動時に固まるので、トークンの取り直しはできない。Anthropic の
+// アクセストークンの寿命は「GitHub の OIDC トークンの残り寿命の 2 倍」まで
+// （OIDC トークンは約 5 分なので、およそ 10 分）で、それを過ぎると CLI は同じ
+// OIDC トークンで交換し直そうとして断られる（期限切れ・使用済み）。つまり
+// レビューが約 10 分を超えると、途中で失敗する。
 //
 // 認証は環境変数の WIF（ANTHROPIC_FEDERATION_RULE_ID など）に任せる。
 // コメントは GITHUB_TOKEN（github-actions[bot]）の名義で付く。
 //
 // 環境変数: GITHUB_REPOSITORY・GH_TOKEN・PR_NUMBER・PR_URL・PLUGIN_DIR・
-// ANTHROPIC_IDENTITY_TOKEN_FILE・ACTIONS_ID_TOKEN_REQUEST_URL / _TOKEN（Actions が渡す）
-import { writeFileSync } from 'node:fs';
+// ACTIONS_ID_TOKEN_REQUEST_URL / _TOKEN（Actions が渡す）
 import { createSdkMcpServer, query, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
 const MODEL = 'claude-opus-5-5';
 const OIDC_AUDIENCE = 'https://api.anthropic.com';
-const REFRESH_MS = 4 * 60 * 1000;
 
 function required(name) {
   const value = process.env[name];
@@ -37,18 +40,17 @@ const githubToken = required('GH_TOKEN');
 const prNumber = Number(required('PR_NUMBER'));
 const prUrl = required('PR_URL');
 const pluginDir = required('PLUGIN_DIR');
-const tokenFile = required('ANTHROPIC_IDENTITY_TOKEN_FILE');
 const oidcUrl = required('ACTIONS_ID_TOKEN_REQUEST_URL');
 const oidcToken = required('ACTIONS_ID_TOKEN_REQUEST_TOKEN');
 
 // --- GitHub の OIDC トークン ---------------------------------------------------
 
-async function refreshIdentityToken() {
+async function fetchIdentityToken() {
   const url = `${oidcUrl}&audience=${encodeURIComponent(OIDC_AUDIENCE)}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${oidcToken}` } });
   if (!res.ok) throw new Error(`OIDC トークンを取得できませんでした（HTTP ${res.status}）`);
   const { value } = await res.json();
-  writeFileSync(tokenFile, value, { mode: 0o600 });
+  return value;
 }
 
 // --- インラインコメントのツール -------------------------------------------------
@@ -109,69 +111,61 @@ const createInlineComment = tool(
 
 // --- 実行 ---------------------------------------------------------------------
 
-// Claude に渡す環境から、OIDC トークンを取るための値を外す（取り直しはこの
-// プロセスが行う。Bash から読めても使い道は無いが、渡す理由も無い）。
-const env = { ...process.env };
+// Claude に渡す環境から、OIDC トークンを取るための値を外し（Claude が別の
+// トークンを取れないように）、取ったトークンだけを渡す。
+const env = { ...process.env, ANTHROPIC_IDENTITY_TOKEN: await fetchIdentityToken() };
 delete env.ACTIONS_ID_TOKEN_REQUEST_URL;
 delete env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
-
-await refreshIdentityToken();
-const timer = setInterval(() => {
-  refreshIdentityToken().catch((error) => console.error(`::warning::${error.message}`));
-}, REFRESH_MS);
+delete env.ANTHROPIC_IDENTITY_TOKEN_FILE;
 
 let ok = false;
-try {
-  for await (const message of query({
-    prompt: `/code-review:code-review --comment ${prUrl}`,
-    options: {
-      model: MODEL,
-      env,
-      plugins: [{ type: 'local', path: pluginDir }],
-      mcpServers: {
-        github_inline_comment: createSdkMcpServer({
-          name: 'github_inline_comment',
-          version: '1.0.0',
-          tools: [createInlineComment],
-        }),
-      },
-      // プラグインのコマンドが宣言しているもの（gh と、インラインコメント）に、
-      // サブエージェントの起動と読み取りを足したもの。ほかは聞かずに断る。
-      allowedTools: [
-        'Agent',
-        'Task',
-        'TodoWrite',
-        'Read',
-        'Glob',
-        'Grep',
-        'Bash(gh pr view:*)',
-        'Bash(gh pr diff:*)',
-        'Bash(gh pr comment:*)',
-        'Bash(gh pr list:*)',
-        'Bash(gh issue view:*)',
-        'Bash(gh issue list:*)',
-        'Bash(gh search:*)',
-        'mcp__github_inline_comment__create_inline_comment',
-      ],
-      permissionMode: 'dontAsk',
-      // PR のチェックアウトにある .claude/ の設定（フックなど）は読まない。
-      // PR 側が書き換えられるため。CLAUDE.md はプラグインがファイルとして読む。
-      settingSources: [],
+for await (const message of query({
+  prompt: `/code-review:code-review --comment ${prUrl}`,
+  options: {
+    model: MODEL,
+    env,
+    plugins: [{ type: 'local', path: pluginDir }],
+    mcpServers: {
+      github_inline_comment: createSdkMcpServer({
+        name: 'github_inline_comment',
+        version: '1.0.0',
+        tools: [createInlineComment],
+      }),
     },
-  })) {
-    if (message.type === 'assistant') {
-      for (const block of message.message.content) {
-        if (block.type === 'text' && block.text.trim()) console.log(block.text);
-        if (block.type === 'tool_use') console.log(`→ ${block.name}`);
-      }
-    }
-    if (message.type === 'result') {
-      const { subtype, is_error, result, total_cost_usd, num_turns } = message;
-      console.log(JSON.stringify({ subtype, is_error, num_turns, total_cost_usd, result }, null, 2));
-      ok = !is_error;
+    // プラグインのコマンドが宣言しているもの（gh と、インラインコメント）に、
+    // サブエージェントの起動と読み取りを足したもの。ほかは聞かずに断る。
+    allowedTools: [
+      'Agent',
+      'Task',
+      'TodoWrite',
+      'Read',
+      'Glob',
+      'Grep',
+      'Bash(gh pr view:*)',
+      'Bash(gh pr diff:*)',
+      'Bash(gh pr comment:*)',
+      'Bash(gh pr list:*)',
+      'Bash(gh issue view:*)',
+      'Bash(gh issue list:*)',
+      'Bash(gh search:*)',
+      'mcp__github_inline_comment__create_inline_comment',
+    ],
+    permissionMode: 'dontAsk',
+    // PR のチェックアウトにある .claude/ の設定（フックなど）は読まない。
+    // PR 側が書き換えられるため。CLAUDE.md はプラグインがファイルとして読む。
+    settingSources: [],
+  },
+})) {
+  if (message.type === 'assistant') {
+    for (const block of message.message.content) {
+      if (block.type === 'text' && block.text.trim()) console.log(block.text);
+      if (block.type === 'tool_use') console.log(`→ ${block.name}`);
     }
   }
-} finally {
-  clearInterval(timer);
+  if (message.type === 'result') {
+    const { subtype, is_error, result, total_cost_usd, num_turns } = message;
+    console.log(JSON.stringify({ subtype, is_error, num_turns, total_cost_usd, result }, null, 2));
+    ok = !is_error;
+  }
 }
 process.exit(ok ? 0 : 1);

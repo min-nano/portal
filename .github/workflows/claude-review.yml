@@ -131,10 +131,7 @@ jobs:
           )
           git clone -q --depth 1 https://github.com/anthropics/claude-code.git "$dir/claude-code"
           echo "プラグイン: anthropics/claude-code@$(git -C "$dir/claude-code" rev-parse HEAD)"
-          {
-            echo "PLUGIN_DIR=$dir/claude-code/plugins/code-review"
-            echo "ANTHROPIC_IDENTITY_TOKEN_FILE=$RUNNER_TEMP/anthropic-identity-token"
-          } >> "$GITHUB_ENV"
+          echo "PLUGIN_DIR=$dir/claude-code/plugins/code-review" >> "$GITHUB_ENV"
       - name: Review with the code-review plugin
         if: steps.before.outputs.verdict == 'false'
         env:

@@ -824,7 +824,7 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 
 PR のレビューを Claude に任せます。API は Claude Platform を **Workload Identity Federation（WIF）** で使い、GitHub Actions の OIDC トークンを短命の Anthropic トークンに交換します。デプロイ（GCP）と同じく **API キーを Secrets に置きません**。
 
-レビューは **Claude Agent SDK** で動かしています（`.github/scripts/claude-review.mjs`）。`anthropics/claude-code-action` は使いません。中身が Claude Code で、[Max / Team プランに付く API クレジット](https://platform.claude.com/docs/ja/about-claude/api-credits-for-subscribers)の対象外だからです（Agent SDK は対象。アクションで動かすと、認証は通ってもモデル呼び出しが通らない）。アクションが用意していたもののうち、プラグインが要るインラインコメントのツールと、GitHub の OIDC トークンの更新は、このスクリプトが持っています。
+レビューは **Claude Agent SDK** で動かしています（`.github/scripts/claude-review.mjs`）。`anthropics/claude-code-action` は使いません。中身が Claude Code で、[Max / Team プランに付く API クレジット](https://platform.claude.com/docs/ja/about-claude/api-credits-for-subscribers)の対象外だからです（Agent SDK は対象。アクションで動かすと、認証は通ってもモデル呼び出しが通らない）。アクションが用意していたもののうち、プラグインが要るインラインコメントのツールは、このスクリプトが持っています。
 
 `.github/workflows/claude-review.yml` は、PR が **Ready の状態になったとき**（下書きから Ready への切り替え・Ready のまま開いた・Ready のまま開き直した）に動き、**1 つの PR に 1 回だけ** レビューします。レビューの中身は Anthropic 公式の [code-review プラグイン](https://github.com/anthropics/claude-code/tree/main/plugins/code-review)（`/code-review:code-review --comment`）にそのまま任せており、ワークフロー側ではプロンプトを書いていません。
 
@@ -849,6 +849,7 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 - 判定に数えるのは、**この実行で** `github-actions[bot]` が付けたインラインコメント（スレッドの起点のみ。`@claude` とのやり取りの返信は数えない）と、`## Code review` で始まるまとめコメントです。インラインコメントがあれば Request changes、「No issues found」を含むまとめだけなら Approve、どちらでもなければ判定せずに失敗にします。投稿直後は API に反映されていないことがあるので、見えなければ数回取り直します。
 - **Ready なのにレビューが付かなかったら、ジョブを失敗（赤）にします。** プラグインは「レビュー不要（自明な変更）」や「Claude が既にコメントした PR」と判断すると何も書かずに終わるため、緑のまま終えると未レビューに気付けません。実行中に下書きへ戻した・閉じた PR は対象外です。
   - PR に Claude のコメントが既にある場合（`@claude` とのやり取りや、中断された実行の残りなど）、プラグインは毎回同じ理由で飛ばすので、**再実行では解消しません**。人がレビューするか、それらのコメントを消してから再実行してください。
+- **1 回のレビューは約 10 分までです。** GitHub の OIDC トークンは起動時に 1 回だけ取り、環境変数（`ANTHROPIC_IDENTITY_TOKEN`）で渡しています（ファイルに書かない）。Anthropic のアクセストークンの寿命は「OIDC トークンの残り寿命の 2 倍」まで（OIDC トークンは約 5 分なので、およそ 10 分）で、環境変数は途中で差し替えられないため、それを過ぎると取り直しが断られて失敗します。大きな PR で失敗が続くようなら、トークンをファイルで渡して 4 分おきに書き換える方式に戻します。
 - bot（Dependabot など）の PR と、フォークからの PR は対象外です（フォークからの実行には OIDC トークンが出ないので、WIF が通りません）。
 - PR のイベントでは PR 側のワークフローが動くので、`claude-review.yml` を変える PR は、変えた後の内容でレビューされます。
 
@@ -872,7 +873,7 @@ Federation rule の match は **このリポジトリだけ** に絞ります。
 | `audience` | `https://api.anthropic.com` | `claude-review.mjs` が OIDC トークンを要求するときの audience |
 | `claims` | `repository_owner_id: 299874061`、`repository_id: 1328433849` | `sub` の解釈に頼らない念押し。数値の ID は名前を変えても変わらない |
 | `oauth_scope` | `workspace:developer`（既定） | |
-| `token_lifetime_seconds` | `3600` 程度 | レビューは数分〜数十分かかる。ウィザードの既定 600 秒でも SDK が更新するが、余裕を持たせる |
+| `token_lifetime_seconds` | `600` 以上 | 実際の寿命は「OIDC トークンの残り寿命の 2 倍」（約 10 分）で頭打ちになるので、それより長くしても延びない。短くするとレビューの持ち時間が減る |
 
 > ID は `gh api repos/<owner>/<repo> --jq '.owner.id, .id'` で確かめられます。`sub` の実際の形は、交換に失敗したときの [authentication history](https://platform.claude.com/settings/workload-identity-federation?tab=history) にも出ます（`match_subject_prefix` で落ちていたら、ここを見比べる）。
 
