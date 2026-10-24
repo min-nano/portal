@@ -769,6 +769,32 @@ describe('ファイルを足して並べる', () => {
     expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o1' });
   });
 
+  it('見出しの「?」は、押すと説明を開き、もう一度押すか外を押すか Esc で閉じる', () => {
+    const [intro, files] = document.querySelectorAll('.bm-help');
+    const button = (help) => help.querySelector('.bm-help-btn');
+    const isOpen = (help) => help.classList.contains('open') && button(help).getAttribute('aria-expanded') === 'true';
+
+    button(intro).click();
+    expect(isOpen(intro)).toBe(true);
+    button(intro).click();
+    expect(isOpen(intro)).toBe(false);
+
+    // 開けるのは 1 つだけ。説明の文を押しても閉じず、節も畳まない。
+    button(intro).click();
+    button(files).click();
+    expect(isOpen(intro)).toBe(false);
+    expect(isOpen(files)).toBe(true);
+    files.querySelector('.bm-help-body').click();
+    expect(isOpen(files)).toBe(true);
+    expect($('filesSection').hasAttribute('collapsed')).toBe(false);
+
+    document.body.click();
+    expect(isOpen(files)).toBe(false);
+    button(files).click();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(isOpen(files)).toBe(false);
+  });
+
   it('ドラッグ中の枠と、手元のファイルの選択', async () => {
     $('filesSection').dispatchEvent(new Event('dragover', { cancelable: true }));
     expect($('filesSection').classList.contains('dragging')).toBe(true);
