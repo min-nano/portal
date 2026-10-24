@@ -388,9 +388,10 @@ async function readFile(file) {
     // 何番目かは、調べ終えたファイルの数から数える（あとからの OCR は数えない）。
     readProgress.label = () =>
       `ファイルを調べています（${files.filter((f) => !f.pending).length + 1} / ${files.length}）`;
-    // 段ごとの区間。読み込みを待つ（先読みが済んでいない）ときは、読み込みにも
-    // 区間を分ける（大きな Drive のファイルは読み込みに数分かかる）。
-    const loadEnd = file.bytes ? 0 : 0.3;
+    // 段ごとの区間。Drive の読み込みを待つ（先読みが済んでいない）ときは、
+    // 読み込みにも区間を分ける（大きなファイルは読み込みに数分かかる。この端末の
+    // ファイルはすぐ読み終えるので分けない）。
+    const loadEnd = file.driveId && !file.bytes ? 0.3 : 0;
     const textEnd = loadEnd + (1 - loadEnd) * 0.1;
     readProgress.stage(0, loadEnd);
     file.waiting = true;
