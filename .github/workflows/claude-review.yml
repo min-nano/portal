@@ -1,20 +1,26 @@
 name: Claude review
 
-# PR エージェント（Claude Code）による自動レビュー。API は Claude Platform を
-# Workload Identity Federation（WIF）で使う。GitHub の OIDC トークンを短命の
-# Anthropic トークンに交換するので、API キー（Secrets）は持たない。
+# PR エージェント（Claude Code）による自動レビュー。レビューの中身は Anthropic
+# 公式の code-review プラグイン（`/code-review:code-review`）に任せ、ここでは
+# プロンプトを書かない。何を見るか・どの指摘を捨てるかはプラグインが決める
+# （並列のエージェントで CLAUDE.md 準拠とバグを見て、確信度の低い指摘を捨てる）。
+# リポジトリ固有の観点は CLAUDE.md に書けば、プラグインがそれに照らして見る。
 #
-# 無駄打ちを防ぐため、**下書き（draft）の PR はレビューしない**。運用は
+# API は Claude Platform を Workload Identity Federation（WIF）で使う。GitHub の
+# OIDC トークンを短命の Anthropic トークンに交換するので、API キー（Secrets）は
+# 持たない。
+#
+# 無駄打ちを防ぐため、**Ready for review に切り替えた時だけ** 走らせる。運用は
 #
 #   1. PR は下書きで作る（作業中の push ではレビューが走らない）
 #   2. 案がまとまったら「Ready for review」に切り替える → ここで 1 回レビュー
-#   3. 指摘を直した後にもう一度見てほしければ、PR に `@claude` でコメントする
-#      （claude.yml が拾う）。あるいは下書きに戻して、まとまったら再度 Ready に
 #
-# synchronize（push）では走らせない。Ready 後の細かな修正のたびに PR 全体を
-# 読み直すのは、ほとんどが同じ指摘の繰り返しになるため。
+# opened / synchronize（push）/ reopened では走らせない。最初から Ready で
+# 開いた PR は、いったん下書きに戻して Ready にし直せばレビューされる。
+# プラグインは「Claude が既にコメントした PR」を自分で飛ばすため、2 回目以降の
+# Ready では何もしない。その後の push やコメントへの対応は、このワークフローの
+# 役目ではない。
 #
-# 下書きを経ずに最初から Ready で開いた PR（opened）も 1 回レビューする。
 # bot（Dependabot など）の PR は対象外。依存の更新は CI とプレビューで見る。
 #
 # 必要な設定（Claude Console 側の WIF、GitHub App、リポジトリ変数）は
@@ -22,7 +28,7 @@ name: Claude review
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review]
+    types: [ready_for_review]
 
 # 同じ PR のレビューは最新の 1 本だけでよい（Ready → 下書き → Ready と
 # 素早く切り替えたときなど）。
@@ -36,13 +42,12 @@ permissions:
 jobs:
   review:
     name: Review
-    if: github.event.pull_request.draft == false && github.event.pull_request.user.type != 'Bot'
+    if: github.event.pull_request.user.type != 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: write
-      issues: write
       # GitHub の OIDC トークンの取得に使う（Anthropic への WIF と、Claude
       # GitHub App のトークン取得の両方）。
       id-token: write
@@ -61,6 +66,24 @@ jobs:
         run: |
           .github/scripts/require-vars.sh \
             ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID ANTHROPIC_SERVICE_ACCOUNT_ID
+      - name: Fetch the plugin marketplace
+        # プラグインはレビューの指示そのものなので、他のアクションと同じく
+        # コミットを固定する。アクションの plugin_marketplaces に URL を渡すと
+        # 既定ブランチの先頭を取ってしまう（ref を指定できない）ため、固定した
+        # コミットを取ってきてローカルのパスとして渡す。置き場所はワークスペースの
+        # 外（RUNNER_TEMP）。中に置くと、レビュー対象のファイルに混ざる。
+        #
+        # Dependabot はこれを追えない。更新するときは anthropics/claude-code の
+        # コミットを確かめて REV を差し替えること。
+        env:
+          REV: 318b7e6ac4e726e88a4ad326214866a93c373b1b
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/claude-code-plugins"
+          git init -q "$dir"
+          git -C "$dir" fetch -q --depth 1 https://github.com/anthropics/claude-code.git "$REV"
+          git -C "$dir" checkout -q FETCH_HEAD
+          echo "PLUGIN_MARKETPLACE=$dir" >> "$GITHUB_ENV"
       - uses: anthropics/claude-code-action@16f9f71ab9c490faf367f94dd294897edc25be33 # v1.0.261
         with:
           # WIF。これらは ID であって秘密ではないので、Variables に置く。
@@ -70,30 +93,14 @@ jobs:
           anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
           # ルールが 1 つのワークスペースだけを対象にしているなら空でよい。
           anthropic_workspace_id: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
-          track_progress: true
-          prompt: |
-            REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
-
-            この PR をレビューしてください。PR のブランチは作業ディレクトリに
-            チェックアウト済みです。差分は `gh pr diff`、説明は `gh pr view` で読めます。
-
-            見てほしい観点（重要な順）:
-            - 正しさ: バグ、境界条件、計算結果の誤り（core/ の計算はグレー本・配布物の
-              表計算ツールと一致している必要がある）
-            - セキュリティ: 認証・権限（Clerk の JWT 検証、許可ドメイン、Firestore
-              ルール）、秘密情報の扱い、ワークフローの権限
-            - テスト: 変更に見合うテストがあるか、既存テストの意図を壊していないか
-            - ドキュメント: README などの説明が変更と食い違っていないか（このリポジトリは
-              README に設計の理由まで書いているので、挙動を変えたら README も直すのが原則）
-
-            書き方:
-            - 日本語で書く。
-            - 具体的な問題はインラインコメント
-              （`mcp__github_inline_comment__create_inline_comment`、`confirmed: true`）で、
-              該当行に付ける。問題が無い箇所への称賛や、好みの範囲の指摘は書かない。
-            - 全体の所見は短くまとめる（重大な指摘の有無・件数が一目で分かるように）。
-            - コードは変更しない（レビューだけを行う）。
+          plugin_marketplaces: ${{ env.PLUGIN_MARKETPLACE }}
+          plugins: code-review@claude-code-plugins
+          # track_progress は使わない。進捗コメントを先に付けると、プラグインが
+          # 「Claude が既にコメントした PR」と見なしてレビューを飛ばす。
+          prompt: /code-review:code-review --comment ${{ github.event.pull_request.html_url }}
+          # この実行（agent モード）では、ここに挙げたツールしか使えない。
+          # プラグインのコマンドが宣言しているもの（gh と、インライン
+          # コメントの MCP）に、サブエージェントの起動と読み取りを足したもの。
           claude_args: |
             --model claude-opus-5-5
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+            --allowedTools "Agent,Task,TodoWrite,Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),mcp__github_inline_comment__create_inline_comment"

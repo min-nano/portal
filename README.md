@@ -460,7 +460,7 @@ firestore/                    # Firestore セキュリティルールとその�
   firestore.rules             # クライアント SDK からのアクセスを全面拒否（deny-all）
   tests/rules.test.js         # エミュレータでルールを検証
 firebase.json                 # Hosting 設定（/api/** → Cloud Run リライト）・Firestore ルールの参照
-.github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml・preview-cleanup.yml（PR プレビュー）/ claude-review.yml・claude.yml（PR エージェント）
+.github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml・preview-cleanup.yml（PR プレビュー）/ claude-review.yml（PR エージェント）
                               # howtec-worksheet-check.yml（表計算ツールの改訂の定期確認）
 .github/scripts/              # ワークフロー間で共有するスクリプト
   require-vars.sh             # 必須のリポジトリ変数が空でないことの確認
@@ -822,26 +822,29 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 
 PR のレビューを Claude Code（[`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action)）に任せます。API は Claude Platform を **Workload Identity Federation（WIF）** で使い、GitHub Actions の OIDC トークンを短命の Anthropic トークンに交換します。デプロイ（GCP）と同じく **API キーを Secrets に置きません**。
 
-| ワークフロー | いつ動くか | 何をするか |
-| --- | --- | --- |
-| `claude-review.yml` | PR が **Ready for review になったとき**（下書きを経ずに開いた PR は opened / reopened 時） | 差分を読み、インラインコメントと所見をまとめたコメントを付ける。コードは変えない |
-| `claude.yml` | PR / issue のコメント・レビューに `@claude` と書いたとき（下書きでも動く） | 書かれた依頼に応える（再レビュー・質問への回答・修正の push など） |
+`.github/workflows/claude-review.yml` は、PR が **Ready for review に切り替わったときだけ** 動きます。レビューの中身は Anthropic 公式の [code-review プラグイン](https://github.com/anthropics/claude-code/tree/main/plugins/code-review)（`/code-review:code-review --comment`）にそのまま任せており、ワークフロー側ではプロンプトを書いていません。
+
+- 並列のエージェントが **CLAUDE.md への準拠** と **変更箇所のバグ** を見て、別のエージェントが検証し、確信度の低い指摘は捨てる。スタイルや好みの指摘は出さない。
+- 指摘は該当行へのインラインコメントで付く。指摘が無ければ「No issues found」のコメントが 1 つ付く。
+- リポジトリ固有の観点（「挙動を変えたら README も直す」など）は **CLAUDE.md に書く**。プラグインはそれに照らしてレビューする。
+- プラグインは特定のコミットに固定して取得している（ワークフローの `REV`）。Dependabot は追えないので、更新は手で行う。
 
 #### 運用: PR は下書きで作る
 
-レビューは 1 回ごとに API の利用料がかかります。作業途中の push のたびに走らせても同じ指摘の繰り返しになるので、**下書き（draft）の PR は自動レビューしません**。
+レビューは 1 回ごとに API の利用料がかかります。作業途中の push のたびに走らせても同じ指摘の繰り返しになるので、自動レビューは **Ready for review への切り替え時の 1 回だけ** です。
 
 1. PR は **下書きで作成** する（GitHub の「Create draft pull request」。Claude Code に PR を作らせる場合も下書きで作る。`CLAUDE.md` に明記してある）。
 2. 案がまとまったら **「Ready for review」に切り替える**。ここで自動レビューが 1 回走る。
-3. 指摘を直した後にもう一度見てほしければ、PR に `@claude 修正したので再レビューしてください` のようにコメントする。大きく作り直す場合は、下書きに戻して手順 2 からやり直してもよい。
 
-push（`synchronize`）では自動レビューは走りません。bot（Dependabot など）の PR も対象外です。
+- PR を開いたとき・push したとき・開き直したときには走りません。最初から Ready で開いてしまった PR は、下書きに戻してから Ready にし直してください。
+- プラグインは「Claude が既にコメントした PR」を自分で飛ばすため、下書きと Ready を行き来しても 2 回目以降はレビューしません。
+- bot（Dependabot など）の PR は対象外です。
 
 #### 初回の設定
 
 **1. Claude GitHub App をリポジトリにインストールする**
 
-<https://github.com/apps/claude> からこのリポジトリにインストールします（リポジトリの管理者権限が要る）。コメントや push は App の名義（`claude[bot]`）で行われます。
+<https://github.com/apps/claude> からこのリポジトリにインストールします（リポジトリの管理者権限が要る）。レビューのコメントは App の名義（`claude[bot]`）で付きます。
 
 **2. Claude Console で WIF を設定する**（Anthropic 組織の admin / owner 権限が要る）
 
@@ -857,7 +860,7 @@ Federation rule の match は **このリポジトリだけ** に絞ります。
 
 | 項目 | 値 | 理由 |
 | --- | --- | --- |
-| `subject_prefix` | `repo:<owner>/<repo>:*` | PR のイベント（`pull_request` / `pull_request_review*`）の `sub` は `repo:<owner>/<repo>:pull_request`、`issue_comment` は既定ブランチの `repo:<owner>/<repo>:ref:refs/heads/main` になる。両方を通すため末尾を `*` にする |
+| `subject_prefix` | `repo:<owner>/<repo>:pull_request` | `pull_request` イベントの `sub` はこの形になる。レビューは PR のイベントでしか動かないので、ここまで絞れる（push や他のイベントのトークンは通さない） |
 | `audience` | `https://api.anthropic.com` | アクションが OIDC トークンを要求するときの既定の audience |
 | `claims` | `repository_owner: <owner>`、`repository: <owner>/<repo>` | `sub` の解釈に頼らない念押し |
 | `oauth_scope` | `workspace:developer`（既定） | |
@@ -865,7 +868,7 @@ Federation rule の match は **このリポジトリだけ** に絞ります。
 
 > `ref`（ブランチ）では絞りません。PR のイベントの `ref` は `refs/pull/<番号>/merge` になるため、ブランチで絞ると PR レビューが通らなくなります。代わりに `subject_prefix` と `claims` でリポジトリに閉じます。フォークからの PR は（プライベートリポジトリでフォークを許可していなければ）そもそも来ません。公開リポジトリにする場合は、フォーク PR で動かないことを確認してください（`pull_request` イベントでは、フォークからの実行に `id-token: write` は与えられません）。
 
-ウィザードの最後の **Test the connection**（15 分間の待ち受け）は、下の 3 を済ませた後に、適当な PR で `@claude` とコメントすれば通せます。失敗した場合は [authentication history](https://platform.claude.com/settings/workload-identity-federation?tab=history) に理由（`match_subject_prefix` など）が出ます。
+ウィザードの最後の **Test the connection**（15 分間の待ち受け）は、下の 3 を済ませた後に、適当な下書きの PR を Ready for review に切り替えれば通せます。失敗した場合は [authentication history](https://platform.claude.com/settings/workload-identity-federation?tab=history) に理由（`match_subject_prefix` など）が出ます。
 
 **3. リポジトリ変数を設定する**
 
