@@ -464,6 +464,7 @@ firebase.json                 # Hosting 設定（/api/** → Cloud Run リライ
                               # howtec-worksheet-check.yml（表計算ツールの改訂の定期確認）
 .github/scripts/              # ワークフロー間で共有するスクリプト
   require-vars.sh             # 必須のリポジトリ変数が空でないことの確認
+  claude-review.mjs           # Agent SDK で code-review プラグインを動かす（PR エージェント）
   claude-review-status.sh     # Claude のレビューが付いたか・判定済みか・PR の状態を確認（PR エージェント）
   clerk-issuer.sh             # Publishable Key から CLERK_ISSUER を導出
   coverage.py                 # カバレッジ XML のパス正規化と集計（テストのカバレッジ）
@@ -821,15 +822,18 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 
 ### 10. Claude による PR レビュー（PR エージェント）
 
-PR のレビューを Claude Code（[`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action)）に任せます。API は Claude Platform を **Workload Identity Federation（WIF）** で使い、GitHub Actions の OIDC トークンを短命の Anthropic トークンに交換します。デプロイ（GCP）と同じく **API キーを Secrets に置きません**。
+PR のレビューを Claude に任せます。API は Claude Platform を **Workload Identity Federation（WIF）** で使い、GitHub Actions の OIDC トークンを短命の Anthropic トークンに交換します。デプロイ（GCP）と同じく **API キーを Secrets に置きません**。
+
+レビューは **Claude Agent SDK** で動かしています（`.github/scripts/claude-review.mjs`）。`anthropics/claude-code-action` は使いません。中身が Claude Code で、[Max / Team プランに付く API クレジット](https://platform.claude.com/docs/ja/about-claude/api-credits-for-subscribers)の対象外だからです（Agent SDK は対象。アクションで動かすと、認証は通ってもモデル呼び出しが通らない）。アクションが用意していたもののうち、プラグインが要るインラインコメントのツールは、このスクリプトが持っています。
 
 `.github/workflows/claude-review.yml` は、PR が **Ready の状態になったとき**（下書きから Ready への切り替え・Ready のまま開いた・Ready のまま開き直した）に動き、**1 つの PR に 1 回だけ** レビューします。レビューの中身は Anthropic 公式の [code-review プラグイン](https://github.com/anthropics/claude-code/tree/main/plugins/code-review)（`/code-review:code-review --comment`）にそのまま任せており、ワークフロー側ではプロンプトを書いていません。
 
 - 並列のエージェントが **CLAUDE.md への準拠** と **変更箇所のバグ** を見て、別のエージェントが検証し、確信度の低い指摘は捨てる。スタイルや好みの指摘は出さない。
 - 指摘は該当行へのインラインコメントで付く。指摘が無ければ「No issues found」のコメントが 1 つ付く。
-- その結果を **PR のレビューとして出す**。指摘があれば **Request changes**、無ければ **Approve**。判定はワークフローが機械的に行う（インラインコメントの有無）。出すのは `github-actions[bot]`（Claude GitHub App のトークンはアクションの終わりで失効するため）。
+- その結果を **PR のレビューとして出す**。指摘があれば **Request changes**、無ければ **Approve**。判定はワークフローが機械的に行う（インラインコメントの有無）。
+- コメントも判定も `GITHUB_TOKEN` で付けるので、名義は `github-actions[bot]` になる。
 - リポジトリ固有の観点（「挙動を変えたら README も直す」など）は **CLAUDE.md に書く**。プラグインはそれに照らしてレビューする。
-- プラグインは毎回、公式のマーケットプレイス（`anthropics/claude-code`）から最新版を取得する。レビューの指示であってこのリポジトリのコードの動作には関わらないため、他のアクションと違ってバージョンを固定しない。
+- プラグインは毎回、`anthropics/claude-code` の最新版を取得する。レビューの指示であってこのリポジトリのコードの動作には関わらないため、他のアクションと違ってバージョンを固定しない（Agent SDK は固定する）。
 
 #### 運用: PR は下書きで作る
 
@@ -842,19 +846,16 @@ PR のレビューを Claude Code（[`anthropics/claude-code-action`](https://gi
 - **判定（Approve / Request changes）まで済んだ PR では、プラグインを起動せずに終えます**（下書きと Ready を行き来したとき・開き直したとき）。済んだかどうかは、判定のレビュー本文の目印（`<!-- claude-review-verdict -->`）で見ます（`.github/scripts/claude-review-status.sh`）。プラグインのコメントの有無で見ないのは、途中で止まった実行を「済み」と取り違えないためです。
 - 同じ PR の実行は 1 本ずつ順に動き、走っている実行は止めません（途中で止めると、コメントが一部だけ付いて判定の無い状態が残るため）。後から来た実行は、前の実行が判定まで済ませていれば何もしません。
 - Ready のまま開き直すのは、閉じる前に判定が付かなかった PR（レビュー中に閉じた、ジョブが失敗した など）を拾うためです。
-- 判定に数えるのは、**この実行で** `claude[bot]` が付けたインラインコメント（スレッドの起点のみ。`@claude` とのやり取りの返信は数えない）と、`## Code review` で始まるまとめコメントです。インラインコメントがあれば Request changes、「No issues found」を含むまとめだけなら Approve、どちらでもなければ判定せずに失敗にします。投稿直後は API に反映されていないことがあるので、見えなければ数回取り直します。
+- 判定に数えるのは、**この実行で** `github-actions[bot]` が付けたインラインコメント（スレッドの起点のみ。`@claude` とのやり取りの返信は数えない）と、`## Code review` で始まるまとめコメントです。インラインコメントがあれば Request changes、「No issues found」を含むまとめだけなら Approve、どちらでもなければ判定せずに失敗にします。投稿直後は API に反映されていないことがあるので、見えなければ数回取り直します。
 - **Ready なのにレビューが付かなかったら、ジョブを失敗（赤）にします。** プラグインは「レビュー不要（自明な変更）」や「Claude が既にコメントした PR」と判断すると何も書かずに終わるため、緑のまま終えると未レビューに気付けません。実行中に下書きへ戻した・閉じた PR は対象外です。
-  - PR に `claude[bot]` のコメントが既にある場合（`@claude` とのやり取りや、中断された実行の残りなど）、プラグインは毎回同じ理由で飛ばすので、**再実行では解消しません**。人がレビューするか、それらのコメントを消してから再実行してください。
-- bot（Dependabot など）の PR は対象外です。
-- **`claude-review.yml` 自体を追加・変更する PR は、Claude ではレビューできません。** Claude GitHub App は、ワークフローが既定ブランチのものと同一でなければトークンを出さないためです（PR から書き換えたワークフローで App の権限を使わせない仕組み）。この場合ジョブは警告を出して緑で終わるので、人がレビューしてください。このワークフローを入れた PR も同じで、実際に動くのはマージ後の PR からです。
+  - PR に Claude のコメントが既にある場合（`@claude` とのやり取りや、中断された実行の残りなど）、プラグインは毎回同じ理由で飛ばすので、**再実行では解消しません**。人がレビューするか、それらのコメントを消してから再実行してください。
+- **1 回のレビューは約 10 分までです。** GitHub の OIDC トークンは起動時に 1 回だけ取り、環境変数（`ANTHROPIC_IDENTITY_TOKEN`）で渡しています（ファイルに書かない）。Anthropic のアクセストークンの寿命は「OIDC トークンの残り寿命の 2 倍」まで（OIDC トークンは約 5 分なので、およそ 10 分）で、環境変数は途中で差し替えられないため、それを過ぎると取り直しが断られて失敗します。大きな PR で失敗が続くようなら、トークンをファイルで渡して 4 分おきに書き換える方式に戻します。
+- bot（Dependabot など）の PR と、フォークからの PR は対象外です（フォークからの実行には OIDC トークンが出ないので、WIF が通りません）。
+- PR のイベントでは PR 側のワークフローが動くので、`claude-review.yml` を変える PR は、変えた後の内容でレビューされます。
 
 #### 初回の設定
 
-**1. Claude GitHub App をリポジトリにインストールする**
-
-<https://github.com/apps/claude> からこのリポジトリにインストールします（リポジトリの管理者権限が要る）。レビューのコメントは App の名義（`claude[bot]`）で付きます。
-
-**2. Claude Console で WIF を設定する**（Anthropic 組織の admin / owner 権限が要る）
+**1. Claude Console で WIF を設定する**（Anthropic 組織の admin / owner 権限が要る）
 
 [Workload identity](https://platform.claude.com/settings/workload-identity-federation) → **Connect workload** → **GitHub Actions** を選ぶと、ウィザードが次の 3 つをまとめて作ります。
 
@@ -868,17 +869,19 @@ Federation rule の match は **このリポジトリだけ** に絞ります。
 
 | 項目 | 値 | 理由 |
 | --- | --- | --- |
-| `subject_prefix` | `repo:<owner>/<repo>:pull_request` | `pull_request` イベントの `sub` はこの形になる。レビューは PR のイベントでしか動かないので、ここまで絞れる（push や他のイベントのトークンは通さない） |
-| `audience` | `https://api.anthropic.com` | アクションが OIDC トークンを要求するときの既定の audience |
-| `claims` | `repository_owner: <owner>`、`repository: <owner>/<repo>` | `sub` の解釈に頼らない念押し |
+| `subject_prefix` | `repo:min-nano@299874061/portal@1328433849:pull_request` | `pull_request` イベントの `sub`。このリポジトリでは、所有者とリポジトリの名前の後ろに数値の ID が付く（`repo:<owner>@<owner_id>/<repo>@<repo_id>:...`）。レビューは PR のイベントでしか動かないので、ここまで絞れる（push や他のイベントのトークンは通さない） |
+| `audience` | `https://api.anthropic.com` | `claude-review.mjs` が OIDC トークンを要求するときの audience |
+| `claims` | `repository_owner_id: 299874061`、`repository_id: 1328433849` | `sub` の解釈に頼らない念押し。数値の ID は名前を変えても変わらない |
 | `oauth_scope` | `workspace:developer`（既定） | |
-| `token_lifetime_seconds` | `3600` 程度 | レビューは数分〜数十分かかる。ウィザードの既定 600 秒でも SDK が更新するが、余裕を持たせる |
+| `token_lifetime_seconds` | `600` 以上 | 実際の寿命は「OIDC トークンの残り寿命の 2 倍」（約 10 分）で頭打ちになるので、それより長くしても延びない。短くするとレビューの持ち時間が減る |
 
-> `ref`（ブランチ）では絞りません。PR のイベントの `ref` は `refs/pull/<番号>/merge` になるため、ブランチで絞ると PR レビューが通らなくなります。代わりに `subject_prefix` と `claims` でリポジトリに閉じます。フォークからの PR は（プライベートリポジトリでフォークを許可していなければ）そもそも来ません。公開リポジトリにする場合は、フォーク PR で動かないことを確認してください（`pull_request` イベントでは、フォークからの実行に `id-token: write` は与えられません）。
+> ID は `gh api repos/<owner>/<repo> --jq '.owner.id, .id'` で確かめられます。`sub` の実際の形は、交換に失敗したときの [authentication history](https://platform.claude.com/settings/workload-identity-federation?tab=history) にも出ます（`match_subject_prefix` で落ちていたら、ここを見比べる）。
 
-ウィザードの最後の **Test the connection**（15 分間の待ち受け）は、下の 3 を済ませた後に、適当な下書きの PR を Ready for review に切り替えれば通せます。失敗した場合は [authentication history](https://platform.claude.com/settings/workload-identity-federation?tab=history) に理由（`match_subject_prefix` など）が出ます。
+> `ref`（ブランチ）では絞りません。PR のイベントの `ref` は `refs/pull/<番号>/merge` になるため、ブランチで絞ると PR レビューが通らなくなります。代わりに `subject_prefix` と `claims` でリポジトリに閉じます。このリポジトリは公開ですが、フォークからの PR の実行には `id-token: write` が与えられず（OIDC トークンが出ない）、ワークフローもフォークの PR を飛ばします。
 
-**3. リポジトリ変数を設定する**
+ウィザードの最後の **Test the connection**（15 分間の待ち受け）は、下の 2 を済ませた後に、適当な下書きの PR を Ready for review に切り替えれば通せます。失敗した場合は [authentication history](https://platform.claude.com/settings/workload-identity-federation?tab=history) に理由（`match_subject_prefix` など）が出ます。
+
+**2. リポジトリ変数を設定する**
 
 Settings → Secrets and variables → Actions → **Variables**。いずれも ID であって秘密ではありません（WIF の安全性は rule の match が担う）。
 
@@ -899,11 +902,11 @@ gh variable set ANTHROPIC_SERVICE_ACCOUNT_ID  -R <owner/repo> --body svac_...
 
 > 変数が欠けていると、ジョブは先頭で変数名を挙げて失敗します（`.github/scripts/require-vars.sh`。デプロイと同じ確認）。WIF の交換は失敗理由を返さない（`401 Authentication failed` のみ）ため、設定漏れはここで先に分かるようにしています。
 
-**4. GitHub Actions に PR の Approve を許可する**
+**3. GitHub Actions に PR の Approve を許可する**
 
 Settings → Actions → General → Workflow permissions の **「Allow GitHub Actions to create and approve pull requests」** を有効にします（表計算ツールの定期確認が PR を作るのにも使う設定なので、既に有効なら不要）。無効のままだと Approve の段階でジョブが失敗します（Request changes は出せます）。
 
-**5.（推奨）Console で利用上限を決める**
+**4.（推奨）Console で利用上限を決める**
 
 サービスアカウントを入れたワークスペースに、Console のワークスペース設定で利用上限（spend limit）を設定しておくと、想定外の呼び出しが続いても費用が青天井になりません。
 

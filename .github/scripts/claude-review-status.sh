@@ -14,7 +14,7 @@
 # 「済み」と取り違える。判定は全部が終わった後にしか出ないので、こちらを使う。
 #
 # この実行で付いたレビューとして数えるのは、SINCE（ISO 8601、UTC）以降に
-# REVIEWER（既定 claude[bot]）が付けた
+# REVIEWER（既定 github-actions[bot]。claude-review.mjs が GITHUB_TOKEN で付ける）が付けた
 #   inline   インラインコメントのうち、スレッドの起点のもの（返信は除く。
 #            `@claude` とのやり取りの返信を指摘と数えないため）
 #   summary  `## Code review` で始まる PR へのコメント（指摘が無かったときの 1 件）
@@ -40,7 +40,7 @@ set -euo pipefail
 
 : "${PR:?PR（PR 番号）を渡してください}"
 repo="${GITHUB_REPOSITORY:?}"
-reviewer="${REVIEWER:-claude[bot]}"
+reviewer="${REVIEWER:-github-actions[bot]}"
 verdict_author="${VERDICT_AUTHOR:-github-actions[bot]}"
 marker="${MARKER:-<!-- claude-review-verdict -->}"
 since="${SINCE:-1970-01-01T00:00:00Z}"
