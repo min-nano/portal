@@ -1,0 +1,11 @@
+# PR-Agent（.github/workflows/pr-agent.yml）の設定。
+# 既定ブランチ（main）にあるこのファイルが読まれる。PR の中で書き換えても、
+# その PR のレビューには効かない。
+#
+# モデルと認証はワークフロー側にある。ここに無い項目は PR-Agent の既定値
+# （レビューと提案は 1 つのコメントを貼り替える、思考の深さは medium 等）のまま。
+# 設定項目の一覧:
+# https://github.com/qodo-ai/pr-agent/blob/main/pr_agent/settings/configuration.toml
+
+[config]
+response_language = "ja-JP"

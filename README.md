@@ -460,8 +460,10 @@ firestore/                    # Firestore セキュリティルールとその�
   firestore.rules             # クライアント SDK からのアクセスを全面拒否（deny-all）
   tests/rules.test.js         # エミュレータでルールを検証
 firebase.json                 # Hosting 設定（/api/** → Cloud Run リライト）・Firestore ルールの参照
+.pr_agent.toml                # PR-Agent（AI レビュー）の設定（言語など）
 .github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml・preview-cleanup.yml（PR プレビュー）
                               # howtec-worksheet-check.yml（表計算ツールの改訂の定期確認）
+                              # pr-agent.yml（PR-Agent による AI レビュー）
 .github/scripts/              # ワークフロー間で共有するスクリプト
   require-vars.sh             # 必須のリポジトリ変数が空でないことの確認
   clerk-issuer.sh             # Publishable Key から CLERK_ISSUER を導出
@@ -816,6 +818,61 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 > **注意**: 分離されるのは Hosting・Clerk・バックエンド・共有設定です。**Drive 上の雛形ファイルは本番と共有** されます（同じ Workspace の同じファイルのため）。プレビューの共有設定は空の状態から始まるので、雛形フォルダはプレビュー内で改めて指定してください。テスト用のフォルダを指定すれば、Drive も実質的に分離できます。
 
 > PR ごとにコンテナをビルドするため、プレビューのデプロイは push ごとに数分かかります（`gcloud run deploy --source` が Cloud Build を経由するため）。
+
+### 10. PR-Agent（AI レビュー。`.github/workflows/pr-agent.yml`）
+
+[PR-Agent](https://github.com/qodo-ai/pr-agent)（オープンソース版）が PR をレビューし、改善案を出します。モデルは Claude Platform（`api.anthropic.com`）の Claude Opus 5.5 で、**Workload Identity Federation（キーレス）** で呼びます。GCP と同じく **API キーの Secret は持ちません**。
+
+**運用: PR は下書き（Draft）で作り、案がまとまってから Ready for review にする。** 呼び出しは 1 回ごとに課金されるため、自動で走るのを「レビューに出した時の 1 回」に絞っています。
+
+| きっかけ | 走るもの |
+| --- | --- |
+| 下書きで PR を開く・下書きのまま push する | 何も走らない |
+| **Ready for review にする**（または最初から下書きでなく開く・再オープンする） | `/review` と `/improve` を 1 回ずつ |
+| その後の push | 何も走らない（見直してほしければコメントで `/review`） |
+| PR に `/review`・`/improve`・`/describe`・`/ask <質問>` 等とコメントする | そのコマンド（下書き中でも可）。オーナー・メンバー・コラボレーターのコメントだけが対象 |
+
+`/describe`（PR の本文とタイトルの書き換え）は自動では走らせません。PR の本文は人が書くためです。フォークからの PR では自動では走らず（OIDC トークンが取れないため）、メンバーがコメントで呼べば走ります。
+
+#### セットアップ
+
+1. **Claude Console で連携を作る。** [Workload identity](https://platform.claude.com/settings/workload-identity-federation) → **Connect workload** → **GitHub Actions** を選び、以下の値で発行元（issuer）・サービスアカウント・フェデレーションルールを作ります（組織の admin 以上の権限が必要）。
+
+   | 項目 | 値 |
+   | --- | --- |
+   | Issuer URL | `https://token.actions.githubusercontent.com`（JWKS は discovery） |
+   | サービスアカウント | 新規（例 `github-pr-agent`）。使うワークスペースのメンバーにする |
+   | ルールの subject（`subject_prefix`） | `repo:<owner/repo>:*` |
+   | ルールの audience | `https://api.anthropic.com` |
+   | ルールの claims | `repository` = `<owner/repo>`、`repository_owner` = `<owner>`、`workflow` = `PR Agent` |
+   | ワークスペース | PR-Agent 用（下記） |
+   | スコープ / 寿命 | `workspace:developer` / `600` 秒（ウィザードの既定のまま） |
+
+   - subject を `repo:<owner/repo>:*` にするのは、イベントで末尾が変わるためです（PR は `repo:<owner/repo>:pull_request`、コメントは既定ブランチ上で走るので `repo:<owner/repo>:ref:refs/heads/main`）。`repository`・`workflow` の claims で、このリポジトリのこのワークフローだけに絞ります。
+   - **ワークスペースは PR-Agent 専用に分け、月の利用上限（spend limit）を付けておく** ことを勧めます。コメントでの呼び出しが重なっても、請求額に天井ができます。
+
+2. **リポジトリ変数を設定する**（Settings → Secrets and variables → Actions → **Variables**）。どれも秘密ではない ID です。
+
+   | 変数 | 値 |
+   | --- | --- |
+   | `ANTHROPIC_ORGANIZATION_ID` | 組織 ID（UUID）。Console の [Organization](https://platform.claude.com/settings/organization) にある |
+   | `ANTHROPIC_FEDERATION_RULE_ID` | 手順 1 のルールの ID（`fdrl_...`） |
+   | `ANTHROPIC_SERVICE_ACCOUNT_ID` | 手順 1 のサービスアカウントの ID（`svac_...`） |
+   | `ANTHROPIC_WORKSPACE_ID` | （任意）ルールが複数のワークスペースにまたがるときだけ、ワークスペース ID（`wrkspc_...`） |
+
+   ```bash
+   gh variable set ANTHROPIC_ORGANIZATION_ID    -R <owner/repo> --body <組織ID>
+   gh variable set ANTHROPIC_FEDERATION_RULE_ID -R <owner/repo> --body fdrl_...
+   gh variable set ANTHROPIC_SERVICE_ACCOUNT_ID -R <owner/repo> --body svac_...
+   ```
+
+3. **動作確認。** 適当な PR に `/review` とコメントします（Console のウィザードは作成後 15 分間、成功した交換を待ち受けて確認してくれます）。`ANTHROPIC_API_KEY` は **リポジトリにも Organization の Secrets にも置かないでください**（このワークフローは参照しませんが、混乱のもとです）。
+
+> **トークン交換が失敗したとき**（`トークン交換に失敗しました（HTTP 401）`）、応答は理由を含みません。理由は Console の [認証履歴](https://platform.claude.com/settings/workload-identity-federation?tab=history) に残ります。多いのは subject・claims の不一致（`match_subject_prefix` 等）です。
+
+> 言語などツールの設定はリポジトリ直下の `.pr_agent.toml` にあります。**このファイルは既定ブランチのものが読まれる** ため、PR の中で変えてもその PR には効きません。モデルはワークフロー側（`config.model`）で決めています。
+
+> PR-Agent は Docker イメージを **digest で固定** しています。Dependabot は `docker://` の参照を更新しないため、上げるときは [Docker Hub](https://hub.docker.com/r/pragent/pr-agent/tags) で `<版>-github_action` の digest を確認して手で差し替えてください。
 
 ## 🧑‍💻 ローカル開発
 

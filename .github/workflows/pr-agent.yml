@@ -1,0 +1,145 @@
+name: PR Agent
+
+# PR-Agent（オープンソース版。https://github.com/qodo-ai/pr-agent）による AI レビュー。
+# モデルは Claude Platform（api.anthropic.com）を **Workload Identity Federation**
+# （キーレス）で呼ぶ。API キーの Secret は持たない。
+#
+# 無駄打ちを防ぐため、**自動で走るのは PR が「レビュー可能」になった 1 回だけ**:
+#
+#   - PR は下書き（Draft）で作り、案がまとまったら Ready for review にする運用。
+#     下書きの間は自動では走らない。
+#   - Ready for review にした時（または最初から下書きでなく開いた時・再オープン時）に
+#     /review と /improve を 1 回ずつ走らせる。その後の push では走らない。
+#   - それ以外は PR コメントで明示的に呼ぶ（/review・/improve・/describe・/ask ...）。
+#     下書き中でも呼べる。呼べるのはリポジトリのオーナー・メンバー・コラボレーターだけ。
+#
+# 認証の流れ（README「PR-Agent（AI レビュー）」）:
+#   GitHub の OIDC トークン → api.anthropic.com/v1/oauth/token で交換 →
+#   短命のアクセストークン（sk-ant-oat01-...）を PR-Agent に渡す。
+# 交換は PR-Agent に任せず、このワークフローで行う。GitHub の OIDC トークンは
+# 約 5 分で切れ、しかも 1 回しか交換できない（jti）ため、PR-Agent 側で再交換させる
+# 作りにはできない。発行されるアクセストークンの寿命は「ルールの
+# token_lifetime_seconds」と「OIDC トークンの残り寿命の 2 倍」の短いほう、
+# つまり実質 10 分弱で、1 回の実行には足りる。
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+# 既定は何も持たない。権限はジョブで必要なものだけを足す。
+permissions: {}
+
+jobs:
+  pr-agent:
+    name: PR-Agent
+    # pull_request: 下書きは除く。フォークからの PR は OIDC トークンを取れないので除く
+    #   （公開リポジトリのため。フォークの PR を見たいときはメンバーがコメントで呼ぶ）。
+    # issue_comment: PR へのコメントで、/ で始まり、書き込み権限のある人のものだけ。
+    if: >-
+      (github.event_name == 'pull_request'
+        && !github.event.pull_request.draft
+        && github.event.pull_request.head.repo.full_name == github.repository)
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && startsWith(github.event.comment.body, '/')
+        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 同じ PR で重ねて走らせない（Ready for review の直後にコメントで呼んだ等）。
+    # 後から来たほうは待たせる（取り消すと、払ったトークンが無駄になるため）。
+    concurrency:
+      group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - name: Check required repository variables
+        env:
+          ANTHROPIC_FEDERATION_RULE_ID: '${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}'
+          ANTHROPIC_ORGANIZATION_ID: '${{ vars.ANTHROPIC_ORGANIZATION_ID }}'
+          ANTHROPIC_SERVICE_ACCOUNT_ID: '${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}'
+        # チェックアウトしないため、require-vars.sh と同じ確認をその場で行う。
+        run: |
+          missing=()
+          for name in ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID ANTHROPIC_SERVICE_ACCOUNT_ID; do
+            [ -n "${!name:-}" ] || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::リポジトリ変数が未設定です: ${missing[*]}（README「PR-Agent（AI レビュー）」参照）"
+            exit 1
+          fi
+
+      - name: Exchange GitHub OIDC token for a Claude API access token
+        # トークンはログに出ないようマスクしてから、後続ステップの環境変数にだけ渡す
+        # （ステップの outputs はマスク済みの値を受け渡せないため GITHUB_ENV を使う）。
+        env:
+          FEDERATION_RULE_ID: '${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}'
+          ORGANIZATION_ID: '${{ vars.ANTHROPIC_ORGANIZATION_ID }}'
+          SERVICE_ACCOUNT_ID: '${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}'
+          # 任意。ルールが複数のワークスペースにまたがるときだけ必要。
+          WORKSPACE_ID: '${{ vars.ANTHROPIC_WORKSPACE_ID }}'
+        run: |
+          set -euo pipefail
+          jwt=$(curl -sSf \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" | jq -r .value)
+          echo "::add-mask::$jwt"
+
+          body=$(jq -n \
+            --arg assertion "$jwt" \
+            --arg rule "$FEDERATION_RULE_ID" \
+            --arg org "$ORGANIZATION_ID" \
+            --arg sa "$SERVICE_ACCOUNT_ID" \
+            --arg ws "$WORKSPACE_ID" \
+            '{
+              grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+              assertion: $assertion,
+              federation_rule_id: $rule,
+              organization_id: $org,
+              service_account_id: $sa
+            } + (if $ws == "" then {} else {workspace_id: $ws} end)')
+
+          response="$RUNNER_TEMP/anthropic-token.json"
+          status=$(curl -sS -o "$response" -w '%{http_code}' \
+            https://api.anthropic.com/v1/oauth/token \
+            -H 'content-type: application/json' \
+            --data-binary @- <<<"$body")
+          if [ "$status" != 200 ]; then
+            # 拒否時の応答は固定文言の 401 のみ。理由は Claude Console の
+            # Workload identity → 認証履歴（history）に残る。
+            echo "::error::トークン交換に失敗しました（HTTP $status）: $(jq -c .error "$response" 2>/dev/null || true)"
+            rm -f "$response"
+            exit 1
+          fi
+          token=$(jq -r .access_token "$response")
+          rm -f "$response"
+          echo "::add-mask::$token"
+          echo "ANTHROPIC_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Run PR-Agent
+        # pragent/pr-agent:0.48.0-github_action。タグは付け替えられうるため digest で固定する。
+        # Dependabot は docker:// の参照を更新しないので、上げるときは手で
+        # Docker Hub のタグと digest を差し替えること。
+        uses: docker://pragent/pr-agent@sha256:80edef71baa3df28c129d858d4b53784abfc14704c235efb32b6c461d5399a6d
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # sk-ant-oat01- で始まるトークンは、PR-Agent 内部の LiteLLM が
+          # Authorization: Bearer として送る（x-api-key ではなく）。
+          ANTHROPIC.KEY: ${{ env.ANTHROPIC_ACCESS_TOKEN }}
+          # モデルはここで決める（.pr_agent.toml は既定ブランチのものしか読まれないため、
+          # 認証と対になる設定はワークフロー側に置く）。フォールバック先は持たない
+          # （別プロバイダの鍵は無いので、失敗をそのまま失敗として出す）。
+          config.model: anthropic/claude-opus-5-5
+          config.fallback_models: '[]'
+          # 自動で走らせるツール。/describe は PR 本文を書き換えるので自動では走らせない
+          # （必要ならコメントで /describe と呼ぶ）。
+          github_action_config.auto_review: 'true'
+          github_action_config.auto_improve: 'true'
+          github_action_config.auto_describe: 'false'
+          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review"]'
+          # 言語などツールの設定はリポジトリ直下の .pr_agent.toml にある。
