@@ -10,16 +10,25 @@ name: Claude review
 # OIDC トークンを短命の Anthropic トークンに交換するので、API キー（Secrets）は
 # 持たない。
 #
-# 無駄打ちを防ぐため、**Ready for review に切り替えた時だけ** 走らせる。運用は
+# 無駄打ちを防ぐため、レビューするのは **Ready の PR に 1 回だけ**。運用は
 #
 #   1. PR は下書きで作る（作業中の push ではレビューが走らない）
 #   2. 案がまとまったら「Ready for review」に切り替える → ここで 1 回レビュー
 #
-# opened / synchronize（push）/ reopened では走らせない。最初から Ready で
-# 開いた PR は、いったん下書きに戻して Ready にし直せばレビューされる。
-# プラグインは「Claude が既にコメントした PR」を自分で飛ばすため、2 回目以降の
-# Ready では何もしない。その後の push やコメントへの対応は、このワークフローの
-# 役目ではない。
+# 走るのは、PR が Ready の状態になったとき:
+#
+#   ready_for_review  下書きから Ready へ
+#   opened            最初から Ready で開いた
+#   reopened          Ready のまま開き直した（閉じる前にレビューが付かなかった
+#                     場合の取りこぼしを拾う）
+#
+# synchronize（push）では走らせない。どの場合も、既にレビューが付いていれば
+# プラグインを起動せずに終える（claude-review-status.sh）。
+#
+# プラグインは「レビュー不要」「Claude が既にコメントした」と判断すると何も
+# 書かずに終わる。そのまま緑で終えると、Ready なのに未レビューの PR が
+# 気付かれずに残るので、最後にレビューが付いたかを確かめ、付いていなければ
+# ジョブを失敗にする。
 #
 # bot（Dependabot など）の PR は対象外。依存の更新は CI とプレビューで見る。
 #
@@ -28,7 +37,7 @@ name: Claude review
 
 on:
   pull_request:
-    types: [ready_for_review]
+    types: [opened, reopened, ready_for_review]
 
 # 同じ PR のレビューは最新の 1 本だけでよい（Ready → 下書き → Ready と
 # 素早く切り替えたときなど）。
@@ -42,15 +51,18 @@ permissions:
 jobs:
   review:
     name: Review
-    if: github.event.pull_request.user.type != 'Bot'
+    if: github.event.pull_request.draft == false && github.event.pull_request.user.type != 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: write
+      issues: read
       # GitHub の OIDC トークンの取得に使う（Anthropic への WIF と、Claude
       # GitHub App のトークン取得の両方）。
       id-token: write
+    env:
+      PR: ${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -66,25 +78,13 @@ jobs:
         run: |
           .github/scripts/require-vars.sh \
             ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID ANTHROPIC_SERVICE_ACCOUNT_ID
-      - name: Fetch the plugin marketplace
-        # プラグインはレビューの指示そのものなので、他のアクションと同じく
-        # コミットを固定する。アクションの plugin_marketplaces に URL を渡すと
-        # 既定ブランチの先頭を取ってしまう（ref を指定できない）ため、固定した
-        # コミットを取ってきてローカルのパスとして渡す。置き場所はワークスペースの
-        # 外（RUNNER_TEMP）。中に置くと、レビュー対象のファイルに混ざる。
-        #
-        # Dependabot はこれを追えない。更新するときは anthropics/claude-code の
-        # コミットを確かめて REV を差し替えること。
+      - name: Check for an existing review
+        id: before
         env:
-          REV: 318b7e6ac4e726e88a4ad326214866a93c373b1b
-        run: |
-          set -euo pipefail
-          dir="$RUNNER_TEMP/claude-code-plugins"
-          git init -q "$dir"
-          git -C "$dir" fetch -q --depth 1 https://github.com/anthropics/claude-code.git "$REV"
-          git -C "$dir" checkout -q FETCH_HEAD
-          echo "PLUGIN_MARKETPLACE=$dir" >> "$GITHUB_ENV"
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/claude-review-status.sh
       - uses: anthropics/claude-code-action@16f9f71ab9c490faf367f94dd294897edc25be33 # v1.0.261
+        if: steps.before.outputs.reviewed == 'false'
         with:
           # WIF。これらは ID であって秘密ではないので、Variables に置く。
           # anthropic_api_key は渡さないこと（静的な鍵があると WIF より優先される）。
@@ -93,7 +93,9 @@ jobs:
           anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
           # ルールが 1 つのワークスペースだけを対象にしているなら空でよい。
           anthropic_workspace_id: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
-          plugin_marketplaces: ${{ env.PLUGIN_MARKETPLACE }}
+          # レビューの指示そのもので、このリポジトリのコードの動作には関わらない
+          # ため、バージョンは固定せず毎回最新を取る（公式のマーケットプレイス）。
+          plugin_marketplaces: https://github.com/anthropics/claude-code.git
           plugins: code-review@claude-code-plugins
           # track_progress は使わない。進捗コメントを先に付けると、プラグインが
           # 「Claude が既にコメントした PR」と見なしてレビューを飛ばす。
@@ -104,3 +106,15 @@ jobs:
           claude_args: |
             --model claude-opus-5-5
             --allowedTools "Agent,Task,TodoWrite,Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),mcp__github_inline_comment__create_inline_comment"
+      - name: Check that the review was posted
+        id: after
+        if: steps.before.outputs.reviewed == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/claude-review-status.sh
+      - name: Fail when a ready PR is left unreviewed
+        # 実行中に下書きへ戻された・閉じられた PR は、Ready ではないので問わない。
+        if: steps.before.outputs.reviewed == 'false' && steps.after.outputs.state == 'open' && steps.after.outputs.reviewed != 'true'
+        run: |
+          echo "::error::PR #${PR} は Ready ですが、レビューが付きませんでした。プラグインが「レビュー不要」または「Claude が既にコメント済み」と判断した可能性があります（実行ログを確認し、必要ならこのジョブを再実行してください）。"
+          exit 1

@@ -822,22 +822,24 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 
 PR のレビューを Claude Code（[`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action)）に任せます。API は Claude Platform を **Workload Identity Federation（WIF）** で使い、GitHub Actions の OIDC トークンを短命の Anthropic トークンに交換します。デプロイ（GCP）と同じく **API キーを Secrets に置きません**。
 
-`.github/workflows/claude-review.yml` は、PR が **Ready for review に切り替わったときだけ** 動きます。レビューの中身は Anthropic 公式の [code-review プラグイン](https://github.com/anthropics/claude-code/tree/main/plugins/code-review)（`/code-review:code-review --comment`）にそのまま任せており、ワークフロー側ではプロンプトを書いていません。
+`.github/workflows/claude-review.yml` は、PR が **Ready の状態になったとき**（下書きから Ready への切り替え・Ready のまま開いた・Ready のまま開き直した）に動き、**1 つの PR に 1 回だけ** レビューします。レビューの中身は Anthropic 公式の [code-review プラグイン](https://github.com/anthropics/claude-code/tree/main/plugins/code-review)（`/code-review:code-review --comment`）にそのまま任せており、ワークフロー側ではプロンプトを書いていません。
 
 - 並列のエージェントが **CLAUDE.md への準拠** と **変更箇所のバグ** を見て、別のエージェントが検証し、確信度の低い指摘は捨てる。スタイルや好みの指摘は出さない。
 - 指摘は該当行へのインラインコメントで付く。指摘が無ければ「No issues found」のコメントが 1 つ付く。
 - リポジトリ固有の観点（「挙動を変えたら README も直す」など）は **CLAUDE.md に書く**。プラグインはそれに照らしてレビューする。
-- プラグインは特定のコミットに固定して取得している（ワークフローの `REV`）。Dependabot は追えないので、更新は手で行う。
+- プラグインは毎回、公式のマーケットプレイス（`anthropics/claude-code`）から最新版を取得する。レビューの指示であってこのリポジトリのコードの動作には関わらないため、他のアクションと違ってバージョンを固定しない。
 
 #### 運用: PR は下書きで作る
 
-レビューは 1 回ごとに API の利用料がかかります。作業途中の push のたびに走らせても同じ指摘の繰り返しになるので、自動レビューは **Ready for review への切り替え時の 1 回だけ** です。
+レビューは 1 回ごとに API の利用料がかかります。作業途中の push のたびに走らせても同じ指摘の繰り返しになるので、自動レビューは **Ready になった PR に 1 回だけ** です。
 
 1. PR は **下書きで作成** する（GitHub の「Create draft pull request」。Claude Code に PR を作らせる場合も下書きで作る。`CLAUDE.md` に明記してある）。
 2. 案がまとまったら **「Ready for review」に切り替える**。ここで自動レビューが 1 回走る。
 
-- PR を開いたとき・push したとき・開き直したときには走りません。最初から Ready で開いてしまった PR は、下書きに戻してから Ready にし直してください。
-- プラグインは「Claude が既にコメントした PR」を自分で飛ばすため、下書きと Ready を行き来しても 2 回目以降はレビューしません。
+- 最初から Ready で開いた PR も、開いた時点でレビューします。push では走りません。
+- 既にレビューが付いている PR では、プラグインを起動せずに終えます（下書きと Ready を行き来したとき・開き直したとき）。「レビュー済み」とは、`claude[bot]` のインラインコメント（指摘があったとき）か、`## Code review` で始まるコメント（指摘が無かったとき）があることです（`.github/scripts/claude-review-status.sh`）。
+- Ready のまま開き直すのは、閉じる前にレビューが付かなかった PR（レビュー中に閉じた、ジョブが失敗した など）を拾うためです。レビュー済みなら何もしません。
+- **Ready なのにレビューが付かなかったら、ジョブを失敗（赤）にします。** プラグインは「レビュー不要（自明な変更）」や「Claude が既にコメントした PR」と判断すると何も書かずに終わるため、緑のまま終えると未レビューに気付けません。赤になったら実行ログを確認し、必要ならジョブを再実行してください。実行中に下書きへ戻した・閉じた PR は対象外です。
 - bot（Dependabot など）の PR は対象外です。
 
 #### 初回の設定
