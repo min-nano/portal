@@ -23,8 +23,8 @@
 #       PR: ${{ github.event.pull_request.number }}
 #     run: .github/scripts/claude-review-status.sh
 #
-# 結果は GITHUB_OUTPUT に reviewed（true / false）と state（open / draft /
-# closed）として渡す。
+# 結果は GITHUB_OUTPUT に reviewed（true / false）、state（open / draft /
+# closed）、inline・summary（それぞれの件数）として渡す。
 set -euo pipefail
 
 : "${PR:?PR（PR 番号）を渡してください}"
@@ -54,4 +54,6 @@ echo "PR #$PR: state=$state reviewed=$reviewed（インライン $inline 件・�
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   echo "reviewed=$reviewed" >> "$GITHUB_OUTPUT"
   echo "state=$state" >> "$GITHUB_OUTPUT"
+  echo "inline=$inline" >> "$GITHUB_OUTPUT"
+  echo "summary=$summary" >> "$GITHUB_OUTPUT"
 fi

@@ -826,6 +826,7 @@ PR のレビューを Claude Code（[`anthropics/claude-code-action`](https://gi
 
 - 並列のエージェントが **CLAUDE.md への準拠** と **変更箇所のバグ** を見て、別のエージェントが検証し、確信度の低い指摘は捨てる。スタイルや好みの指摘は出さない。
 - 指摘は該当行へのインラインコメントで付く。指摘が無ければ「No issues found」のコメントが 1 つ付く。
+- その結果を **PR のレビューとして出す**。指摘があれば **Request changes**、無ければ **Approve**。判定はワークフローが機械的に行う（インラインコメントの有無）。出すのは `github-actions[bot]`（Claude GitHub App のトークンはアクションの終わりで失効するため）。
 - リポジトリ固有の観点（「挙動を変えたら README も直す」など）は **CLAUDE.md に書く**。プラグインはそれに照らしてレビューする。
 - プラグインは毎回、公式のマーケットプレイス（`anthropics/claude-code`）から最新版を取得する。レビューの指示であってこのリポジトリのコードの動作には関わらないため、他のアクションと違ってバージョンを固定しない。
 
@@ -893,7 +894,11 @@ gh variable set ANTHROPIC_SERVICE_ACCOUNT_ID  -R <owner/repo> --body svac_...
 
 > 変数が欠けていると、ジョブは先頭で変数名を挙げて失敗します（`.github/scripts/require-vars.sh`。デプロイと同じ確認）。WIF の交換は失敗理由を返さない（`401 Authentication failed` のみ）ため、設定漏れはここで先に分かるようにしています。
 
-**4.（推奨）Console で利用上限を決める**
+**4. GitHub Actions に PR の Approve を許可する**
+
+Settings → Actions → General → Workflow permissions の **「Allow GitHub Actions to create and approve pull requests」** を有効にします（表計算ツールの定期確認が PR を作るのにも使う設定なので、既に有効なら不要）。無効のままだと Approve の段階でジョブが失敗します（Request changes は出せます）。
+
+**5.（推奨）Console で利用上限を決める**
 
 サービスアカウントを入れたワークスペースに、Console のワークスペース設定で利用上限（spend limit）を設定しておくと、想定外の呼び出しが続いても費用が青天井になりません。
 

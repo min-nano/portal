@@ -30,6 +30,11 @@ name: Claude review
 # 気付かれずに残るので、最後にレビューが付いたかを確かめ、付いていなければ
 # ジョブを失敗にする。
 #
+# レビューが付いたら、その結果を PR のレビュー（Approve / Request changes）として
+# 出す。指摘があればプラグインはインラインコメントを付け、無ければ
+# 「No issues found」のコメントを 1 件付けるので、判定はそれに従う
+# （判定はここで機械的に行い、プラグインには何も足さない）。
+#
 # bot（Dependabot など）の PR は対象外。依存の更新は CI とプレビューで見る。
 #
 # 必要な設定（Claude Console 側の WIF、GitHub App、リポジトリ変数）は
@@ -118,3 +123,25 @@ jobs:
         run: |
           echo "::error::PR #${PR} は Ready ですが、レビューが付きませんでした。プラグインが「レビュー不要」または「Claude が既にコメント済み」と判断した可能性があります（実行ログを確認し、必要ならこのジョブを再実行してください）。"
           exit 1
+      - name: Submit the review verdict
+        # 指摘あり（インラインコメントがある）→ Request changes、無し → Approve。
+        #
+        # 出すのは GITHUB_TOKEN（github-actions[bot]）。Claude GitHub App の
+        # トークンはアクションの終わりで失効するため、ここでは使えない。
+        # Approve には Settings → Actions → General の「Allow GitHub Actions to
+        # create and approve pull requests」が要る（howtec-worksheet-check.yml の
+        # PR 作成と同じ設定）。
+        if: steps.before.outputs.reviewed == 'false' && steps.after.outputs.state == 'open' && steps.after.outputs.reviewed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INLINE: ${{ steps.after.outputs.inline }}
+        run: |
+          set -euo pipefail
+          if [ "$INLINE" -gt 0 ]; then
+            gh pr review "$PR" --request-changes \
+              --body "Claude のレビューで指摘が ${INLINE} 件ありました。インラインコメントを確認してください。"
+          elif ! gh pr review "$PR" --approve \
+              --body "Claude のレビューで指摘はありませんでした。"; then
+            echo "::error::Approve できませんでした。Settings → Actions → General の「Allow GitHub Actions to create and approve pull requests」が有効か確認してください（README「Claude による PR レビュー（PR エージェント）」参照）。"
+            exit 1
+          fi
