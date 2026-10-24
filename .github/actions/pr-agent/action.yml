@@ -1,0 +1,5 @@
+name: PR-Agent
+description: 版を固定した PR-Agent を実行する（設定は呼び出し側の env で渡す）
+runs:
+  using: docker
+  image: Dockerfile

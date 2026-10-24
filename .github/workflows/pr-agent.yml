@@ -9,8 +9,8 @@ name: PR Agent
 #   - PR は下書き（Draft）で作り、案がまとまったら Ready for review にする運用。
 #     下書きの間は自動では走らない。
 #   - Ready for review にした時（または最初から下書きでなく開いた時・再オープン時）に
-#     /review と /improve を 1 回ずつ走らせる。その後の push では走らない。
-#   - それ以外は PR コメントで明示的に呼ぶ（/review・/improve・/describe・/ask ...）。
+#     /review を 1 回走らせる。その後の push では走らない。
+#   - それ以外は PR コメントで明示的に呼ぶ（/review・/describe・/ask ...）。
 #     下書き中でも呼べる。呼べるのはリポジトリのオーナー・メンバー・コラボレーターだけ。
 #
 # 認証の流れ（README「PR-Agent（AI レビュー）」）:
@@ -36,11 +36,13 @@ jobs:
     name: PR-Agent
     # pull_request: 下書きは除く。フォークからの PR は OIDC トークンを取れないので除く
     #   （公開リポジトリのため。フォークの PR を見たいときはメンバーがコメントで呼ぶ）。
+    #   Dependabot の PR も除く（OIDC トークンを取れず、依存の更新に AI レビューは要らない）。
     # issue_comment: PR へのコメントで、/ で始まり、書き込み権限のある人のものだけ。
     if: >-
       (github.event_name == 'pull_request'
         && !github.event.pull_request.draft
-        && github.event.pull_request.head.repo.full_name == github.repository)
+        && github.event.pull_request.head.repo.full_name == github.repository
+        && github.event.pull_request.user.login != 'dependabot[bot]')
       || (github.event_name == 'issue_comment'
         && github.event.issue.pull_request
         && startsWith(github.event.comment.body, '/')
@@ -121,11 +123,19 @@ jobs:
           echo "::add-mask::$token"
           echo "ANTHROPIC_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
 
+      - name: Check out the PR-Agent action
+        # PR-Agent 本体は版を固定したローカル action（.github/actions/pr-agent）。
+        # PR の中で書き換えた版で動かないよう、既定ブランチのものを使う
+        # （.pr_agent.toml と同じ扱い。Dependabot の更新もマージ後に効く）。
+        # PR-Agent は PR の中身を API で読むので、他のファイルは要らない。
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github/actions/pr-agent
+
       - name: Run PR-Agent
-        # pragent/pr-agent:0.48.0-github_action。タグは付け替えられうるため digest で固定する。
-        # Dependabot は docker:// の参照を更新しないので、上げるときは手で
-        # Docker Hub のタグと digest を差し替えること。
-        uses: docker://pragent/pr-agent@sha256:80edef71baa3df28c129d858d4b53784abfc14704c235efb32b6c461d5399a6d
+        uses: ./.github/actions/pr-agent
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # sk-ant-oat01- で始まるトークンは、PR-Agent 内部の LiteLLM が
@@ -136,10 +146,10 @@ jobs:
           # （別プロバイダの鍵は無いので、失敗をそのまま失敗として出す）。
           config.model: anthropic/claude-opus-5-5
           config.fallback_models: '[]'
-          # 自動で走らせるツール。/describe は PR 本文を書き換えるので自動では走らせない
-          # （必要ならコメントで /describe と呼ぶ）。
+          # 自動で走らせるのは /review だけ。/describe は PR 本文を書き換えるので
+          # 自動では走らせない（必要ならコメントで /describe と呼ぶ）。
           github_action_config.auto_review: 'true'
-          github_action_config.auto_improve: 'true'
+          github_action_config.auto_improve: 'false'
           github_action_config.auto_describe: 'false'
           github_action_config.pr_actions: '["opened", "reopened", "ready_for_review"]'
           # 言語などツールの設定はリポジトリ直下の .pr_agent.toml にある。

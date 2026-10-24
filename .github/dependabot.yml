@@ -158,3 +158,18 @@ updates:
         update-types:
           - minor
           - patch
+
+  # PR-Agent（AI レビュー）のイメージ。.github/actions/pr-agent/Dockerfile の
+  # FROM（版と digest）を上げる。0.x で版ごとに挙動が変わりうるため、まとめずに
+  # 1 本ずつ出す。
+  - package-ecosystem: docker
+    directory: "/.github/actions/pr-agent"
+    schedule:
+      interval: daily
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"

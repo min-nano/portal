@@ -464,6 +464,7 @@ firebase.json                 # Hosting 設定（/api/** → Cloud Run リライ
 .github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml・preview-cleanup.yml（PR プレビュー）
                               # howtec-worksheet-check.yml（表計算ツールの改訂の定期確認）
                               # pr-agent.yml（PR-Agent による AI レビュー）
+.github/actions/pr-agent/     # PR-Agent 本体を版と digest で固定するローカル action（Dependabot が更新）
 .github/scripts/              # ワークフロー間で共有するスクリプト
   require-vars.sh             # 必須のリポジトリ変数が空でないことの確認
   clerk-issuer.sh             # Publishable Key から CLERK_ISSUER を導出
@@ -828,11 +829,11 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 | きっかけ | 走るもの |
 | --- | --- |
 | 下書きで PR を開く・下書きのまま push する | 何も走らない |
-| **Ready for review にする**（または最初から下書きでなく開く・再オープンする） | `/review` と `/improve` を 1 回ずつ |
+| **Ready for review にする**（または最初から下書きでなく開く・再オープンする） | `/review` を 1 回 |
 | その後の push | 何も走らない（見直してほしければコメントで `/review`） |
-| PR に `/review`・`/improve`・`/describe`・`/ask <質問>` 等とコメントする | そのコマンド（下書き中でも可）。オーナー・メンバー・コラボレーターのコメントだけが対象 |
+| PR に `/review`・`/describe`・`/ask <質問>` 等とコメントする | そのコマンド（下書き中でも可）。オーナー・メンバー・コラボレーターのコメントだけが対象 |
 
-`/describe`（PR の本文とタイトルの書き換え）は自動では走らせません。PR の本文は人が書くためです。フォークからの PR では自動では走らず（OIDC トークンが取れないため）、メンバーがコメントで呼べば走ります。
+`/describe`（PR の本文とタイトルの書き換え）は自動では走らせません。PR の本文は人が書くためです。フォークからの PR と Dependabot の PR では自動では走らず、メンバーがコメントで呼べば走ります（フォークは OIDC トークンが取れないため）。
 
 #### セットアップ
 
@@ -872,7 +873,7 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 
 > 言語などツールの設定はリポジトリ直下の `.pr_agent.toml` にあります。**このファイルは既定ブランチのものが読まれる** ため、PR の中で変えてもその PR には効きません。モデルはワークフロー側（`config.model`）で決めています。
 
-> PR-Agent は Docker イメージを **digest で固定** しています。Dependabot は `docker://` の参照を更新しないため、上げるときは [Docker Hub](https://hub.docker.com/r/pragent/pr-agent/tags) で `<版>-github_action` の digest を確認して手で差し替えてください。
+> PR-Agent 本体は `.github/actions/pr-agent/Dockerfile` で **版と digest を固定** し、Dependabot（docker）が更新の PR を出します。公式の action（`qodo-ai/pr-agent`）を使わないのは、その中身が `FROM pragent/pr-agent:github_action`（更新され続けるタグ）の 1 行で、action を SHA で固定しても動く版が固定されないためです。ワークフローは既定ブランチのこの action を使うので、版の更新はマージ後に効きます。
 
 ## 🧑‍💻 ローカル開発
 
