@@ -824,13 +824,13 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 
 [PR-Agent](https://github.com/qodo-ai/pr-agent)（オープンソース版）が PR をレビューし、改善案を出します。モデルは Claude Platform（`api.anthropic.com`）の Claude Opus 5.5 で、**Workload Identity Federation（キーレス）** で呼びます。GCP と同じく **API キーの Secret は持ちません**。
 
-**運用: PR は下書き（Draft）で作り、案がまとまってから Ready for review にする。** 呼び出しは 1 回ごとに課金されるため、自動で走るのを「レビューに出した時の 1 回」に絞っています。
+**運用: PR は下書き（Draft）で作り、案がまとまってから Ready for review にする。** 呼び出しは 1 回ごとに課金されるため、自動で走るのを「レビューに出している間」に絞っています。
 
 | きっかけ | 走るもの |
 | --- | --- |
 | 下書きで PR を開く・下書きのまま push する | 何も走らない |
 | **Ready for review にする**（または最初から下書きでなく開く・再オープンする） | `/review` を 1 回 |
-| その後の push | 何も走らない（見直してほしければコメントで `/review`） |
+| Ready for review の間に push する | `/review`（レビューのコメントは 1 つを貼り替える） |
 | PR に `/review`・`/describe`・`/ask <質問>` 等とコメントする | そのコマンド（下書き中でも可）。オーナー・メンバー・コラボレーターのコメントだけが対象 |
 
 `/describe`（PR の本文とタイトルの書き換え）は自動では走らせません。PR の本文は人が書くためです。フォークからの PR と Dependabot の PR では自動では走らず、メンバーがコメントで呼べば走ります（フォークは OIDC トークンが取れないため）。

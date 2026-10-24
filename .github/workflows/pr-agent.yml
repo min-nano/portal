@@ -4,12 +4,13 @@ name: PR Agent
 # モデルは Claude Platform（api.anthropic.com）を **Workload Identity Federation**
 # （キーレス）で呼ぶ。API キーの Secret は持たない。
 #
-# 無駄打ちを防ぐため、**自動で走るのは PR が「レビュー可能」になった 1 回だけ**:
+# 無駄打ちを防ぐため、**自動で走るのは PR が「レビュー可能」な間だけ**:
 #
 #   - PR は下書き（Draft）で作り、案がまとまったら Ready for review にする運用。
-#     下書きの間は自動では走らない。
-#   - Ready for review にした時（または最初から下書きでなく開いた時・再オープン時）に
-#     /review を 1 回走らせる。その後の push では走らない。
+#     下書きの間は push しても自動では走らない。
+#   - Ready for review にした時（または最初から下書きでなく開いた時・再オープン時）と、
+#     その後の push のたびに /review を走らせる。レビューは 1 つのコメントを
+#     貼り替えるので、push のたびにコメントが増えることはない。
 #   - それ以外は PR コメントで明示的に呼ぶ（/review・/describe・/ask ...）。
 #     下書き中でも呼べる。呼べるのはリポジトリのオーナー・メンバー・コラボレーターだけ。
 #
@@ -24,7 +25,7 @@ name: PR Agent
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review]
+    types: [opened, reopened, ready_for_review, synchronize]
   issue_comment:
     types: [created]
 
@@ -49,8 +50,9 @@ jobs:
         && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # 同じ PR で重ねて走らせない（Ready for review の直後にコメントで呼んだ等）。
-    # 後から来たほうは待たせる（取り消すと、払ったトークンが無駄になるため）。
+    # 同じ PR で重ねて走らせない（続けて push した、push の直後にコメントで呼んだ等）。
+    # 走っているものは最後まで走らせ（取り消すと、払ったトークンが無駄になるため）、
+    # 待っているものは最新の 1 つだけが残る（GitHub の concurrency の仕様）。
     concurrency:
       group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: false
@@ -152,4 +154,8 @@ jobs:
           github_action_config.auto_improve: 'false'
           github_action_config.auto_describe: 'false'
           github_action_config.pr_actions: '["opened", "reopened", "ready_for_review"]'
+          # push（synchronize）でも /review だけを走らせる。既定は /describe も含むので
+          # 明示する。bot（GitHub App 等）による push では走らない（既定）。
+          github_action_config.handle_push_trigger: 'true'
+          github_action_config.push_commands: '["/review"]'
           # 言語などツールの設定はリポジトリ直下の .pr_agent.toml にある。
