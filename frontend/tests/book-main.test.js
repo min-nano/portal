@@ -323,7 +323,7 @@ describe('ファイルを足して並べる', () => {
   it('束を外すと、抜けた頁をあるべき位置に札で出し、指摘する', async () => {
     await addBook();
 
-    fileItem('猫_偶数.pdf').querySelector('button[aria-label="このファイルを外す"]').click();
+    fileItem('猫_偶数.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
 
     expect(gridLabels()).toEqual(['表紙', '表紙', '1 頁', '-2 頁', '3 頁', '-4 頁', '5 頁', '-6 頁', '7 頁']);
     expect($('problems').textContent).toContain('2・4・6 頁が見つかりません');
@@ -510,7 +510,7 @@ describe('ファイルを足して並べる', () => {
     await vi.waitFor(() => expect(mocks.renderPageImage).toHaveBeenCalled());
     const [doc] = mocks.renderPageImage.mock.calls[0];
 
-    fileItem('猫_奇数.pdf').querySelector('button[aria-label="このファイルを外す"]').click();
+    fileItem('猫_奇数.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
     await flush();
     expect(mocks.closePdf.mock.calls.some(([closed]) => closed === doc)).toBe(false);
 
@@ -528,13 +528,11 @@ describe('ファイルを足して並べる', () => {
     $('logBox').dispatchEvent(new Event('toggle'));
     expect($('logText').textContent).toContain('pdf-lib にバイト列を写させない設定が効いていません');
 
-    $('ocrToggle').checked = false;
-    drop([file('猫_奇数.pdf', pdf(ODD))]);
+    drop([file('猫_表紙.pdf', pdf(ODD))]);
     await settled(1);
     expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
 
-    $('ocrToggle').checked = true;
-    $('ocrToggle').dispatchEvent(new Event('change'));
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalled());
     // 写しの JPEG は残していないので、1 度だけ調べ直して、その JPEG で描く。
     expect(mocks.findScanImages).toHaveBeenCalledTimes(2);
@@ -542,15 +540,13 @@ describe('ファイルを足して並べる', () => {
   });
 
   it('あとからの OCR が終わっても、拡大表示で開いている文書は閉じない', async () => {
-    $('ocrToggle').checked = false;
-    drop([file('猫_奇数.pdf', pdf(ODD))]);
+    drop([file('猫_表紙.pdf', pdf(ODD))]);
     await settled(1);
     document.querySelector('#pageGrid .bm-thumb').click();
     await vi.waitFor(() => expect(mocks.renderPreview).toHaveBeenCalled());
     const [shown] = mocks.renderPreview.mock.calls[0];
 
-    $('ocrToggle').checked = true;
-    $('ocrToggle').dispatchEvent(new Event('change'));
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
     await vi.waitFor(() =>
       expect(document.querySelector('#pageGrid [data-page-key="f1:2"] .bm-status').textContent).toBe('読取')
     );
@@ -561,20 +557,25 @@ describe('ファイルを足して並べる', () => {
   });
 
   it('名前を入力したあとに裏の処理が終わっても、結合した PDF は捨てない', async () => {
-    $('ocrToggle').checked = false;
-    drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    drop([file('猫_表紙.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
     await settled(2);
+    // 本文に変えると裏で OCR を読む。読み終える前に結合しておく。
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    mocks.readStrip.mockImplementation(async () => {
+      await gate;
+      return [];
+    });
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
+    await vi.waitFor(() => expect(mocks.readStrip).toHaveBeenCalled());
     $('outputName').value = '自分で付けた名前';
     $('outputName').dispatchEvent(new Event('input'));
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('downloadBtn').disabled).toBe(false));
 
-    // 裏で OCR を読んでも、並び（番号の決まった頁）が変わらなければ捨てない。
-    mocks.readStrip.mockResolvedValue([]);
-    $('ocrToggle').checked = true;
-    $('ocrToggle').dispatchEvent(new Event('change'));
-    await vi.waitFor(() => expect(mocks.readStrip).toHaveBeenCalled());
-    await vi.waitFor(() => expect(fileItem('猫_奇数.pdf').textContent).not.toContain('余白を読み取り中'));
+    // 裏で OCR を読み終えても、並び（番号の決まった頁）が変わらなければ捨てない。
+    release();
+    await vi.waitFor(() => expect(fileItem('猫_表紙.pdf').textContent).not.toContain('余白を読み取り中'));
 
     expect($('downloadBtn').disabled).toBe(false);
   });
@@ -686,10 +687,10 @@ describe('ファイルを足して並べる', () => {
     expect(document.querySelector('#pageGrid [data-page-key="f1:2"] .bm-status').textContent).toBe('推定');
   });
 
-  it('OCR を後から有効にすると、残りの頁を読む（読んでいる間も頁は並びに残す）', async () => {
-    $('ocrToggle').checked = false;
-    drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+  it('表紙と見たファイルを本文に変えると、残りの頁を読む（読んでいる間も頁は並びに残す）', async () => {
+    drop([file('猫_表紙.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
     await settled(2);
+    // 名前で表紙と分かるファイルは、はじめは余白を読まない。
     expect(mocks.readStrip).not.toHaveBeenCalled();
     expect(mocks.findScanImages).toHaveBeenCalledTimes(2);
 
@@ -701,11 +702,8 @@ describe('ファイルを足して並べる', () => {
       await gate;
       return answer(strip);
     });
-    const toggle = (checked) => {
-      $('ocrToggle').checked = checked;
-      $('ocrToggle').dispatchEvent(new Event('change'));
-    };
-    toggle(true);
+    const toggle = (role) => change(fileItem('猫_表紙.pdf').querySelector('select'), role);
+    toggle('body');
     await vi.waitFor(() => expect(mocks.readStrip).toHaveBeenCalled());
 
     // 読んでいる間も、そのファイルの頁は抜けにしない。
@@ -714,10 +712,10 @@ describe('ファイルを足して並べる', () => {
     $('outputName').dispatchEvent(new Event('input'));
     change(fileItem('猫_偶数.pdf').querySelector('select'), 'body');
     expect(gridLabels()).toEqual(labels);
-    expect(fileItem('猫_奇数.pdf').textContent).toContain('余白を読み取り中');
+    expect(fileItem('猫_表紙.pdf').textContent).toContain('余白を読み取り中');
     // 切り替えを繰り返しても、同じ頁を 2 度は頼まない。
-    toggle(false);
-    toggle(true);
+    toggle('front');
+    toggle('body');
     release();
 
     await vi.waitFor(() =>
@@ -727,7 +725,7 @@ describe('ファイルを足して並べる', () => {
     // 調べたときの JPEG を使う（PDF 全体を読み直さない）。
     expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o5' });
     expect(mocks.findScanImages).toHaveBeenCalledTimes(2);
-    expect(fileItem('猫_奇数.pdf').textContent).not.toContain('余白を読み取り中');
+    await vi.waitFor(() => expect(fileItem('猫_表紙.pdf').textContent).not.toContain('余白を読み取り中'));
   });
 
   it('1 頁が描けなければ、描きかけの頁を待ってから失敗にし、残りの頁は描かない', async () => {
@@ -757,42 +755,89 @@ describe('ファイルを足して並べる', () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:scan-o3');
   });
 
-  it('調べている間に OCR を有効にしたら、調べ終えたところで残りの頁を読む', async () => {
-    $('ocrToggle').checked = false;
-    let release;
-    const gate = new Promise((resolve) => (release = resolve));
-    const answer = mocks.renderPageImage.getMockImplementation();
-    mocks.renderPageImage.mockImplementation(async (...args) => {
-      await gate;
-      return answer(...args);
-    });
-    drop([file('猫_奇数.pdf', pdf(ODD))]);
-    await vi.waitFor(() => expect(mocks.renderPageImage).toHaveBeenCalled());
-
-    $('ocrToggle').checked = true;
-    $('ocrToggle').dispatchEvent(new Event('change'));
-    release();
-
-    await vi.waitFor(() =>
-      expect(document.querySelector('#pageGrid [data-page-key="f1:2"] .bm-status').textContent).toBe('読取')
-    );
-    expect(mocks.renderMargins).toHaveBeenCalled();
-  });
-
-  it('番号の無い頁が多くても、OCR を後から有効にしたときに PDF を調べ直さない', async () => {
-    $('ocrToggle').checked = false;
+  it('番号の無い頁が多くても、あとから本文に変えたときに PDF を調べ直さない', async () => {
     const many = Array.from({ length: 40 }, (_, i) => page(`o${2 * i + 1}`, 2 * i + 1, { ocr: true }));
-    drop([file('odd.pdf', pdf(many))]);
+    drop([file('cover.pdf', pdf(many))]);
     await settled(1);
     expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
 
-    $('ocrToggle').checked = true;
-    $('ocrToggle').dispatchEvent(new Event('change'));
+    change(fileItem('cover.pdf').querySelector('select'), 'body');
 
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalledTimes(40));
     // 調べたときの JPEG（ファイルの一部を指すだけ）で描く。
     expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
     expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o1' });
+  });
+
+  it('見出しの「?」は、押すと説明を開き、もう一度押すか外を押すか Esc で閉じる', () => {
+    const [intro, files] = document.querySelectorAll('.bm-help');
+    const button = (help) => help.querySelector('.bm-help-btn');
+    const isOpen = (help) => help.classList.contains('open') && button(help).getAttribute('aria-expanded') === 'true';
+
+    button(intro).click();
+    expect(isOpen(intro)).toBe(true);
+    button(intro).click();
+    expect(isOpen(intro)).toBe(false);
+
+    // 開けるのは 1 つだけ。説明の文を押しても閉じず、節も畳まない。
+    button(intro).click();
+    button(files).click();
+    expect(isOpen(intro)).toBe(false);
+    expect(isOpen(files)).toBe(true);
+    files.querySelector('.bm-help-body').click();
+    expect(isOpen(files)).toBe(true);
+    expect($('filesSection').hasAttribute('collapsed')).toBe(false);
+
+    document.body.click();
+    expect(isOpen(files)).toBe(false);
+    button(files).click();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    expect(isOpen(files)).toBe(true);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(isOpen(files)).toBe(false);
+  });
+
+  it('見出しの「?」は、マウスを載せている間だけ開き、開くのはいつも 1 つだけ', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const [intro, files] = document.querySelectorAll('.bm-help');
+      const isOpen = (help) =>
+        help.classList.contains('open') && help.querySelector('.bm-help-btn').getAttribute('aria-expanded') === 'true';
+      const pointer = (help, type, pointerType = 'mouse') =>
+        help.dispatchEvent(Object.assign(new Event(type), { pointerType }));
+
+      // タッチの pointerenter では開かない（押したときに開く）。
+      pointer(intro, 'pointerenter', 'touch');
+      expect(isOpen(intro)).toBe(false);
+      intro.querySelector('.bm-help-btn').click();
+      pointer(intro, 'pointerleave', 'touch');
+      vi.advanceTimersByTime(1000);
+      expect(isOpen(intro)).toBe(true);
+      intro.querySelector('.bm-help-btn').click();
+
+      pointer(intro, 'pointerenter');
+      expect(isOpen(intro)).toBe(true);
+      // 載せたまま押しても閉じない。
+      intro.querySelector('.bm-help-btn').click();
+      expect(isOpen(intro)).toBe(true);
+      // 説明の文へ動かす間の隙間では閉じない。
+      pointer(intro, 'pointerleave');
+      vi.advanceTimersByTime(100);
+      pointer(intro, 'pointerenter');
+      vi.advanceTimersByTime(1000);
+      expect(isOpen(intro)).toBe(true);
+      pointer(intro, 'pointerleave');
+      vi.advanceTimersByTime(1000);
+      expect(isOpen(intro)).toBe(false);
+
+      // 押して開いたものがあっても、別の「?」に載せればそちらだけになる。
+      files.querySelector('.bm-help-btn').click();
+      pointer(intro, 'pointerenter');
+      expect(isOpen(files)).toBe(false);
+      expect(isOpen(intro)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('ドラッグ中の枠と、手元のファイルの選択', async () => {
@@ -923,7 +968,7 @@ describe('結合と検証', () => {
 
     $('mergeBtn').click();
     await flush();
-    fileItem('猫_表紙.pdf').querySelector('button[aria-label="このファイルを外す"]').click();
+    fileItem('猫_表紙.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
     release();
 
     await vi.waitFor(() => expect($('message').textContent).toContain('結合している間に並びか名前が変わりました'));
