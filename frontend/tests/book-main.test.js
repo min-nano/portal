@@ -351,9 +351,18 @@ describe('ファイルを足して並べる', () => {
     change(odd(), '-10');
     expect(keys().slice(0, 6)).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f3:0', 'f3:1']);
 
-    change(start(), 'x');
+    // 番号を消すと、番号を入れた奇数頁の束の後ろへ戻る。
+    change(start(), '');
+    expect(start().value).toBe('');
+    expect(keys().slice(0, 6)).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f3:0', 'f3:1']);
+
+    // 結合しないファイルには番号の欄を出さない。
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'exclude');
+    expect(start()).toBeNull();
+
+    change(odd(), 'x');
     expect($('message').textContent).toContain('整数で');
-    expect(fileItem('猫_表紙.pdf').querySelector('button[aria-label^="ひとつ"]')).toBeNull();
+    expect(fileItem('猫_奇数.pdf').querySelector('button[aria-label^="ひとつ"]')).toBeNull();
   });
 
   it('頁ごと・ファイルごとに番号を直せる', async () => {
