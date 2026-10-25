@@ -1,5 +1,5 @@
 // Claude Agent SDK で公式 code-review プラグインを動かし、PR をレビューする
-// （claude-review.yml から使う）。
+// （tests.yml の review ジョブから使う）。
 //
 // claude-code-action を使わないのは、中身が Claude Code で、Max / Team プランに
 // 付く API クレジットの対象外だから（Claude Agent SDK は対象）。アクションが
