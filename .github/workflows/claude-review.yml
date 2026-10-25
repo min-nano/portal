@@ -35,6 +35,12 @@ name: Claude review
 #   判定があり、head が変わった   前回の判定の head からの差分を再レビューする
 #   判定があり、head が同じ       何もしない（開き直し・下書きとの行き来など）
 #
+# どの場合も、PR の head のテスト（tests.yml のテストジョブ）が通るまで待ち、
+# 通らなければレビューせずに失敗にする（claude-review-tests.sh）。テストが落ちる
+# 変更をレビューしても、直した後にもう一度レビューすることになるため。待って
+# いる間に push されたら、その実行はレビューせずに終える（新しい head の実行が
+# レビューする）。
+#
 # 再レビューでは、差分のうち PR の差分にも含まれる行だけを見る（ベースブランチを
 # 取り込んだ分は見ない）。前回までの指摘が直っていなければ付け直す。force push
 # で前回の head が祖先でなくなっていたら PR 全体を見る（claude-review.mjs）。
@@ -83,11 +89,14 @@ jobs:
       github.event.pull_request.user.type != 'Bot' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # テストを待つ時間（最長 25 分）とレビュー（約 10 分まで）の分。
+    timeout-minutes: 45
     permissions:
       contents: read
       pull-requests: write
       issues: read
+      # テストの結果（チェックラン）を読む。
+      checks: read
       # GitHub の OIDC トークンの取得に使う（Anthropic への WIF）。
       id-token: write
     env:
@@ -111,6 +120,19 @@ jobs:
         run: |
           .github/scripts/require-vars.sh \
             ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID ANTHROPIC_SERVICE_ACCOUNT_ID
+      - name: Wait for the tests to pass
+        # TESTS は tests.yml のテストジョブの名前（name:）。そちらの名前を
+        # 変えたら、ここも直す。
+        id: tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TESTS: |
+            Core (cargo)
+            Backend (pytest)
+            Frontend (vitest + build)
+            Firestore rules (emulator)
+        run: .github/scripts/claude-review-tests.sh
       - name: Find the previous verdict
         id: before
         env:
@@ -122,11 +144,16 @@ jobs:
         # head の祖先でなければ空（PR 全体を見る）。
         id: plan
         env:
+          TESTS_PASSED: ${{ steps.tests.outputs.passed }}
           VERDICT: ${{ steps.before.outputs.verdict }}
           PREVIOUS_SHA: ${{ steps.before.outputs.verdict_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          if [ "$TESTS_PASSED" != 'true' ]; then
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$VERDICT" != 'true' ]; then
             echo "mode=review" >> "$GITHUB_OUTPUT"
             exit 0

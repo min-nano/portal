@@ -28,6 +28,9 @@ name: Tests
 # レポートは貼り替え式の PR コメント 1 つ、成果物として残る XML、Codecov の
 # 3 か所に出る。しきい値で CI を守るのは coverage ジョブだけで、Codecov は
 # 推移やファイル別の閲覧のために使う。
+#
+# Claude のレビュー（claude-review.yml）は、テストジョブ（test-*）が通るのを
+# 名前（name:）で待ってから走る。名前を変えたら、そちらの TESTS も直す。
 
 on:
   push:
