@@ -460,7 +460,7 @@ firestore/                    # Firestore セキュリティルールとその�
   firestore.rules             # クライアント SDK からのアクセスを全面拒否（deny-all）
   tests/rules.test.js         # エミュレータでルールを検証
 firebase.json                 # Hosting 設定（/api/** → Cloud Run リライト）・Firestore ルールの参照
-.github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml・preview-cleanup.yml（PR プレビュー）/ claude-review.yml（PR エージェント）
+.github/workflows/            # tests.yml（CI）/ deploy.yml（本番 CD）/ preview.yml・preview-cleanup.yml（PR プレビュー）（PR エージェントの review ジョブもここ）
                               # howtec-worksheet-check.yml（表計算ツールの改訂の定期確認）
 .github/scripts/              # ワークフロー間で共有するスクリプト
   require-vars.sh             # 必須のリポジトリ変数が空でないことの確認
@@ -826,7 +826,7 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 
 レビューは **Claude Agent SDK** で動かしています（`.github/scripts/claude-review.mjs`）。`anthropics/claude-code-action` は使いません。中身が Claude Code で、[Max / Team プランに付く API クレジット](https://platform.claude.com/docs/ja/about-claude/api-credits-for-subscribers)の対象外だからです（Agent SDK は対象。アクションで動かすと、認証は通ってもモデル呼び出しが通らない）。アクションが用意していたもののうち、プラグインが要るインラインコメントのツールは、このスクリプトが持っています。
 
-`.github/workflows/claude-review.yml` は、PR が **Ready の状態になったとき**（下書きから Ready への切り替え・Ready のまま開いた・Ready のまま開き直した）に動き、**1 つの PR に 1 回だけ** レビューします。レビューの中身は Anthropic 公式の [code-review プラグイン](https://github.com/anthropics/claude-code/tree/main/plugins/code-review)（`/code-review:code-review --comment`）にそのまま任せており、ワークフロー側ではプロンプトを書いていません。
+`.github/workflows/tests.yml` の `review` ジョブは、PR が **Ready の状態になったとき**（下書きから Ready への切り替え・Ready のまま開いた・Ready のまま開き直した）に PR 全体をレビューし、その後は **Ready の PR に push するたびに、前回の判定から後の変更だけを再レビュー** します（下記「再レビュー」）。レビューの中身は Anthropic 公式の [code-review プラグイン](https://github.com/anthropics/claude-code/tree/main/plugins/code-review)（`/code-review:code-review --comment`）にそのまま任せており、ワークフロー側ではプロンプトを書いていません。
 
 - 並列のエージェントが **CLAUDE.md への準拠** と **変更箇所のバグ** を見て、別のエージェントが検証し、確信度の低い指摘は捨てる。スタイルや好みの指摘は出さない。
 - 指摘は該当行へのインラインコメントで付く。指摘が無ければ「No issues found」のコメントが 1 つ付く。
@@ -837,21 +837,41 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 
 #### 運用: PR は下書きで作る
 
-レビューは 1 回ごとに API の利用料がかかります。作業途中の push のたびに走らせても同じ指摘の繰り返しになるので、自動レビューは **Ready になった PR に 1 回だけ** です。
+レビューは 1 回ごとに API の利用料がかかります。作業途中の push のたびに走らせても同じ指摘の繰り返しになるので、下書きの間はレビューせず、**Ready になった時点で PR 全体を 1 回** レビューします。その後の Ready の PR への push は、前回の判定からの差分だけを再レビューします。
 
 1. PR は **下書きで作成** する（GitHub の「Create draft pull request」。Claude Code に PR を作らせる場合も下書きで作る。`CLAUDE.md` に明記してある）。
-2. 案がまとまったら **「Ready for review」に切り替える**。ここで自動レビューが 1 回走る。
+2. 案がまとまったら **「Ready for review」に切り替える**。ここで PR 全体のレビューが 1 回走る。
+3. 指摘に対応して push すると、その変更だけが再レビューされる。
 
-- 最初から Ready で開いた PR も、開いた時点でレビューします。push では走りません。
-- **判定（Approve / Request changes）まで済んだ PR では、プラグインを起動せずに終えます**（下書きと Ready を行き来したとき・開き直したとき）。済んだかどうかは、判定のレビュー本文の目印（`<!-- claude-review-verdict -->`）で見ます（`.github/scripts/claude-review-status.sh`）。プラグインのコメントの有無で見ないのは、途中で止まった実行を「済み」と取り違えないためです。
-- 同じ PR の実行は 1 本ずつ順に動き、走っている実行は止めません（途中で止めると、コメントが一部だけ付いて判定の無い状態が残るため）。後から来た実行は、前の実行が判定まで済ませていれば何もしません。
+- 最初から Ready で開いた PR も、開いた時点でレビューします。下書きの間の push では、レビューも再レビューも走りません。
+- **テストが通るまでレビューしません。** レビューは `tests.yml` の 1 ジョブで、テストジョブ（Core・Backend・Frontend・Firestore rules）が全部通ってから走ります（`needs`）。落ちる変更をレビューしても、直した後にもう一度レビューすることになるためです。
+  - テストが落ちたら、レビューのジョブは走りません。直して push すれば、その push でレビュー（判定があれば再レビュー）が走ります。落ちたジョブを再実行して（Re-run failed jobs）通した場合も、続けてレビューが走ります。
+  - 「Re-run all jobs」で全部を再実行すると、レビューのジョブも走り直します。ただし前回の判定から head が変わっていなければ何もしません。
+  - Ready に切り替えたとき（`ready_for_review`）にもレビューを走らせるため、`tests.yml` はこのイベントでも動きます（テストも走り直す）。
+  - テストの間に push されていたら、その実行はレビューせずに終わり、新しい head の実行がレビューします。
+- **判定（Approve / Request changes）まで済んだ PR では、PR 全体のレビューはしません。** 前回の判定から head が変わっていれば差分を再レビューし、変わっていなければ何もせずに終えます（下書きと Ready を行き来しただけのとき・開き直したとき）。済んだかどうかは、判定のレビュー本文の目印（`<!-- claude-review-verdict -->`）で見ます（`.github/scripts/claude-review-status.sh`）。プラグインのコメントの有無で見ないのは、途中で止まった実行を「済み」と取り違えないためです。
+- 同じ PR の実行は 1 本ずつ順に動き、走っている実行は止めません（途中で止めると、コメントが一部だけ付いて判定の無い状態が残るため）。後から来た実行は、前の実行の判定から後の変更だけを見ます。
 - Ready のまま開き直すのは、閉じる前に判定が付かなかった PR（レビュー中に閉じた、ジョブが失敗した など）を拾うためです。
 - 判定に数えるのは、**この実行で** `github-actions[bot]` が付けたインラインコメント（スレッドの起点のみ。`@claude` とのやり取りの返信は数えない）と、`## Code review` で始まるまとめコメントです。インラインコメントがあれば Request changes、「No issues found」を含むまとめだけなら Approve、どちらでもなければ判定せずに失敗にします。投稿直後は API に反映されていないことがあるので、見えなければ数回取り直します。
 - **Ready なのにレビューが付かなかったら、ジョブを失敗（赤）にします。** プラグインは「レビュー不要（自明な変更）」や「Claude が既にコメントした PR」と判断すると何も書かずに終わるため、緑のまま終えると未レビューに気付けません。実行中に下書きへ戻した・閉じた PR は対象外です。
   - PR に Claude のコメントが既にある場合（`@claude` とのやり取りや、中断された実行の残りなど）、プラグインは毎回同じ理由で飛ばすので、**再実行では解消しません**。人がレビューするか、それらのコメントを消してから再実行してください。
 - **1 回のレビューは約 10 分までです。** GitHub の OIDC トークンは起動時に 1 回だけ取り、環境変数（`ANTHROPIC_IDENTITY_TOKEN`）で渡しています（ファイルに書かない）。Anthropic のアクセストークンの寿命は「OIDC トークンの残り寿命の 2 倍」まで（OIDC トークンは約 5 分なので、およそ 10 分）で、環境変数は途中で差し替えられないため、それを過ぎると取り直しが断られて失敗します。大きな PR で失敗が続くようなら、トークンをファイルで渡して 4 分おきに書き換える方式に戻します。
 - bot（Dependabot など）の PR と、フォークからの PR は対象外です（フォークからの実行には OIDC トークンが出ないので、WIF が通りません）。
-- PR のイベントでは PR 側のワークフローが動くので、`claude-review.yml` を変える PR は、変えた後の内容でレビューされます。
+- PR のイベントでは PR 側のワークフローが動くので、`review` ジョブを変える PR は、変えた後の内容でレビューされます。
+
+#### 再レビュー: Ready の PR への push
+
+最初のレビューの後の変更（指摘への対応など）は、同じ `review` ジョブが **前回の判定から後の変更** をレビューし直し、判定（Approve / Request changes）を出し直します。新しい判定は前の判定を置き換えます（GitHub は同じレビュアーの最新の判定を有効にする）。
+
+- 走るのは、**判定のある Ready の PR に push したとき**（`pull_request` の `synchronize`）と、判定の後に下書きへ戻して直してから Ready に戻したときです。判定がまだ無い PR に push したときは、最初のレビュー（PR 全体）になります。続けて push したときは、同じ PR の実行が 1 本ずつ順に動き、待っている実行は新しいものに置き換わるので、まとめて 1 回になりやすくなっています。
+- push のたびに API の利用料がかかります。細かい修正は、まとめてから push してください。
+- 失敗した実行は、Actions の画面から再実行すればやり直せます。
+- 見るのは、前回の判定を出したときの head から今の head までの差分のうち、PR の差分にも含まれる行です（ベースブランチを取り込んだ分は見ない）。force push で前回の head が祖先でなくなっていたら、PR 全体を見ます。前回の判定から head が変わっていなければ、何もせずに終わります。
+- 前回までの指摘が直っていなければ、今のコードに改めてインラインコメントを付けます（指摘として数えるので Request changes になる）。直っていれば何も付けません。
+- プラグインは「Claude が既にコメントした PR」を飛ばすので、再レビューではコマンドとして呼ばず、コマンドの本文（`commands/code-review.md`）に、再レビューで変える点（既存コメントで飛ばさない・差分だけを見る・前回の指摘を確かめる）を書き足して渡します（`claude-review.mjs`）。それ以外の手順と、指摘を絞る基準はプラグインのままです。
+- 取り出すのは最初のレビューと同じ PR のマージコミットで、履歴ごと取ります。PR の head はその親として手元にあるので、前回の head との差分はそこから取ります（PR の head を別に取り出さない）。
+- コメントでの起動（`issue_comment`）は設けていません。`issue_comment` の実行はデフォルトブランチのワークフローで動くので、WIF の rule を広げる必要があり、PR のコードを特権のある実行で取り出すことにもなる（CodeQL が高のアラートを出す）ためです。
+- 下書き・bot・フォークの PR は、最初のレビューと同じく対象外です。
 
 #### 初回の設定
 
@@ -869,7 +889,7 @@ Federation rule の match は **このリポジトリだけ** に絞ります。
 
 | 項目 | 値 | 理由 |
 | --- | --- | --- |
-| `subject_prefix` | `repo:min-nano@299874061/portal@1328433849:pull_request` | `pull_request` イベントの `sub`。このリポジトリでは、所有者とリポジトリの名前の後ろに数値の ID が付く（`repo:<owner>@<owner_id>/<repo>@<repo_id>:...`）。レビューは PR のイベントでしか動かないので、ここまで絞れる（push や他のイベントのトークンは通さない） |
+| `subject_prefix` | `repo:min-nano@299874061/portal@1328433849:pull_request` | `pull_request` イベントの `sub`。このリポジトリでは、所有者とリポジトリの名前の後ろに数値の ID が付く（`repo:<owner>@<owner_id>/<repo>@<repo_id>:...`）。レビュー・再レビューは PR のイベントでしか動かないので、ここまで絞れる（push や他のイベントのトークンは通さない） |
 | `audience` | `https://api.anthropic.com` | `claude-review.mjs` が OIDC トークンを要求するときの audience |
 | `claims` | `repository_owner_id: 299874061`、`repository_id: 1328433849` | `sub` の解釈に頼らない念押し。数値の ID は名前を変えても変わらない |
 | `oauth_scope` | `workspace:developer`（既定） | |
