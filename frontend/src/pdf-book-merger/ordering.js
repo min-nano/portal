@@ -123,7 +123,12 @@ const STATUS_RANK = { manual: 0, detected: 0, inferred: 1, conflict: 1, uncertai
 /**
  * 1 冊の並びを作る。
  *
- * @param {object[]} files 画面の順（先頭・末尾のファイルは、この順で並べる）
+ * 先頭・末尾に置く頁は、ファイルに入れた「先頭の頁の番号」（coverStart）から
+ * 1 つずつ進む番号の順に並べる。この番号は先頭・末尾の中での順番を決める
+ * だけで、本文の頁番号とは比べない。番号を入れていないファイルの頁は、
+ * 番号を入れたものの後ろに、画面の順（追加した順）で並べる。
+ *
+ * @param {object[]} files 画面の順
  * @param {Map<string, object>} numberings numberFiles の結果
  * @param {Map<string, number>} overrides 頁ごとに手で決めた番号（頁の key → 番号）
  * @returns {{
@@ -147,12 +152,16 @@ export function buildBookOrder(files, numberings, overrides = new Map()) {
     ...extra,
   });
 
+  // 先頭・末尾の頁の並べ順（番号を入れていなければ null）。
+  const place = (file, i) => (Number.isInteger(file.coverStart) ? file.coverStart + i : null);
   files.forEach((file, fileOrder) => {
-    if (file.role === 'front') file.pages.forEach((p, i) => front.push(entry(file, p, i, 'front')));
-    if (file.role === 'back') file.pages.forEach((p, i) => back.push(entry(file, p, i, 'back')));
+    const cover = (p, i, role) =>
+      (role === 'front' ? front : back).push(entry(file, p, i, role, { place: place(file, i) }));
+    if (file.role === 'front') file.pages.forEach((p, i) => cover(p, i, 'front'));
+    if (file.role === 'back') file.pages.forEach((p, i) => cover(p, i, 'back'));
     if (file.role === 'split') {
       const half = Math.ceil(file.pages.length / 2);
-      file.pages.forEach((p, i) => (i < half ? front : back).push(entry(file, p, i, i < half ? 'front' : 'back')));
+      file.pages.forEach((p, i) => cover(p, i, i < half ? 'front' : 'back'));
     }
     if (file.role !== 'body') return;
     const numbering = numberings.get(file.key);
@@ -184,6 +193,12 @@ export function buildBookOrder(files, numberings, overrides = new Map()) {
     );
   });
   body.forEach((item) => delete item.fileOrder);
+  // 番号の同じ頁・番号の無い頁は、入れた順のまま（sort は安定）。
+  for (const covers of [front, back]) {
+    // 番号の無い頁どうしは Infinity - Infinity が NaN になるので 0 にする。
+    covers.sort((a, b) => (a.place ?? Infinity) - (b.place ?? Infinity) || 0);
+    covers.forEach((item) => delete item.place);
+  }
   return [...front, ...body, ...back];
 }
 

@@ -22,11 +22,12 @@ import {
 /**
  * ファイル 1 つ。numbers は頁ごとに読めた番号（null は読めなかった頁）。
  */
-function file(key, numbers, { role = 'body', manual = null } = {}) {
+function file(key, numbers, { role = 'body', manual = null, coverStart = null } = {}) {
   return {
     key,
     role,
     manual,
+    coverStart,
     pages: numbers.map((value, index) => ({
       key: `${key}:${index}`,
       candidates: value === null ? [] : [{ value, score: 3.5, source: 'text', zone: 'bottom' }],
@@ -141,6 +142,32 @@ describe('buildBookOrder', () => {
     ];
 
     expect(arrange(files).map((e) => e.fileKey)).toEqual(['front2', 'front1', 'body', 'body', 'back']);
+  });
+
+  it('先頭・末尾に置く頁は、先頭の頁の番号の順（番号の無いものはその後ろ）', () => {
+    const files = [
+      file('cover', [null, null, null, null], { role: 'split', coverStart: 10 }),
+      file('front-a', [null], { role: 'front' }),
+      file('front-b', [null, null], { role: 'front', coverStart: 11 }),
+      file('body', [1, 2]),
+      file('back-a', [null], { role: 'back', coverStart: 1 }),
+      file('back-b', [null], { role: 'back' }),
+    ];
+
+    expect(arrange(files).map((e) => e.pageKey)).toEqual([
+      'cover:0', // 10
+      'cover:1', // 11（同じ番号は画面の順）
+      'front-b:0', // 11
+      'front-b:1', // 12
+      'front-a:0', // 番号なし
+      'body:0',
+      'body:1',
+      'back-a:0', // 1
+      'cover:2', // 12
+      'cover:3', // 13
+      'back-b:0', // 番号なし
+    ]);
+    expect(arrange(files).every((e) => !('place' in e))).toBe(true);
   });
 
   it('結合しないファイルは並びに入れない', () => {
