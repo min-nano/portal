@@ -127,13 +127,17 @@ jobs:
             echo "url=$(field .html_url)"
           } >> "$GITHUB_OUTPUT"
       - name: Check out the pull request head
-        # 前回の head との差分を取るため、履歴ごと取る。
+        # 前回の head との差分を取るため、履歴ごと取る。ここにあるのは PR の
+        # コードなので、実行しない（スクリプトはワークスペース直下の、この
+        # ワークフローと同じコミットのものを使う）。Claude はここのファイルを
+        # 読めるので、GITHUB_TOKEN は残さない（以降の git は手元の履歴だけを使う）。
         if: steps.pr.outputs.eligible == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ steps.pr.outputs.head_sha }}
           path: pr
           fetch-depth: 0
+          persist-credentials: false
       - name: Find the previous verdict
         id: before
         if: steps.pr.outputs.eligible == 'true'
