@@ -484,7 +484,7 @@ jobs:
             }
 
   review:
-    name: Claude review
+    name: Auto review
     # Claude（PR エージェント）による自動レビュー。レビューの中身は Anthropic 公式の
     # code-review プラグイン（`/code-review:code-review`）に任せ、ここでは
     # プロンプトを書かない。何を見るか・どの指摘を捨てるかはプラグインが決める
