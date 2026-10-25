@@ -4,34 +4,21 @@ name: Claude re-review
 # ので、その後の変更（指摘への対応など）は見ない。ここでは **前回の判定から
 # 後の変更** をレビューし直し、判定（Approve / Request changes）を出し直す。
 #
-# 起動するのは:
-#
-#   push      判定のある Ready の PR に push したとき（pull_request の
-#             synchronize）。判定がまだ無い PR（最初のレビューの前）は飛ばす
-#   コメント  PR に `/claude-rereview` とコメントしたとき（issue_comment）。
-#             コメントしたのがリポジトリの所有者・メンバー・コラボレーターの
-#             場合だけ（公開リポジトリなので、誰でも API の利用料を使えない
-#             ようにする）。push を待たずにやり直したいとき（失敗した実行の
-#             やり直しなど）に使う
+# 起動するのは、判定のある Ready の PR に push したとき（pull_request の
+# synchronize）。判定がまだ無い PR（最初のレビューの前）は飛ばす。失敗した
+# 実行は、Actions の画面から再実行すればやり直せる（そのときの head を見る）。
 #
 # 続けて push したときは、同じ PR の実行は 1 本ずつで、待っている実行は新しい
 # ものに置き換わる（concurrency）ので、まとめて 1 回になりやすい。
 #
-# issue_comment の実行はデフォルトブランチ（main）のこのファイルで動き、
-# OIDC トークンの `sub` も `...:ref:refs/heads/main` になる。WIF の rule は、
-# pull_request イベントと、main のこのワークフローの issue_comment だけを
-# 通すように絞ってある（README「Claude による PR レビュー（PR エージェント）」）。
-# 同じ理由で、コメントでの起動はこのファイルの変更が main に入ってから効く。
-#
-# スクリプト（.github/scripts）はこのワークフローと同じコミット（push では
-# PR のマージコミット、コメントでは main）のものを使い、レビュー対象の PR の
-# head は別のディレクトリ（pr/）に取り出す。
+# スクリプト（.github/scripts）はこのワークフローと同じコミット（PR の
+# マージコミット）のものを使い、レビュー対象の PR の head は別のディレクトリ
+# （pr/）に取り出す。
 #
 # 再レビューの流れ:
 #
-#   1. 前回の判定（claude-review-status.sh の verdict_sha）が無ければ、
-#      push では飛ばし、コメントでは失敗にする（最初のレビューがまだ。
-#      Ready への切り替えや開き直しで付ける）
+#   1. 前回の判定（claude-review-status.sh の verdict_sha）が無ければ飛ばす
+#      （最初のレビューがまだ。Ready への切り替えや開き直しで付ける）
 #   2. 前回の判定から head が変わっていなければ、何もせずに終える
 #   3. プラグインの手順で、前回の head からの差分をレビューする。前回までの
 #      指摘が直っていなければ、それも指摘として付け直す（claude-review.mjs）。
@@ -46,13 +33,11 @@ name: Claude re-review
 on:
   pull_request:
     types: [synchronize]
-  issue_comment:
-    types: [created]
 
 # claude-review.yml と同じグループにして、同じ PR のレビューと重ならないように
 # する。走っている実行は止めない。
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: claude-review-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 permissions:
@@ -61,18 +46,10 @@ permissions:
 jobs:
   rereview:
     name: Re-review
-    # pull_request は、Ready・人の PR・フォークでないものだけ。issue_comment は
-    # PR へのコメントで、本文が `/claude-rereview` で始まり、書き込み権限の
-    # ある人が付けたものだけ（PR の条件は下の Resolve で見る）。
     if: >-
-      (github.event_name == 'pull_request' &&
-        github.event.pull_request.draft == false &&
-        github.event.pull_request.user.type != 'Bot' &&
-        github.event.pull_request.head.repo.full_name == github.repository) ||
-      (github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request &&
-        startsWith(github.event.comment.body, '/claude-rereview') &&
-        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.type != 'Bot' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -82,7 +59,7 @@ jobs:
       # GitHub の OIDC トークンの取得に使う（Anthropic への WIF）。
       id-token: write
     env:
-      PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+      PR: ${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -96,9 +73,8 @@ jobs:
           .github/scripts/require-vars.sh \
             ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID ANTHROPIC_SERVICE_ACCOUNT_ID
       - name: Resolve the pull request
-        # コメントのイベントには PR の head などが無いので、どちらのイベントでも
-        # API から取る（push の場合も、待っている間に進んだ head を見る）。
-        # コメントで起動して対象外の PR だったら、失敗にして気付けるようにする。
+        # head は API から取る（待っている間や再実行で進んだ head を見る）。
+        # 待っている間に下書きへ戻された・閉じられた PR は飛ばす。
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
@@ -113,10 +89,6 @@ jobs:
           elif [ "$(field .head.repo.full_name)" != "$GITHUB_REPOSITORY" ]; then reason='フォークからの PR です'
           fi
           if [ -n "$reason" ]; then
-            if [ "$GITHUB_EVENT_NAME" = 'issue_comment' ]; then
-              echo "::error::PR #${PR} は${reason}。再レビューの対象外です。"
-              exit 1
-            fi
             echo "::notice::PR #${PR} は${reason}。再レビューしません。"
             echo "eligible=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -127,9 +99,7 @@ jobs:
             echo "url=$(field .html_url)"
           } >> "$GITHUB_OUTPUT"
       - name: Check out the pull request head
-        # 前回の head との差分を取るため、履歴ごと取る。ここにあるのは PR の
-        # コードなので、実行しない（スクリプトはワークスペース直下の、この
-        # ワークフローと同じコミットのものを使う）。Claude はここのファイルを
+        # 前回の head との差分を取るため、履歴ごと取る。Claude はここのファイルを
         # 読めるので、GITHUB_TOKEN は残さない（以降の git は手元の履歴だけを使う）。
         if: steps.pr.outputs.eligible == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -157,12 +127,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$VERDICT" != 'true' ]; then
-            message="PR #${PR} にはまだ Claude の判定がありません。最初のレビューは Ready for review への切り替え（または開き直し）で走ります（claude-review.yml）。"
-            if [ "$GITHUB_EVENT_NAME" = 'issue_comment' ]; then
-              echo "::error::$message"
-              exit 1
-            fi
-            echo "::notice::$message"
+            echo "::notice::PR #${PR} にはまだ Claude の判定がありません。最初のレビューは Ready for review への切り替え（または開き直し）で走ります（claude-review.yml）。"
             echo "run=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -221,7 +186,7 @@ jobs:
       - name: Fail when the re-review was not posted
         if: steps.plan.outputs.run == 'true' && steps.after.outputs.state == 'open' && steps.after.outputs.reviewed != 'true'
         run: |
-          echo "::error::PR #${PR} の再レビューが付きませんでした。実行ログを確認し、PR に \`/claude-rereview\` とコメントしてやり直してください。"
+          echo "::error::PR #${PR} の再レビューが付きませんでした。実行ログを確認し、このジョブを再実行してください。"
           exit 1
       - name: Submit the review verdict
         if: steps.plan.outputs.run == 'true' && steps.after.outputs.state == 'open' && steps.after.outputs.reviewed == 'true'

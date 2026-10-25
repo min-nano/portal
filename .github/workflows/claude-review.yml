@@ -28,8 +28,8 @@ name: Claude review
 #
 # synchronize（push）では走らせない。どの場合も、既に判定（Approve /
 # Request changes）まで済んでいればプラグインを起動せずに終える
-# （claude-review-status.sh）。その後の変更のレビューし直しは、push か
-# `/claude-rereview` のコメントで claude-rereview.yml が行う。
+# （claude-review-status.sh）。その後の push での変更のレビューし直しは、
+# claude-rereview.yml が行う。
 #
 # プラグインは「レビュー不要」「Claude が既にコメントした」と判断すると何も
 # 書かずに終わる。そのまま緑で終えると、Ready なのに未レビューの PR が

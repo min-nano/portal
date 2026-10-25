@@ -853,18 +853,18 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 - bot（Dependabot など）の PR と、フォークからの PR は対象外です（フォークからの実行には OIDC トークンが出ないので、WIF が通りません）。
 - PR のイベントでは PR 側のワークフローが動くので、`claude-review.yml` を変える PR は、変えた後の内容でレビューされます。
 
-#### 再レビュー: push か `/claude-rereview` のコメント
+#### 再レビュー: Ready の PR への push
 
-最初のレビューの後の変更（指摘への対応など）は、`.github/workflows/claude-rereview.yml` が **前回の判定から後の変更** をレビューし直し、判定（Approve / Request changes）を出し直します。新しい判定は前の判定を置き換えます（GitHub は同じレビュアーの最新の判定を有効にする）。起動するのは次の 2 つです。
+最初のレビューの後の変更（指摘への対応など）は、`.github/workflows/claude-rereview.yml` が **前回の判定から後の変更** をレビューし直し、判定（Approve / Request changes）を出し直します。新しい判定は前の判定を置き換えます（GitHub は同じレビュアーの最新の判定を有効にする）。
 
-- **push**: 判定のある Ready の PR に push すると、自動で再レビューします。判定がまだ無い PR（最初のレビューの前）では何もしません。続けて push したときは、同じ PR の実行が 1 本ずつ順に動き、待っている実行は新しいものに置き換わるので、まとめて 1 回になりやすくなっています。
-- **コメント**: PR に `/claude-rereview` とコメントすると再レビューします。push を待たずにやり直したいとき（失敗した実行のやり直しなど）に使います。コメントしたのがリポジトリの所有者・メンバー・コラボレーターのときだけ動きます（公開リポジトリなので、誰でも API の利用料を使えないようにする）。対象外の PR（下書きなど）や、判定がまだ無い PR では失敗にします。
-
+- 走るのは、**判定のある Ready の PR に push したとき**（`pull_request` の `synchronize`）です。判定がまだ無い PR（最初のレビューの前）や下書きでは何もしません。続けて push したときは、同じ PR の実行が 1 本ずつ順に動き、待っている実行は新しいものに置き換わるので、まとめて 1 回になりやすくなっています。
+- push のたびに API の利用料がかかります。細かい修正は、まとめてから push してください。
+- 失敗した実行は、Actions の画面から再実行すればやり直せます（そのときの head を見ます）。
 - 見るのは、前回の判定を出したときの head から今の head までの差分のうち、PR の差分にも含まれる行です（ベースブランチを取り込んだ分は見ない）。force push で前回の head が祖先でなくなっていたら、PR 全体を見ます。前回の判定から head が変わっていなければ、何もせずに終わります。
 - 前回までの指摘が直っていなければ、今のコードに改めてインラインコメントを付けます（指摘として数えるので Request changes になる）。直っていれば何も付けません。
 - プラグインは「Claude が既にコメントした PR」を飛ばすので、再レビューではコマンドとして呼ばず、コマンドの本文（`commands/code-review.md`）に、再レビューで変える点（既存コメントで飛ばさない・差分だけを見る・前回の指摘を確かめる）を書き足して渡します（`claude-review.mjs`）。それ以外の手順と、指摘を絞る基準はプラグインのままです。
-- コメントでの起動（`issue_comment`）は、PR 側ではなく **デフォルトブランチ（`main`）のワークフロー** で動き、OIDC トークンの `sub` も `...:ref:refs/heads/main` になります。そのため WIF の rule は、`pull_request` イベントに加えて **`main` の `claude-rereview.yml` の `issue_comment`** を通すようにしてあります（下の表）。このワークフローの変更は、コメントでの起動については `main` に入ってから効きます。
-- スクリプト（`.github/scripts`）はワークフローと同じコミット（push では PR のマージコミット、コメントでは `main`）のものを使い、レビュー対象の PR の head は別のディレクトリ（`pr/`）に取り出して、Claude はそこで動きます。
+- スクリプト（`.github/scripts`）はワークフローと同じコミット（PR のマージコミット）のものを使い、レビュー対象の PR の head は別のディレクトリ（`pr/`）に取り出して、Claude はそこで動きます。
+- コメントでの起動（`issue_comment`）は設けていません。`issue_comment` の実行はデフォルトブランチのワークフローで動くので、WIF の rule を広げる必要があり、PR のコードを特権のある実行で取り出すことにもなる（CodeQL が高のアラートを出す）ためです。
 - 下書き・bot・フォークの PR は、最初のレビューと同じく対象外です。同じ PR の最初のレビューとは重ならないよう、1 本ずつ順に動きます。
 
 #### 初回の設定
@@ -879,12 +879,11 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 | Service account（`svac_...`） | 例 `github-portal-pr-agent`。利用料を寄せたいワークスペースのメンバーにする |
 | Federation rule（`fdrl_...`） | 下記 |
 
-Federation rule の match は **このリポジトリの、PR のイベントと再レビューのコメントだけ** に絞ります。
+Federation rule の match は **このリポジトリだけ** に絞ります。
 
 | 項目 | 値 | 理由 |
 | --- | --- | --- |
-| `subject_prefix` | `repo:min-nano@299874061/portal@1328433849:*` | このリポジトリの `sub`（末尾の `*` で前方一致）。所有者とリポジトリの名前の後ろに数値の ID が付く（`repo:<owner>@<owner_id>/<repo>@<repo_id>:...`）。`sub` の後ろはイベントで変わる（`pull_request` のイベントは `...:pull_request`、コメントは `...:ref:refs/heads/main`）ので、イベントは下の `condition` で絞る |
-| `condition` | `claims.event_name == "pull_request" \|\| (claims.event_name == "issue_comment" && claims.job_workflow_ref == "min-nano/portal/.github/workflows/claude-rereview.yml@refs/heads/main")` | 通すのは、PR のイベント（レビュー・push での再レビュー）と、`main` の `claude-rereview.yml` が `issue_comment` で動いたとき（コメントでの再レビュー）だけ。branch への push や他のワークフロー・他のブランチのワークフローのトークンは通さない。`job_workflow_ref` は名前で書かれるので、リポジトリやワークフローの名前を変えたら直す |
+| `subject_prefix` | `repo:min-nano@299874061/portal@1328433849:pull_request` | `pull_request` イベントの `sub`。このリポジトリでは、所有者とリポジトリの名前の後ろに数値の ID が付く（`repo:<owner>@<owner_id>/<repo>@<repo_id>:...`）。レビュー・再レビューは PR のイベントでしか動かないので、ここまで絞れる（push や他のイベントのトークンは通さない） |
 | `audience` | `https://api.anthropic.com` | `claude-review.mjs` が OIDC トークンを要求するときの audience |
 | `claims` | `repository_owner_id: 299874061`、`repository_id: 1328433849` | `sub` の解釈に頼らない念押し。数値の ID は名前を変えても変わらない |
 | `oauth_scope` | `workspace:developer`（既定） | |
