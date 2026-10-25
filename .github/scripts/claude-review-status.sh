@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PR の Claude レビュー（code-review プラグイン）の状況を調べる。
 #
-# claude-review.yml がプラグインを呼ぶ前と後に使う。
+# claude-review.yml がプラグインを呼ぶ前と後に使う（claude-rereview.yml も同じ）。
 #
 #   前: 判定（Approve / Request changes）まで済んでいれば、プラグインを
 #       起動せずに終える（開き直しなど）
@@ -34,7 +34,8 @@
 #     run: .github/scripts/claude-review-status.sh
 #
 # 結果は GITHUB_OUTPUT に state（open / draft / closed）、verdict（true /
-# false）、inline・summary・clean（件数）、reviewed（inline か summary が
+# false）、verdict_sha（最後の判定を出したときの PR の head。再レビューの
+# 起点）、inline・summary・clean（件数）、reviewed（inline か summary が
 # 1 件以上なら true）として渡す。
 set -euo pipefail
 
@@ -69,8 +70,11 @@ while [ "$inline" -eq 0 ] && [ "$summary" -eq 0 ] && [ "$attempt" -lt "$retries"
   measure
 done
 
-verdicts="$(count "repos/$repo/pulls/$PR/reviews?per_page=100" \
-  "[.[] | select(.user.login == \"$verdict_author\" and ((.body // \"\") | contains(\"$marker\")))] | length")"
+# 一覧は古い順に返るので、最後の行が最新の判定。
+verdict_shas="$(gh api --paginate "repos/$repo/pulls/$PR/reviews?per_page=100" \
+  --jq ".[] | select(.user.login == \"$verdict_author\" and ((.body // \"\") | contains(\"$marker\"))) | .commit_id")"
+verdicts="$(printf '%s' "$verdict_shas" | grep -c . || true)"
+verdict_sha="$(printf '%s\n' "$verdict_shas" | tail -n 1)"
 
 state="$(gh api "repos/$repo/pulls/$PR" \
   --jq 'if .state != "open" then "closed" elif .draft then "draft" else "open" end')"
@@ -80,11 +84,12 @@ verdict=false
 reviewed=false
 { [ "$inline" -gt 0 ] || [ "$summary" -gt 0 ]; } && reviewed=true
 
-echo "PR #$PR: state=$state verdict=$verdict reviewed=$reviewed（$since 以降: インライン $inline 件・まとめ $summary 件（うち指摘なし $clean 件））"
+echo "PR #$PR: state=$state verdict=$verdict${verdict_sha:+（$verdict_sha）} reviewed=$reviewed（$since 以降: インライン $inline 件・まとめ $summary 件（うち指摘なし $clean 件））"
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   {
     echo "state=$state"
     echo "verdict=$verdict"
+    echo "verdict_sha=$verdict_sha"
     echo "reviewed=$reviewed"
     echo "inline=$inline"
     echo "summary=$summary"

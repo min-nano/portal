@@ -853,6 +853,18 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 - bot（Dependabot など）の PR と、フォークからの PR は対象外です（フォークからの実行には OIDC トークンが出ないので、WIF が通りません）。
 - PR のイベントでは PR 側のワークフローが動くので、`claude-review.yml` を変える PR は、変えた後の内容でレビューされます。
 
+#### 再レビュー: ラベル `claude-rereview` を付ける
+
+最初のレビューの後の変更（指摘への対応など）は、自動ではレビューしません。対応がまとまったら PR に **ラベル `claude-rereview` を付ける** と、`.github/workflows/claude-rereview.yml` が **前回の判定から後の変更** をレビューし直し、判定（Approve / Request changes）を出し直します。新しい判定は前の判定を置き換えます（GitHub は同じレビュアーの最新の判定を有効にする）。
+
+- ラベルは実行の始めに外れます。もう一度付ければ何度でも再レビューできます（失敗した後のやり直しも同じ）。
+- 見るのは、前回の判定を出したときの head から今の head までの差分のうち、PR の差分にも含まれる行です（ベースブランチを取り込んだ分は見ない）。force push で前回の head が祖先でなくなっていたら、PR 全体を見ます。
+- 前回までの指摘が直っていなければ、今のコードに改めてインラインコメントを付けます（指摘として数えるので Request changes になる）。直っていれば何も付けません。
+- プラグインは「Claude が既にコメントした PR」を飛ばすので、再レビューではコマンドとして呼ばず、コマンドの本文（`commands/code-review.md`）に、再レビューで変える点（既存コメントで飛ばさない・差分だけを見る・前回の指摘を確かめる）を書き足して渡します（`claude-review.mjs`）。それ以外の手順と、指摘を絞る基準はプラグインのままです。
+- 判定がまだ無い PR では失敗します（最初のレビューは Ready for review への切り替えで走る）。前回の判定から head が変わっていなければ、何もせずに終わります。
+- トリガーをラベル（`pull_request` の `labeled`）にしているのは、WIF の rule が `pull_request` イベントのトークンだけを通すためです（下の `subject_prefix`）。コメントでの起動（`issue_comment`）や手動実行（`workflow_dispatch`）では `sub` が変わり、交換が通りません。
+- 下書き・bot・フォークの PR は、最初のレビューと同じく対象外です。同じ PR の最初のレビューとは重ならないよう、1 本ずつ順に動きます。
+
 #### 初回の設定
 
 **1. Claude Console で WIF を設定する**（Anthropic 組織の admin / owner 権限が要る）
@@ -909,6 +921,12 @@ Settings → Actions → General → Workflow permissions の **「Allow GitHub 
 **4.（推奨）Console で利用上限を決める**
 
 サービスアカウントを入れたワークスペースに、Console のワークスペース設定で利用上限（spend limit）を設定しておくと、想定外の呼び出しが続いても費用が青天井になりません。
+
+**5. 再レビュー用のラベルを作る**
+
+```bash
+gh label create claude-rereview -R <owner/repo> --description "Claude に前回の判定から後の変更を再レビューさせる"
+```
 
 ## 🧑‍💻 ローカル開発
 

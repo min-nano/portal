@@ -1,0 +1,163 @@
+name: Claude re-review
+
+# Claude の再レビュー。claude-review.yml は Ready の PR を 1 回だけレビューする
+# ので、その後の push（指摘への対応など）は見ない。ここでは、人が PR に
+# ラベル `claude-rereview` を付けたときに、**前回の判定から後の変更** を
+# レビューし直し、判定（Approve / Request changes）を出し直す。
+#
+# 自動（push のたび）にしないのは、claude-review.yml と同じく無駄打ちを防ぐ
+# ため。対応がまとまったところで人がラベルを付ける。ラベルは実行の始めに外す
+# ので、もう一度付ければ何度でも再レビューできる（ボタンの代わり）。
+#
+# トリガーを pull_request（labeled）にしているのは、WIF の rule が
+# `pull_request` イベントの OIDC トークンだけを通すため（README の
+# subject_prefix）。workflow_dispatch や issue_comment ではトークンの `sub` が
+# 変わり、交換が通らない。
+#
+# 再レビューの流れ:
+#
+#   1. 前回の判定（claude-review-status.sh の verdict_sha）が無ければ失敗に
+#      する（最初のレビューがまだ。Ready への切り替えや開き直しで付ける）
+#   2. 前回の判定から head が変わっていなければ、何もせずに終える
+#   3. プラグインの手順で、前回の head からの差分をレビューする。前回までの
+#      指摘が直っていなければ、それも指摘として付け直す（claude-review.mjs）。
+#      force push で前回の head が祖先でなくなっていたら、PR 全体を見る
+#   4. 以降は claude-review.yml と同じ。レビューが付いたかを確かめ、判定を出す
+#
+# 新しい判定は前の判定を置き換える（GitHub は同じレビュアーの最新の判定を
+# 有効にする）。
+#
+# 対象外の PR（下書き・bot・フォーク）は claude-review.yml と同じ。
+
+on:
+  pull_request:
+    types: [labeled]
+
+# claude-review.yml と同じグループにして、同じ PR のレビューと重ならないように
+# する。走っている実行は止めない。
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rereview:
+    name: Re-review
+    if: >-
+      github.event.label.name == 'claude-rereview' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.type != 'Bot' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      # GitHub の OIDC トークンの取得に使う（Anthropic への WIF）。
+      id-token: write
+    env:
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Remove the label
+        # 先に外す。失敗した実行の後も、付け直せばやり直せる。
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/claude-rereview" --silent || true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # 前回の head との差分を取るため、履歴ごと取る。
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Check required repository variables
+        env:
+          ANTHROPIC_FEDERATION_RULE_ID: '${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}'
+          ANTHROPIC_ORGANIZATION_ID: '${{ vars.ANTHROPIC_ORGANIZATION_ID }}'
+          ANTHROPIC_SERVICE_ACCOUNT_ID: '${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}'
+        run: |
+          .github/scripts/require-vars.sh \
+            ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID ANTHROPIC_SERVICE_ACCOUNT_ID
+      - name: Find the previous verdict
+        id: before
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/claude-review-status.sh
+      - name: Decide what to review
+        # run が false なら、レビューせずに終える。base は差分の起点で、前回の
+        # head が今の head の祖先でなければ空（PR 全体を見る）。
+        id: plan
+        env:
+          VERDICT: ${{ steps.before.outputs.verdict }}
+          PREVIOUS_SHA: ${{ steps.before.outputs.verdict_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$VERDICT" != 'true' ]; then
+            echo "::error::PR #${PR} にはまだ Claude の判定がありません。最初のレビューは Ready for review への切り替え（または開き直し）で走ります（claude-review.yml）。"
+            exit 1
+          fi
+          if [ "$PREVIOUS_SHA" = "$HEAD_SHA" ]; then
+            echo "::notice::前回の判定（${PREVIOUS_SHA}）から変更が無いので、再レビューしません。"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base=''
+          if git cat-file -e "${PREVIOUS_SHA}^{commit}" 2> /dev/null &&
+              git merge-base --is-ancestor "$PREVIOUS_SHA" "$HEAD_SHA"; then
+            base="$PREVIOUS_SHA"
+            echo "前回の判定（${PREVIOUS_SHA}）からの差分を再レビューします。"
+          else
+            echo "::warning::前回の判定の head（${PREVIOUS_SHA}）が今の head の祖先ではありません（force push など）。PR 全体を再レビューします。"
+          fi
+          {
+            echo "run=true"
+            echo "base=$base"
+          } >> "$GITHUB_OUTPUT"
+      - name: Record the start time
+        id: start
+        if: steps.plan.outputs.run == 'true'
+        run: echo "since=$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - name: Set up Node.js
+        if: steps.plan.outputs.run == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: Install the Agent SDK and the plugin
+        if: steps.plan.outputs.run == 'true'
+        run: .github/scripts/claude-review-setup.sh
+      - name: Re-review with the code-review plugin's procedure
+        if: steps.plan.outputs.run == 'true'
+        env:
+          ANTHROPIC_FEDERATION_RULE_ID: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+          ANTHROPIC_ORGANIZATION_ID: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+          ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PREVIOUS_SHA: ${{ steps.before.outputs.verdict_sha }}
+          REVIEW_BASE: ${{ steps.plan.outputs.base }}
+        run: node "$RUNNER_TEMP/claude-review/claude-review.mjs"
+      - name: Check that the review was posted
+        id: after
+        if: steps.plan.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SINCE: ${{ steps.start.outputs.since }}
+          RETRIES: '5'
+        run: .github/scripts/claude-review-status.sh
+      - name: Fail when the re-review was not posted
+        if: steps.plan.outputs.run == 'true' && steps.after.outputs.state == 'open' && steps.after.outputs.reviewed != 'true'
+        run: |
+          echo "::error::PR #${PR} の再レビューが付きませんでした。実行ログを確認し、ラベル claude-rereview を付け直して再実行してください。"
+          exit 1
+      - name: Submit the review verdict
+        if: steps.plan.outputs.run == 'true' && steps.after.outputs.state == 'open' && steps.after.outputs.reviewed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INLINE: ${{ steps.after.outputs.inline }}
+          CLEAN: ${{ steps.after.outputs.clean }}
+          KIND: 再レビュー
+        run: .github/scripts/claude-review-verdict.sh

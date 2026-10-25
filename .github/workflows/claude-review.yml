@@ -28,7 +28,8 @@ name: Claude review
 #
 # synchronize（push）では走らせない。どの場合も、既に判定（Approve /
 # Request changes）まで済んでいればプラグインを起動せずに終える
-# （claude-review-status.sh）。
+# （claude-review-status.sh）。その後の変更のレビューし直しは、ラベル
+# `claude-rereview` を付けて claude-rereview.yml で行う。
 #
 # プラグインは「レビュー不要」「Claude が既にコメントした」と判断すると何も
 # 書かずに終わる。そのまま緑で終えると、Ready なのに未レビューの PR が
@@ -113,25 +114,9 @@ jobs:
         with:
           node-version: '22'
       - name: Install the Agent SDK and the plugin
-        # SDK は固定する（レビューを動かす仕組みなので、他のアクションと同じ扱い）。
-        # プラグインはレビューの指示そのもので、このリポジトリのコードの動作には
-        # 関わらないため、固定せず毎回 anthropics/claude-code の最新を取る。
-        # どちらもワークスペースの外（RUNNER_TEMP）に置く（レビュー対象に混ぜない）。
+        # SDK は固定し、プラグインは毎回最新を取る（claude-review-setup.sh）。
         if: steps.before.outputs.verdict == 'false'
-        run: |
-          set -euo pipefail
-          dir="$RUNNER_TEMP/claude-review"
-          mkdir -p "$dir"
-          cp .github/scripts/claude-review.mjs "$dir/"
-          (
-            cd "$dir"
-            npm init -y > /dev/null
-            npm install --no-audit --no-fund --ignore-scripts \
-              @anthropic-ai/claude-agent-sdk@0.3.310 zod@4.6.7
-          )
-          git clone -q --depth 1 https://github.com/anthropics/claude-code.git "$dir/claude-code"
-          echo "プラグイン: anthropics/claude-code@$(git -C "$dir/claude-code" rev-parse HEAD)"
-          echo "PLUGIN_DIR=$dir/claude-code/plugins/code-review" >> "$GITHUB_ENV"
+        run: .github/scripts/claude-review-setup.sh
       - name: Review with the code-review plugin
         if: steps.before.outputs.verdict == 'false'
         env:
@@ -162,34 +147,11 @@ jobs:
           echo "::error::PR に Claude のコメントが既にある場合（\`@claude\` とのやり取りや、中断された実行の残りなど）は、プラグインが毎回同じ理由で飛ばすため、再実行では解消しません。人がレビューするか、それらのコメントを消してから再実行してください。"
           exit 1
       - name: Submit the review verdict
-        # 指摘あり（インラインコメントがある）→ Request changes、
-        # 「No issues found」のまとめだけ → Approve。どちらでもない（まとめは
-        # あるが「No issues found」を含まない）なら、判定せずに落とす。
-        #
-        # 本文の目印（claude-review-status.sh の MARKER）が「判定まで済んだ」の
-        # 印になる。
-        #
-        # 出すのは GITHUB_TOKEN（github-actions[bot]）。Approve には Settings →
-        # Actions → General の「Allow GitHub Actions to create and approve pull
-        # requests」が要る（howtec-worksheet-check.yml の PR 作成と同じ設定）。
+        # 指摘あり → Request changes、「No issues found」だけ → Approve
+        # （claude-review-verdict.sh）。本文の目印が「判定まで済んだ」の印になる。
         if: steps.before.outputs.verdict == 'false' && steps.after.outputs.state == 'open' && steps.after.outputs.reviewed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           INLINE: ${{ steps.after.outputs.inline }}
           CLEAN: ${{ steps.after.outputs.clean }}
-          MARKER: '<!-- claude-review-verdict -->'
-        run: |
-          set -euo pipefail
-          if [ "$INLINE" -gt 0 ]; then
-            gh pr review "$PR" --request-changes \
-              --body "$(printf '%s\n\nClaude のレビューで指摘が %s 件ありました。インラインコメントを確認してください。' "$MARKER" "$INLINE")"
-          elif [ "$CLEAN" -gt 0 ]; then
-            if ! gh pr review "$PR" --approve \
-                --body "$(printf '%s\n\nClaude のレビューで指摘はありませんでした。' "$MARKER")"; then
-              echo "::error::Approve できませんでした。Settings → Actions → General の「Allow GitHub Actions to create and approve pull requests」が有効か確認してください（README「Claude による PR レビュー（PR エージェント）」参照）。"
-              exit 1
-            fi
-          else
-            echo "::error::Claude のまとめコメントに「No issues found」が無く、インラインコメントもありません。指摘の有無を判定できないので、まとめコメントを確認して人が判定してください。"
-            exit 1
-          fi
+        run: .github/scripts/claude-review-verdict.sh
