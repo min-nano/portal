@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # PR の Claude レビュー（code-review プラグイン）の状況を調べる。
 #
-# claude-review.yml がプラグインを呼ぶ前と後に使う。
+# tests.yml の review ジョブが、プラグインを呼ぶ前と後に使う。
 #
-#   前: 判定（Approve / Request changes）まで済んでいれば、プラグインを
-#       起動せずに終える（開き直しなど）
+#   前: 判定（Approve / Request changes）があれば、PR 全体ではなく、その
+#       判定の head（verdict_sha）からの差分を再レビューする。head が
+#       変わっていなければ何もしない（開き直しなど）
 #   後: この実行でレビューが付いたかを数え、判定の材料にする。付いて
 #       いなければジョブを失敗にする（Ready なのに未レビューを残さない）
 #
@@ -14,7 +15,7 @@
 # 「済み」と取り違える。判定は全部が終わった後にしか出ないので、こちらを使う。
 #
 # この実行で付いたレビューとして数えるのは、SINCE（ISO 8601、UTC）以降に
-# REVIEWER（既定 claude[bot]）が付けた
+# REVIEWER（既定 github-actions[bot]。claude-review.mjs が GITHUB_TOKEN で付ける）が付けた
 #   inline   インラインコメントのうち、スレッドの起点のもの（返信は除く。
 #            `@claude` とのやり取りの返信を指摘と数えないため）
 #   summary  `## Code review` で始まる PR へのコメント（指摘が無かったときの 1 件）
@@ -34,13 +35,14 @@
 #     run: .github/scripts/claude-review-status.sh
 #
 # 結果は GITHUB_OUTPUT に state（open / draft / closed）、verdict（true /
-# false）、inline・summary・clean（件数）、reviewed（inline か summary が
+# false）、verdict_sha（最後の判定を出したときの PR の head。再レビューの
+# 起点）、inline・summary・clean（件数）、reviewed（inline か summary が
 # 1 件以上なら true）として渡す。
 set -euo pipefail
 
 : "${PR:?PR（PR 番号）を渡してください}"
 repo="${GITHUB_REPOSITORY:?}"
-reviewer="${REVIEWER:-claude[bot]}"
+reviewer="${REVIEWER:-github-actions[bot]}"
 verdict_author="${VERDICT_AUTHOR:-github-actions[bot]}"
 marker="${MARKER:-<!-- claude-review-verdict -->}"
 since="${SINCE:-1970-01-01T00:00:00Z}"
@@ -69,8 +71,11 @@ while [ "$inline" -eq 0 ] && [ "$summary" -eq 0 ] && [ "$attempt" -lt "$retries"
   measure
 done
 
-verdicts="$(count "repos/$repo/pulls/$PR/reviews?per_page=100" \
-  "[.[] | select(.user.login == \"$verdict_author\" and ((.body // \"\") | contains(\"$marker\")))] | length")"
+# 一覧は古い順に返るので、最後の行が最新の判定。
+verdict_shas="$(gh api --paginate "repos/$repo/pulls/$PR/reviews?per_page=100" \
+  --jq ".[] | select(.user.login == \"$verdict_author\" and ((.body // \"\") | contains(\"$marker\"))) | .commit_id")"
+verdicts="$(printf '%s' "$verdict_shas" | grep -c . || true)"
+verdict_sha="$(printf '%s\n' "$verdict_shas" | tail -n 1)"
 
 state="$(gh api "repos/$repo/pulls/$PR" \
   --jq 'if .state != "open" then "closed" elif .draft then "draft" else "open" end')"
@@ -80,11 +85,12 @@ verdict=false
 reviewed=false
 { [ "$inline" -gt 0 ] || [ "$summary" -gt 0 ]; } && reviewed=true
 
-echo "PR #$PR: state=$state verdict=$verdict reviewed=$reviewed（$since 以降: インライン $inline 件・まとめ $summary 件（うち指摘なし $clean 件））"
+echo "PR #$PR: state=$state verdict=$verdict${verdict_sha:+（$verdict_sha）} reviewed=$reviewed（$since 以降: インライン $inline 件・まとめ $summary 件（うち指摘なし $clean 件））"
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   {
     echo "state=$state"
     echo "verdict=$verdict"
+    echo "verdict_sha=$verdict_sha"
     echo "reviewed=$reviewed"
     echo "inline=$inline"
     echo "summary=$summary"

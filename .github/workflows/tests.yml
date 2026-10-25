@@ -25,18 +25,29 @@ name: Tests
 #       coverage ジョブとは独立していて、Codecov 側で失敗してもテストや
 #       しきい値の判定には影響しない。
 #
+#   review
+#       PR だけ。4 つのテストジョブが全部通ってから、Claude が PR を
+#       レビューする（前回の判定があれば、その後の変更だけを再レビュー）。
+#       ここが赤いのは **レビューが付かなかった・判定できなかった** という
+#       意味で、テストの失敗ではない（詳しくはジョブのコメント）。
+#
 # レポートは貼り替え式の PR コメント 1 つ、成果物として残る XML、Codecov の
 # 3 か所に出る。しきい値で CI を守るのは coverage ジョブだけで、Codecov は
 # 推移やファイル別の閲覧のために使う。
-
+#
 on:
   push:
     branches:
       - main
   pull_request:
+    # 既定の 3 つ（opened・synchronize・reopened）に、Claude のレビューのために
+    # ready_for_review を足す（下書きから Ready にしたときにレビューを走らせる。
+    # テストもそのとき走り直す）。
+    types: [opened, synchronize, reopened, ready_for_review]
 
-# 既定はテストジョブに必要な最小限。coverage ジョブだけが PR コメントの
-# ために pull-requests: write を追加で持つ。
+# 既定はテストジョブに必要な最小限。coverage ジョブは PR コメントのために
+# pull-requests: write を、review ジョブはさらに Anthropic への WIF のために
+# id-token: write を追加で持つ。
 permissions:
   contents: read
 
@@ -471,3 +482,274 @@ jobs:
                 'Coverage below threshold: one or more metrics are 🔴. ' +
                 'See the coverage table above.');
             }
+
+  review:
+    name: Auto review
+    # Claude（PR エージェント）による自動レビュー。レビューの中身は Anthropic 公式の
+    # code-review プラグイン（`/code-review:code-review`）に任せ、ここでは
+    # プロンプトを書かない。何を見るか・どの指摘を捨てるかはプラグインが決める
+    # （並列のエージェントで CLAUDE.md 準拠とバグを見て、確信度の低い指摘を捨てる）。
+    # リポジトリ固有の観点は CLAUDE.md に書けば、プラグインがそれに照らして見る。
+    #
+    # プラグインは Claude Agent SDK で動かす（.github/scripts/claude-review.mjs）。
+    # claude-code-action は中身が Claude Code で、Max / Team プランに付く API
+    # クレジットの対象外のため使わない（Agent SDK は対象）。
+    #
+    # API は Claude Platform を Workload Identity Federation（WIF）で使う。GitHub の
+    # OIDC トークンを短命の Anthropic トークンに交換するので、API キー（Secrets）は
+    # 持たない。コメントと判定は GITHUB_TOKEN（github-actions[bot]）の名義で付く。
+    #
+    # 無駄打ちを防ぐため、下書きの間はレビューしない。運用は
+    #
+    #   1. PR は下書きで作る（作業中の push ではレビューが走らない）
+    #   2. 案がまとまったら「Ready for review」に切り替える → PR 全体を 1 回レビュー
+    #   3. 指摘に対応して push する → 前回の判定から後の変更だけを再レビュー
+    #
+    # 走るのは、Ready の PR に次のことが起きたとき（ready_for_review は、この
+    # ジョブのためにワークフローのトリガーに足してある。Ready にしたときもテストが
+    # 走り直す）:
+    #
+    #   ready_for_review  下書きから Ready へ
+    #   opened            最初から Ready で開いた
+    #   reopened          Ready のまま開き直した（閉じる前にレビューが付かなかった
+    #                     場合の取りこぼしを拾う）
+    #   synchronize       push した
+    #
+    # どのイベントでも、何をするかは前回の判定（Approve / Request changes。
+    # claude-review-status.sh の verdict・verdict_sha）で決める:
+    #
+    #   判定が無い                    PR 全体をレビューする（プラグインのコマンド）
+    #   判定があり、head が変わった   前回の判定の head からの差分を再レビューする
+    #   判定があり、head が同じ       何もしない（開き直し・下書きとの行き来など）
+    #
+    # どの場合も、上のテストジョブが全部通ってから走る（needs）。テストが落ちる
+    # 変更をレビューしても、直した後にもう一度レビューすることになるため。テストが
+    # 落ちたらこのジョブは走らない。落ちたジョブを再実行して（Re-run failed jobs）
+    # 通れば、このジョブも続けて走る。テストの間に push されていたら（head が
+    # 進んでいたら）、その実行はレビューせずに終える（新しい head の実行がレビュー
+    # する）。
+    #
+    # 再レビューでは、差分のうち PR の差分にも含まれる行だけを見る（ベースブランチを
+    # 取り込んだ分は見ない）。前回までの指摘が直っていなければ付け直す。force push
+    # で前回の head が祖先でなくなっていたら PR 全体を見る（claude-review.mjs）。
+    # 新しい判定は前の判定を置き換える（GitHub は同じレビュアーの最新の判定を
+    # 有効にする）。
+    #
+    # プラグインは「レビュー不要」「Claude が既にコメントした」と判断すると何も
+    # 書かずに終わる。そのまま緑で終えると、Ready なのに未レビューの PR が
+    # 気付かれずに残るので、最後にレビューが付いたかを確かめ、付いていなければ
+    # ジョブを失敗にする。
+    #
+    # レビューが付いたら、その結果を PR のレビュー（Approve / Request changes）として
+    # 出す。指摘があればプラグインはインラインコメントを付け、無ければ
+    # 「No issues found」のコメントを 1 件付けるので、判定はそれに従う
+    # （判定はここで機械的に行い、プラグインには何も足さない）。
+    #
+    # bot（Dependabot など）の PR は対象外。依存の更新は CI とプレビューで見る。
+    # フォークからの PR も対象外（OIDC トークンが出ないので、WIF が通らない）。
+    #
+    # PR のイベントでは、PR 側のこのワークフローが動く。つまりこのジョブを
+    # 変える PR も、変えた後の内容でレビューされる。
+    #
+    # 必要な設定（Claude Console 側の WIF、リポジトリ変数）は
+    # README「Claude による PR レビュー（PR エージェント）」を参照。
+    needs: [test-core, test-backend, test-frontend, test-firestore-rules]
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.type != 'Bot' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # 同じ PR のレビューは 1 本ずつ。走っている実行は止めない（途中で止めると、
+    # コメントを一部だけ付けて判定の無い状態が残る）。後から来た実行は待ち、
+    # 前の実行の判定から後の変更だけを見る。続けて push したときは、待っている
+    # 実行が新しいものに置き換わるので、まとめて 1 回になりやすい。
+    concurrency:
+      # push（main）では if で飛ぶが、式が空にならないよう run_id で埋める。
+      group: claude-review-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      # GitHub の OIDC トークンの取得に使う（Anthropic への WIF）。
+      id-token: write
+    env:
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # 取り出すのは PR のマージコミット。再レビューで前回の head との差分を
+          # 取るため、履歴ごと取る（PR の head はマージコミットの親として手元に
+          # ある）。Claude はここのファイルを読めるので、GITHUB_TOKEN は残さない。
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check required repository variables
+        # 未設定のリポジトリ変数は空文字として展開される。WIF の値が欠けると
+        # 交換は「Authentication failed」としか返らず原因が読めないので、
+        # 先にここで変数名を挙げて落とす。
+        env:
+          ANTHROPIC_FEDERATION_RULE_ID: '${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}'
+          ANTHROPIC_ORGANIZATION_ID: '${{ vars.ANTHROPIC_ORGANIZATION_ID }}'
+          ANTHROPIC_SERVICE_ACCOUNT_ID: '${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}'
+        run: |
+          .github/scripts/require-vars.sh \
+            ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID ANTHROPIC_SERVICE_ACCOUNT_ID
+      - name: Find the previous verdict
+        id: before
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/claude-review-status.sh
+      - name: Decide what to review
+        # mode は review（PR 全体）・rereview（前回の判定からの差分）・none
+        # （何もしない）。テストの間に head が進んでいたら none（新しい head の
+        # 実行がレビューする）。再レビューの base は差分の起点で、前回の head が
+        # 今の head の祖先でなければ空（PR 全体を見る）。
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERDICT: ${{ steps.before.outputs.verdict }}
+          PREVIOUS_SHA: ${{ steps.before.outputs.verdict_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          current="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .head.sha)"
+          if [ "$current" != "$HEAD_SHA" ]; then
+            echo "::notice::PR #${PR} の head が ${HEAD_SHA} から ${current} に進んだので、この実行ではレビューしません（新しい head の実行がレビューする）。"
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$VERDICT" != 'true' ]; then
+            echo "mode=review" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$PREVIOUS_SHA" = "$HEAD_SHA" ]; then
+            echo "::notice::前回の判定（${PREVIOUS_SHA}）から変更が無いので、レビューしません。"
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base=''
+          if git cat-file -e "${PREVIOUS_SHA}^{commit}" 2> /dev/null &&
+              git merge-base --is-ancestor "$PREVIOUS_SHA" "$HEAD_SHA"; then
+            base="$PREVIOUS_SHA"
+            echo "前回の判定（${PREVIOUS_SHA}）からの差分を再レビューします。"
+          else
+            echo "::warning::前回の判定の head（${PREVIOUS_SHA}）が今の head の祖先ではありません（force push など）。PR 全体を再レビューします。"
+          fi
+          {
+            echo "mode=rereview"
+            echo "previous=$PREVIOUS_SHA"
+            echo "base=$base"
+          } >> "$GITHUB_OUTPUT"
+      - name: Record the start time
+        # この実行で付いたコメントだけを数えるための基準。GitHub 側の時刻との
+        # ずれを見込んで 1 分前にする。
+        id: start
+        if: steps.plan.outputs.mode != 'none'
+        run: echo "since=$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - name: Set up Node.js
+        if: steps.plan.outputs.mode != 'none'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: Install the Agent SDK and the plugin
+        # SDK は固定する（レビューを動かす仕組みなので、他のアクションと同じ扱い）。
+        # プラグインはレビューの指示そのもので、このリポジトリのコードの動作には
+        # 関わらないため、固定せず毎回 anthropics/claude-code の最新を取る。
+        # どちらもワークスペースの外（RUNNER_TEMP）に置く（レビュー対象に混ぜない）。
+        if: steps.plan.outputs.mode != 'none'
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/claude-review"
+          mkdir -p "$dir"
+          cp .github/scripts/claude-review.mjs "$dir/"
+          (
+            cd "$dir"
+            npm init -y > /dev/null
+            npm install --no-audit --no-fund --ignore-scripts \
+              @anthropic-ai/claude-agent-sdk@0.3.310 zod@4.6.7
+          )
+          git clone -q --depth 1 https://github.com/anthropics/claude-code.git "$dir/claude-code"
+          echo "プラグイン: anthropics/claude-code@$(git -C "$dir/claude-code" rev-parse HEAD)"
+          echo "PLUGIN_DIR=$dir/claude-code/plugins/code-review" >> "$GITHUB_ENV"
+      - name: Review with the code-review plugin
+        # PREVIOUS_SHA があれば再レビュー（claude-review.mjs）。
+        if: steps.plan.outputs.mode != 'none'
+        env:
+          # WIF。これらは ID であって秘密ではないので、Variables に置く。
+          # ANTHROPIC_API_KEY は渡さないこと（静的な鍵があると WIF より優先される）。
+          ANTHROPIC_FEDERATION_RULE_ID: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+          ANTHROPIC_ORGANIZATION_ID: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+          ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          # ルールが 1 つのワークスペースだけを対象にしているなら空でよい。
+          ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PREVIOUS_SHA: ${{ steps.plan.outputs.previous }}
+          REVIEW_BASE: ${{ steps.plan.outputs.base }}
+        run: node "$RUNNER_TEMP/claude-review/claude-review.mjs"
+      - name: Check that the review was posted
+        id: after
+        if: steps.plan.outputs.mode != 'none'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SINCE: ${{ steps.start.outputs.since }}
+          RETRIES: '5'
+        run: .github/scripts/claude-review-status.sh
+      - name: Fail when a ready PR is left unreviewed
+        # 実行中に下書きへ戻された・閉じられた PR は、Ready ではないので問わない。
+        if: steps.plan.outputs.mode != 'none' && steps.after.outputs.state == 'open' && steps.after.outputs.reviewed != 'true'
+        env:
+          MODE: ${{ steps.plan.outputs.mode }}
+        run: |
+          if [ "$MODE" = 'rereview' ]; then
+            echo "::error::PR #${PR} の再レビューが付きませんでした。実行ログを確認し、このジョブを再実行してください。"
+          else
+            echo "::error::PR #${PR} は Ready ですが、レビューが付きませんでした。プラグインが「レビュー不要」または「Claude が既にコメント済み」と判断した可能性があります。実行ログを確認してください。"
+            echo "::error::PR に Claude のコメントが既にある場合（\`@claude\` とのやり取りや、中断された実行の残りなど）は、プラグインが毎回同じ理由で飛ばすため、再実行では解消しません。人がレビューするか、それらのコメントを消してから再実行してください。"
+          fi
+          exit 1
+      - name: Submit the review verdict
+        # 指摘あり（インラインコメントがある）→ Request changes、
+        # 「No issues found」のまとめだけ → Approve。どちらでもない（まとめは
+        # あるが「No issues found」を含まない）なら、判定せずに落とす。
+        #
+        # 本文の目印（claude-review-status.sh の MARKER）が「判定まで済んだ」の
+        # 印になる。判定はレビューした commit（HEAD_SHA）に付ける。`gh pr review`
+        # は commit を指定できず、出した時点の head に付くので、レビュー中に
+        # push されると、レビューしていない commit が「判定済み」になり、次の
+        # 実行がその変更を飛ばしてしまう（verdict_sha が再レビューの起点のため）。
+        #
+        # 出すのは GITHUB_TOKEN（github-actions[bot]）。Approve には Settings →
+        # Actions → General の「Allow GitHub Actions to create and approve pull
+        # requests」が要る（howtec-worksheet-check.yml の PR 作成と同じ設定）。
+        if: steps.plan.outputs.mode != 'none' && steps.after.outputs.state == 'open' && steps.after.outputs.reviewed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INLINE: ${{ steps.after.outputs.inline }}
+          CLEAN: ${{ steps.after.outputs.clean }}
+          KIND: ${{ steps.plan.outputs.mode == 'rereview' && '再レビュー' || 'レビュー' }}
+          MARKER: '<!-- claude-review-verdict -->'
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          submit() {
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --silent \
+              -f commit_id="$HEAD_SHA" -f event="$1" -f body="$2"
+          }
+          if [ "$INLINE" -gt 0 ]; then
+            submit REQUEST_CHANGES \
+              "$(printf '%s\n\nClaude の%sで指摘が %s 件ありました。インラインコメントを確認してください。' "$MARKER" "$KIND" "$INLINE")"
+          elif [ "$CLEAN" -gt 0 ]; then
+            if ! submit APPROVE \
+                "$(printf '%s\n\nClaude の%sで指摘はありませんでした。' "$MARKER" "$KIND")"; then
+              echo "::error::Approve できませんでした。Settings → Actions → General の「Allow GitHub Actions to create and approve pull requests」が有効か確認してください（README「Claude による PR レビュー（PR エージェント）」参照）。"
+              exit 1
+            fi
+          else
+            echo "::error::Claude のまとめコメントに「No issues found」が無く、インラインコメントもありません。指摘の有無を判定できないので、まとめコメントを確認して人が判定してください。"
+            exit 1
+          fi
