@@ -54,7 +54,9 @@ const oidcUrl = required('ACTIONS_ID_TOKEN_REQUEST_URL');
 const oidcToken = required('ACTIONS_ID_TOKEN_REQUEST_TOKEN');
 const previousSha = process.env.PREVIOUS_SHA ?? '';
 const rereview = previousSha !== '';
-const headSha = rereview ? required('HEAD_SHA') : '';
+// レビューする commit。インラインコメントの既定の付け先にもする（付ける時点の
+// head にすると、レビュー中に push された commit に付いてしまう）。
+const headSha = rereview ? required('HEAD_SHA') : process.env.HEAD_SHA ?? '';
 const reviewBase = process.env.REVIEW_BASE ?? '';
 
 // --- GitHub の OIDC トークン ---------------------------------------------------
@@ -99,7 +101,7 @@ const createInlineComment = tool(
     line: z.number().nonnegative().optional().describe('Line number for single-line comments, or the end line of a multi-line comment'),
     startLine: z.number().nonnegative().optional().describe('Start line for multi-line comments (use with line for the end line)'),
     side: z.enum(['LEFT', 'RIGHT']).optional().describe('Side of the diff: LEFT (old code) or RIGHT (new code, default)'),
-    commit_id: z.string().optional().describe('Commit SHA to comment on (defaults to the PR head)'),
+    commit_id: z.string().optional().describe('Commit SHA to comment on (defaults to the reviewed head)'),
     confirmed: z.boolean().optional().describe('Set false to skip posting. Final review comments are posted when true or omitted.'),
   },
   async ({ path, body, line, startLine, side = 'RIGHT', commit_id, confirmed }) => {
@@ -108,7 +110,7 @@ const createInlineComment = tool(
     }
     try {
       if (!line) throw new Error("'line' is required (the end line for multi-line comments)");
-      const head = commit_id ?? (await github('GET', `/pulls/${prNumber}`)).head.sha;
+      const head = commit_id ?? (headSha || (await github('GET', `/pulls/${prNumber}`)).head.sha);
       const params = { body, path, side, commit_id: head, line };
       if (startLine && startLine !== line) Object.assign(params, { start_line: startLine, start_side: side });
       const result = await github('POST', `/pulls/${prNumber}/comments`, params);

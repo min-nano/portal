@@ -718,7 +718,10 @@ jobs:
         # あるが「No issues found」を含まない）なら、判定せずに落とす。
         #
         # 本文の目印（claude-review-status.sh の MARKER）が「判定まで済んだ」の
-        # 印になる。
+        # 印になる。判定はレビューした commit（HEAD_SHA）に付ける。`gh pr review`
+        # は commit を指定できず、出した時点の head に付くので、レビュー中に
+        # push されると、レビューしていない commit が「判定済み」になり、次の
+        # 実行がその変更を飛ばしてしまう（verdict_sha が再レビューの起点のため）。
         #
         # 出すのは GITHUB_TOKEN（github-actions[bot]）。Approve には Settings →
         # Actions → General の「Allow GitHub Actions to create and approve pull
@@ -730,14 +733,19 @@ jobs:
           CLEAN: ${{ steps.after.outputs.clean }}
           KIND: ${{ steps.plan.outputs.mode == 'rereview' && '再レビュー' || 'レビュー' }}
           MARKER: '<!-- claude-review-verdict -->'
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          submit() {
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --silent \
+              -f commit_id="$HEAD_SHA" -f event="$1" -f body="$2"
+          }
           if [ "$INLINE" -gt 0 ]; then
-            gh pr review "$PR" --request-changes \
-              --body "$(printf '%s\n\nClaude の%sで指摘が %s 件ありました。インラインコメントを確認してください。' "$MARKER" "$KIND" "$INLINE")"
+            submit REQUEST_CHANGES \
+              "$(printf '%s\n\nClaude の%sで指摘が %s 件ありました。インラインコメントを確認してください。' "$MARKER" "$KIND" "$INLINE")"
           elif [ "$CLEAN" -gt 0 ]; then
-            if ! gh pr review "$PR" --approve \
-                --body "$(printf '%s\n\nClaude の%sで指摘はありませんでした。' "$MARKER" "$KIND")"; then
+            if ! submit APPROVE \
+                "$(printf '%s\n\nClaude の%sで指摘はありませんでした。' "$MARKER" "$KIND")"; then
               echo "::error::Approve できませんでした。Settings → Actions → General の「Allow GitHub Actions to create and approve pull requests」が有効か確認してください（README「Claude による PR レビュー（PR エージェント）」参照）。"
               exit 1
             fi
