@@ -31,7 +31,8 @@
 // 変える点（既存のコメントで飛ばさない・前回からの変更だけを見る・前回の
 // 指摘が残っていないか見る）だけを前に書き足す。REVIEW_BASE は差分の起点で、
 // 前回の head が今の head の祖先でない（force push した）ときは空になり、
-// PR 全体を見る。
+// PR 全体を見る。REVIEW_DIR は PR の head を取り出したディレクトリで、Claude は
+// そこで動く（スクリプトのあるチェックアウトとは分けてある）。
 import { readFile } from 'node:fs/promises';
 import { createSdkMcpServer, query, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
@@ -56,6 +57,7 @@ const previousSha = process.env.PREVIOUS_SHA ?? '';
 const rereview = previousSha !== '';
 const headSha = rereview ? required('HEAD_SHA') : '';
 const reviewBase = process.env.REVIEW_BASE ?? '';
+const reviewDir = process.env.REVIEW_DIR || undefined;
 
 // --- GitHub の OIDC トークン ---------------------------------------------------
 
@@ -193,6 +195,7 @@ for await (const message of query({
   prompt,
   options: {
     model: MODEL,
+    cwd: reviewDir,
     env,
     plugins: rereview ? [] : [{ type: 'local', path: pluginDir }],
     mcpServers: {

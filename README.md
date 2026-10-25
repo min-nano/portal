@@ -826,7 +826,7 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 
 レビューは **Claude Agent SDK** で動かしています（`.github/scripts/claude-review.mjs`）。`anthropics/claude-code-action` は使いません。中身が Claude Code で、[Max / Team プランに付く API クレジット](https://platform.claude.com/docs/ja/about-claude/api-credits-for-subscribers)の対象外だからです（Agent SDK は対象。アクションで動かすと、認証は通ってもモデル呼び出しが通らない）。アクションが用意していたもののうち、プラグインが要るインラインコメントのツールは、このスクリプトが持っています。
 
-`.github/workflows/claude-review.yml` は、PR が **Ready の状態になったとき**（下書きから Ready への切り替え・Ready のまま開いた・Ready のまま開き直した）に動き、**1 つの PR に 1 回だけ** レビューします。レビューの中身は Anthropic 公式の [code-review プラグイン](https://github.com/anthropics/claude-code/tree/main/plugins/code-review)（`/code-review:code-review --comment`）にそのまま任せており、ワークフロー側ではプロンプトを書いていません。
+`.github/workflows/claude-review.yml` は、PR が **Ready の状態になったとき**（下書きから Ready への切り替え・Ready のまま開いた・Ready のまま開き直した）に動き、**1 つの PR に 1 回だけ** レビューします（その後の変更は再レビューで見る。下記「再レビュー」）。レビューの中身は Anthropic 公式の [code-review プラグイン](https://github.com/anthropics/claude-code/tree/main/plugins/code-review)（`/code-review:code-review --comment`）にそのまま任せており、ワークフロー側ではプロンプトを書いていません。
 
 - 並列のエージェントが **CLAUDE.md への準拠** と **変更箇所のバグ** を見て、別のエージェントが検証し、確信度の低い指摘は捨てる。スタイルや好みの指摘は出さない。
 - 指摘は該当行へのインラインコメントで付く。指摘が無ければ「No issues found」のコメントが 1 つ付く。
@@ -837,12 +837,12 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 
 #### 運用: PR は下書きで作る
 
-レビューは 1 回ごとに API の利用料がかかります。作業途中の push のたびに走らせても同じ指摘の繰り返しになるので、自動レビューは **Ready になった PR に 1 回だけ** です。
+レビューは 1 回ごとに API の利用料がかかります。作業途中の push のたびに走らせても同じ指摘の繰り返しになるので、下書きの間はレビューせず、**Ready になった時点で PR 全体を 1 回** レビューします。その後の Ready の PR への push は、前回の判定からの差分だけを再レビューします。
 
 1. PR は **下書きで作成** する（GitHub の「Create draft pull request」。Claude Code に PR を作らせる場合も下書きで作る。`CLAUDE.md` に明記してある）。
 2. 案がまとまったら **「Ready for review」に切り替える**。ここで自動レビューが 1 回走る。
 
-- 最初から Ready で開いた PR も、開いた時点でレビューします。push では走りません。
+- 最初から Ready で開いた PR も、開いた時点でレビューします。下書きの間の push では、レビューも再レビューも走りません。
 - **判定（Approve / Request changes）まで済んだ PR では、プラグインを起動せずに終えます**（下書きと Ready を行き来したとき・開き直したとき）。済んだかどうかは、判定のレビュー本文の目印（`<!-- claude-review-verdict -->`）で見ます（`.github/scripts/claude-review-status.sh`）。プラグインのコメントの有無で見ないのは、途中で止まった実行を「済み」と取り違えないためです。
 - 同じ PR の実行は 1 本ずつ順に動き、走っている実行は止めません（途中で止めると、コメントが一部だけ付いて判定の無い状態が残るため）。後から来た実行は、前の実行が判定まで済ませていれば何もしません。
 - Ready のまま開き直すのは、閉じる前に判定が付かなかった PR（レビュー中に閉じた、ジョブが失敗した など）を拾うためです。
@@ -853,16 +853,18 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 - bot（Dependabot など）の PR と、フォークからの PR は対象外です（フォークからの実行には OIDC トークンが出ないので、WIF が通りません）。
 - PR のイベントでは PR 側のワークフローが動くので、`claude-review.yml` を変える PR は、変えた後の内容でレビューされます。
 
-#### 再レビュー: ラベル `claude-rereview` を付ける
+#### 再レビュー: push か `/claude-rereview` のコメント
 
-最初のレビューの後の変更（指摘への対応など）は、自動ではレビューしません。対応がまとまったら PR に **ラベル `claude-rereview` を付ける** と、`.github/workflows/claude-rereview.yml` が **前回の判定から後の変更** をレビューし直し、判定（Approve / Request changes）を出し直します。新しい判定は前の判定を置き換えます（GitHub は同じレビュアーの最新の判定を有効にする）。
+最初のレビューの後の変更（指摘への対応など）は、`.github/workflows/claude-rereview.yml` が **前回の判定から後の変更** をレビューし直し、判定（Approve / Request changes）を出し直します。新しい判定は前の判定を置き換えます（GitHub は同じレビュアーの最新の判定を有効にする）。起動するのは次の 2 つです。
 
-- ラベルは実行の始めに外れます。もう一度付ければ何度でも再レビューできます（失敗した後のやり直しも同じ）。
-- 見るのは、前回の判定を出したときの head から今の head までの差分のうち、PR の差分にも含まれる行です（ベースブランチを取り込んだ分は見ない）。force push で前回の head が祖先でなくなっていたら、PR 全体を見ます。
+- **push**: 判定のある Ready の PR に push すると、自動で再レビューします。判定がまだ無い PR（最初のレビューの前）では何もしません。続けて push したときは、同じ PR の実行が 1 本ずつ順に動き、待っている実行は新しいものに置き換わるので、まとめて 1 回になりやすくなっています。
+- **コメント**: PR に `/claude-rereview` とコメントすると再レビューします。push を待たずにやり直したいとき（失敗した実行のやり直しなど）に使います。コメントしたのがリポジトリの所有者・メンバー・コラボレーターのときだけ動きます（公開リポジトリなので、誰でも API の利用料を使えないようにする）。対象外の PR（下書きなど）や、判定がまだ無い PR では失敗にします。
+
+- 見るのは、前回の判定を出したときの head から今の head までの差分のうち、PR の差分にも含まれる行です（ベースブランチを取り込んだ分は見ない）。force push で前回の head が祖先でなくなっていたら、PR 全体を見ます。前回の判定から head が変わっていなければ、何もせずに終わります。
 - 前回までの指摘が直っていなければ、今のコードに改めてインラインコメントを付けます（指摘として数えるので Request changes になる）。直っていれば何も付けません。
 - プラグインは「Claude が既にコメントした PR」を飛ばすので、再レビューではコマンドとして呼ばず、コマンドの本文（`commands/code-review.md`）に、再レビューで変える点（既存コメントで飛ばさない・差分だけを見る・前回の指摘を確かめる）を書き足して渡します（`claude-review.mjs`）。それ以外の手順と、指摘を絞る基準はプラグインのままです。
-- 判定がまだ無い PR では失敗します（最初のレビューは Ready for review への切り替えで走る）。前回の判定から head が変わっていなければ、何もせずに終わります。
-- トリガーをラベル（`pull_request` の `labeled`）にしているのは、WIF の rule が `pull_request` イベントのトークンだけを通すためです（下の `subject_prefix`）。コメントでの起動（`issue_comment`）や手動実行（`workflow_dispatch`）では `sub` が変わり、交換が通りません。
+- コメントでの起動（`issue_comment`）は、PR 側ではなく **デフォルトブランチ（`main`）のワークフロー** で動き、OIDC トークンの `sub` も `...:ref:refs/heads/main` になります。そのため WIF の rule は、`pull_request` イベントに加えて **`main` の `claude-rereview.yml` の `issue_comment`** を通すようにしてあります（下の表）。このワークフローの変更は、コメントでの起動については `main` に入ってから効きます。
+- スクリプト（`.github/scripts`）はワークフローと同じコミット（push では PR のマージコミット、コメントでは `main`）のものを使い、レビュー対象の PR の head は別のディレクトリ（`pr/`）に取り出して、Claude はそこで動きます。
 - 下書き・bot・フォークの PR は、最初のレビューと同じく対象外です。同じ PR の最初のレビューとは重ならないよう、1 本ずつ順に動きます。
 
 #### 初回の設定
@@ -877,11 +879,12 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 | Service account（`svac_...`） | 例 `github-portal-pr-agent`。利用料を寄せたいワークスペースのメンバーにする |
 | Federation rule（`fdrl_...`） | 下記 |
 
-Federation rule の match は **このリポジトリだけ** に絞ります。
+Federation rule の match は **このリポジトリの、PR のイベントと再レビューのコメントだけ** に絞ります。
 
 | 項目 | 値 | 理由 |
 | --- | --- | --- |
-| `subject_prefix` | `repo:min-nano@299874061/portal@1328433849:pull_request` | `pull_request` イベントの `sub`。このリポジトリでは、所有者とリポジトリの名前の後ろに数値の ID が付く（`repo:<owner>@<owner_id>/<repo>@<repo_id>:...`）。レビューは PR のイベントでしか動かないので、ここまで絞れる（push や他のイベントのトークンは通さない） |
+| `subject_prefix` | `repo:min-nano@299874061/portal@1328433849:*` | このリポジトリの `sub`（末尾の `*` で前方一致）。所有者とリポジトリの名前の後ろに数値の ID が付く（`repo:<owner>@<owner_id>/<repo>@<repo_id>:...`）。`sub` の後ろはイベントで変わる（`pull_request` のイベントは `...:pull_request`、コメントは `...:ref:refs/heads/main`）ので、イベントは下の `condition` で絞る |
+| `condition` | `claims.event_name == "pull_request" \|\| (claims.event_name == "issue_comment" && claims.job_workflow_ref == "min-nano/portal/.github/workflows/claude-rereview.yml@refs/heads/main")` | 通すのは、PR のイベント（レビュー・push での再レビュー）と、`main` の `claude-rereview.yml` が `issue_comment` で動いたとき（コメントでの再レビュー）だけ。branch への push や他のワークフロー・他のブランチのワークフローのトークンは通さない。`job_workflow_ref` は名前で書かれるので、リポジトリやワークフローの名前を変えたら直す |
 | `audience` | `https://api.anthropic.com` | `claude-review.mjs` が OIDC トークンを要求するときの audience |
 | `claims` | `repository_owner_id: 299874061`、`repository_id: 1328433849` | `sub` の解釈に頼らない念押し。数値の ID は名前を変えても変わらない |
 | `oauth_scope` | `workspace:developer`（既定） | |
@@ -921,12 +924,6 @@ Settings → Actions → General → Workflow permissions の **「Allow GitHub 
 **4.（推奨）Console で利用上限を決める**
 
 サービスアカウントを入れたワークスペースに、Console のワークスペース設定で利用上限（spend limit）を設定しておくと、想定外の呼び出しが続いても費用が青天井になりません。
-
-**5. 再レビュー用のラベルを作る**
-
-```bash
-gh label create claude-rereview -R <owner/repo> --description "Claude に前回の判定から後の変更を再レビューさせる"
-```
 
 ## 🧑‍💻 ローカル開発
 
