@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # PR の Claude レビュー（code-review プラグイン）の状況を調べる。
 #
-# claude-review.yml がプラグインを呼ぶ前と後に使う（claude-rereview.yml も同じ）。
+# claude-review.yml がプラグインを呼ぶ前と後に使う。
 #
-#   前: 判定（Approve / Request changes）まで済んでいれば、プラグインを
-#       起動せずに終える（開き直しなど）
+#   前: 判定（Approve / Request changes）があれば、PR 全体ではなく、その
+#       判定の head（verdict_sha）からの差分を再レビューする。head が
+#       変わっていなければ何もしない（開き直しなど）
 #   後: この実行でレビューが付いたかを数え、判定の材料にする。付いて
 #       いなければジョブを失敗にする（Ready なのに未レビューを残さない）
 #

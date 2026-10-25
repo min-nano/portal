@@ -826,7 +826,7 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 
 レビューは **Claude Agent SDK** で動かしています（`.github/scripts/claude-review.mjs`）。`anthropics/claude-code-action` は使いません。中身が Claude Code で、[Max / Team プランに付く API クレジット](https://platform.claude.com/docs/ja/about-claude/api-credits-for-subscribers)の対象外だからです（Agent SDK は対象。アクションで動かすと、認証は通ってもモデル呼び出しが通らない）。アクションが用意していたもののうち、プラグインが要るインラインコメントのツールは、このスクリプトが持っています。
 
-`.github/workflows/claude-review.yml` は、PR が **Ready の状態になったとき**（下書きから Ready への切り替え・Ready のまま開いた・Ready のまま開き直した）に動き、**1 つの PR に 1 回だけ** レビューします（その後の変更は再レビューで見る。下記「再レビュー」）。レビューの中身は Anthropic 公式の [code-review プラグイン](https://github.com/anthropics/claude-code/tree/main/plugins/code-review)（`/code-review:code-review --comment`）にそのまま任せており、ワークフロー側ではプロンプトを書いていません。
+`.github/workflows/claude-review.yml` は、PR が **Ready の状態になったとき**（下書きから Ready への切り替え・Ready のまま開いた・Ready のまま開き直した）に PR 全体をレビューし、その後は **Ready の PR に push するたびに、前回の判定から後の変更だけを再レビュー** します（下記「再レビュー」）。レビューの中身は Anthropic 公式の [code-review プラグイン](https://github.com/anthropics/claude-code/tree/main/plugins/code-review)（`/code-review:code-review --comment`）にそのまま任せており、ワークフロー側ではプロンプトを書いていません。
 
 - 並列のエージェントが **CLAUDE.md への準拠** と **変更箇所のバグ** を見て、別のエージェントが検証し、確信度の低い指摘は捨てる。スタイルや好みの指摘は出さない。
 - 指摘は該当行へのインラインコメントで付く。指摘が無ければ「No issues found」のコメントが 1 つ付く。
@@ -840,11 +840,12 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 レビューは 1 回ごとに API の利用料がかかります。作業途中の push のたびに走らせても同じ指摘の繰り返しになるので、下書きの間はレビューせず、**Ready になった時点で PR 全体を 1 回** レビューします。その後の Ready の PR への push は、前回の判定からの差分だけを再レビューします。
 
 1. PR は **下書きで作成** する（GitHub の「Create draft pull request」。Claude Code に PR を作らせる場合も下書きで作る。`CLAUDE.md` に明記してある）。
-2. 案がまとまったら **「Ready for review」に切り替える**。ここで自動レビューが 1 回走る。
+2. 案がまとまったら **「Ready for review」に切り替える**。ここで PR 全体のレビューが 1 回走る。
+3. 指摘に対応して push すると、その変更だけが再レビューされる。
 
 - 最初から Ready で開いた PR も、開いた時点でレビューします。下書きの間の push では、レビューも再レビューも走りません。
-- **判定（Approve / Request changes）まで済んだ PR では、プラグインを起動せずに終えます**（下書きと Ready を行き来したとき・開き直したとき）。済んだかどうかは、判定のレビュー本文の目印（`<!-- claude-review-verdict -->`）で見ます（`.github/scripts/claude-review-status.sh`）。プラグインのコメントの有無で見ないのは、途中で止まった実行を「済み」と取り違えないためです。
-- 同じ PR の実行は 1 本ずつ順に動き、走っている実行は止めません（途中で止めると、コメントが一部だけ付いて判定の無い状態が残るため）。後から来た実行は、前の実行が判定まで済ませていれば何もしません。
+- **判定（Approve / Request changes）まで済んだ PR では、PR 全体のレビューはしません。** 前回の判定から head が変わっていれば差分を再レビューし、変わっていなければ何もせずに終えます（下書きと Ready を行き来しただけのとき・開き直したとき）。済んだかどうかは、判定のレビュー本文の目印（`<!-- claude-review-verdict -->`）で見ます（`.github/scripts/claude-review-status.sh`）。プラグインのコメントの有無で見ないのは、途中で止まった実行を「済み」と取り違えないためです。
+- 同じ PR の実行は 1 本ずつ順に動き、走っている実行は止めません（途中で止めると、コメントが一部だけ付いて判定の無い状態が残るため）。後から来た実行は、前の実行の判定から後の変更だけを見ます。
 - Ready のまま開き直すのは、閉じる前に判定が付かなかった PR（レビュー中に閉じた、ジョブが失敗した など）を拾うためです。
 - 判定に数えるのは、**この実行で** `github-actions[bot]` が付けたインラインコメント（スレッドの起点のみ。`@claude` とのやり取りの返信は数えない）と、`## Code review` で始まるまとめコメントです。インラインコメントがあれば Request changes、「No issues found」を含むまとめだけなら Approve、どちらでもなければ判定せずに失敗にします。投稿直後は API に反映されていないことがあるので、見えなければ数回取り直します。
 - **Ready なのにレビューが付かなかったら、ジョブを失敗（赤）にします。** プラグインは「レビュー不要（自明な変更）」や「Claude が既にコメントした PR」と判断すると何も書かずに終わるため、緑のまま終えると未レビューに気付けません。実行中に下書きへ戻した・閉じた PR は対象外です。
@@ -855,9 +856,9 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 
 #### 再レビュー: Ready の PR への push
 
-最初のレビューの後の変更（指摘への対応など）は、`.github/workflows/claude-rereview.yml` が **前回の判定から後の変更** をレビューし直し、判定（Approve / Request changes）を出し直します。新しい判定は前の判定を置き換えます（GitHub は同じレビュアーの最新の判定を有効にする）。
+最初のレビューの後の変更（指摘への対応など）は、同じ `claude-review.yml` が **前回の判定から後の変更** をレビューし直し、判定（Approve / Request changes）を出し直します。新しい判定は前の判定を置き換えます（GitHub は同じレビュアーの最新の判定を有効にする）。
 
-- 走るのは、**判定のある Ready の PR に push したとき**（`pull_request` の `synchronize`）です。判定がまだ無い PR（最初のレビューの前）や下書きでは何もしません。続けて push したときは、同じ PR の実行が 1 本ずつ順に動き、待っている実行は新しいものに置き換わるので、まとめて 1 回になりやすくなっています。
+- 走るのは、**判定のある Ready の PR に push したとき**（`pull_request` の `synchronize`）と、判定の後に下書きへ戻して直してから Ready に戻したときです。判定がまだ無い PR に push したときは、最初のレビュー（PR 全体）になります。続けて push したときは、同じ PR の実行が 1 本ずつ順に動き、待っている実行は新しいものに置き換わるので、まとめて 1 回になりやすくなっています。
 - push のたびに API の利用料がかかります。細かい修正は、まとめてから push してください。
 - 失敗した実行は、Actions の画面から再実行すればやり直せます。
 - 見るのは、前回の判定を出したときの head から今の head までの差分のうち、PR の差分にも含まれる行です（ベースブランチを取り込んだ分は見ない）。force push で前回の head が祖先でなくなっていたら、PR 全体を見ます。前回の判定から head が変わっていなければ、何もせずに終わります。
@@ -865,7 +866,7 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 - プラグインは「Claude が既にコメントした PR」を飛ばすので、再レビューではコマンドとして呼ばず、コマンドの本文（`commands/code-review.md`）に、再レビューで変える点（既存コメントで飛ばさない・差分だけを見る・前回の指摘を確かめる）を書き足して渡します（`claude-review.mjs`）。それ以外の手順と、指摘を絞る基準はプラグインのままです。
 - 取り出すのは最初のレビューと同じ PR のマージコミットで、履歴ごと取ります。PR の head はその親として手元にあるので、前回の head との差分はそこから取ります（PR の head を別に取り出さない）。
 - コメントでの起動（`issue_comment`）は設けていません。`issue_comment` の実行はデフォルトブランチのワークフローで動くので、WIF の rule を広げる必要があり、PR のコードを特権のある実行で取り出すことにもなる（CodeQL が高のアラートを出す）ためです。
-- 下書き・bot・フォークの PR は、最初のレビューと同じく対象外です。同じ PR の最初のレビューとは重ならないよう、1 本ずつ順に動きます。
+- 下書き・bot・フォークの PR は、最初のレビューと同じく対象外です。
 
 #### 初回の設定
 

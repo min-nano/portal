@@ -24,7 +24,7 @@
 // 環境変数: GITHUB_REPOSITORY・GH_TOKEN・PR_NUMBER・PR_URL・PLUGIN_DIR・
 // ACTIONS_ID_TOKEN_REQUEST_URL / _TOKEN（Actions が渡す）
 //
-// 再レビュー（claude-rereview.yml）では、さらに PREVIOUS_SHA（前回の判定を
+// 再レビュー（前回の判定から head が変わったとき）では、さらに PREVIOUS_SHA（前回の判定を
 // 出したときの head）と HEAD_SHA を渡す。プラグインは「Claude が既にコメント
 // した PR」を飛ばすので、コマンドとしては呼べない。代わりにプラグインの
 // コマンドの本文（commands/code-review.md）をそのまま渡し、再レビューで
