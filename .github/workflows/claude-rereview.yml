@@ -6,14 +6,14 @@ name: Claude re-review
 #
 # 起動するのは、判定のある Ready の PR に push したとき（pull_request の
 # synchronize）。判定がまだ無い PR（最初のレビューの前）は飛ばす。失敗した
-# 実行は、Actions の画面から再実行すればやり直せる（そのときの head を見る）。
+# 実行は、Actions の画面から再実行すればやり直せる。
 #
 # 続けて push したときは、同じ PR の実行は 1 本ずつで、待っている実行は新しい
 # ものに置き換わる（concurrency）ので、まとめて 1 回になりやすい。
 #
-# スクリプト（.github/scripts）はこのワークフローと同じコミット（PR の
-# マージコミット）のものを使い、レビュー対象の PR の head は別のディレクトリ
-# （pr/）に取り出す。
+# 取り出すのは claude-review.yml と同じ PR のマージコミット（既定の
+# checkout）。履歴ごと取ると、PR の head はその親として手元にあるので、前回の
+# head との差分はそこから取れる（PR の head を別に取り出さない）。
 #
 # 再レビューの流れ:
 #
@@ -63,7 +63,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: 1
+          # 前回の head との差分を取るため、履歴ごと取る。Claude はここのファイルを
+          # 読めるので、GITHUB_TOKEN は残さない（以降の git は手元の履歴だけを使う）。
+          fetch-depth: 0
+          persist-credentials: false
       - name: Check required repository variables
         env:
           ANTHROPIC_FEDERATION_RULE_ID: '${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}'
@@ -72,8 +75,7 @@ jobs:
         run: |
           .github/scripts/require-vars.sh \
             ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID ANTHROPIC_SERVICE_ACCOUNT_ID
-      - name: Resolve the pull request
-        # head は API から取る（待っている間や再実行で進んだ head を見る）。
+      - name: Check that the pull request is still ready
         # 待っている間に下書きへ戻された・閉じられた PR は飛ばす。
         id: pr
         env:
@@ -85,29 +87,13 @@ jobs:
           reason=''
           if [ "$(field .state)" != 'open' ]; then reason='閉じています'
           elif [ "$(field .draft)" = 'true' ]; then reason='下書きです'
-          elif [ "$(field .user.type)" = 'Bot' ]; then reason='bot の PR です'
-          elif [ "$(field .head.repo.full_name)" != "$GITHUB_REPOSITORY" ]; then reason='フォークからの PR です'
           fi
           if [ -n "$reason" ]; then
             echo "::notice::PR #${PR} は${reason}。再レビューしません。"
             echo "eligible=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          {
-            echo "eligible=true"
-            echo "head_sha=$(field .head.sha)"
-            echo "url=$(field .html_url)"
-          } >> "$GITHUB_OUTPUT"
-      - name: Check out the pull request head
-        # 前回の head との差分を取るため、履歴ごと取る。Claude はここのファイルを
-        # 読めるので、GITHUB_TOKEN は残さない（以降の git は手元の履歴だけを使う）。
-        if: steps.pr.outputs.eligible == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ steps.pr.outputs.head_sha }}
-          path: pr
-          fetch-depth: 0
-          persist-credentials: false
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
       - name: Find the previous verdict
         id: before
         if: steps.pr.outputs.eligible == 'true'
@@ -119,11 +105,10 @@ jobs:
         # head が今の head の祖先でなければ空（PR 全体を見る）。
         id: plan
         if: steps.pr.outputs.eligible == 'true'
-        working-directory: pr
         env:
           VERDICT: ${{ steps.before.outputs.verdict }}
           PREVIOUS_SHA: ${{ steps.before.outputs.verdict_sha }}
-          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           if [ "$VERDICT" != 'true' ]; then
@@ -168,12 +153,11 @@ jobs:
           ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
           ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ env.PR }}
-          PR_URL: ${{ steps.pr.outputs.url }}
-          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PREVIOUS_SHA: ${{ steps.before.outputs.verdict_sha }}
           REVIEW_BASE: ${{ steps.plan.outputs.base }}
-          REVIEW_DIR: ${{ github.workspace }}/pr
         run: node "$RUNNER_TEMP/claude-review/claude-review.mjs"
       - name: Check that the review was posted
         id: after

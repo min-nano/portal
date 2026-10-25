@@ -31,8 +31,7 @@
 // 変える点（既存のコメントで飛ばさない・前回からの変更だけを見る・前回の
 // 指摘が残っていないか見る）だけを前に書き足す。REVIEW_BASE は差分の起点で、
 // 前回の head が今の head の祖先でない（force push した）ときは空になり、
-// PR 全体を見る。REVIEW_DIR は PR の head を取り出したディレクトリで、Claude は
-// そこで動く（スクリプトのあるチェックアウトとは分けてある）。
+// PR 全体を見る。
 import { readFile } from 'node:fs/promises';
 import { createSdkMcpServer, query, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
@@ -57,7 +56,6 @@ const previousSha = process.env.PREVIOUS_SHA ?? '';
 const rereview = previousSha !== '';
 const headSha = rereview ? required('HEAD_SHA') : '';
 const reviewBase = process.env.REVIEW_BASE ?? '';
-const reviewDir = process.env.REVIEW_DIR || undefined;
 
 // --- GitHub の OIDC トークン ---------------------------------------------------
 
@@ -170,8 +168,8 @@ ${listed}
 4. Use \`--comment\` behaviour: if no issues are found, post the summary comment in exactly the format the
    procedure gives (starting with "## Code review" and containing "No issues found").
 
-Read-only git commands (\`git diff\`, \`git log\`, \`git show\`) are available in the working directory, which
-is checked out at the current head.
+Read-only git commands (\`git diff\`, \`git log\`, \`git show\`) are available. The working directory is the
+pull request merged into its base branch, with full history (the current head is in it).
 
 --- Code review procedure ---
 
@@ -195,7 +193,6 @@ for await (const message of query({
   prompt,
   options: {
     model: MODEL,
-    cwd: reviewDir,
     env,
     plugins: rereview ? [] : [{ type: 'local', path: pluginDir }],
     mcpServers: {
