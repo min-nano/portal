@@ -330,14 +330,39 @@ describe('ファイルを足して並べる', () => {
     expect(mocks.closePdf).toHaveBeenCalled();
   });
 
-  it('ファイルの並びを入れ替えられる（先頭に置くファイルの順番）', async () => {
+  it('先頭に置くファイルは、先頭の頁の番号で順番を決められる', async () => {
     await addBook();
-    const names = () => [...document.querySelectorAll('#fileList .name')].map((n) => n.textContent);
+    const keys = () => [...document.querySelectorAll('#pageGrid > li')].map((card) => card.dataset.pageKey);
+    // 奇数頁の束を先頭に置くファイルにすると、名前の順（奇数 → 表紙）に並ぶ。
+    change(fileItem('猫_奇数.pdf').querySelector('select'), 'front');
+    expect(keys().slice(0, 6)).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f3:0', 'f3:1']);
 
-    fileItem('猫_表紙.pdf').querySelector('button[aria-label^="ひとつ上へ"]').click();
-    expect(names()).toEqual(['猫_奇数.pdf', '猫_表紙.pdf', '猫_偶数.pdf']);
-    fileItem('猫_表紙.pdf').querySelector('button[aria-label="ひとつ下へ"]').click();
-    expect(names()).toEqual(['猫_奇数.pdf', '猫_偶数.pdf', '猫_表紙.pdf']);
+    // 表紙に番号を入れると、番号を入れていない奇数頁の束より前に並ぶ。
+    const start = () => fileItem('猫_表紙.pdf').querySelector('input[type="text"]');
+    change(start(), '1');
+    expect(keys().slice(0, 6)).toEqual(['f3:0', 'f3:1', 'f1:0', 'f1:1', 'f1:2', 'f1:3']);
+    expect(start().value).toBe('1');
+
+    // 番号は頁ごとに 1 つずつ進むので、重なれば頁が互い違いに並ぶ（0, 1, 1, 2, 2, 3）。
+    const odd = () => fileItem('猫_奇数.pdf').querySelector('input[type="text"]');
+    change(odd(), '0');
+    expect(keys().slice(0, 6)).toEqual(['f1:0', 'f1:1', 'f3:0', 'f1:2', 'f3:1', 'f1:3']);
+    // 奇数頁の束を表紙より小さい番号で始めれば、まとめてそちらが前。
+    change(odd(), '-10');
+    expect(keys().slice(0, 6)).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f3:0', 'f3:1']);
+
+    // 番号を消すと、番号を入れた奇数頁の束の後ろへ戻る。
+    change(start(), '');
+    expect(start().value).toBe('');
+    expect(keys().slice(0, 6)).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f3:0', 'f3:1']);
+
+    // 結合しないファイルには番号の欄を出さない。
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'exclude');
+    expect(start()).toBeNull();
+
+    change(odd(), 'x');
+    expect($('message').textContent).toContain('整数で');
+    expect(fileItem('猫_奇数.pdf').querySelector('button[aria-label^="ひとつ"]')).toBeNull();
   });
 
   it('頁ごと・ファイルごとに番号を直せる', async () => {
@@ -1130,8 +1155,10 @@ describe('結合と検証', () => {
 
     $('mergeBtn').click();
     await flush();
-    // 本文のファイルの順は、本の並び（頁番号で決まる）を変えない。
-    fileItem('猫_奇数.pdf').querySelector('button[aria-label="ひとつ下へ"]').click();
+    // 本文は頁番号から並ぶので、逆順にしても本の並びは変わらない。
+    const reverse = fileItem('猫_奇数.pdf').querySelector('input[type="checkbox"]');
+    reverse.checked = true;
+    reverse.dispatchEvent(new Event('change'));
     release();
 
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));

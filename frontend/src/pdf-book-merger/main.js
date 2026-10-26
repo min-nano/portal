@@ -298,6 +298,7 @@ function addFile(source) {
     error: '',
     role: 'body',
     manual: null,
+    coverStart: null, // 先頭・末尾に置くファイルの並べ順（先頭の頁の番号）
     reversed: false,
     bytes: null,
     doc: null,
@@ -811,15 +812,6 @@ function removeFile(file) {
   refresh();
 }
 
-function moveFile(file, delta) {
-  const at = files.indexOf(file);
-  const to = at + delta;
-  if (at < 0 || to < 0 || to >= files.length) return;
-  files.splice(at, 1);
-  files.splice(to, 0, file);
-  refresh();
-}
-
 // --- 並べて確かめる ----------------------------------------------------------
 
 function readyFiles() {
@@ -910,19 +902,15 @@ function renderFiles() {
   $('outputSection').hidden = readyFiles().length === 0;
 }
 
-function fileItem(file, position) {
+function fileItem(file) {
   const item = el(document, 'li', `bm-file${file.status === 'error' ? ' error' : ''}`);
 
   const head = el(document, 'div', 'bm-file-head');
   head.append(el(document, 'span', 'name', file.name));
   const actions = el(document, 'div', 'bm-file-buttons');
   actions.append(
-    smallButton('↑', 'ひとつ上へ（先頭・末尾に置くファイルの順番）', () => moveFile(file, -1)),
-    smallButton('↓', 'ひとつ下へ', () => moveFile(file, 1)),
     smallButton('削除', 'このファイルを削除', () => removeFile(file), 'secondary danger')
   );
-  actions.firstChild.disabled = position === 0;
-  actions.children[1].disabled = position === files.length - 1;
   head.append(actions);
   item.append(head);
 
@@ -990,7 +978,8 @@ function fileControls(file) {
   reverseField.append(reverse, ' 最後の頁から並んでいる（逆順）');
   controls.append(reverseField);
 
-  if (file.role !== 'body') return controls;
+  if (file.role === 'exclude') return controls;
+  if (file.role !== 'body') return coverControls(file, controls);
 
   const numbering = view.numberings.get(file.key);
   const startField = el(document, 'label', 'bm-inline');
@@ -1040,6 +1029,42 @@ function fileControls(file) {
   step.addEventListener('change', apply);
   controls.append(startField, stepField);
   const note = el(document, 'span', 'hint', '番号を読み違えているときだけ入れてください（空なら自動）。');
+  controls.append(note);
+  return controls;
+}
+
+/**
+ * 先頭・末尾に置くファイルの「先頭の頁の番号」。表紙などが何ファイルかある
+ * ときに、先頭（末尾）の中での並べ順を決める（頁は 1 つずつ進む）。
+ */
+function coverControls(file, controls) {
+  const startField = el(document, 'label', 'bm-inline');
+  startField.append('先頭の頁の番号 ');
+  const start = el(document, 'input');
+  start.type = 'text';
+  start.inputMode = 'numeric';
+  start.size = 5;
+  start.placeholder = '順番';
+  start.value = Number.isInteger(file.coverStart) ? String(file.coverStart) : '';
+  start.addEventListener('change', () => {
+    const value = start.value.trim();
+    const number = Number(value);
+    if (value && !Number.isInteger(number)) {
+      showMessage('先頭の頁の番号は整数で入れてください。', 'red');
+      return;
+    }
+    file.coverStart = value ? number : null;
+    showMessage('');
+    refresh();
+  });
+  startField.append(start);
+  controls.append(startField);
+  const note = el(
+    document,
+    'span',
+    'hint',
+    '先頭（末尾）に置くファイルが何ファイルかあるとき、その中での順番です（番号の小さい順。空なら追加した順で、番号を入れたものの後ろ）。'
+  );
   controls.append(note);
   return controls;
 }
