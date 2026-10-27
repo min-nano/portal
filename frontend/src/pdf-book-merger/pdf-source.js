@@ -16,6 +16,7 @@ import workerSrc from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { toGray } from './image-checks.js';
 import { MARGIN_ZONE } from './page-numbers.js';
 import { isIOS, isWebKit } from './device.js';
+import { BundledDataFactory } from './pdf-data.js';
 import { drawScan } from './scan-images.js';
 import { multiply, textItems, textSignature } from './text-layer.js';
 
@@ -48,6 +49,9 @@ export async function openPdf(bytes, { safe = false } = {}) {
   const doc = await pdfjs.getDocument({
     data: bytes.slice(),
     isEvalSupported: false,
+    // CMap・標準フォント・画像の展開の wasm（pdf-data.js）。渡さないと、ToUnicode を
+    // 持たない日本語のフォント（カタログの PDF によくある）の文字が消える。
+    BinaryDataFactory: BundledDataFactory,
     // Safari（と、中身が同じ WebKit の iPhone・iPad のブラウザ）では、worker の
     // 中で画像を ImageDecoder で展開すると「The object is in an invalid
     // state.」で失敗することがある（スキャンの JPEG で起きた）。ImageDecoder は
