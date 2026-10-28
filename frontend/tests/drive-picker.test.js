@@ -621,3 +621,194 @@ describe('いくつも選ぶ', () => {
     await expect(one).resolves.toBeNull();
   });
 });
+
+describe('なぞって選ぶ', () => {
+  const ROW_PX = 44;
+  const LIST_TOP = 100;
+  const chooseButton = () => dialog().querySelector('.drive-picker-choose');
+  const pressed = () =>
+    items()
+      .filter((node) => node.getAttribute('aria-pressed') === 'true')
+      .map((node) => node.querySelector('.drive-picker-name').textContent);
+
+  /**
+   * 行を縦に並べる（jsdom は配置を計算しないので、位置を決めてやる）。一覧の
+   * 見えている高さは rowsVisible 行分で、scrollTop で送れる。
+   */
+  function layOut(rowsVisible = 20) {
+    const body = dialog().querySelector('.drive-picker-body');
+    let scrollTop = 0;
+    Object.defineProperty(body, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        const max = Math.max(0, items().length - rowsVisible) * ROW_PX;
+        scrollTop = Math.min(max, Math.max(0, value));
+      },
+    });
+    body.getBoundingClientRect = () => ({ top: LIST_TOP, bottom: LIST_TOP + rowsVisible * ROW_PX });
+    items().forEach((row, index) => {
+      row.getBoundingClientRect = () => ({ top: LIST_TOP + index * ROW_PX - scrollTop });
+    });
+  }
+  /** index 行目の真ん中の高さ。 */
+  const rowY = (index) => LIST_TOP + index * ROW_PX + ROW_PX / 2;
+
+  /** jsdom には PointerEvent が無いので、MouseEvent に指の印を足して送る。 */
+  function pointer(target, type, { x = 20, y, kind = 'touch', id = 1 }) {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
+    Object.defineProperties(event, {
+      pointerId: { value: id },
+      pointerType: { value: kind },
+      isPrimary: { value: true },
+    });
+    target.dispatchEvent(event);
+  }
+  const check = (name) => itemNamed(name).querySelector('.drive-picker-check');
+  const nameOf = (name) => itemNamed(name).querySelector('.drive-picker-name');
+
+  const five = {
+    'my-drive': {
+      items: [
+        pdf('p1', '1.pdf'),
+        pdf('p2', '2.pdf'),
+        folder('d1', 'フォルダ'),
+        pdf('p3', '3.pdf'),
+        pdf('p4', '4.pdf'),
+      ],
+    },
+  };
+
+  it('丸を下へなぞると通った行がまとめて選ばれ、戻ると外れる（フォルダは飛ばす）', async () => {
+    respond(five);
+    const picking = pickFiles({ mimeTypes: PDF_MIME });
+    await flush();
+    layOut();
+    expect(dialog().querySelector('.drive-picker-hint').hidden).toBe(false);
+
+    pointer(check('1.pdf'), 'pointerdown', { y: rowY(0) });
+    pointer(check('1.pdf'), 'pointermove', { y: rowY(0) + 12 });
+    expect(pressed()).toEqual(['1.pdf']);
+    pointer(check('1.pdf'), 'pointermove', { y: rowY(4) });
+    expect(pressed()).toEqual(['1.pdf', '2.pdf', '3.pdf', '4.pdf']);
+    expect(itemNamed('フォルダ').hasAttribute('aria-pressed')).toBe(false);
+    expect(chooseButton().textContent).toBe('選択（4 個）');
+    // 行き過ぎて戻れば、通り過ぎた行は元に戻る。
+    pointer(check('1.pdf'), 'pointermove', { y: rowY(1) });
+    expect(pressed()).toEqual(['1.pdf', '2.pdf']);
+    pointer(check('1.pdf'), 'pointerup', { y: rowY(1) });
+    await flush(); // なぞり終えた直後の click は呑まれる
+
+    chooseButton().click();
+    await expect(picking).resolves.toEqual([
+      { id: 'p1', name: '1.pdf', mimeType: PDF_MIME },
+      { id: 'p2', name: '2.pdf', mimeType: PDF_MIME },
+    ]);
+  });
+
+  it('上へなぞってもよく、選んだ順はなぞった順', async () => {
+    respond(five);
+    const picking = pickFiles({});
+    await flush();
+    layOut();
+
+    pointer(check('4.pdf'), 'pointerdown', { y: rowY(4) });
+    pointer(check('4.pdf'), 'pointermove', { y: rowY(1) });
+    pointer(check('4.pdf'), 'pointerup', { y: rowY(1) });
+    await flush(); // なぞり終えた直後の click は呑まれる
+
+    chooseButton().click();
+    expect((await picking).map(({ id }) => id)).toEqual(['p4', 'p3', 'p2']);
+  });
+
+  it('選んである行からなぞり始めると、通った行を外す', async () => {
+    respond(five);
+    const picking = pickFiles({});
+    await flush();
+    layOut();
+    ['1.pdf', '2.pdf', '4.pdf'].forEach((name) => itemNamed(name).click());
+
+    pointer(check('2.pdf'), 'pointerdown', { y: rowY(1) });
+    pointer(check('2.pdf'), 'pointermove', { y: rowY(3) });
+    pointer(check('2.pdf'), 'pointerup', { y: rowY(3) });
+    await flush(); // なぞり終えた直後の click は呑まれる
+    expect(pressed()).toEqual(['1.pdf', '4.pdf']);
+
+    button('キャンセル').click();
+    await picking;
+  });
+
+  it('丸の外は、横に動かし始めればなぞって選び、縦に動かし始めればスクロールに任せる', async () => {
+    respond(five);
+    const picking = pickFiles({});
+    await flush();
+    layOut();
+
+    // 縦に動かし始めた（一覧のスクロール）。
+    pointer(nameOf('1.pdf'), 'pointerdown', { x: 100, y: rowY(0) });
+    pointer(nameOf('1.pdf'), 'pointermove', { x: 102, y: rowY(0) + 20 });
+    pointer(nameOf('1.pdf'), 'pointermove', { x: 102, y: rowY(3) });
+    pointer(nameOf('1.pdf'), 'pointercancel', { x: 102, y: rowY(3) });
+    expect(pressed()).toEqual([]);
+
+    // 横に動かし始めてから縦へ。
+    pointer(nameOf('2.pdf'), 'pointerdown', { x: 100, y: rowY(1) });
+    pointer(nameOf('2.pdf'), 'pointermove', { x: 120, y: rowY(1) + 2 });
+    pointer(nameOf('2.pdf'), 'pointermove', { x: 120, y: rowY(3) });
+    pointer(nameOf('2.pdf'), 'pointerup', { x: 120, y: rowY(3) });
+    await flush(); // なぞり終えた直後の click は呑まれる
+    expect(pressed()).toEqual(['2.pdf', '3.pdf']);
+
+    button('キャンセル').click();
+    await picking;
+  });
+
+  it('マウスはどの向きでもなぞれ、なぞり終えた行の click では切り替えない', async () => {
+    respond(five);
+    const picking = pickFiles({});
+    await flush();
+    layOut();
+
+    pointer(nameOf('1.pdf'), 'pointerdown', { x: 100, y: rowY(0), kind: 'mouse' });
+    pointer(nameOf('1.pdf'), 'pointermove', { x: 100, y: rowY(1), kind: 'mouse' });
+    pointer(nameOf('2.pdf'), 'pointerup', { x: 100, y: rowY(1), kind: 'mouse' });
+    itemNamed('2.pdf').click();
+    expect(pressed()).toEqual(['1.pdf', '2.pdf']);
+
+    // その次の click は、いつも通り切り替える。
+    await flush();
+    itemNamed('2.pdf').click();
+    expect(pressed()).toEqual(['1.pdf']);
+
+    button('キャンセル').click();
+    await picking;
+  });
+
+  it('一覧の下端まで来たら一覧を送り、送った先の行も選ぶ', async () => {
+    respond(five);
+    const picking = pickFiles({});
+    await flush();
+    layOut(2); // 2 行分しか見えていない
+
+    pointer(check('1.pdf'), 'pointerdown', { y: rowY(0) });
+    pointer(check('1.pdf'), 'pointermove', { y: LIST_TOP + 2 * ROW_PX - 1 });
+    await vi.waitFor(() => expect(pressed()).toContain('4.pdf'));
+    expect(dialog().querySelector('.drive-picker-body').scrollTop).toBeGreaterThan(0);
+    pointer(check('1.pdf'), 'pointerup', { y: LIST_TOP + 2 * ROW_PX - 1 });
+    await flush(); // なぞり終えた直後の click は呑まれる
+
+    button('キャンセル').click();
+    await picking;
+  });
+
+  it('1 つ選ぶダイアログには丸も案内も出ない', async () => {
+    respond(five);
+    const picking = pickFile({});
+    await flush();
+    expect(dialog().querySelector('.drive-picker-check')).toBeNull();
+    expect(dialog().querySelector('.drive-picker-hint').hidden).toBe(true);
+    expect(dialog().classList.contains('multiple')).toBe(false);
+    button('キャンセル').click();
+    await picking;
+  });
+});
