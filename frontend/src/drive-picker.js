@@ -137,17 +137,24 @@ export function dragSelection(before, items, from, to, select) {
 }
 
 /**
- * 画面の高さ y にある行の位置。一覧より上なら先頭、下なら末尾の行。
+ * 画面の高さ y にある行の位置（上端が y より上にある、いちばん下の行）。
+ * 先頭の行より上なら先頭。
+ *
+ * 行は上から順に並んでいるので二分探索する（数百行あっても、指が動くたびに
+ * すべての行の位置を測らない）。
  *
  * @param {Element[]} rows 一覧の行（上から順）。
  * @param {number} y 画面座標（clientY）。
  */
 function rowIndexAt(rows, y) {
-  let index = 0;
-  rows.forEach((row, i) => {
-    if (row.getBoundingClientRect().top <= y) index = i;
-  });
-  return index;
+  let low = 0;
+  let high = rows.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (rows[mid].getBoundingClientRect().top <= y) low = mid;
+    else high = mid - 1;
+  }
+  return low;
 }
 
 /**
@@ -497,8 +504,10 @@ function openPicker(options) {
   const body = $('.drive-picker-body');
   const view = doc.defaultView;
   let drag = null; // なぞっている最中の様子（押したときに作り、動き出したら active）
-  // なぞり終えた直後の click は、行を押したことにしない（マウスでは、なぞり
-  // 終えた行や、押した行と離した行の共通の祖先で click が起きる）。
+  // なぞり終えたあとに届く click は、行を押したことにしない（マウスでは、
+  // なぞり終えた行や、押した行と離した行の共通の祖先で click が起きる）。
+  // 次に押すまで待つ（届くかどうか・いつ届くかはブラウザによるので、時間では
+  // 区切らない）。
   let swallowClick = false;
 
   const rows = () => [...list.querySelectorAll('.drive-picker-item')];
@@ -507,15 +516,18 @@ function openPicker(options) {
     const all = rows();
     // 一覧を描き直すときは先になぞるのをやめる（stopDrag）ので、押した行は必ずある。
     const from = all.indexOf(drag.row);
-    const to = rowIndexAt(all, drag.y);
+    // 一覧の外の指は、見えている端の行にいるとみなす（送ってあって見えていない
+    // 行は選ばない。そうした行は、自動送りで見せてから選ぶ）。
+    const { top, bottom } = body.getBoundingClientRect();
+    const to = rowIndexAt(all, Math.min(Math.max(drag.y, top), bottom - 1));
     const items = all.map((row) => row.driveItem);
     const next = dragSelection(drag.before, items, from, to, drag.select);
     picked.clear();
     next.forEach((item, id) => picked.set(id, item));
     all.forEach((row) => {
-      if (!row.driveItem.folder) {
-        row.setAttribute('aria-pressed', String(picked.has(row.driveItem.id)));
-      }
+      if (row.driveItem.folder) return;
+      const pressed = String(picked.has(row.driveItem.id));
+      if (row.getAttribute('aria-pressed') !== pressed) row.setAttribute('aria-pressed', pressed);
     });
     updateChoose();
   };
@@ -553,11 +565,11 @@ function openPicker(options) {
       // 指がもう離れていた。続く pointerup / pointercancel で終わる。
     }
     extendDrag();
-    if (view.requestAnimationFrame) drag.frame = view.requestAnimationFrame(autoScroll);
+    drag.frame = view.requestAnimationFrame(autoScroll);
   };
 
   function stopDrag() {
-    if (drag && drag.frame) view.cancelAnimationFrame(drag.frame);
+    if (drag && drag.active) view.cancelAnimationFrame(drag.frame);
     drag = null;
   }
 
@@ -612,6 +624,12 @@ function openPicker(options) {
       });
       on(list, 'pointermove', (event) => {
         if (!drag || event.pointerId !== drag.pointerId) return;
+        // マウスのボタンを一覧の外で離すと、pointerup はここへ届かない（なぞり
+        // 始める前は一覧で捕まえていない）。ボタンを離したまま動かしたら終える。
+        if (drag.mouse && !(event.buttons & 1)) {
+          stopDrag();
+          return;
+        }
         drag.y = event.clientY;
         if (drag.active) {
           event.preventDefault();
@@ -628,24 +646,27 @@ function openPicker(options) {
       });
       on(list, 'pointerup', (event) => {
         if (!drag || event.pointerId !== drag.pointerId) return;
-        if (drag.active) {
-          swallowClick = true;
-          // click は離したのと同じ流れで届く。届かなかったときに、次の押下を
-          // 呑み込まないようにする。
-          setTimeout(() => {
-            swallowClick = false;
-          }, 0);
-        }
+        if (drag.active) swallowClick = true;
         stopDrag();
       });
       on(list, 'pointercancel', (event) => {
         if (drag && event.pointerId === drag.pointerId) stopDrag();
       });
+      // 次に押したら、その click は普通に受ける。
+      on(
+        dialog,
+        'pointerdown',
+        () => {
+          swallowClick = false;
+        },
+        true
+      );
       on(
         dialog,
         'click',
         (event) => {
-          if (!swallowClick) return;
+          // キーボードで押した click（detail が 0）は、なぞったあとでも受ける。
+          if (!swallowClick || event.detail === 0) return;
           swallowClick = false;
           event.stopPropagation();
         },
