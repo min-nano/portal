@@ -505,8 +505,8 @@ function openPicker(options) {
 
   const extendDrag = () => {
     const all = rows();
+    // 一覧を描き直すときは先になぞるのをやめる（stopDrag）ので、押した行は必ずある。
     const from = all.indexOf(drag.row);
-    if (from < 0) return;
     const to = rowIndexAt(all, drag.y);
     const items = all.map((row) => row.driveItem);
     const next = dragSelection(drag.before, items, from, to, drag.select);
@@ -520,8 +520,8 @@ function openPicker(options) {
     updateChoose();
   };
 
+  // なぞり終えれば stopDrag が次のフレームを取り消すので、ここでは drag がある。
   const autoScroll = () => {
-    if (!drag || !drag.active) return;
     const { top, bottom } = body.getBoundingClientRect();
     const edge = AUTO_SCROLL_EDGE_PX;
     let speed = 0;
