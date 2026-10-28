@@ -525,8 +525,14 @@ function openPicker(options) {
     const { top, bottom } = body.getBoundingClientRect();
     const edge = AUTO_SCROLL_EDGE_PX;
     let speed = 0;
-    if (drag.y < top + edge) speed = -Math.min(1, (top + edge - drag.y) / edge);
-    else if (drag.y > bottom - edge) speed = Math.min(1, (drag.y - (bottom - edge)) / edge);
+    // 端の行は、押した所がもう端の幅に入っている（行の高さより幅が広い）。
+    // その端へ向けて動かしたときだけ送る（端の行から反対へなぞり始めたのに、
+    // 一覧が逆へ流れて余計な行を選ばないように）。
+    if (drag.y < top + edge && drag.y < drag.y0) {
+      speed = -Math.min(1, (top + edge - drag.y) / edge);
+    } else if (drag.y > bottom - edge && drag.y > drag.y0) {
+      speed = Math.min(1, (drag.y - (bottom - edge)) / edge);
+    }
     if (speed) {
       const before = body.scrollTop;
       body.scrollTop += speed * AUTO_SCROLL_MAX_PX;

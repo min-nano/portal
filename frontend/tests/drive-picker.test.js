@@ -820,6 +820,28 @@ describe('なぞって選ぶ', () => {
     await picking;
   });
 
+  it('端の行から反対へなぞり始めても、一覧は送らない', async () => {
+    respond(five);
+    const picking = pickFiles({});
+    await flush();
+    layOut(2); // 1.pdf と 2.pdf が見えている
+    const body = dialog().querySelector('.drive-picker-body');
+
+    // 下端の行（2.pdf）から上へ。指はまだ下端の幅の中にいる。
+    pointer(check('2.pdf'), 'pointerdown', { y: rowY(1) });
+    pointer(check('2.pdf'), 'pointermove', { y: rowY(1) - 12 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(body.scrollTop).toBe(0);
+    expect(pressed()).toEqual(['2.pdf']);
+    pointer(check('2.pdf'), 'pointermove', { y: rowY(0) });
+    pointer(check('2.pdf'), 'pointerup', { y: rowY(0) });
+    await flush();
+    expect(pressed()).toEqual(['1.pdf', '2.pdf']);
+
+    button('キャンセル').click();
+    await picking;
+  });
+
   it('少し動いただけ・フォルダの上・2 本目の指では、なぞり始めない', async () => {
     respond(five);
     const picking = pickFiles({});
