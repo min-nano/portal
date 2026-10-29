@@ -5,7 +5,7 @@
 // pdf.js・OCR・Drive・結合（pdf-lib）は偽物に差し替え、実際のページの
 // マークアップ（page.html / overlay.html）の上で、利用者の操作の流れを通す。
 //
-//   ファイルを足す → 番号を読んで並べる → 役割・番号を直す → 確かめる
+//   ファイルを足す → 番号を読んで並べる → 扱い・番号を直す → 確かめる
 //   → 結合して検証する → ダウンロード / Drive に保存
 //
 // 偽物の PDF は「%PDF-」に続けて頁の仕様（JSON）を書いたバイト列で、
@@ -136,7 +136,7 @@ function installPage() {
 const $ = (id) => document.getElementById(id);
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-/** ファイルの読み込みが終わり、一覧に役割の選択が並ぶまで待つ。 */
+/** ファイルの読み込みが終わり、一覧に扱いの選択が並ぶまで待つ。 */
 async function settled(count) {
   await vi.waitFor(
     () => {
@@ -313,7 +313,7 @@ describe('ファイルを足して並べる', () => {
     expect(meta('猫_奇数.pdf')).toBe('本文(頁番号: -11, -9, -7, -5, 手入力)');
   });
 
-  it('役割を変えると並びが変わる（表紙と裏表紙を 1 回で取ったファイル）', async () => {
+  it('扱いを変えると並びが変わる（表紙と裏表紙を 1 回で取ったファイル）', async () => {
     await addBook();
 
     change(fileItem('猫_表紙.pdf').querySelector('select'), 'split');

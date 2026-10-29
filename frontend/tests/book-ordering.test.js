@@ -72,7 +72,7 @@ describe('guessRole', () => {
     expect(guessRole('scan_0005.pdf', [{ candidates: [] }])).toBe('front');
   });
 
-  it('名前だけで分かる役割（画像から番号を読むかどうかを決める）', () => {
+  it('名前だけで分かる扱い（画像から番号を読むかどうかを決める）', () => {
     expect(roleFromName('猫_表紙.pdf')).toBe('front');
     expect(roleFromName('猫_裏表紙.pdf')).toBe('back');
     expect(roleFromName('猫_奇数1.pdf')).toBeNull();

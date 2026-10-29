@@ -95,7 +95,7 @@ let merged = null;
 let merging = false;
 /** 結合する中身（並び・名前）が変わるたびに進める番号（結合の途中で変わったら、その結合は捨てる）。 */
 let generation = 0;
-/** いまの並びのうち、結合する PDF を決める部分（頁・役割・頁番号）。変わったときだけ結合した PDF を捨てる。 */
+/** いまの並びのうち、結合する PDF を決める部分（頁・扱い・頁番号）。変わったときだけ結合した PDF を捨てる。 */
 let orderKey = '';
 let filter = 'all';
 // ファイルは 1 つずつ調べる（pdf.js も OCR も、同時に動かすと遅くなるだけなので）。
@@ -436,7 +436,7 @@ async function readFile(file) {
     log(`「${file.name}」の文字情報を読みました（${count} 頁、文字情報のある頁 ${textPages}、番号が見つかった頁 ${textNumbers}）`);
 
     // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
-    // もののほかは、役割を決める前に番号を読み切る（文字情報の無い束も、画像
+    // もののほかは、扱いを決める前に番号を読み切る（文字情報の無い束も、画像
     // から番号が読めれば本文と分かる）。OCR の準備は、画像を描く間に進める。
     const ocrPages = new Set(
       !roleFromName(file.name)
@@ -852,7 +852,7 @@ function refresh() {
     $('outputName').dataset.suggested = 'true';
   }
   // 裏の処理（ほかのファイルの読み込み・OCR）が終わっただけで、結合する中身
-  // （頁・役割・頁番号と、名前）が変わらなければ、結合した PDF はそのまま使える。
+  // （頁・扱い・頁番号と、名前）が変わらなければ、結合した PDF はそのまま使える。
   // 名前は提案し直すことがあるので、ここで一緒に比べる。
   const key = mergeKey();
   if (key !== orderKey) {
@@ -864,7 +864,7 @@ function refresh() {
   renderReview();
 }
 
-/** 結合する中身（名前と、並びの頁・役割・頁番号）を 1 つの文字列にしたもの。 */
+/** 結合する中身（名前と、並びの頁・扱い・頁番号）を 1 つの文字列にしたもの。 */
 function mergeKey() {
   return [outputName(), ...view.order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}`)].join('\n');
 }
@@ -950,7 +950,7 @@ const ROLE_SHORT = {
 };
 
 /**
- * 見出しの 2 行目。読み込みの経過か、役割と設定の要約（本文なら頁番号を並べて。
+ * 見出しの 2 行目。読み込みの経過か、扱いと設定の要約（本文なら頁番号を並べて。
  * 例: 本文(頁番号: -11, -9, -7...13, 15)）。
  */
 function fileMeta(file) {
@@ -992,7 +992,7 @@ function fileControls(file) {
   const controls = el(document, 'div', 'bm-file-controls');
 
   const roleField = el(document, 'label', 'bm-inline');
-  roleField.append('役割 ');
+  roleField.append('扱い ');
   const role = el(document, 'select');
   for (const [value, text] of Object.entries(ROLES)) {
     const option = el(document, 'option', null, text);
