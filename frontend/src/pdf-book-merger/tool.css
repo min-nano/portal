@@ -136,26 +136,35 @@ button.bm-help-btn:hover,
   gap: var(--s-2);
 }
 
-.bm-file {
+/* ファイル 1 つぶん（<portal-section>）。閉じているときは、名前と設定の要約の
+   2 行だけになる。 */
+portal-section.bm-file {
   /* 一覧（grid）の中で、長い選択肢の幅に押し広げられないようにする。 */
   min-width: 0;
-  padding: var(--s-3);
+  margin-top: 0;
+  padding: var(--s-2) var(--s-3);
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: var(--r-md);
 }
 
-.bm-file.error {
-  border-color: var(--ng-500);
-  background: var(--ng-50);
+portal-section.bm-file::part(head) {
+  padding-bottom: var(--s-2);
+  margin-bottom: var(--s-2);
 }
 
-.bm-file-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-2);
-  flex-wrap: wrap;
+portal-section.bm-file[collapsed]::part(head) {
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+/* 読み込みが済むまでは開く中身が無いので、つまみは隠す（名前の位置は揃えたまま）。 */
+portal-section.bm-file:not(.ready)::part(toggle) {
+  visibility: hidden;
+}
+
+portal-section.bm-file.error {
+  border-color: var(--ng-500);
+  background: var(--ng-50);
 }
 
 .bm-file-head .name {
@@ -163,16 +172,12 @@ button.bm-help-btn:hover,
   word-break: break-all;
 }
 
-.bm-file .hint {
-  margin: var(--s-1) 0 0;
+.bm-file-head .hint {
+  margin: 0;
+  max-width: none;
 }
 
-.bm-file-buttons {
-  display: flex;
-  gap: var(--s-1);
-}
-
-.bm-file-buttons button,
+.bm-file > button[slot='actions'],
 .bm-problem button {
   min-height: 32px;
   padding: 0 var(--s-3);
@@ -184,7 +189,10 @@ button.bm-help-btn:hover,
   flex-wrap: wrap;
   align-items: center;
   gap: var(--s-2) var(--s-4);
-  margin-top: var(--s-2);
+}
+
+.bm-file-controls .hint {
+  margin: 0;
 }
 
 .bm-inline {

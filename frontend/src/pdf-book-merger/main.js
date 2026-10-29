@@ -300,6 +300,7 @@ function addFile(source) {
     manual: null,
     coverStart: null, // 先頭・末尾に置くファイルの並べ順（先頭の頁の番号）
     reversed: false,
+    open: false, // 一覧で設定の欄を開いているか（描き直しても保つ）
     bytes: null,
     doc: null,
     pages: [],
@@ -902,30 +903,60 @@ function renderFiles() {
   $('outputSection').hidden = readyFiles().length === 0;
 }
 
+// ファイルは 1 つずつ折り畳める（<portal-section>）。束が何ファイルもあると
+// 設定の欄で一覧が長くなるので、既定は閉じておき、見出しの行には名前と
+// 設定の要約の 2 行だけを残す。開け閉めは描き直しても保つ。
 function fileItem(file) {
-  const item = el(document, 'li', `bm-file${file.status === 'error' ? ' error' : ''}`);
+  const item = el(document, 'li');
+  const ready = file.status === 'ready';
+  const section = el(
+    document,
+    'portal-section',
+    `bm-file${ready ? ' ready' : ''}${file.status === 'error' ? ' error' : ''}`
+  );
+  section.setAttribute('label', file.name);
+  if (!(ready && file.open)) section.setAttribute('collapsed', '');
+  section.addEventListener('section-toggle', (event) => {
+    // 読み込みが済むまでは、開いても中身（設定の欄）が無い。
+    if (!ready) section.open = false;
+    else file.open = event.detail.open;
+  });
 
   const head = el(document, 'div', 'bm-file-head');
+  head.slot = 'title';
   head.append(el(document, 'span', 'name', file.name));
-  const actions = el(document, 'div', 'bm-file-buttons');
-  actions.append(
-    smallButton('削除', 'このファイルを削除', () => removeFile(file), 'secondary danger')
-  );
-  head.append(actions);
-  item.append(head);
+  head.append(el(document, 'p', 'hint', fileMeta(file)));
+  section.append(head);
 
-  const meta = el(document, 'p', 'hint');
-  if (file.status === 'error') {
-    meta.textContent = file.error;
-  } else if (file.status !== 'ready') {
-    meta.textContent = STATUS_TEXT[file.status];
-  } else {
-    meta.textContent = fileSummary(file) + (file.ocrBusy ? '・余白を読み取り中' : '');
-  }
-  item.append(meta);
+  const remove = smallButton('削除', 'このファイルを削除', () => removeFile(file), 'secondary danger');
+  remove.slot = 'actions';
+  section.append(remove);
 
-  if (file.status === 'ready') item.append(fileControls(file));
+  if (ready) section.append(fileControls(file));
+  item.append(section);
   return item;
+}
+
+const ROLE_SHORT = {
+  body: '本文',
+  front: '先頭に置く',
+  back: '末尾に置く',
+  split: '前半を先頭・後半を末尾',
+  exclude: '結合しない',
+};
+
+/** 見出しの 2 行目。読み込みの経過か、役割・頁番号などの設定の要約。 */
+function fileMeta(file) {
+  if (file.status === 'error') return file.error;
+  if (file.status !== 'ready') return STATUS_TEXT[file.status];
+  const parts = [ROLE_SHORT[file.role], fileSummary(file)];
+  if (file.role === 'body' && file.manual) parts.push('番号は手入力');
+  if (file.role !== 'body' && file.role !== 'exclude' && Number.isInteger(file.coverStart)) {
+    parts.push(`先頭の頁の番号 ${file.coverStart}`);
+  }
+  if (file.reversed) parts.push('最後の頁から');
+  if (file.ocrBusy) parts.push('余白を読み取り中');
+  return parts.join('・');
 }
 
 function fileSummary(file) {

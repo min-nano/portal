@@ -287,6 +287,31 @@ describe('ファイルを足して並べる', () => {
     expect(mocks.readStrip).toHaveBeenCalledTimes(2);
   });
 
+  it('ファイルは名前と設定の要約の 2 行に畳んでおき、開け閉めは描き直しても保つ', async () => {
+    await addBook();
+    const meta = (name) => fileItem(name).querySelector('.bm-file-head .hint').textContent;
+
+    expect(fileItem('猫_奇数.pdf').hasAttribute('collapsed')).toBe(true);
+    expect(meta('猫_奇数.pdf')).toMatch(/^本文・4 頁・奇数頁 1〜7/);
+    expect(meta('猫_表紙.pdf')).toMatch(/^先頭に置く・2 頁/);
+
+    fileItem('猫_表紙.pdf').toggle();
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'split');
+    const cover = fileItem('猫_表紙.pdf').querySelector('input[type="checkbox"]');
+    cover.checked = true;
+    cover.dispatchEvent(new Event('change'));
+
+    // 一覧は描き直されるが、開いたものは開いたまま、閉じたものは閉じたまま。
+    expect(fileItem('猫_表紙.pdf').hasAttribute('collapsed')).toBe(false);
+    expect(fileItem('猫_奇数.pdf').hasAttribute('collapsed')).toBe(true);
+    expect(meta('猫_表紙.pdf')).toBe('前半を先頭・後半を末尾・2 頁・最後の頁から');
+
+    change(fileItem('猫_表紙.pdf').querySelector('.bm-file-controls input[type="text"]'), '3');
+    expect(meta('猫_表紙.pdf')).toContain('・先頭の頁の番号 3・');
+    change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '1');
+    expect(meta('猫_奇数.pdf')).toContain('番号は手入力');
+  });
+
   it('役割を変えると並びが変わる（表紙と裏表紙を 1 回で取ったファイル）', async () => {
     await addBook();
 
