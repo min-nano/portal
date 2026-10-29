@@ -275,11 +275,11 @@ describe('ファイルを足して並べる', () => {
 
     // 名前に「表紙」とあるファイルは先頭へ。
     expect(gridLabels()).toEqual(['表紙', '表紙', '1 頁', '2 頁', '3 頁', '4 頁', '5 頁', '6 頁', '7 頁', '8 頁']);
-    expect(fileItem('猫_奇数.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 2n-1[n=1..4])');
+    expect(fileItem('猫_奇数.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 1, 3, 5, 7)');
     expect(fileItem('猫_奇数.pdf').querySelector('.bm-file-details').textContent).toBe(
       '4 頁のうち番号を読めた頁 4（うち画像から 1）'
     );
-    expect(fileItem('猫_偶数.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: -2n+10[n=1..4])');
+    expect(fileItem('猫_偶数.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 8, 6, 4, 2)');
     expect($('summary').textContent).toContain('1〜8（8 頁）');
     expect($('checkSection').hidden).toBe(false);
     expect($('outputName').value).toBe('猫.pdf');
@@ -293,7 +293,7 @@ describe('ファイルを足して並べる', () => {
     const meta = (name) => fileItem(name).querySelector('.bm-file-head .hint').textContent;
 
     expect(fileItem('猫_奇数.pdf').hasAttribute('collapsed')).toBe(true);
-    expect(meta('猫_奇数.pdf')).toBe('本文(頁番号: 2n-1[n=1..4])');
+    expect(meta('猫_奇数.pdf')).toBe('本文(頁番号: 1, 3, 5, 7)');
     expect(meta('猫_表紙.pdf')).toBe('先頭に置く(2 頁)');
 
     fileItem('猫_表紙.pdf').toggle();
@@ -310,7 +310,7 @@ describe('ファイルを足して並べる', () => {
     change(fileItem('猫_表紙.pdf').querySelector('.bm-file-controls input[type="text"]'), '3');
     expect(meta('猫_表紙.pdf')).toBe('前半を先頭・後半を末尾(2 頁, 先頭の頁の番号 3, 最後の頁から)');
     change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '-11');
-    expect(meta('猫_奇数.pdf')).toBe('本文(頁番号: 2n-13[n=1..4], 手入力)');
+    expect(meta('猫_奇数.pdf')).toBe('本文(頁番号: -11, -9, -7, -5, 手入力)');
   });
 
   it('役割を変えると並びが変わる（表紙と裏表紙を 1 回で取ったファイル）', async () => {

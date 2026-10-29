@@ -45,7 +45,7 @@ import {
   roleFromName,
   sideOf,
 } from './ordering.js';
-import { numberingFormula, pageNumberCandidates } from './page-numbers.js';
+import { numberingSequence, pageNumberCandidates } from './page-numbers.js';
 import { findScanImages } from './scan-images.js';
 import { pdfLibViews } from './pdf-lib-views.js';
 import {
@@ -950,8 +950,8 @@ const ROLE_SHORT = {
 };
 
 /**
- * 見出しの 2 行目。読み込みの経過か、役割と設定の要約（本文なら頁番号の付き方を
- * 式で。例: 本文(頁番号: 2n-13[n=1..14])）。
+ * 見出しの 2 行目。読み込みの経過か、役割と設定の要約（本文なら頁番号を並べて。
+ * 例: 本文(頁番号: -11, -9, -7...13, 15)）。
  */
 function fileMeta(file) {
   if (file.status === 'error') return file.error;
@@ -959,7 +959,7 @@ function fileMeta(file) {
   const details = [];
   const numbering = file.role === 'body' ? view.numberings.get(file.key) : null;
   if (numbering) {
-    details.push(`頁番号: ${numberingFormula(numbering)}`);
+    details.push(`頁番号: ${numberingSequence(numbering)}`);
     if (file.manual) details.push('手入力');
   } else {
     details.push(`${file.pages.length} 頁`);
