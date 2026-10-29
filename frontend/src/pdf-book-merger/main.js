@@ -45,7 +45,7 @@ import {
   roleFromName,
   sideOf,
 } from './ordering.js';
-import { describeNumbering, pageNumberCandidates } from './page-numbers.js';
+import { numberingSequence, pageNumberCandidates } from './page-numbers.js';
 import { findScanImages } from './scan-images.js';
 import { pdfLibViews } from './pdf-lib-views.js';
 import {
@@ -300,6 +300,7 @@ function addFile(source) {
     manual: null,
     coverStart: null, // 先頭・末尾に置くファイルの並べ順（先頭の頁の番号）
     reversed: false,
+    open: false, // 一覧で設定の欄を開いているか（描き直しても保つ）
     bytes: null,
     doc: null,
     pages: [],
@@ -902,42 +903,85 @@ function renderFiles() {
   $('outputSection').hidden = readyFiles().length === 0;
 }
 
+// ファイルは 1 つずつ折り畳める（<portal-section>）。束が何ファイルもあると
+// 設定の欄で一覧が長くなるので、既定は閉じておき、見出しの行には名前と
+// 設定の要約の 2 行だけを残す。開け閉めは描き直しても保つ。
 function fileItem(file) {
-  const item = el(document, 'li', `bm-file${file.status === 'error' ? ' error' : ''}`);
+  const item = el(document, 'li');
+  const ready = file.status === 'ready';
+  const section = el(
+    document,
+    'portal-section',
+    `bm-file${ready ? ' ready' : ''}${file.status === 'error' ? ' error' : ''}`
+  );
+  section.setAttribute('label', file.name);
+  if (!(ready && file.open)) section.setAttribute('collapsed', '');
+  section.addEventListener('section-toggle', (event) => {
+    // 読み込みが済むまでは、開いても中身（設定の欄）が無い。
+    if (!ready) section.open = false;
+    else file.open = event.detail.open;
+  });
 
   const head = el(document, 'div', 'bm-file-head');
+  head.slot = 'title';
   head.append(el(document, 'span', 'name', file.name));
-  const actions = el(document, 'div', 'bm-file-buttons');
-  actions.append(
-    smallButton('削除', 'このファイルを削除', () => removeFile(file), 'secondary danger')
-  );
-  head.append(actions);
-  item.append(head);
+  head.append(el(document, 'p', 'hint', fileMeta(file)));
+  section.append(head);
 
-  const meta = el(document, 'p', 'hint');
-  if (file.status === 'error') {
-    meta.textContent = file.error;
-  } else if (file.status !== 'ready') {
-    meta.textContent = STATUS_TEXT[file.status];
-  } else {
-    meta.textContent = fileSummary(file) + (file.ocrBusy ? '・余白を読み取り中' : '');
+  const remove = smallButton('削除', 'このファイルを削除', () => removeFile(file), 'secondary danger');
+  remove.slot = 'actions';
+  section.append(remove);
+
+  if (ready) {
+    const details = fileDetails(file);
+    if (details) section.append(el(document, 'p', 'hint bm-file-details', details));
+    section.append(fileControls(file));
   }
-  item.append(meta);
-
-  if (file.status === 'ready') item.append(fileControls(file));
+  item.append(section);
   return item;
 }
 
-function fileSummary(file) {
-  const parts = [`${file.pages.length} 頁`];
-  const numbering = view.numberings.get(file.key);
-  if (file.role === 'body' && numbering) {
-    parts.push(describeNumbering(numbering));
+const ROLE_SHORT = {
+  body: '本文',
+  front: '先頭に置く',
+  back: '末尾に置く',
+  split: '前半を先頭・後半を末尾',
+  exclude: '結合しない',
+};
+
+/**
+ * 見出しの 2 行目。読み込みの経過か、役割と設定の要約（本文なら頁番号を並べて。
+ * 例: 本文(頁番号: -11, -9, -7...13, 15)）。
+ */
+function fileMeta(file) {
+  if (file.status === 'error') return file.error;
+  if (file.status !== 'ready') return STATUS_TEXT[file.status];
+  const details = [];
+  const numbering = file.role === 'body' ? view.numberings.get(file.key) : null;
+  if (numbering) {
+    details.push(`頁番号: ${numberingSequence(numbering)}`);
+    if (file.manual) details.push('手入力');
+  } else {
+    details.push(`${file.pages.length} 頁`);
+    if (file.role !== 'exclude' && Number.isInteger(file.coverStart)) {
+      details.push(`先頭の頁の番号 ${file.coverStart}`);
+    }
+  }
+  if (file.reversed) details.push('最後の頁から');
+  if (file.ocrBusy) details.push('余白を読み取り中');
+  return `${ROLE_SHORT[file.role]}(${details.join(', ')})`;
+}
+
+/** 開いたときに出す、読み取りの内訳（番号を読めた頁の数・文字情報の無い頁）。 */
+function fileDetails(file) {
+  const parts = [];
+  const numbering = file.role === 'body' ? view.numberings.get(file.key) : null;
+  if (numbering) {
     const read = numbering.pages.filter((page) => page.status === 'detected').length;
     const byOcr = numbering.pages.filter(
       (page) => page.status === 'detected' && page.read?.source === 'ocr'
     ).length;
-    parts.push(`番号を読めた頁 ${read}${byOcr ? `（うち画像から ${byOcr}）` : ''}`);
+    parts.push(`${file.pages.length} 頁のうち番号を読めた頁 ${read}${byOcr ? `（うち画像から ${byOcr}）` : ''}`);
   }
   const textPages = file.pages.filter((page) => page.signature.length > 0).length;
   if (textPages < file.pages.length) parts.push(`文字情報なし ${file.pages.length - textPages} 頁`);

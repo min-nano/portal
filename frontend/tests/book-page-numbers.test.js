@@ -7,13 +7,13 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  describeNumbering,
   detectStep,
   formatNumber,
   groupLines,
   inferFileNumbers,
   manualFileNumbers,
   normalizeDigits,
+  numberingSequence,
   pageNumberCandidates,
 } from '../src/pdf-book-merger/page-numbers.js';
 
@@ -191,7 +191,7 @@ describe('inferFileNumbers', () => {
   });
 });
 
-describe('manualFileNumbers / describeNumbering / formatNumber', () => {
+describe('manualFileNumbers / numberingSequence / formatNumber', () => {
   it('手で決めた先頭の番号と歩幅で並べる', () => {
     expect(manualFileNumbers(3, 20, -2).pages.map((p) => [p.number, p.status])).toEqual([
       [20, 'manual'],
@@ -200,13 +200,24 @@ describe('manualFileNumbers / describeNumbering / formatNumber', () => {
     ]);
   });
 
-  it('番号の付き方を 1 行で言い表す', () => {
-    expect(describeNumbering(inferFileNumbers([read(1), read(3), read(5)]))).toBe('奇数頁 1〜5');
-    expect(describeNumbering(inferFileNumbers([read(6), read(4), read(2)]))).toBe(
-      '偶数頁（逆順） 6〜2'
+  it('番号の付き方を、番号を並べて言い表す（長い並びは間を詰める）', () => {
+    expect(numberingSequence(inferFileNumbers([read(1), read(3), read(5)]))).toBe('1, 3, 5');
+    expect(numberingSequence(inferFileNumbers([read(6), read(4), read(2)]))).toBe('6, 4, 2');
+    expect(numberingSequence(manualFileNumbers(5, 1, 1))).toBe('1, 2, 3, 4, 5');
+    // 前付け（0 以下の番号）から始まる束。
+    expect(numberingSequence(manualFileNumbers(14, -11, 2))).toBe('-11, -9, -7...13, 15');
+    expect(numberingSequence(manualFileNumbers(6, 12, -2))).toBe('12, 10, 8...4, 2');
+    expect(numberingSequence(inferFileNumbers([none()]))).toBe('?');
+    // 歩幅をほかの束から借りても、番号の候補が無ければ決まらない。
+    expect(numberingSequence(inferFileNumbers([none(), none(), none()], { step: 2 }))).toBe('?');
+  });
+
+  it('番号が飛んでいるところは詰めずに、飛んだ先から並べ直す', () => {
+    const numbers = (...list) => ({ step: 2, pages: list.map((number) => ({ number })) });
+    expect(numberingSequence(numbers(1, 3, 9, 11))).toBe('1, 3, 9, 11');
+    expect(numberingSequence(numbers(1, 3, 5, 7, 9, 11, 21, 23, 25, 27, 29, 31))).toBe(
+      '1, 3, 5...9, 11, 21, 23, 25...29, 31'
     );
-    expect(describeNumbering(inferFileNumbers([read(6), read(7)]))).toBe('連続した頁 6〜7');
-    expect(describeNumbering(inferFileNumbers([none()]))).toBe('頁番号を読み取れませんでした');
   });
 
   it('前付けと、間に入れた頁の番号の見せ方', () => {
