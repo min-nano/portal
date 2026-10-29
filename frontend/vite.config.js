@@ -117,8 +117,8 @@ export default defineConfig(({ mode }) => {
         // 「ページは出来上がるが中身が違う」という気付きにくい壊れ方をする
         // ので、覆われていることを表で見えるようにしておく。
         include: ['src/**/*.js', 'tools-plugin.js', 'tools.config.js'],
-        // text は CI のログ用、cobertura は PR のカバレッジコメント用
-        // （.github/scripts/coverage.py がこれを読む）。
+        // text は CI のログ用、cobertura は Codecov へ送る用
+        // （.github/scripts/coverage.py がパスを直してから送る）。
         reporter: ['text', 'cobertura'],
         reportsDirectory: 'coverage',
       },
