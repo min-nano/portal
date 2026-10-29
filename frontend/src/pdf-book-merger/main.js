@@ -38,7 +38,6 @@ import {
   checkSequence,
   guessRole,
   numberFiles,
-  orderedFile,
   pageLabelRanges,
   pageLabelTexts,
   ROLES,
@@ -303,7 +302,7 @@ function addFile(source) {
     role: 'body',
     manual: null,
     coverStart: null, // 先頭・末尾に置くファイルの並べ順（先頭の頁の番号）
-    reversed: false,
+    coverStep: 1, // 先頭・末尾に置くファイルの進み方（-1 なら最後の頁から）
     open: false, // 一覧で設定の欄を開いているか（描き直しても保つ）
     bytes: null,
     doc: null,
@@ -859,8 +858,7 @@ function pageOf(entry) {
 
 /** 並びと指摘を組み立て直し、画面を描き直す。結合した PDF は捨てる。 */
 function refresh() {
-  // 逆順のファイルは、ここで頁を並べ直してから番号を決める。
-  const ready = readyFiles().map(orderedFile);
+  const ready = readyFiles();
   const numberings = numberFiles(ready);
   const order = buildBookOrder(ready, numberings, overrides);
   const sheets = ready.some(
@@ -1000,8 +998,8 @@ function fileMeta(file) {
     if (file.role !== 'exclude' && Number.isInteger(file.coverStart)) {
       details.push(`先頭の頁の番号 ${file.coverStart}`);
     }
+    if (file.role !== 'exclude' && file.coverStep === -1) details.push('最後の頁から');
   }
-  if (file.reversed) details.push('最後の頁から');
   if (file.ocrBusy) details.push('余白を読み取り中');
   return `${ROLE_SHORT[file.role]}(${details.join(', ')})`;
 }
@@ -1042,19 +1040,6 @@ function fileControls(file) {
   });
   roleField.append(role);
   controls.append(roleField);
-
-  // 給紙口の都合で、最後の頁から並んでいるファイル。本文は頁番号から自動で
-  // 並ぶので、効くのは主に表紙など番号の無いファイル（と手で決めた番号）。
-  const reverseField = el(document, 'label', 'bm-inline');
-  const reverse = el(document, 'input');
-  reverse.type = 'checkbox';
-  reverse.checked = file.reversed;
-  reverse.addEventListener('change', () => {
-    file.reversed = reverse.checked;
-    refresh();
-  });
-  reverseField.append(reverse, ' 最後の頁から並んでいる（逆順）');
-  controls.append(reverseField);
 
   if (file.role === 'exclude') return controls;
   if (file.role !== 'body') return coverControls(file, controls);
@@ -1112,8 +1097,9 @@ function fileControls(file) {
 }
 
 /**
- * 先頭・末尾に置くファイルの「先頭の頁の番号」。表紙などが何ファイルかある
- * ときに、先頭（末尾）の中での並べ順を決める（頁は 1 つずつ進む）。
+ * 先頭・末尾に置くファイルの「先頭の頁の番号」と「進み方」。本文と同じ形で、
+ * 表紙などが何ファイルかあるときに、先頭（末尾）の中での並べ順を決める。
+ * 進み方を逆順にすると、給紙の都合で最後の頁から並んだファイルを並べ直す。
  */
 function coverControls(file, controls) {
   const startField = el(document, 'label', 'bm-inline');
@@ -1136,12 +1122,30 @@ function coverControls(file, controls) {
     refresh();
   });
   startField.append(start);
-  controls.append(startField);
+
+  const stepField = el(document, 'label', 'bm-inline');
+  stepField.append('進み方 ');
+  const step = el(document, 'select');
+  [
+    ['1', '1 つずつ'],
+    ['-1', '1 つずつ逆順（最後の頁から）'],
+  ].forEach(([value, text]) => {
+    const option = el(document, 'option', null, text);
+    option.value = value;
+    option.selected = String(file.coverStep) === value;
+    step.append(option);
+  });
+  step.addEventListener('change', () => {
+    file.coverStep = Number(step.value);
+    refresh();
+  });
+  stepField.append(step);
+  controls.append(startField, stepField);
   const note = el(
     document,
     'span',
     'hint',
-    '先頭（末尾）に置くファイルが何ファイルかあるとき、その中での順番です（番号の小さい順。空なら追加した順で、番号を入れたものの後ろ）。'
+    '番号は、先頭（末尾）に置くファイルが何ファイルかあるとき、その中での順番です（番号の小さい順。空なら追加した順で、番号を入れたものの後ろ）。'
   );
   controls.append(note);
   return controls;
