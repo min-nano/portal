@@ -1167,6 +1167,73 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   box-shadow: inset 3px 0 0 var(--brand-600);
 }
 
+/* いくつも選ぶとき（.multiple）は、iOS のファイルの選択と同じく行の左に丸を
+ * 出し、なぞって続けて選べるようにする。丸の上はどの向きに動かしても選ぶ
+ * （touch-action: none）。行のほかの所は、縦に動かし始めれば一覧のスクロール、
+ * 横に動かし始めれば選ぶ（pan-y）。長押しのメニューや文字の選択も出さない。 */
+.drive-picker.multiple .drive-picker-item {
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* 丸は行の左端から高さいっぱいを受け持つ（指で狙いやすいように広げる）。 */
+.drive-picker-check {
+  flex: none;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  box-sizing: content-box;
+  width: 22px;
+  margin-left: calc(-1 * var(--s-3));
+  padding: 0 var(--s-1) 0 var(--s-3);
+  touch-action: none;
+}
+
+.drive-picker-check.blank {
+  touch-action: pan-y;
+}
+
+.drive-picker-check svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.drive-picker-check circle {
+  stroke: var(--n-300);
+  transition: fill var(--dur) var(--ease), stroke var(--dur) var(--ease);
+}
+
+.drive-picker-check path {
+  stroke: transparent;
+  stroke-width: 2;
+}
+
+.drive-picker-item[aria-pressed='true'] .drive-picker-check circle {
+  fill: var(--brand-600);
+  stroke: var(--brand-600);
+}
+
+.drive-picker-item[aria-pressed='true'] .drive-picker-check path {
+  stroke: var(--text-inverse);
+}
+
+/* 丸が選んだ印になるので、左の帯は要らない。 */
+.drive-picker.multiple .drive-picker-item[aria-pressed='true'] {
+  box-shadow: none;
+}
+
+.drive-picker-hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
 .drive-picker-icon {
   flex: none;
   width: 22px;

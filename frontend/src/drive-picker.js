@@ -19,7 +19,9 @@
 // ここから返すのはファイルの ID・名前・種類だけ。
 //
 // いくつも選ぶ（pickFiles）こともできる。押すたびに選ぶ・外すが切り替わり、
-// 選んだものはフォルダを移っても残る。
+// 選んだものはフォルダを移っても残る。iOS のファイルの選択と同じく、行を
+// なぞれば続けて選べる（左の丸の上はどの向きでも、行のほかの所は横に動かし
+// 始めれば。縦に動かし始めたときは一覧のスクロール）。
 
 import { apiGet } from './api.js';
 import { el } from './components/form-field.js';
@@ -40,6 +42,14 @@ const MY_DRIVE_ROOT = { id: 'root', name: 'マイドライブ' };
 
 // 検索は打ち終わるのを少し待ってから送る（1 文字ごとに Drive へ問い合わせない）。
 const SEARCH_DELAY_MS = 350;
+
+// なぞって選ぶ。指はこれだけ動いてから「なぞった」とみなす（タップの揺れで
+// 選び始めない）。マウスは揺れが小さいので短くする。
+const DRAG_START_PX = { touch: 10, mouse: 5 };
+// なぞっている指が一覧の上下の端のこの幅に入ったら、一覧を送る（端に近いほど速く。
+// 1 秒あたりの最大。60Hz の画面で 1 フレーム 16px）。
+const AUTO_SCROLL_EDGE_PX = 48;
+const AUTO_SCROLL_MAX_PX_PER_S = 960;
 
 // 開き直したときは、前回いた場所から始める（雛形と保存先を続けて選ぶときなど、
 // 同じフォルダの周りを行き来することが多いため）。ページを開き直せば忘れる。
@@ -75,6 +85,76 @@ function icon(doc, kind) {
   path.setAttribute('d', ICON_PATHS[kind]);
   svg.append(path);
   return svg;
+}
+
+/**
+ * いくつも選ぶときの、行の左の丸（選ぶと塗られてチェックが付く）。
+ *
+ * 丸の上は、どの向きになぞっても選ぶ所（CSS で touch-action: none）。
+ * フォルダは選べないので、丸の代わりに同じ幅の空きを置いて名前を揃える。
+ */
+function checkMark(doc, folder) {
+  const mark = el(doc, 'span', folder ? 'drive-picker-check blank' : 'drive-picker-check');
+  if (folder) return mark;
+  const svg = doc.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  const circle = doc.createElementNS(SVG_NS, 'circle');
+  circle.setAttribute('cx', '12');
+  circle.setAttribute('cy', '12');
+  circle.setAttribute('r', '10.25');
+  const tick = doc.createElementNS(SVG_NS, 'path');
+  tick.setAttribute('d', 'M7.5 12.5l3 3 6-6.5');
+  svg.append(circle, tick);
+  mark.append(svg);
+  return mark;
+}
+
+/**
+ * なぞって選んだあとの選択（ID → ファイル。選んだ順）。
+ *
+ * なぞり始めた行（from）から今の行（to）までを、すべて選ぶ（select）か
+ * すべて外す。範囲の外は、なぞり始める前（before）のまま。行き過ぎて戻れば、
+ * 通り過ぎた行も元に戻る。フォルダは飛ばす。
+ *
+ * @param {Map<string, object>} before なぞり始める前の選択。
+ * @param {object[]} items 一覧の並び（上から順。フォルダも含む）。
+ * @param {number} from なぞり始めた行の位置。
+ * @param {number} to 今の行の位置。
+ * @param {boolean} select 選ぶなら true、外すなら false。
+ */
+export function dragSelection(before, items, from, to, select) {
+  const picked = new Map(before);
+  const step = to >= from ? 1 : -1;
+  // なぞった向きに足していく（選んだ順＝なぞった順）。
+  for (let i = from; i !== to + step; i += step) {
+    const item = items[i];
+    if (!item || item.folder) continue;
+    if (!select) picked.delete(item.id);
+    else if (!picked.has(item.id)) picked.set(item.id, item);
+  }
+  return picked;
+}
+
+/**
+ * 画面の高さ y にある行の位置（上端が y より上にある、いちばん下の行）。
+ * 先頭の行より上なら先頭。
+ *
+ * 行は上から順に並んでいるので二分探索する（数百行あっても、指が動くたびに
+ * すべての行の位置を測らない）。
+ *
+ * @param {Element[]} rows 一覧の行（上から順）。
+ * @param {number} y 画面座標（clientY）。
+ */
+function rowIndexAt(rows, y) {
+  let low = 0;
+  let high = rows.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (rows[mid].getBoundingClientRect().top <= y) low = mid;
+    else high = mid - 1;
+  }
+  return low;
 }
 
 /**
@@ -173,6 +253,11 @@ function buildDialog(doc) {
   const crumbs = el(doc, 'nav', 'drive-picker-crumbs');
   crumbs.setAttribute('aria-label', '現在の場所');
 
+  // なぞって選べることは、見ただけでは分からないので書いておく（いくつも
+  // 選ぶときだけ出す）。
+  const hint = el(doc, 'p', 'drive-picker-hint', '左の ○ を上下になぞると、続けて選べます。');
+  hint.hidden = true;
+
   const body = el(doc, 'div', 'drive-picker-body');
   const list = el(doc, 'ul', 'drive-picker-list');
   const status = el(doc, 'p', 'drive-picker-status');
@@ -191,7 +276,7 @@ function buildDialog(doc) {
   cancel.dataset.action = 'cancel';
   actions.append(choose, cancel);
 
-  dialog.append(head, tabs, search, crumbs, body, actions);
+  dialog.append(head, tabs, search, crumbs, hint, body, actions);
   return dialog;
 }
 
@@ -235,6 +320,7 @@ function openPicker(options) {
   const doc = document;
   const dialog = dialogFor(doc);
   const $ = (selector) => dialog.querySelector(selector);
+  const body = $('.drive-picker-body');
   const list = $('.drive-picker-list');
   const status = $('.drive-picker-status');
   const more = $('.drive-picker-more');
@@ -243,6 +329,8 @@ function openPicker(options) {
 
   $('#drivePickerTitle').textContent = options.title || '';
   input.value = '';
+  dialog.classList.toggle('multiple', Boolean(options.multiple));
+  $('.drive-picker-hint').hidden = !options.multiple;
 
   const state = { ...lastPlace, path: [...lastPlace.path], query: '' };
   let selected = null; // 一覧で選んでいるファイル（1 つ選ぶとき）
@@ -320,6 +408,7 @@ function openPicker(options) {
     if (!item.folder) button.setAttribute('aria-pressed', String(picked.has(item.id)));
     const name = el(doc, 'span', 'drive-picker-name', item.name);
     const date = el(doc, 'span', 'drive-picker-date', formatDate(item.modifiedTime));
+    if (options.multiple) button.append(checkMark(doc, item.folder));
     button.append(icon(doc, item.folder ? 'folder' : 'file'), name, date);
     button.title = item.name;
     button.driveItem = item;
@@ -333,13 +422,14 @@ function openPicker(options) {
     const controller = new AbortController();
     loading = controller;
     if (!append) {
+      stopDrag();
       selected = null;
       nextPageToken = null;
       shown = new Set();
       incomplete = false;
       list.replaceChildren();
       // 別の場所へ移ったら、一覧は先頭から見せる。
-      $('.drive-picker-body').scrollTop = 0;
+      body.scrollTop = 0;
       renderTabs();
       renderCrumbs();
     }
@@ -368,6 +458,8 @@ function openPicker(options) {
         shown.add(item.id);
         list.append(renderItem(item));
       });
+    // なぞっている最中に続きを読んだら、足した行もなぞれるようにする。
+    if (drag?.active) drag.rows = rows();
     nextPageToken = result.nextPageToken || null;
     incomplete = incomplete || Boolean(result.incomplete);
     // 絞り込みで 1 ページがまるごと対象外だった（0 件でも続きがある）ときは、
@@ -409,6 +501,111 @@ function openPicker(options) {
     updateChoose();
   };
 
+  // --- なぞって選ぶ（いくつも選ぶとき） ---
+  // 押した行から、いま指のある行までを続けて選ぶ（なぞり始めた行を選んで
+  // いなければ選び、選んでいれば外す）。一覧の上下の端まで来たら一覧を送る。
+  const view = doc.defaultView;
+  let drag = null; // なぞっている最中の様子（押したときに作り、動き出したら active）
+  // マウスでなぞり終えたあとに届く click は、行を押したことにしない（なぞり
+  // 終えた行や、押した行と離した行の共通の祖先で click が起きる）。次に押す
+  // まで待つ（いつ届くかはブラウザによるので、時間では区切らない）。
+  let swallowClick = false;
+
+  const rows = () => [...list.querySelectorAll('.drive-picker-item')];
+
+  // 指の下の行が変わったときだけ、選び直す。
+  const extendDrag = () => {
+    // 一覧の外の指は、見えている端の行にいるとみなす（送ってあって見えていない
+    // 行は選ばない。そうした行は、自動送りで見せてから選ぶ）。
+    const { top, bottom } = body.getBoundingClientRect();
+    const to = rowIndexAt(drag.rows, Math.min(Math.max(drag.y, top), bottom - 1));
+    if (to === drag.to) return;
+    drag.to = to;
+    const items = drag.rows.map((row) => row.driveItem);
+    const next = dragSelection(drag.before, items, drag.from, to, drag.select);
+    picked.clear();
+    next.forEach((item, id) => picked.set(id, item));
+    drag.rows.forEach((row) => {
+      if (row.driveItem.folder) return;
+      const pressed = String(picked.has(row.driveItem.id));
+      if (row.getAttribute('aria-pressed') !== pressed) row.setAttribute('aria-pressed', pressed);
+    });
+    updateChoose();
+  };
+
+  /**
+   * 端の帯で一覧を送る速さ（-1〜1。0 なら送らない）。
+   *
+   * 端の行は、押した所がもう端の帯の中にある（行の高さより帯が広い）。その
+   * 端は、そちらへ動かすか、一度帯の外へ出るまでは送らない（端の行から反対へ
+   * なぞり始めたのに、一覧が逆へ流れて余計な行を選ばないように）。
+   */
+  const edgeSpeed = () => {
+    const { top, bottom } = body.getBoundingClientRect();
+    const edge = AUTO_SCROLL_EDGE_PX;
+    const inTop = drag.y < top + edge;
+    const inBottom = drag.y > bottom - edge;
+    if (!inTop) drag.topArmed = true;
+    if (!inBottom) drag.bottomArmed = true;
+    if (inTop && (drag.topArmed || drag.y < drag.y0)) {
+      return -Math.min(1, (top + edge - drag.y) / edge);
+    }
+    if (inBottom && (drag.bottomArmed || drag.y > drag.y0)) {
+      return Math.min(1, (drag.y - (bottom - edge)) / edge);
+    }
+    return 0;
+  };
+
+  // 端の帯にいる間だけ回す（帯の外へ出たら止まり、次に入れば pointermove から
+  // また始める）。選び直すのは、送ったあとの scroll で行う。
+  const autoScroll = (now) => {
+    const speed = edgeSpeed();
+    if (!speed) {
+      drag.frame = 0;
+      return;
+    }
+    // 送る量は前のフレームからの時間に比例させる（リフレッシュレートが高い画面
+    // でも速くならないように）。1px に満たない分は次へ持ち越す。
+    const elapsed = drag.lastFrame === null ? 1000 / 60 : Math.min(now - drag.lastFrame, 100);
+    drag.lastFrame = now;
+    drag.carry += (speed * AUTO_SCROLL_MAX_PX_PER_S * elapsed) / 1000;
+    const step = Math.trunc(drag.carry);
+    drag.carry -= step;
+    if (step) body.scrollTop += step;
+    drag.frame = view.requestAnimationFrame(autoScroll);
+  };
+
+  const keepScrolling = () => {
+    if (drag.frame || !edgeSpeed()) return;
+    drag.lastFrame = null;
+    drag.carry = 0;
+    drag.frame = view.requestAnimationFrame(autoScroll);
+  };
+
+  const startDrag = () => {
+    drag.active = true;
+    drag.select = !picked.has(drag.row.driveItem.id);
+    drag.before = new Map(picked);
+    // 行は、一覧を描き直すまで変わらない（描き直す前に stopDrag する。続きを
+    // 読んだときは load で足す）。
+    drag.rows = rows();
+    drag.from = drag.rows.indexOf(drag.row);
+    drag.to = null;
+    // 一覧の外（上下の端より先）へ出ても、指を追い続ける。
+    try {
+      list.setPointerCapture?.(drag.pointerId);
+    } catch {
+      // 指がもう離れていた。続く pointerup / pointercancel で終わる。
+    }
+    extendDrag();
+    keepScrolling();
+  };
+
+  function stopDrag() {
+    if (drag?.frame) view.cancelAnimationFrame(drag.frame);
+    drag = null;
+  }
+
   const result = () => {
     if (options.multiple) {
       return [...picked.values()].map(({ id, name, mimeType }) => ({ id, name, mimeType }));
@@ -424,13 +621,14 @@ function openPicker(options) {
 
   return new Promise((resolve) => {
     const listening = new AbortController();
-    const on = (target, type, handler) =>
-      target.addEventListener(type, handler, { signal: listening.signal });
+    const on = (target, type, handler, capture = false) =>
+      target.addEventListener(type, handler, { signal: listening.signal, capture });
     let searchTimer = null;
     let observer = null;
 
     const finish = (value) => {
       listening.abort();
+      stopDrag();
       clearTimeout(searchTimer);
       if (observer) observer.disconnect();
       if (loading) loading.abort();
@@ -438,6 +636,86 @@ function openPicker(options) {
       dialog.close();
       resolve(value);
     };
+
+    if (options.multiple) {
+      on(list, 'pointerdown', (event) => {
+        // なぞり始める前の drag が残っていたら（離したのを取り逃した）、押し直した
+        // ここから始め直す。
+        if (drag?.active || !event.isPrimary || event.button !== 0) return;
+        const row = event.target.closest('.drive-picker-item');
+        if (!row || row.driveItem.folder) return;
+        drag = {
+          pointerId: event.pointerId,
+          pointerType: event.pointerType,
+          mouse: event.pointerType === 'mouse',
+          // 丸の上では、どの向きに動かしてもなぞり始める（CSS でスクロールを
+          // 止めてある）。
+          onCheck: Boolean(event.target.closest('.drive-picker-check')),
+          row,
+          x0: event.clientX,
+          y0: event.clientY,
+          y: event.clientY,
+          active: false,
+        };
+      });
+      on(list, 'pointermove', (event) => {
+        if (!drag || event.pointerId !== drag.pointerId) return;
+        // マウスのボタンをウィンドウの外で離すと、pointerup は届かない（なぞり
+        // 始める前は一覧で捕まえていない）。ボタンを離したまま動かしたら終える。
+        if (drag.mouse && !(event.buttons & 1)) {
+          stopDrag();
+          return;
+        }
+        drag.y = event.clientY;
+        if (drag.active) {
+          event.preventDefault();
+          extendDrag();
+          keepScrolling();
+          return;
+        }
+        const dx = Math.abs(event.clientX - drag.x0);
+        const dy = Math.abs(event.clientY - drag.y0);
+        if (Math.max(dx, dy) < DRAG_START_PX[drag.mouse ? 'mouse' : 'touch']) return;
+        // 指で丸の外を縦に動かし始めたのは、一覧のスクロール（ブラウザに任せる。
+        // 横に動かし始めたときは、CSS の touch-action: pan-y でスクロールしない）。
+        if (drag.mouse || drag.onCheck || dx > dy) startDrag();
+        else stopDrag();
+      });
+      // 離したのは、一覧の外でも受ける（なぞり始める前は一覧で捕まえていない）。
+      on(doc, 'pointerup', (event) => {
+        if (!drag || event.pointerId !== drag.pointerId) return;
+        // 指でなぞったあとには click が来ない（動いたタッチは click にならない）。
+        if (drag.active && drag.pointerType !== 'touch') swallowClick = true;
+        stopDrag();
+      });
+      on(doc, 'pointercancel', (event) => {
+        if (drag && event.pointerId === drag.pointerId) stopDrag();
+      });
+      // ホイール・慣性・自動送りのどれで送っても、指の下を通った行を選ぶ。
+      on(body, 'scroll', () => {
+        if (drag?.active) extendDrag();
+      });
+      // 次に押したら、その click は普通に受ける。
+      on(
+        dialog,
+        'pointerdown',
+        () => {
+          swallowClick = false;
+        },
+        true
+      );
+      on(
+        dialog,
+        'click',
+        (event) => {
+          // キーボードで押した click（detail が 0）は、なぞったあとでも受ける。
+          if (!swallowClick || event.detail === 0) return;
+          swallowClick = false;
+          event.stopPropagation();
+        },
+        true
+      );
+    }
 
     on(dialog, 'click', (event) => {
       const target = event.target.closest('button');
