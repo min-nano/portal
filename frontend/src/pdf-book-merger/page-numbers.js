@@ -313,26 +313,44 @@ export function manualFileNumbers(count, start, step) {
 }
 
 /**
- * 番号の付き方を 1 行で言い表す（ファイルの一覧に出す）。
+ * 番号の付き方を、何頁目か（n。ファイルの中で 1 から）の式で言い表す
+ * （ファイルの一覧の見出しに出す）。番号の飛んでいるところでずれが切り替わる
+ * ときは、区間ごとの式を並べる。
+ *
+ *   奇数頁の束 1, 3, 5, 7        → 2n-1[n=1..4]
+ *   裏返した偶数頁の束 8, 6, 4, 2 → -2n+10[n=1..4]
+ *   途中で飛ぶ 1, 3, 9, 11       → 2n-1[n=1..2], 2n+3[n=3..4]
  *
  * @param {{step:number|null, pages:{number:number|null}[]}} numbering
  */
-export function describeNumbering(numbering) {
-  const numbers = numbering.pages.map((page) => page.number).filter((n) => n !== null);
-  if (numbers.length === 0) return '頁番号を読み取れませんでした';
-  const first = numbers[0];
-  const last = numbers[numbers.length - 1];
-  const step = numbering.step;
-  const kind =
-    step === 2 || step === -2
-      ? first % 2 === 0
-        ? '偶数頁'
-        : '奇数頁'
-      : step === 1 || step === -1
-        ? '連続した頁'
-        : '頁';
-  const order = step < 0 ? '（逆順）' : '';
-  return `${kind}${order} ${formatNumber(first)}〜${formatNumber(last)}`;
+export function numberingFormula(numbering) {
+  const { step, pages } = numbering;
+  if (step === null || step === undefined) return `?[n=1..${pages.length}]`;
+  const runs = [];
+  pages.forEach((page, index) => {
+    const n = index + 1;
+    const offset = page.number === null ? null : page.number - step * n;
+    const run = runs.at(-1);
+    if (run && run.offset === offset) {
+      run.last = n;
+    } else {
+      runs.push({ offset, first: n, last: n });
+    }
+  });
+  return runs
+    .map((run) => {
+      const range = run.first === run.last ? `n=${run.first}` : `n=${run.first}..${run.last}`;
+      return `${formulaTerm(step, run.offset)}[${range}]`;
+    })
+    .join(', ');
+}
+
+/** step·n + offset を、1n・+0 を省いて書く。 */
+function formulaTerm(step, offset) {
+  if (offset === null) return '?';
+  const coefficient = step === 1 ? '' : step === -1 ? '-' : String(step);
+  const constant = offset === 0 ? '' : offset > 0 ? `+${offset}` : String(offset);
+  return `${coefficient}n${constant}`;
 }
 
 /** 頁番号の表示。前付け（0 以下）は「前付」と分かるようにする。 */

@@ -45,7 +45,7 @@ import {
   roleFromName,
   sideOf,
 } from './ordering.js';
-import { describeNumbering, pageNumberCandidates } from './page-numbers.js';
+import { numberingFormula, pageNumberCandidates } from './page-numbers.js';
 import { findScanImages } from './scan-images.js';
 import { pdfLibViews } from './pdf-lib-views.js';
 import {
@@ -932,7 +932,11 @@ function fileItem(file) {
   remove.slot = 'actions';
   section.append(remove);
 
-  if (ready) section.append(fileControls(file));
+  if (ready) {
+    const details = fileDetails(file);
+    if (details) section.append(el(document, 'p', 'hint bm-file-details', details));
+    section.append(fileControls(file));
+  }
   item.append(section);
   return item;
 }
@@ -945,30 +949,39 @@ const ROLE_SHORT = {
   exclude: '結合しない',
 };
 
-/** 見出しの 2 行目。読み込みの経過か、役割・頁番号などの設定の要約。 */
+/**
+ * 見出しの 2 行目。読み込みの経過か、役割と設定の要約（本文なら頁番号の付き方を
+ * 式で。例: 本文(頁番号: 2n-13[n=1..14])）。
+ */
 function fileMeta(file) {
   if (file.status === 'error') return file.error;
   if (file.status !== 'ready') return STATUS_TEXT[file.status];
-  const parts = [ROLE_SHORT[file.role], fileSummary(file)];
-  if (file.role === 'body' && file.manual) parts.push('番号は手入力');
-  if (file.role !== 'body' && file.role !== 'exclude' && Number.isInteger(file.coverStart)) {
-    parts.push(`先頭の頁の番号 ${file.coverStart}`);
+  const details = [];
+  const numbering = file.role === 'body' ? view.numberings.get(file.key) : null;
+  if (numbering) {
+    details.push(`頁番号: ${numberingFormula(numbering)}`);
+    if (file.manual) details.push('手入力');
+  } else {
+    details.push(`${file.pages.length} 頁`);
+    if (file.role !== 'exclude' && Number.isInteger(file.coverStart)) {
+      details.push(`先頭の頁の番号 ${file.coverStart}`);
+    }
   }
-  if (file.reversed) parts.push('最後の頁から');
-  if (file.ocrBusy) parts.push('余白を読み取り中');
-  return parts.join('・');
+  if (file.reversed) details.push('最後の頁から');
+  if (file.ocrBusy) details.push('余白を読み取り中');
+  return `${ROLE_SHORT[file.role]}(${details.join(', ')})`;
 }
 
-function fileSummary(file) {
-  const parts = [`${file.pages.length} 頁`];
-  const numbering = view.numberings.get(file.key);
-  if (file.role === 'body' && numbering) {
-    parts.push(describeNumbering(numbering));
+/** 開いたときに出す、読み取りの内訳（番号を読めた頁の数・文字情報の無い頁）。 */
+function fileDetails(file) {
+  const parts = [];
+  const numbering = file.role === 'body' ? view.numberings.get(file.key) : null;
+  if (numbering) {
     const read = numbering.pages.filter((page) => page.status === 'detected').length;
     const byOcr = numbering.pages.filter(
       (page) => page.status === 'detected' && page.read?.source === 'ocr'
     ).length;
-    parts.push(`番号を読めた頁 ${read}${byOcr ? `（うち画像から ${byOcr}）` : ''}`);
+    parts.push(`${file.pages.length} 頁のうち番号を読めた頁 ${read}${byOcr ? `（うち画像から ${byOcr}）` : ''}`);
   }
   const textPages = file.pages.filter((page) => page.signature.length > 0).length;
   if (textPages < file.pages.length) parts.push(`文字情報なし ${file.pages.length - textPages} 頁`);

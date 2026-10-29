@@ -7,13 +7,13 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  describeNumbering,
   detectStep,
   formatNumber,
   groupLines,
   inferFileNumbers,
   manualFileNumbers,
   normalizeDigits,
+  numberingFormula,
   pageNumberCandidates,
 } from '../src/pdf-book-merger/page-numbers.js';
 
@@ -191,7 +191,7 @@ describe('inferFileNumbers', () => {
   });
 });
 
-describe('manualFileNumbers / describeNumbering / formatNumber', () => {
+describe('manualFileNumbers / numberingFormula / formatNumber', () => {
   it('手で決めた先頭の番号と歩幅で並べる', () => {
     expect(manualFileNumbers(3, 20, -2).pages.map((p) => [p.number, p.status])).toEqual([
       [20, 'manual'],
@@ -200,13 +200,21 @@ describe('manualFileNumbers / describeNumbering / formatNumber', () => {
     ]);
   });
 
-  it('番号の付き方を 1 行で言い表す', () => {
-    expect(describeNumbering(inferFileNumbers([read(1), read(3), read(5)]))).toBe('奇数頁 1〜5');
-    expect(describeNumbering(inferFileNumbers([read(6), read(4), read(2)]))).toBe(
-      '偶数頁（逆順） 6〜2'
-    );
-    expect(describeNumbering(inferFileNumbers([read(6), read(7)]))).toBe('連続した頁 6〜7');
-    expect(describeNumbering(inferFileNumbers([none()]))).toBe('頁番号を読み取れませんでした');
+  it('番号の付き方を、何頁目か（n）の式で言い表す', () => {
+    expect(numberingFormula(inferFileNumbers([read(1), read(3), read(5)]))).toBe('2n-1[n=1..3]');
+    expect(numberingFormula(inferFileNumbers([read(6), read(4), read(2)]))).toBe('-2n+8[n=1..3]');
+    expect(numberingFormula(inferFileNumbers([read(6), read(7)]))).toBe('n+5[n=1..2]');
+    expect(numberingFormula(manualFileNumbers(3, 3, -1))).toBe('-n+4[n=1..3]');
+    expect(numberingFormula(manualFileNumbers(2, 2, 2))).toBe('2n[n=1..2]');
+    // 前付け（0 以下の番号）から始まる束。
+    expect(numberingFormula(manualFileNumbers(14, -11, 2))).toBe('2n-13[n=1..14]');
+    expect(numberingFormula(inferFileNumbers([none()]))).toBe('?[n=1..1]');
+  });
+
+  it('番号が飛んでずれが切り替わるところでは、区間ごとの式を並べる', () => {
+    const numbers = (...list) => ({ step: 2, pages: list.map((number) => ({ number })) });
+    expect(numberingFormula(numbers(1, 3, 9, 11))).toBe('2n-1[n=1..2], 2n+3[n=3..4]');
+    expect(numberingFormula(numbers(1, 3, 9))).toBe('2n-1[n=1..2], 2n+3[n=3]');
   });
 
   it('前付けと、間に入れた頁の番号の見せ方', () => {

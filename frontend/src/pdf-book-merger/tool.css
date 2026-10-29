@@ -177,6 +177,10 @@ portal-section.bm-file.error {
   max-width: none;
 }
 
+.bm-file-details {
+  margin: 0 0 var(--s-2);
+}
+
 .bm-file > button[slot='actions'],
 .bm-problem button {
   min-height: 32px;
