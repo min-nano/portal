@@ -313,26 +313,37 @@ export function manualFileNumbers(count, start, step) {
 }
 
 /**
- * 番号の付き方を 1 行で言い表す（ファイルの一覧に出す）。
+ * 番号の付き方を、ファイルの頁の順に番号を並べて言い表す（ファイルの一覧の
+ * 見出しに出す）。長い並びは、はじめの 3 つと終わりの 2 つだけを出して間を
+ * 「...」で詰める。番号が飛んでいるところは詰めずに、飛んだ先から並べ直す
+ * （「...」の中に飛びが隠れないように）。
+ *
+ *   前付けから始まる奇数頁の束 → -11, -9, -7...13, 15
+ *   裏返した偶数頁の束         → 8, 6, 4, 2
+ *   途中で飛ぶ                 → 1, 3, 5...17, 19, 31, 33, 35...47, 49
  *
  * @param {{step:number|null, pages:{number:number|null}[]}} numbering
  */
-export function describeNumbering(numbering) {
-  const numbers = numbering.pages.map((page) => page.number).filter((n) => n !== null);
-  if (numbers.length === 0) return '頁番号を読み取れませんでした';
-  const first = numbers[0];
-  const last = numbers[numbers.length - 1];
-  const step = numbering.step;
-  const kind =
-    step === 2 || step === -2
-      ? first % 2 === 0
-        ? '偶数頁'
-        : '奇数頁'
-      : step === 1 || step === -1
-        ? '連続した頁'
-        : '頁';
-  const order = step < 0 ? '（逆順）' : '';
-  return `${kind}${order} ${formatNumber(first)}〜${formatNumber(last)}`;
+export function numberingSequence(numbering) {
+  const { step, pages } = numbering;
+  // 歩幅をほかの束から借りても、番号の候補が 1 つも無ければ番号は決まらない。
+  if (step === null || step === undefined || pages.every((page) => page.number === null)) {
+    return '?';
+  }
+  const runs = [];
+  for (const { number } of pages) {
+    const run = runs.at(-1);
+    if (run && number === run.at(-1) + step) {
+      run.push(number);
+    } else {
+      runs.push([number]);
+    }
+  }
+  return runs
+    .map((run) =>
+      run.length <= 5 ? run.join(', ') : `${run.slice(0, 3).join(', ')}...${run.slice(-2).join(', ')}`
+    )
+    .join(', ');
 }
 
 /** 頁番号の表示。前付け（0 以下）は「前付」と分かるようにする。 */
