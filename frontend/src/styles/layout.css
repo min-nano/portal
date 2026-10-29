@@ -165,8 +165,8 @@
    幕は 2 枚に分けてある。ヘッダーは backdrop-filter で固定配置の基準に
    なってしまい、中から画面全体を覆えないので、ページ側は body に張り、
    ヘッダーの帯の上にはヘッダー自身の ::after を重ねる（アカウント欄だけ
-   その手前に出る）。ページ側の幕に触れると、外に触れたことになって閉じる
-   （下のリンクは押されない）。 */
+   その手前に出る）。どちらの幕も、触れると閉じるだけで、下のリンクや
+   ボタンには届かない（page-header.js）。 */
 body::after,
 .portal-header::after {
   content: '';
@@ -206,7 +206,10 @@ body:has(.portal-header .account.open)::after,
   visibility: visible;
 }
 
-body:has(.portal-header .account.open)::after {
+/* 開いているあいだは幕が触れたのを受け止める（ヘッダーの帯の上も。
+   ポータル名のリンクに触れても、閉じるだけになる）。 */
+body:has(.portal-header .account.open)::after,
+.portal-header:has(.account.open)::after {
   pointer-events: auto;
 }
 

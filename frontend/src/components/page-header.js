@@ -97,10 +97,23 @@ export class PortalHeader extends HTMLElement {
     toggle.addEventListener('click', () => {
       setOpen(!account.classList.contains('open'));
     });
-    // メニューの外に触れたら閉じる。
-    doc.addEventListener('pointerdown', (event) => {
-      if (!account.contains(event.target)) setOpen(false);
-    });
+    // メニューの外（幕）に触れたら閉じるだけにする。そのクリックは下の
+    // 本文へ渡さない（幕の下のリンクやボタンが、触れたつもりのないまま
+    // 動かないように）。
+    //
+    // 閉じるのは pointerdown ではなく click で行う。指を置いた時点で閉じると
+    // 幕がそこで消え、指を離したときの click が幕の下の要素に届いてしまう。
+    // 捕捉段階で受けて、ほかの誰よりも先に止める。
+    doc.addEventListener(
+      'click',
+      (event) => {
+        if (!account.classList.contains('open') || account.contains(event.target)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+      },
+      true
+    );
     account.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape' || !account.classList.contains('open')) return;
       setOpen(false);

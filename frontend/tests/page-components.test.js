@@ -79,12 +79,29 @@ describe('portal-header', () => {
 
     toggle.click();
     // メニューの中に触れても閉じない（サインアウトを押せるように）。
-    document
-      .getElementById('signOutBtn')
-      .dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    // メニューの中のクリックは閉じない（サインアウトを押せるように）。
+    let signedOut = false;
+    document.getElementById('signOutBtn').addEventListener('click', () => {
+      signedOut = true;
+    });
+    document.getElementById('signOutBtn').click();
+    expect(signedOut).toBe(true);
     expect(area.classList.contains('open')).toBe(true);
-    document.getElementById('outside').dispatchEvent(new Event('pointerdown', { bubbles: true }));
+
+    // 外（幕）のクリックは閉じるだけで、下の要素には届かない。
+    let reached = false;
+    document.getElementById('outside').addEventListener('click', () => {
+      reached = true;
+    });
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    document.getElementById('outside').dispatchEvent(click);
     expect(area.classList.contains('open')).toBe(false);
+    expect(reached).toBe(false);
+    expect(click.defaultPrevented).toBe(true);
+
+    // 閉じているときのクリックは、ふつうに届く。
+    document.getElementById('outside').click();
+    expect(reached).toBe(true);
 
     toggle.click();
     // Esc 以外のキーでは閉じない。
