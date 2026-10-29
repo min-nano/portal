@@ -158,3 +158,24 @@ updates:
         update-types:
           - minor
           - patch
+
+  # PR レビュー（PR エージェント）の code-review プラグイン
+  #
+  # 取得元（anthropics/claude-plugins-official）には tag も release も無いので、
+  # submodule（.github/claude-plugins-official）で commit を固定し、main の
+  # 最新 commit へ上げさせる。上流は 1 日に何度も更新され、code-review と関係
+  # ない変更でも上がるので、週 1 回にする（開いている PR は新しい commit に
+  # 置き換わる）。上げた commit にプラグインがあるかは tests.yml の
+  # review-plugin ジョブが確かめる。プラグイン自体の変更は、PR 本文の commit の
+  # 一覧のうち plugins/code-review に触れるものを見る。
+  - package-ecosystem: gitsubmodule
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"

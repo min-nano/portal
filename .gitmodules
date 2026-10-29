@@ -1,0 +1,7 @@
+# PR レビューの code-review プラグイン（.github/scripts/claude-review-plugin.sh）。
+# 固定と Dependabot での更新のためだけに置く。チェックアウトは不要。
+[submodule ".github/claude-plugins-official"]
+	path = .github/claude-plugins-official
+	url = https://github.com/anthropics/claude-plugins-official.git
+	branch = main
+	shallow = true
