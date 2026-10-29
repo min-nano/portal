@@ -98,7 +98,7 @@ let generation = 0;
 /** いまの並びのうち、結合する PDF を決める部分（頁・役割・頁番号）。変わったときだけ結合した PDF を捨てる。 */
 let orderKey = '';
 let filter = 'all';
-/** ファイルの一覧の並び順（added: 追加した順 / name: 名前の順 / time: 更新日時の古い順）。 */
+/** ファイルの一覧の並び順（added: 追加した順 / name: 名前の順 / time: 更新日時の古い順。-desc を付けると逆順）。 */
 let fileSort = 'added';
 // ファイルは 1 つずつ調べる（pdf.js も OCR も、同時に動かすと遅くなるだけなので）。
 let queue = Promise.resolve();
@@ -823,24 +823,26 @@ const byName = (a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true });
 /**
  * ファイルの一覧を、選んだ並び順に並べ直す。先頭・末尾に置くファイルのうち
  * 番号を入れていないものは、この順に並ぶ（本文は頁番号で並ぶので変わらない）。
- * 更新日時の分からないファイルは後ろへ。決まらないところは追加した順。
+ * 決まらないところは追加した順（逆順なら、それも逆）。更新日時の分からない
+ * ファイルは、逆順でも後ろへ。
  */
 function sortFiles() {
+  const key = fileSort.replace(/-desc$/, '');
+  const sign = fileSort.endsWith('-desc') ? -1 : 1;
   const byAdded = (a, b) => a.added - b.added;
   const compare = {
     added: byAdded,
     name: (a, b) => byName(a, b) || byAdded(a, b),
-    // どちらも分からなければ Infinity - Infinity（NaN）になり、名前の順へ進む。
-    time: (a, b) =>
-      (a.modified ?? Infinity) - (b.modified ?? Infinity) || byName(a, b) || byAdded(a, b),
-  }[fileSort];
-  files.sort(compare);
+    time: (a, b) => (a.modified ?? 0) - (b.modified ?? 0) || byName(a, b) || byAdded(a, b),
+  }[key];
+  const unknown = (file) => key === 'time' && file.modified === null;
+  files.sort((a, b) => unknown(a) - unknown(b) || sign * compare(a, b));
 }
 
 function setFileSort(value) {
   fileSort = value;
   sortFiles();
-  log(`ファイルを${{ added: '追加した順', name: '名前の順', time: '更新日時の順' }[value]}に並べました`);
+  log(`ファイルを「${$('fileSort').selectedOptions[0].textContent}」に並べました`);
   refresh();
 }
 
@@ -930,7 +932,7 @@ function smallButton(text, title, onClick, className = 'secondary') {
 function renderFiles() {
   const list = $('fileList');
   list.replaceChildren(...files.map(fileItem));
-  $('fileSort').hidden = files.length < 2;
+  $('fileSortField').hidden = files.length < 2;
   $('checkSection').hidden = readyFiles().length === 0;
   $('outputSection').hidden = readyFiles().length === 0;
 }
@@ -1651,9 +1653,7 @@ function wireUp() {
       renderGrid();
     })
   );
-  document.querySelectorAll('input[name="fileSort"]').forEach((radio) =>
-    radio.addEventListener('change', () => setFileSort(radio.value))
-  );
+  $('fileSort').addEventListener('change', (event) => setFileSort(event.target.value));
   $('outputName').addEventListener('input', () => {
     $('outputName').dataset.suggested = 'false';
     discardMerged();

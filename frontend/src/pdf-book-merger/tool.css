@@ -219,6 +219,11 @@ portal-section.bm-file.error {
   max-width: 6em;
 }
 
+/* 一覧の並び順。一覧のすぐ上に、一覧と間を空けて置く。 */
+.bm-sort {
+  margin-bottom: var(--s-2);
+}
+
 /* --- 指摘 ---------------------------------------------------------------- */
 
 .bm-problems {

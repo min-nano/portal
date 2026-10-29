@@ -391,24 +391,20 @@ describe('ファイルを足して並べる', () => {
     expect(fileItem('猫_奇数.pdf').querySelector('button[aria-label^="ひとつ"]')).toBeNull();
   });
 
-  it('ファイルの並び順を、追加順・名前順・更新日時順で切り替えられる', async () => {
+  it('ファイルの並び順を、追加順・名前順・更新日時順（それぞれ逆順も）で切り替えられる', async () => {
     const at = (name, bytes, lastModified) =>
       new File([bytes], name, { type: 'application/pdf', lastModified });
-    expect($('fileSort').hidden).toBe(true);
+    expect($('fileSortField').hidden).toBe(true);
     drop([at('猫_奇数.pdf', pdf(ODD), 3000), at('猫_表紙.pdf', pdf(COVER), 1000)]);
     await settled(2);
     drop([at('猫_偶数.pdf', pdf(EVEN), 2000)]);
     await settled(3);
     const names = () => [...document.querySelectorAll('#fileList .bm-file .name')].map((n) => n.textContent);
     const keys = () => [...document.querySelectorAll('#pageGrid > li')].map((card) => card.dataset.pageKey);
-    const sortBy = (value) => {
-      const radio = document.querySelector(`input[name="fileSort"][value="${value}"]`);
-      radio.checked = true;
-      radio.dispatchEvent(new Event('change'));
-    };
+    const sortBy = (value) => change($('fileSort'), value);
 
     // 既定は追加した順（一度に選んだファイルは名前の順）。
-    expect($('fileSort').hidden).toBe(false);
+    expect($('fileSortField').hidden).toBe(false);
     expect(names()).toEqual(['猫_奇数.pdf', '猫_表紙.pdf', '猫_偶数.pdf']);
 
     sortBy('time');
@@ -439,6 +435,17 @@ describe('ファイルを足して並べる', () => {
     await settled(6);
     sortBy('time');
     expect(names()).toEqual(['猫_帯.pdf', '猫_あとがき.pdf', '猫_表紙.pdf', '猫_偶数.pdf', '猫_奇数.pdf', '猫_栞.pdf']);
+
+    // 逆順。更新日時の分からないファイルは、逆順でも後ろのまま。
+    sortBy('time-desc');
+    expect(names()).toEqual(['猫_奇数.pdf', '猫_偶数.pdf', '猫_表紙.pdf', '猫_あとがき.pdf', '猫_帯.pdf', '猫_栞.pdf']);
+    sortBy('name-desc');
+    expect(names()).toEqual(['猫_栞.pdf', '猫_表紙.pdf', '猫_帯.pdf', '猫_偶数.pdf', '猫_奇数.pdf', '猫_あとがき.pdf']);
+    sortBy('added-desc');
+    expect(names()).toEqual(['猫_栞.pdf', '猫_帯.pdf', '猫_あとがき.pdf', '猫_偶数.pdf', '猫_表紙.pdf', '猫_奇数.pdf']);
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('ファイルを「追加順（逆順）」に並べました');
   });
 
   it('頁ごと・ファイルごとに番号を直せる', async () => {
