@@ -28,6 +28,97 @@ describe('portal-header', () => {
     expect(document.getElementById('accountArea').hidden).toBe(true);
     expect(document.getElementById('accountEmail')).not.toBeNull();
     expect(document.getElementById('signOutBtn').textContent).toBe('サインアウト');
+    // メールアドレスとサインアウトは、アバターから開くメニューの中にある。
+    const menu = document.getElementById('accountMenu');
+    expect(menu.contains(document.getElementById('accountEmail'))).toBe(true);
+    expect(menu.contains(document.getElementById('signOutBtn'))).toBe(true);
+  });
+
+  it('setAccount でアカウント欄を出し、頭文字と写真を入れる', () => {
+    document.body.innerHTML = '<portal-header portal-name="社内ポータル"></portal-header>';
+    const header = document.querySelector('portal-header');
+
+    header.setAccount({ email: 'taro@example.com', imageUrl: 'https://example.com/a.png' });
+
+    expect(document.getElementById('accountArea').hidden).toBe(false);
+    expect(document.getElementById('accountEmail').textContent).toBe('taro@example.com');
+    expect(document.getElementById('accountInitial').textContent).toBe('T');
+    const avatar = document.getElementById('accountAvatar');
+    expect(avatar.getAttribute('src')).toBe('https://example.com/a.png');
+    // 写真は読めてから出す（読めなければ頭文字のまま）。
+    expect(avatar.hidden).toBe(true);
+    avatar.dispatchEvent(new Event('load'));
+    expect(avatar.hidden).toBe(false);
+    avatar.dispatchEvent(new Event('error'));
+    expect(avatar.hidden).toBe(true);
+  });
+
+  it('メールアドレスも写真も無ければ、? を出して写真は読みに行かない', () => {
+    document.body.innerHTML = '<portal-header portal-name="社内ポータル"></portal-header>';
+
+    document.querySelector('portal-header').setAccount({ email: '' });
+
+    expect(document.getElementById('accountInitial').textContent).toBe('?');
+    expect(document.getElementById('accountToggle').getAttribute('aria-label')).toBe('アカウント');
+    expect(document.getElementById('accountAvatar').hasAttribute('src')).toBe(false);
+  });
+
+  it('アバターのタップでメニューを開け閉めし、外に触れるか Esc で閉じる', () => {
+    document.body.innerHTML =
+      '<portal-header portal-name="社内ポータル"></portal-header><p id="outside">本文</p>';
+    const area = document.getElementById('accountArea');
+    const toggle = document.getElementById('accountToggle');
+    area.hidden = false; // サインイン後の状態（隠れていると焦点を移せない）
+
+    toggle.click();
+    expect(area.classList.contains('open')).toBe(true);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    toggle.click();
+    expect(area.classList.contains('open')).toBe(false);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+    toggle.click();
+    // メニューの中に触れても閉じない（サインアウトを押せるように）。
+    // メニューの中のクリックは閉じない（サインアウトを押せるように）。
+    let signedOut = false;
+    document.getElementById('signOutBtn').addEventListener('click', () => {
+      signedOut = true;
+    });
+    document.getElementById('signOutBtn').click();
+    expect(signedOut).toBe(true);
+    expect(area.classList.contains('open')).toBe(true);
+
+    // 外（幕）のクリックは閉じるだけで、下の要素には届かない。
+    let reached = false;
+    document.getElementById('outside').addEventListener('click', () => {
+      reached = true;
+    });
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    document.getElementById('outside').dispatchEvent(click);
+    expect(area.classList.contains('open')).toBe(false);
+    expect(reached).toBe(false);
+    expect(click.defaultPrevented).toBe(true);
+
+    // 閉じているときのクリックは、ふつうに届く。
+    document.getElementById('outside').click();
+    expect(reached).toBe(true);
+
+    toggle.click();
+    // Esc 以外のキーでは閉じない。
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(area.classList.contains('open')).toBe(true);
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(area.classList.contains('open')).toBe(false);
+    expect(document.activeElement).toBe(toggle);
+    // 閉じているときの Esc は何もしない。
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(area.classList.contains('open')).toBe(false);
+  });
+
+  it('ページに置かれる前の setAccount は何もしない', () => {
+    const header = document.createElement('portal-header');
+    expect(() => header.setAccount({ email: 'taro@example.com' })).not.toThrow();
+    expect(header.children).toHaveLength(0);
   });
 
   it('home 属性を付けるとトップページへのリンクになる', () => {

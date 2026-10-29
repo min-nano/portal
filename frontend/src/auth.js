@@ -8,6 +8,7 @@
 
 import { Clerk } from '@clerk/clerk-js';
 import { jaJP } from '@clerk/localizations';
+import { avatarUrl } from './account-avatar.js';
 import { finishPageLoading } from './components/loading.js';
 
 let clerkInstance = null;
@@ -119,12 +120,12 @@ export async function requireSignIn() {
     return null;
   }
 
-  const accountArea = document.getElementById('accountArea');
-  if (accountArea) accountArea.hidden = false;
-  const emailEl = document.getElementById('accountEmail');
-  if (emailEl) {
-    emailEl.textContent = clerk.user.primaryEmailAddress?.emailAddress || '';
-  }
+  // アバターは本人の写真か、つないだ Google アカウントの写真
+  // （どちらも無ければ Clerk の既定のアイコン。account-avatar.js 参照）。
+  document.querySelector('portal-header')?.setAccount?.({
+    email: clerk.user.primaryEmailAddress?.emailAddress || '',
+    imageUrl: avatarUrl(clerk.user),
+  });
   const signOutBtn = document.getElementById('signOutBtn');
   if (signOutBtn) {
     signOutBtn.addEventListener('click', async () => {

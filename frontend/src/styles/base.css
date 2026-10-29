@@ -132,6 +132,7 @@ portal-save-bar {
     background: #fff;
   }
 
+  body::after,
   .portal-header,
   portal-section-controls,
   .verdict-fab,
