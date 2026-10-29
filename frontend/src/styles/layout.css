@@ -78,6 +78,8 @@
    開く（.open は page-header.js が付け外しする）。 */
 .portal-header .account {
   position: relative;
+  /* 下の幕（.portal-header::after）より手前に出す。 */
+  z-index: 1;
   flex: none;
   display: flex;
   align-items: center;
@@ -156,6 +158,53 @@
 
 .portal-header .account-email {
   overflow-wrap: anywhere;
+}
+
+/* メニューを開いているあいだは、メニュー（とアバター）以外を幕で暗くする。
+   背景の文字とメニューが重なって読みにくくならないようにするため。
+   幕は 2 枚に分けてある。ヘッダーは backdrop-filter で固定配置の基準に
+   なってしまい、中から画面全体を覆えないので、ページ側は body に張り、
+   ヘッダーの帯の上にはヘッダー自身の ::after を重ねる（アカウント欄だけ
+   その手前に出る）。ページ側の幕に触れると、外に触れたことになって閉じる
+   （下のリンクは押されない）。 */
+body::after,
+.portal-header::after {
+  content: '';
+  inset: 0;
+  background: var(--scrim);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--dur) var(--ease), visibility var(--dur) var(--ease);
+}
+
+body::after {
+  position: fixed;
+  z-index: calc(var(--z-header) - 1);
+}
+
+.portal-header::after {
+  position: absolute;
+  /* 下線（border-bottom）も覆う。覆わないと幕の中に明るい線が残る。 */
+  bottom: -1px;
+}
+
+body:has(.portal-header .account.open)::after,
+.portal-header:has(.account.open)::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+body:has(.portal-header .account.open)::after {
+  pointer-events: auto;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  body:has(.portal-header .account:hover)::after,
+  .portal-header:has(.account:hover)::after {
+    opacity: 1;
+    visibility: visible;
+  }
 }
 
 /* --- ページ本体 ---------------------------------------------------------- */

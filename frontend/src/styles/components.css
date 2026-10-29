@@ -927,7 +927,7 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
 }
 
 .app-dialog::backdrop {
-  background: rgba(10, 14, 20, 0.45);
+  background: var(--scrim);
 }
 
 .app-dialog p {
