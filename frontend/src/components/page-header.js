@@ -54,7 +54,7 @@ export class PortalHeader extends HTMLElement {
     toggle.setAttribute('aria-expanded', 'false');
     toggle.setAttribute('aria-controls', 'accountMenu');
     toggle.setAttribute('aria-label', 'アカウント');
-    // 写真が無い・読めないときは、メールアドレスの頭文字を丸の中に出す。
+    // 写真が読めないときは、メールアドレスの頭文字を丸の中に出す。
     const initial = doc.createElement('span');
     initial.className = 'avatar-initial';
     initial.id = 'accountInitial';

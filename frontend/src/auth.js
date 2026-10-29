@@ -121,7 +121,7 @@ export async function requireSignIn() {
   }
 
   // アバターは本人の写真か、つないだ Google アカウントの写真
-  // （どちらも無ければ頭文字。account-avatar.js 参照）。
+  // （どちらも無ければ Clerk の既定のアイコン。account-avatar.js 参照）。
   document.querySelector('portal-header')?.setAccount?.({
     email: clerk.user.primaryEmailAddress?.emailAddress || '',
     imageUrl: avatarUrl(clerk.user),

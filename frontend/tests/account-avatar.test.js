@@ -40,10 +40,15 @@ describe('avatarUrl', () => {
     ).toBe('https://img.example/github.png');
   });
 
-  it('どこにも写真が無ければ undefined（頭文字を出す）', () => {
-    expect(avatarUrl({ hasImage: false, imageUrl: 'https://img.example/default.png' })).toBeUndefined();
+  it('どこにも写真が無ければ Clerk の既定のアイコンを使う', () => {
     expect(
-      avatarUrl({ hasImage: false, externalAccounts: [{ provider: 'google', imageUrl: '' }] })
-    ).toBeUndefined();
+      avatarUrl({
+        hasImage: false,
+        imageUrl: 'https://img.example/default.png',
+        externalAccounts: [{ provider: 'google', imageUrl: '' }],
+      })
+    ).toBe('https://img.example/default.png');
+    // 既定のアイコンも無ければ undefined（頭文字を出す）。
+    expect(avatarUrl({ hasImage: false })).toBeUndefined();
   });
 });
