@@ -428,6 +428,17 @@ describe('ファイルを足して並べる', () => {
 
     sortBy('added');
     expect(names()).toEqual(['猫_奇数.pdf', '猫_表紙.pdf', '猫_偶数.pdf', '猫_あとがき.pdf']);
+
+    // Drive のファイルは modifiedTime で並べ、更新日時の分からないファイルは後ろへ。
+    mocks.pickFiles.mockResolvedValue([
+      { id: 'd-old', name: '猫_帯.pdf', modifiedTime: '1970-01-01T00:00:00.100Z' },
+      { id: 'd-none', name: '猫_栞.pdf' },
+    ]);
+    mocks.downloadDriveFile.mockImplementation(async () => pdf(COVER));
+    $('driveBtn').click();
+    await settled(6);
+    sortBy('time');
+    expect(names()).toEqual(['猫_帯.pdf', '猫_あとがき.pdf', '猫_表紙.pdf', '猫_偶数.pdf', '猫_奇数.pdf', '猫_栞.pdf']);
   });
 
   it('頁ごと・ファイルごとに番号を直せる', async () => {
