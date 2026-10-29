@@ -39,6 +39,18 @@
     <pre id="logText"></pre>
     <button type="button" id="logCopyBtn" class="secondary">ログをコピー</button>
   </details>
+  <!-- 一覧の並び。番号を入れていない表紙など（先頭・末尾に置くファイル）は、この順に並ぶ。 -->
+  <label id="fileSortField" class="bm-inline bm-sort" hidden>
+    並び順
+    <select id="fileSort">
+      <option value="added" selected>追加順（古い順）</option>
+      <option value="added-desc">追加順（新しい順）</option>
+      <option value="name">名前順（昇順）</option>
+      <option value="name-desc">名前順（降順）</option>
+      <option value="time">更新日時順（古い順）</option>
+      <option value="time-desc">更新日時順（新しい順）</option>
+    </select>
+  </label>
   <ul id="fileList" class="bm-files"></ul>
 </portal-section>
 

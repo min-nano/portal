@@ -12,6 +12,7 @@ vi.mock('../src/api.js', () => ({ apiGet: (path, options) => apiGet(path, option
 
 const PDF_MIME = 'application/pdf';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
+const MODIFIED = '2026-10-01T00:00:00Z';
 
 const folder = (id, name) => ({ id, name, mimeType: FOLDER_MIME, folder: true, modifiedTime: null });
 const pdf = (id, name) => ({
@@ -19,7 +20,7 @@ const pdf = (id, name) => ({
   name,
   mimeType: PDF_MIME,
   folder: false,
-  modifiedTime: '2026-10-01T00:00:00Z',
+  modifiedTime: MODIFIED,
 });
 
 /** 送られた条件（URL のクエリ）を辞書にする。 */
@@ -586,8 +587,8 @@ describe('いくつも選ぶ', () => {
 
     chooseButton().click();
     await expect(picking).resolves.toEqual([
-      { id: 'p0', name: '表紙.pdf', mimeType: PDF_MIME },
-      { id: 'p1', name: '奇数1.pdf', mimeType: PDF_MIME },
+      { id: 'p0', name: '表紙.pdf', mimeType: PDF_MIME, modifiedTime: MODIFIED },
+      { id: 'p1', name: '奇数1.pdf', mimeType: PDF_MIME, modifiedTime: MODIFIED },
     ]);
   });
 
@@ -713,8 +714,8 @@ describe('なぞって選ぶ', () => {
 
     chooseButton().click();
     await expect(picking).resolves.toEqual([
-      { id: 'p1', name: '1.pdf', mimeType: PDF_MIME },
-      { id: 'p2', name: '2.pdf', mimeType: PDF_MIME },
+      { id: 'p1', name: '1.pdf', mimeType: PDF_MIME, modifiedTime: MODIFIED },
+      { id: 'p2', name: '2.pdf', mimeType: PDF_MIME, modifiedTime: MODIFIED },
     ]);
   });
 

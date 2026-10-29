@@ -391,6 +391,63 @@ describe('ファイルを足して並べる', () => {
     expect(fileItem('猫_奇数.pdf').querySelector('button[aria-label^="ひとつ"]')).toBeNull();
   });
 
+  it('ファイルの並び順を、追加順・名前順・更新日時順（それぞれ昇順・降順）で切り替えられる', async () => {
+    const at = (name, bytes, lastModified) =>
+      new File([bytes], name, { type: 'application/pdf', lastModified });
+    expect($('fileSortField').hidden).toBe(true);
+    drop([at('猫_奇数.pdf', pdf(ODD), 3000), at('猫_表紙.pdf', pdf(COVER), 1000)]);
+    await settled(2);
+    drop([at('猫_偶数.pdf', pdf(EVEN), 2000)]);
+    await settled(3);
+    const names = () => [...document.querySelectorAll('#fileList .bm-file .name')].map((n) => n.textContent);
+    const keys = () => [...document.querySelectorAll('#pageGrid > li')].map((card) => card.dataset.pageKey);
+    const sortBy = (value) => change($('fileSort'), value);
+
+    // 既定は追加した順（一度に選んだファイルは名前の順）。
+    expect($('fileSortField').hidden).toBe(false);
+    expect(names()).toEqual(['猫_奇数.pdf', '猫_表紙.pdf', '猫_偶数.pdf']);
+
+    sortBy('time');
+    expect(names()).toEqual(['猫_表紙.pdf', '猫_偶数.pdf', '猫_奇数.pdf']);
+    // 番号を入れていない先頭のファイルは、一覧の順に並ぶ。
+    change(fileItem('猫_奇数.pdf').querySelector('select'), 'front');
+    expect(keys().slice(0, 6)).toEqual(['f2:0', 'f2:1', 'f1:0', 'f1:1', 'f1:2', 'f1:3']);
+
+    sortBy('name');
+    expect(names()).toEqual(['猫_奇数.pdf', '猫_偶数.pdf', '猫_表紙.pdf']);
+    expect(keys().slice(0, 6)).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f2:0', 'f2:1']);
+
+    // あとから足したファイルも、選んでいる並び順の位置に入る。
+    drop([at('猫_あとがき.pdf', pdf(COVER), 500)]);
+    await settled(4);
+    expect(names()).toEqual(['猫_あとがき.pdf', '猫_奇数.pdf', '猫_偶数.pdf', '猫_表紙.pdf']);
+
+    sortBy('added');
+    expect(names()).toEqual(['猫_奇数.pdf', '猫_表紙.pdf', '猫_偶数.pdf', '猫_あとがき.pdf']);
+
+    // Drive のファイルは modifiedTime で並べ、更新日時の分からないファイルは後ろへ。
+    mocks.pickFiles.mockResolvedValue([
+      { id: 'd-old', name: '猫_帯.pdf', modifiedTime: '1970-01-01T00:00:00.100Z' },
+      { id: 'd-none', name: '猫_栞.pdf' },
+    ]);
+    mocks.downloadDriveFile.mockImplementation(async () => pdf(COVER));
+    $('driveBtn').click();
+    await settled(6);
+    sortBy('time');
+    expect(names()).toEqual(['猫_帯.pdf', '猫_あとがき.pdf', '猫_表紙.pdf', '猫_偶数.pdf', '猫_奇数.pdf', '猫_栞.pdf']);
+
+    // 降順（新しい順）。更新日時の分からないファイルは、新しい順でも後ろのまま。
+    sortBy('time-desc');
+    expect(names()).toEqual(['猫_奇数.pdf', '猫_偶数.pdf', '猫_表紙.pdf', '猫_あとがき.pdf', '猫_帯.pdf', '猫_栞.pdf']);
+    sortBy('name-desc');
+    expect(names()).toEqual(['猫_栞.pdf', '猫_表紙.pdf', '猫_帯.pdf', '猫_偶数.pdf', '猫_奇数.pdf', '猫_あとがき.pdf']);
+    sortBy('added-desc');
+    expect(names()).toEqual(['猫_栞.pdf', '猫_帯.pdf', '猫_あとがき.pdf', '猫_偶数.pdf', '猫_表紙.pdf', '猫_奇数.pdf']);
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('ファイルを「追加順（新しい順）」に並べました');
+  });
+
   it('頁ごと・ファイルごとに番号を直せる', async () => {
     await addBook();
 

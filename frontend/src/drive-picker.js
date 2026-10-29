@@ -608,7 +608,13 @@ function openPicker(options) {
 
   const result = () => {
     if (options.multiple) {
-      return [...picked.values()].map(({ id, name, mimeType }) => ({ id, name, mimeType }));
+      // 更新日時も渡す（書籍スキャン PDF 結合ツールが、ファイルを更新日時の順に並べるのに使う）。
+      return [...picked.values()].map(({ id, name, mimeType, modifiedTime }) => ({
+        id,
+        name,
+        mimeType,
+        modifiedTime,
+      }));
     }
     if (options.selectFolder) {
       const folder = currentFolder(state);
