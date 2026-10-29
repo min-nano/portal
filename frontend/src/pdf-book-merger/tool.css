@@ -136,11 +136,15 @@ button.bm-help-btn:hover,
   gap: var(--s-2);
 }
 
+/* 一覧（grid）の項目は既定では中身の幅より縮まないので、長い選択肢を持つ
+   ファイルを開くと、項目ごと画面の幅を超えてしまう。 */
+.bm-files > li {
+  min-width: 0;
+}
+
 /* ファイル 1 つぶん（<portal-section>）。閉じているときは、名前と設定の要約の
    2 行だけになる。 */
 portal-section.bm-file {
-  /* 一覧（grid）の中で、長い選択肢の幅に押し広げられないようにする。 */
-  min-width: 0;
   margin-top: 0;
   padding: var(--s-2) var(--s-3);
   background: var(--surface);
@@ -206,6 +210,8 @@ portal-section.bm-file.error {
   gap: var(--s-2);
   font-size: var(--fs-sm);
   color: var(--text-2);
+  /* 狭い画面では、項目名（「役割」など）を 1 字ずつ折り返さず、選択肢の側を縮める。 */
+  word-break: keep-all;
 }
 
 .bm-inline select,
