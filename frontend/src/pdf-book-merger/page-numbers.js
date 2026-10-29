@@ -326,7 +326,10 @@ export function manualFileNumbers(count, start, step) {
  */
 export function numberingSequence(numbering) {
   const { step, pages } = numbering;
-  if (step === null || step === undefined) return '?';
+  // 歩幅をほかの束から借りても、番号の候補が 1 つも無ければ番号は決まらない。
+  if (step === null || step === undefined || pages.every((page) => page.number === null)) {
+    return '?';
+  }
   const runs = [];
   for (const { number } of pages) {
     const run = runs.at(-1);

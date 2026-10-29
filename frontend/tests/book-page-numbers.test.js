@@ -208,6 +208,8 @@ describe('manualFileNumbers / numberingSequence / formatNumber', () => {
     expect(numberingSequence(manualFileNumbers(14, -11, 2))).toBe('-11, -9, -7...13, 15');
     expect(numberingSequence(manualFileNumbers(6, 12, -2))).toBe('12, 10, 8...4, 2');
     expect(numberingSequence(inferFileNumbers([none()]))).toBe('?');
+    // 歩幅をほかの束から借りても、番号の候補が無ければ決まらない。
+    expect(numberingSequence(inferFileNumbers([none(), none(), none()], { step: 2 }))).toBe('?');
   });
 
   it('番号が飛んでいるところは詰めずに、飛んだ先から並べ直す', () => {
