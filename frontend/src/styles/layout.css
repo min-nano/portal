@@ -31,7 +31,9 @@
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
+  /* どんな幅でも 1 行に収める。入りきらないときは名前の末尾を … で切る
+     （アカウント欄はアバター 1 つなので、幅はほとんど取らない）。 */
+  flex-wrap: nowrap;
 }
 
 .portal-header .title {
@@ -42,6 +44,13 @@
   font-size: var(--fs-md);
   color: var(--text-brand);
   letter-spacing: 0.01em;
+  min-width: 0;
+}
+
+.portal-header .title .name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /* ポータルの印。名前だけだとどのページも同じ見出しに見えるので、
@@ -64,12 +73,89 @@
   text-decoration: underline;
 }
 
+/* アカウント欄。ふだんはアバターだけを出し、メールアドレスとサインアウトは
+   その下に開くメニューに入れる。マウスなら重ねただけで開き、指ならタップで
+   開く（.open は page-header.js が付け外しする）。 */
 .portal-header .account {
+  position: relative;
+  flex: none;
   display: flex;
   align-items: center;
+}
+
+.portal-header .account-toggle {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--brand-100);
+  color: var(--text-brand);
+  font-size: var(--fs-sm);
+}
+
+.portal-header .account-toggle:hover,
+.portal-header .account.open .account-toggle {
+  background: var(--brand-100);
+  border-color: var(--brand-400);
+}
+
+.portal-header .account-toggle .avatar {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.portal-header .account-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  display: none;
+  flex-direction: column;
+  align-items: stretch;
   gap: var(--s-2);
+  width: max-content;
+  max-width: min(20rem, calc(100vw - 2 * var(--s-4)));
+  /* アバターとメニューのあいだを、:hover が途切れない透明な余白でつなぐ
+     （マウスをアバターからメニューへ動かす途中で閉じないように）。 */
+  margin-top: var(--s-2);
+  padding: var(--s-3);
   font-size: var(--fs-xs);
   color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
+}
+
+.portal-header .account-menu::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: calc(var(--s-2) + 1px);
+}
+
+.portal-header .account.open .account-menu {
+  display: flex;
+}
+
+/* 重ねて開くのはマウスなど :hover が素直に効く端末だけ（タッチ端末の
+   :hover は「最後に触れたもの」に残り続け、閉じられなくなるため）。 */
+@media (hover: hover) and (pointer: fine) {
+  .portal-header .account:hover .account-menu {
+    display: flex;
+  }
+}
+
+.portal-header .account-email {
+  overflow-wrap: anywhere;
 }
 
 /* --- ページ本体 ---------------------------------------------------------- */
@@ -91,6 +177,17 @@
     border-left: none;
     border-right: none;
     padding: var(--s-4) var(--s-3);
+  }
+
+  /* 紙が画面いっぱいに広がるので、ヘッダーとのあいだに台紙の帯を残さない
+     （紙に浮かせる余白は、縁の見える広い画面でだけ意味がある）。上の縁は
+     ヘッダーの下線と重なるので消す。 */
+  .portal-header {
+    margin-bottom: 0;
+  }
+
+  .container {
+    border-top: none;
   }
 }
 

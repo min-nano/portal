@@ -119,12 +119,12 @@ export async function requireSignIn() {
     return null;
   }
 
-  const accountArea = document.getElementById('accountArea');
-  if (accountArea) accountArea.hidden = false;
-  const emailEl = document.getElementById('accountEmail');
-  if (emailEl) {
-    emailEl.textContent = clerk.user.primaryEmailAddress?.emailAddress || '';
-  }
+  // アバターは Clerk の imageUrl（Google ログインなら Google アカウントの
+  // プロフィール写真）。
+  document.querySelector('portal-header')?.setAccount?.({
+    email: clerk.user.primaryEmailAddress?.emailAddress || '',
+    imageUrl: clerk.user.imageUrl,
+  });
   const signOutBtn = document.getElementById('signOutBtn');
   if (signOutBtn) {
     signOutBtn.addEventListener('click', async () => {

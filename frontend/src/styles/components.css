@@ -115,7 +115,7 @@ form > button#submitBtn {
 }
 
 /* 小さく添えるボタン（ヘッダー・雛形の設定・一括開閉）。 */
-.portal-header .account button,
+.portal-header .account-menu button,
 .template-chip button,
 portal-section-controls button,
 .folder-row button {

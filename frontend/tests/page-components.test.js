@@ -28,6 +28,56 @@ describe('portal-header', () => {
     expect(document.getElementById('accountArea').hidden).toBe(true);
     expect(document.getElementById('accountEmail')).not.toBeNull();
     expect(document.getElementById('signOutBtn').textContent).toBe('サインアウト');
+    // メールアドレスとサインアウトは、アバターから開くメニューの中にある。
+    const menu = document.getElementById('accountMenu');
+    expect(menu.contains(document.getElementById('accountEmail'))).toBe(true);
+    expect(menu.contains(document.getElementById('signOutBtn'))).toBe(true);
+  });
+
+  it('setAccount でアカウント欄を出し、頭文字と写真を入れる', () => {
+    document.body.innerHTML = '<portal-header portal-name="社内ポータル"></portal-header>';
+    const header = document.querySelector('portal-header');
+
+    header.setAccount({ email: 'taro@example.com', imageUrl: 'https://example.com/a.png' });
+
+    expect(document.getElementById('accountArea').hidden).toBe(false);
+    expect(document.getElementById('accountEmail').textContent).toBe('taro@example.com');
+    expect(document.getElementById('accountInitial').textContent).toBe('T');
+    const avatar = document.getElementById('accountAvatar');
+    expect(avatar.getAttribute('src')).toBe('https://example.com/a.png');
+    // 写真は読めてから出す（読めなければ頭文字のまま）。
+    expect(avatar.hidden).toBe(true);
+    avatar.dispatchEvent(new Event('load'));
+    expect(avatar.hidden).toBe(false);
+    avatar.dispatchEvent(new Event('error'));
+    expect(avatar.hidden).toBe(true);
+  });
+
+  it('アバターのタップでメニューを開け閉めし、外に触れるか Esc で閉じる', () => {
+    document.body.innerHTML =
+      '<portal-header portal-name="社内ポータル"></portal-header><p id="outside">本文</p>';
+    const area = document.getElementById('accountArea');
+    const toggle = document.getElementById('accountToggle');
+
+    toggle.click();
+    expect(area.classList.contains('open')).toBe(true);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    toggle.click();
+    expect(area.classList.contains('open')).toBe(false);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+    toggle.click();
+    // メニューの中に触れても閉じない（サインアウトを押せるように）。
+    document
+      .getElementById('signOutBtn')
+      .dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(area.classList.contains('open')).toBe(true);
+    document.getElementById('outside').dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(area.classList.contains('open')).toBe(false);
+
+    toggle.click();
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(area.classList.contains('open')).toBe(false);
   });
 
   it('home 属性を付けるとトップページへのリンクになる', () => {
