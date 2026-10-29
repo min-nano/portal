@@ -11,7 +11,6 @@ import {
   compressRanges,
   guessRole,
   numberFiles,
-  orderedFile,
   pageLabelRanges,
   pageLabelTexts,
   roleFromName,
@@ -22,12 +21,13 @@ import {
 /**
  * ファイル 1 つ。numbers は頁ごとに読めた番号（null は読めなかった頁）。
  */
-function file(key, numbers, { role = 'body', manual = null, coverStart = null } = {}) {
+function file(key, numbers, { role = 'body', manual = null, coverStart = null, coverStep = 1 } = {}) {
   return {
     key,
     role,
     manual,
     coverStart,
+    coverStep,
     pages: numbers.map((value, index) => ({
       key: `${key}:${index}`,
       candidates: value === null ? [] : [{ value, score: 3.5, source: 'text', zone: 'bottom' }],
@@ -84,38 +84,6 @@ describe('guessRole', () => {
   });
 });
 
-describe('orderedFile', () => {
-  it('逆順のファイルは頁を並べ直し、結合では元の頁を引く', () => {
-    const cover = { ...file('cover', [null, null], { role: 'split' }), reversed: true };
-    cover.pages.forEach((page, index) => (page.index = index));
-    const files = [orderedFile(cover), file('body', [1, 2])];
-
-    const order = buildBookOrder(files, numberFiles(files));
-
-    expect(order.map((e) => [e.role, e.pageKey, e.pageIndex])).toEqual([
-      ['front', 'cover:1', 1],
-      ['body', 'body:0', 0],
-      ['body', 'body:1', 1],
-      ['back', 'cover:0', 0],
-    ]);
-  });
-
-  it('逆順でなければ、そのまま', () => {
-    const plain = file('x', [1]);
-
-    expect(orderedFile(plain)).toBe(plain);
-  });
-
-  it('逆順にした本文の束も、頁番号から同じ並びになる', () => {
-    const odd = file('odd', [1, 3, 5]);
-    odd.pages.forEach((page, index) => (page.index = index));
-    const even = file('even', [2, 4, 6]);
-    const reversed = [orderedFile({ ...odd, reversed: true }), even];
-
-    expect(buildBookOrder(reversed, numberFiles(reversed)).map((e) => e.number)).toEqual([1, 2, 3, 4, 5, 6]);
-  });
-});
-
 describe('buildBookOrder', () => {
   it('奇数・偶数の束と表紙を、1 冊の順に並べる', () => {
     const order = arrange(book());
@@ -168,6 +136,27 @@ describe('buildBookOrder', () => {
       'back-b:0', // 番号なし
     ]);
     expect(arrange(files).every((e) => !('place' in e))).toBe(true);
+  });
+
+  it('進み方が逆順のファイルは最後の頁から置き、結合では元の頁を引く', () => {
+    const files = [file('cover', [null, null], { role: 'split', coverStep: -1 }), file('body', [1, 2])];
+
+    expect(arrange(files).map((e) => [e.role, e.pageKey, e.pageIndex])).toEqual([
+      ['front', 'cover:1', 1],
+      ['body', 'body:0', 0],
+      ['body', 'body:1', 1],
+      ['back', 'cover:0', 0],
+    ]);
+  });
+
+  it('逆順のファイルの番号も、先頭の頁から 1 つずつ減っていく', () => {
+    const files = [
+      file('front-a', [null, null], { role: 'front', coverStart: 2 }), // 2, 3
+      file('front-b', [null, null], { role: 'front', coverStart: 5, coverStep: -1 }), // 5, 4
+      file('body', [1]),
+    ];
+
+    expect(arrange(files).map((e) => e.pageKey)).toEqual(['front-a:0', 'front-a:1', 'front-b:1', 'front-b:0', 'body:0']);
   });
 
   it('結合しないファイルは並びに入れない', () => {

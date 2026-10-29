@@ -167,6 +167,11 @@ function fileItem(name) {
   );
 }
 
+/** ファイルの「進み方」のセレクトボックス（役割の次）。 */
+function stepSelect(name) {
+  return fileItem(name).querySelectorAll('.bm-file-controls select')[1];
+}
+
 function change(element, value) {
   element.value = value;
   element.dispatchEvent(new Event('change', { bubbles: true }));
@@ -298,9 +303,7 @@ describe('ファイルを足して並べる', () => {
 
     fileItem('猫_表紙.pdf').toggle();
     change(fileItem('猫_表紙.pdf').querySelector('select'), 'split');
-    const cover = fileItem('猫_表紙.pdf').querySelector('input[type="checkbox"]');
-    cover.checked = true;
-    cover.dispatchEvent(new Event('change'));
+    change(stepSelect('猫_表紙.pdf'), '-1');
 
     // 一覧は描き直されるが、開いたものは開いたまま、閉じたものは閉じたまま。
     expect(fileItem('猫_表紙.pdf').hasAttribute('collapsed')).toBe(false);
@@ -324,7 +327,7 @@ describe('ファイルを足して並べる', () => {
     expect(labels).toHaveLength(10);
   });
 
-  it('逆順のファイルは、頁を並べ直してから置く（給紙の都合で最後の頁から並んだ表紙）', async () => {
+  it('進み方を逆順にした表紙は、最後の頁から置く（給紙の都合で最後の頁から並んだ表紙）', async () => {
     await addBook();
     change(fileItem('猫_表紙.pdf').querySelector('select'), 'split');
     const firstAndLast = () => {
@@ -333,17 +336,13 @@ describe('ファイルを足して並べる', () => {
     };
     expect(firstAndLast()).toEqual(['f3:0', 'f3:1']);
 
-    const reverse = fileItem('猫_表紙.pdf').querySelector('input[type="checkbox"]');
-    reverse.checked = true;
-    reverse.dispatchEvent(new Event('change'));
+    change(stepSelect('猫_表紙.pdf'), '-1');
 
     expect(firstAndLast()).toEqual(['f3:1', 'f3:0']);
-    expect(fileItem('猫_表紙.pdf').querySelector('input[type="checkbox"]').checked).toBe(true);
-    // 本文は頁番号から並ぶので、逆順にしても並びは変わらない。
-    const odd = fileItem('猫_奇数.pdf').querySelector('input[type="checkbox"]');
-    odd.checked = true;
-    odd.dispatchEvent(new Event('change'));
-    expect(gridLabels().slice(1, 9)).toEqual(['1 頁', '2 頁', '3 頁', '4 頁', '5 頁', '6 頁', '7 頁', '8 頁']);
+    expect(stepSelect('猫_表紙.pdf').value).toBe('-1');
+    // 逆順のチェックは無く、本文と同じ「先頭の頁の番号」と「進み方」の欄だけ。
+    expect(fileItem('猫_表紙.pdf').querySelector('input[type="checkbox"]')).toBeNull();
+    expect(fileItem('猫_奇数.pdf').querySelector('input[type="checkbox"]')).toBeNull();
   });
 
   it('束を外すと、抜けた頁をあるべき位置に札で出し、指摘する', async () => {
@@ -1247,10 +1246,9 @@ describe('結合と検証', () => {
 
     $('mergeBtn').click();
     await flush();
-    // 本文は頁番号から並ぶので、逆順にしても本の並びは変わらない。
-    const reverse = fileItem('猫_奇数.pdf').querySelector('input[type="checkbox"]');
-    reverse.checked = true;
-    reverse.dispatchEvent(new Event('change'));
+    // 先頭に置くファイルが 1 つだけなら、番号を入れても本の並びは変わらない。
+    fileItem('猫_表紙.pdf').toggle();
+    change(fileItem('猫_表紙.pdf').querySelector('.bm-file-controls input[type="text"]'), '3');
     release();
 
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));

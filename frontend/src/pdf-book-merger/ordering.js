@@ -60,21 +60,6 @@ export function guessRole(name, pages) {
 }
 
 /**
- * スキャンした順に並べ直したファイル。
- *
- * スキャナーの給紙口の都合で、ファイルの中の頁が最後の頁から並んでいること
- * がある。reversed を付けたファイルは頁を逆に並べたものとして扱う（頁は
- * 自分の元の位置 index を持っているので、結合では元の頁を正しく引ける）。
- * 本文のファイルは、逆順でも頁番号から自動で並ぶ（歩幅が負になる）ので、
- * これが効くのは主に番号の無い表紙などと、手で決めた番号。
- *
- * @param {{reversed?:boolean, pages:object[]}} file
- */
-export function orderedFile(file) {
-  return file.reversed ? { ...file, pages: [...file.pages].reverse() } : file;
-}
-
-/**
  * 本文のファイルごとに、頁の番号を決める。
  *
  * 番号が 1 つしか読めず歩幅を決められないファイルは、他の本文のファイルで
@@ -123,12 +108,15 @@ const STATUS_RANK = { manual: 0, detected: 0, inferred: 1, conflict: 1, uncertai
 /**
  * 1 冊の並びを作る。
  *
- * 先頭・末尾に置く頁は、ファイルに入れた「先頭の頁の番号」（coverStart）から
- * 1 つずつ進む番号の順に並べる。この番号は先頭・末尾の中での順番を決める
- * だけで、本文の頁番号とは比べない。番号を入れていないファイルの頁は、
- * 番号を入れたものの後ろに、画面の順（追加した順）で並べる。
+ * 先頭・末尾に置く頁は、本文と同じく「先頭の頁の番号」（coverStart）と
+ * 「進み方」（coverStep。1 つずつか 1 つずつ逆順）から決まる番号の順に並べる。
+ * この番号は先頭・末尾の中での順番を決めるだけで、本文の頁番号とは比べない。
+ * 番号を入れていないファイルの頁は、番号を入れたものの後ろに、画面の順
+ * （追加した順）で並べる。逆順のファイル（給紙の都合で最後の頁から並んだ
+ * もの）は、番号を入れていなくても最後の頁から置く。
  *
- * @param {object[]} files 画面の順
+ * @param {{key:string, role:string, coverStart?:number|null, coverStep?:1|-1,
+ *          pages:object[]}[]} files 画面の順
  * @param {Map<string, object>} numberings numberFiles の結果
  * @param {Map<string, number>} overrides 頁ごとに手で決めた番号（頁の key → 番号）
  * @returns {{
@@ -140,10 +128,10 @@ export function buildBookOrder(files, numberings, overrides = new Map()) {
   const front = [];
   const body = [];
   const back = [];
-  // pageIndex は元のファイルの中の位置（並べ直したファイルでも、結合で引くのは元の頁）。
+  // pageIndex はファイルの中の位置（逆順に置いた頁も、結合で引くのは元の頁）。
   const entry = (file, page, index, role, extra = {}) => ({
     fileKey: file.key,
-    pageIndex: page.index ?? index,
+    pageIndex: index,
     pageKey: page.key,
     role,
     number: null,
@@ -152,16 +140,23 @@ export function buildBookOrder(files, numberings, overrides = new Map()) {
     ...extra,
   });
 
-  // 先頭・末尾の頁の並べ順（番号を入れていなければ null）。
-  const place = (file, i) => (Number.isInteger(file.coverStart) ? file.coverStart + i : null);
   files.forEach((file, fileOrder) => {
-    const cover = (p, i, role) =>
-      (role === 'front' ? front : back).push(entry(file, p, i, role, { place: place(file, i) }));
-    if (file.role === 'front') file.pages.forEach((p, i) => cover(p, i, 'front'));
-    if (file.role === 'back') file.pages.forEach((p, i) => cover(p, i, 'back'));
+    // 先頭・末尾の頁は、番号の小さい順（逆順なら最後の頁から）に並べてから振り分ける。
+    // place は並べ順（番号を入れていなければ null）。
+    const step = file.coverStep === -1 ? -1 : 1;
+    const pages = file.pages.map((page, index) => ({
+      page,
+      index,
+      place: Number.isInteger(file.coverStart) ? file.coverStart + step * index : null,
+    }));
+    if (step === -1) pages.reverse();
+    const cover = ({ page, index, place }, role) =>
+      (role === 'front' ? front : back).push(entry(file, page, index, role, { place }));
+    if (file.role === 'front') pages.forEach((p) => cover(p, 'front'));
+    if (file.role === 'back') pages.forEach((p) => cover(p, 'back'));
     if (file.role === 'split') {
-      const half = Math.ceil(file.pages.length / 2);
-      file.pages.forEach((p, i) => cover(p, i, i < half ? 'front' : 'back'));
+      const half = Math.ceil(pages.length / 2);
+      pages.forEach((p, i) => cover(p, i < half ? 'front' : 'back'));
     }
     if (file.role !== 'body') return;
     const numbering = numberings.get(file.key);
