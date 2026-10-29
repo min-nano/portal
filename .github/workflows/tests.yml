@@ -656,9 +656,18 @@ jobs:
       - name: Install the Agent SDK and the plugin
         # SDK は固定する（レビューを動かす仕組みなので、他のアクションと同じ扱い）。
         # プラグインはレビューの指示そのもので、このリポジトリのコードの動作には
-        # 関わらないため、固定せず毎回 anthropics/claude-code の最新を取る。
+        # 関わらないため、固定せず毎回 anthropics/claude-plugins-official の最新を
+        # 取る（2026-10 に anthropics/claude-code から移った）。中身はプラグインの
+        # ディレクトリだけを取り出す。
         # どちらもワークスペースの外（RUNNER_TEMP）に置く（レビュー対象に混ぜない）。
+        #
+        # 置き場所がまた変わると、再レビューは claude-review.mjs がコマンドの本文を
+        # 読めずに落ち、最初のレビューはプラグインが読み込まれずに「レビューが
+        # 付かなかった」で落ちる。どちらも原因が読みにくいので、ここで確かめる。
         if: steps.plan.outputs.mode != 'none'
+        env:
+          PLUGIN_REPO: https://github.com/anthropics/claude-plugins-official.git
+          PLUGIN_PATH: plugins/code-review
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/claude-review"
@@ -670,9 +679,17 @@ jobs:
             npm install --no-audit --no-fund --ignore-scripts \
               @anthropic-ai/claude-agent-sdk@0.3.310 zod@4.6.7
           )
-          git clone -q --depth 1 https://github.com/anthropics/claude-code.git "$dir/claude-code"
-          echo "プラグイン: anthropics/claude-code@$(git -C "$dir/claude-code" rev-parse HEAD)"
-          echo "PLUGIN_DIR=$dir/claude-code/plugins/code-review" >> "$GITHUB_ENV"
+          git clone -q --depth 1 --filter=blob:none --sparse "$PLUGIN_REPO" "$dir/plugins"
+          git -C "$dir/plugins" sparse-checkout set "$PLUGIN_PATH"
+          echo "プラグイン: ${PLUGIN_REPO%.git}/tree/$(git -C "$dir/plugins" rev-parse HEAD)/$PLUGIN_PATH"
+          plugin="$dir/plugins/$PLUGIN_PATH"
+          for file in .claude-plugin/plugin.json commands/code-review.md; do
+            if [ ! -f "$plugin/$file" ]; then
+              echo "::error::code-review プラグインの ${PLUGIN_PATH}/${file} が ${PLUGIN_REPO} にありません。プラグインの置き場所が変わった可能性があります。このステップの PLUGIN_REPO・PLUGIN_PATH を直してください。"
+              exit 1
+            fi
+          done
+          echo "PLUGIN_DIR=$plugin" >> "$GITHUB_ENV"
       - name: Review with the code-review plugin
         # PREVIOUS_SHA があれば再レビュー（claude-review.mjs）。
         if: steps.plan.outputs.mode != 'none'

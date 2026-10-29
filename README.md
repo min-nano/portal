@@ -829,14 +829,14 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 
 レビューは **Claude Agent SDK** で動かしています（`.github/scripts/claude-review.mjs`）。`anthropics/claude-code-action` は使いません。中身が Claude Code で、[Max / Team プランに付く API クレジット](https://platform.claude.com/docs/ja/about-claude/api-credits-for-subscribers)の対象外だからです（Agent SDK は対象。アクションで動かすと、認証は通ってもモデル呼び出しが通らない）。アクションが用意していたもののうち、プラグインが要るインラインコメントのツールは、このスクリプトが持っています。
 
-`.github/workflows/tests.yml` の `review` ジョブは、PR が **Ready の状態になったとき**（下書きから Ready への切り替え・Ready のまま開いた・Ready のまま開き直した）に PR 全体をレビューし、その後は **Ready の PR に push するたびに、前回の判定から後の変更だけを再レビュー** します（下記「再レビュー」）。レビューの中身は Anthropic 公式の [code-review プラグイン](https://github.com/anthropics/claude-code/tree/main/plugins/code-review)（`/code-review:code-review --comment`）にそのまま任せており、ワークフロー側ではプロンプトを書いていません。
+`.github/workflows/tests.yml` の `review` ジョブは、PR が **Ready の状態になったとき**（下書きから Ready への切り替え・Ready のまま開いた・Ready のまま開き直した）に PR 全体をレビューし、その後は **Ready の PR に push するたびに、前回の判定から後の変更だけを再レビュー** します（下記「再レビュー」）。レビューの中身は Anthropic 公式の [code-review プラグイン](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/code-review)（`/code-review:code-review --comment`）にそのまま任せており、ワークフロー側ではプロンプトを書いていません。
 
 - 並列のエージェントが **CLAUDE.md への準拠** と **変更箇所のバグ** を見て、別のエージェントが検証し、確信度の低い指摘は捨てる。スタイルや好みの指摘は出さない。
 - 指摘は該当行へのインラインコメントで付く。指摘が無ければ「No issues found」のコメントが 1 つ付く。
 - その結果を **PR のレビューとして出す**。指摘があれば **Request changes**、無ければ **Approve**。判定はワークフローが機械的に行う（インラインコメントの有無）。
 - コメントも判定も `GITHUB_TOKEN` で付けるので、名義は `github-actions[bot]` になる。
 - リポジトリ固有の観点（「挙動を変えたら README も直す」など）は **CLAUDE.md に書く**。プラグインはそれに照らしてレビューする。
-- プラグインは毎回、`anthropics/claude-code` の最新版を取得する。レビューの指示であってこのリポジトリのコードの動作には関わらないため、他のアクションと違ってバージョンを固定しない（Agent SDK は固定する）。
+- プラグインは毎回、`anthropics/claude-plugins-official` の最新版を取得する（2026-10 に `anthropics/claude-code` から移った）。レビューの指示であってこのリポジトリのコードの動作には関わらないため、他のアクションと違ってバージョンを固定しない（Agent SDK は固定する）。置き場所が変わってプラグインのファイルが見つからなければ、取得のステップでその旨を出して失敗する。
 
 #### 運用: PR は下書きで作る
 
