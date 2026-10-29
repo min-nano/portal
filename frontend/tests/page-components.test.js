@@ -53,11 +53,22 @@ describe('portal-header', () => {
     expect(avatar.hidden).toBe(true);
   });
 
+  it('メールアドレスも写真も無ければ、? を出して写真は読みに行かない', () => {
+    document.body.innerHTML = '<portal-header portal-name="社内ポータル"></portal-header>';
+
+    document.querySelector('portal-header').setAccount({ email: '' });
+
+    expect(document.getElementById('accountInitial').textContent).toBe('?');
+    expect(document.getElementById('accountToggle').getAttribute('aria-label')).toBe('アカウント');
+    expect(document.getElementById('accountAvatar').hasAttribute('src')).toBe(false);
+  });
+
   it('アバターのタップでメニューを開け閉めし、外に触れるか Esc で閉じる', () => {
     document.body.innerHTML =
       '<portal-header portal-name="社内ポータル"></portal-header><p id="outside">本文</p>';
     const area = document.getElementById('accountArea');
     const toggle = document.getElementById('accountToggle');
+    area.hidden = false; // サインイン後の状態（隠れていると焦点を移せない）
 
     toggle.click();
     expect(area.classList.contains('open')).toBe(true);
@@ -76,8 +87,21 @@ describe('portal-header', () => {
     expect(area.classList.contains('open')).toBe(false);
 
     toggle.click();
+    // Esc 以外のキーでは閉じない。
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(area.classList.contains('open')).toBe(true);
     area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(area.classList.contains('open')).toBe(false);
+    expect(document.activeElement).toBe(toggle);
+    // 閉じているときの Esc は何もしない。
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(area.classList.contains('open')).toBe(false);
+  });
+
+  it('ページに置かれる前の setAccount は何もしない', () => {
+    const header = document.createElement('portal-header');
+    expect(() => header.setAccount({ email: 'taro@example.com' })).not.toThrow();
+    expect(header.children).toHaveLength(0);
   });
 
   it('home 属性を付けるとトップページへのリンクになる', () => {
