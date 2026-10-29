@@ -25,6 +25,12 @@ name: Tests
 #       coverage ジョブとは独立していて、Codecov 側で失敗してもテストや
 #       しきい値の判定には影響しない。
 #
+#   review-plugin
+#       review ジョブが使う code-review プラグインを、固定した commit から
+#       取り出せるかだけを確かめる（Claude は動かさない）。Dependabot が
+#       プラグインの固定（submodule）を上げる PR では review ジョブが走らないので、
+#       置き場所が変わった commit に上げたことにここで気付く。
+#
 #   review
 #       PR だけ。4 つのテストジョブが全部通ってから、Claude が PR を
 #       レビューする（前回の判定があれば、その後の変更だけを再レビュー）。
@@ -483,6 +489,19 @@ jobs:
                 'See the coverage table above.');
             }
 
+  review-plugin:
+    name: Review plugin
+    # review ジョブと同じ手順でプラグインを取り出し、ファイルがあるかを見る
+    # （.github/scripts/claude-review-plugin.sh）。数秒で終わるので、イベントを
+    # 絞らずに毎回走らせる。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Fetch the pinned code-review plugin
+        run: .github/scripts/claude-review-plugin.sh "$RUNNER_TEMP/plugins"
+
   review:
     name: Auto review
     # Claude（PR エージェント）による自動レビュー。レビューの中身は Anthropic 公式の
@@ -655,19 +674,13 @@ jobs:
           node-version: '22'
       - name: Install the Agent SDK and the plugin
         # SDK は固定する（レビューを動かす仕組みなので、他のアクションと同じ扱い）。
-        # プラグインはレビューの指示そのもので、このリポジトリのコードの動作には
-        # 関わらないため、固定せず毎回 anthropics/claude-plugins-official の最新を
-        # 取る（2026-10 に anthropics/claude-code から移った）。中身はプラグインの
-        # ディレクトリだけを取り出す。
+        # プラグインも固定する。上流で置き場所が変わると、固定していなければ
+        # 次のレビューから落ちる（2026-10 に anthropics/claude-code から
+        # anthropics/claude-plugins-official に移ったとき、再レビューが落ちた）。
+        # 固定は submodule（.github/claude-plugins-official）で、Dependabot が
+        # 上げる。取り出すのはプラグインのディレクトリだけ（claude-review-plugin.sh）。
         # どちらもワークスペースの外（RUNNER_TEMP）に置く（レビュー対象に混ぜない）。
-        #
-        # 置き場所がまた変わると、再レビューは claude-review.mjs がコマンドの本文を
-        # 読めずに落ち、最初のレビューはプラグインが読み込まれずに「レビューが
-        # 付かなかった」で落ちる。どちらも原因が読みにくいので、ここで確かめる。
         if: steps.plan.outputs.mode != 'none'
-        env:
-          PLUGIN_REPO: https://github.com/anthropics/claude-plugins-official.git
-          PLUGIN_PATH: plugins/code-review
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/claude-review"
@@ -679,16 +692,7 @@ jobs:
             npm install --no-audit --no-fund --ignore-scripts \
               @anthropic-ai/claude-agent-sdk@0.3.310 zod@4.6.7
           )
-          git clone -q --depth 1 --filter=blob:none --sparse "$PLUGIN_REPO" "$dir/plugins"
-          git -C "$dir/plugins" sparse-checkout set "$PLUGIN_PATH"
-          echo "プラグイン: ${PLUGIN_REPO%.git}/tree/$(git -C "$dir/plugins" rev-parse HEAD)/$PLUGIN_PATH"
-          plugin="$dir/plugins/$PLUGIN_PATH"
-          for file in .claude-plugin/plugin.json commands/code-review.md; do
-            if [ ! -f "$plugin/$file" ]; then
-              echo "::error::code-review プラグインの ${PLUGIN_PATH}/${file} が ${PLUGIN_REPO} にありません。プラグインの置き場所が変わった可能性があります。このステップの PLUGIN_REPO・PLUGIN_PATH を直してください。"
-              exit 1
-            fi
-          done
+          plugin="$(.github/scripts/claude-review-plugin.sh "$dir/plugins")"
           echo "PLUGIN_DIR=$plugin" >> "$GITHUB_ENV"
       - name: Review with the code-review plugin
         # PREVIOUS_SHA があれば再レビュー（claude-review.mjs）。

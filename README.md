@@ -469,9 +469,11 @@ firebase.json                 # Hosting 設定（/api/** → Cloud Run リライ
   require-vars.sh             # 必須のリポジトリ変数が空でないことの確認
   claude-review.mjs           # Agent SDK で code-review プラグインを動かす（PR エージェント）
   claude-review-status.sh     # Claude のレビューが付いたか・判定済みか・PR の状態を確認（PR エージェント）
+  claude-review-plugin.sh     # 固定した commit から code-review プラグインを取り出す（PR エージェント）
   clerk-issuer.sh             # Publishable Key から CLERK_ISSUER を導出
   coverage.py                 # カバレッジ XML のパス正規化と集計（テストのカバレッジ）
   check_howtec_worksheet.py   # 配布ページを見て表計算ツールの改訂を拾う
+.github/claude-plugins-official  # code-review プラグインの固定（submodule。チェックアウト不要）
 ```
 
 ## ⚙️ セットアップ
@@ -836,7 +838,11 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 - その結果を **PR のレビューとして出す**。指摘があれば **Request changes**、無ければ **Approve**。判定はワークフローが機械的に行う（インラインコメントの有無）。
 - コメントも判定も `GITHUB_TOKEN` で付けるので、名義は `github-actions[bot]` になる。
 - リポジトリ固有の観点（「挙動を変えたら README も直す」など）は **CLAUDE.md に書く**。プラグインはそれに照らしてレビューする。
-- プラグインは毎回、`anthropics/claude-plugins-official` の最新版を取得する（2026-10 に `anthropics/claude-code` から移った）。レビューの指示であってこのリポジトリのコードの動作には関わらないため、他のアクションと違ってバージョンを固定しない（Agent SDK は固定する）。置き場所が変わってプラグインのファイルが見つからなければ、取得のステップでその旨を出して失敗する。
+- プラグインは **commit を固定** する（Agent SDK も固定）。以前は毎回最新を取っていたが、2026-10 にプラグインが `anthropics/claude-code` から `anthropics/claude-plugins-official` へ移ったとき、再レビューが落ちた。
+  - 固定は git submodule（`.github/claude-plugins-official`、`.gitmodules`）で行う。取得元には tag も release も無く、Actions でも npm のパッケージでもないので、Dependabot（`gitsubmodule`）が追えるのは submodule だけのため。submodule はチェックアウトしなくてよい（CI も取り出さない）。
+  - `review` ジョブは、submodule に記録された commit から `plugins/code-review` だけを取り出して使う（`.github/scripts/claude-review-plugin.sh`）。
+  - Dependabot が週 1 回、`main` の最新 commit へ上げる PR を出す。上流は 1 日に何度も更新されるので、code-review と関係ない変更でも上がる。プラグイン自体の変更は、PR 本文の commit の一覧のうち `plugins/code-review` に触れるものを見る。
+  - Dependabot の PR では `review` ジョブが走らないので、上げた commit にプラグインがあるかは `review-plugin` ジョブ（Review plugin）が毎回確かめる。置き場所がまた変わったら、ここが落ちる。
 
 #### 運用: PR は下書きで作る
 
