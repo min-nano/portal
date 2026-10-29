@@ -584,8 +584,17 @@ describe('ファイルを足して並べる', () => {
     await settled(2);
     const release = holdImage('c2');
     drop([file('猫_表紙.pdf', pdf(COVER))]);
-    await vi.waitFor(() => expect($('progressText').textContent).toBe('ファイルを調べています（3 / 3）'));
+    // 調べる流れが止まるところまで待つ。c1 と c2 は並べて描くので、c2 を止めても
+    // c1 は描き終えてバーを進める。c2 を描き始める前に、バーは分からない表示に
+    // なる（頁の画像を調べています）ので、c2 を描き始めたあとに値が付いていれば、
+    // それは c1 を測り終えたときの値で、c2 を放すまで変わらない。
+    await vi.waitFor(() => {
+      expect($('progressText').textContent).toBe('ファイルを調べています（3 / 3）');
+      expect(mocks.renderPageImage.mock.calls.some(([doc, index]) => doc.spec.pages[index].id === 'c2')).toBe(true);
+      expect($('progressBar').hasAttribute('value')).toBe(true);
+    });
     const reading = $('progressBar').value;
+    expect(reading).toBeGreaterThan(0);
 
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('downloadBtn').disabled).toBe(false));
