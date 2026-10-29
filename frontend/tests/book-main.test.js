@@ -391,6 +391,45 @@ describe('ファイルを足して並べる', () => {
     expect(fileItem('猫_奇数.pdf').querySelector('button[aria-label^="ひとつ"]')).toBeNull();
   });
 
+  it('ファイルの並び順を、追加順・名前順・更新日時順で切り替えられる', async () => {
+    const at = (name, bytes, lastModified) =>
+      new File([bytes], name, { type: 'application/pdf', lastModified });
+    expect($('fileSort').hidden).toBe(true);
+    drop([at('猫_奇数.pdf', pdf(ODD), 3000), at('猫_表紙.pdf', pdf(COVER), 1000)]);
+    await settled(2);
+    drop([at('猫_偶数.pdf', pdf(EVEN), 2000)]);
+    await settled(3);
+    const names = () => [...document.querySelectorAll('#fileList .bm-file .name')].map((n) => n.textContent);
+    const keys = () => [...document.querySelectorAll('#pageGrid > li')].map((card) => card.dataset.pageKey);
+    const sortBy = (value) => {
+      const radio = document.querySelector(`input[name="fileSort"][value="${value}"]`);
+      radio.checked = true;
+      radio.dispatchEvent(new Event('change'));
+    };
+
+    // 既定は追加した順（一度に選んだファイルは名前の順）。
+    expect($('fileSort').hidden).toBe(false);
+    expect(names()).toEqual(['猫_奇数.pdf', '猫_表紙.pdf', '猫_偶数.pdf']);
+
+    sortBy('time');
+    expect(names()).toEqual(['猫_表紙.pdf', '猫_偶数.pdf', '猫_奇数.pdf']);
+    // 番号を入れていない先頭のファイルは、一覧の順に並ぶ。
+    change(fileItem('猫_奇数.pdf').querySelector('select'), 'front');
+    expect(keys().slice(0, 6)).toEqual(['f2:0', 'f2:1', 'f1:0', 'f1:1', 'f1:2', 'f1:3']);
+
+    sortBy('name');
+    expect(names()).toEqual(['猫_奇数.pdf', '猫_偶数.pdf', '猫_表紙.pdf']);
+    expect(keys().slice(0, 6)).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f2:0', 'f2:1']);
+
+    // あとから足したファイルも、選んでいる並び順の位置に入る。
+    drop([at('猫_あとがき.pdf', pdf(COVER), 500)]);
+    await settled(4);
+    expect(names()).toEqual(['猫_あとがき.pdf', '猫_奇数.pdf', '猫_偶数.pdf', '猫_表紙.pdf']);
+
+    sortBy('added');
+    expect(names()).toEqual(['猫_奇数.pdf', '猫_表紙.pdf', '猫_偶数.pdf', '猫_あとがき.pdf']);
+  });
+
   it('頁ごと・ファイルごとに番号を直せる', async () => {
     await addBook();
 

@@ -39,6 +39,12 @@
     <pre id="logText"></pre>
     <button type="button" id="logCopyBtn" class="secondary">ログをコピー</button>
   </details>
+  <!-- 一覧の並び。番号を入れていない表紙など（先頭・末尾に置くファイル）は、この順に並ぶ。 -->
+  <div id="fileSort" class="bm-filter" role="group" aria-label="ファイルの並び順" hidden>
+    <label class="choice-option"><input type="radio" name="fileSort" value="added" checked> 追加順</label>
+    <label class="choice-option"><input type="radio" name="fileSort" value="name"> 名前順</label>
+    <label class="choice-option"><input type="radio" name="fileSort" value="time"> 更新日時順</label>
+  </div>
   <ul id="fileList" class="bm-files"></ul>
 </portal-section>
 

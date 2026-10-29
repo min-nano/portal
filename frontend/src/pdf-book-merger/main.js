@@ -98,6 +98,8 @@ let generation = 0;
 /** いまの並びのうち、結合する PDF を決める部分（頁・役割・頁番号）。変わったときだけ結合した PDF を捨てる。 */
 let orderKey = '';
 let filter = 'all';
+/** ファイルの一覧の並び順（added: 追加した順 / name: 名前の順 / time: 更新日時の古い順）。 */
+let fileSort = 'added';
 // ファイルは 1 つずつ調べる（pdf.js も OCR も、同時に動かすと遅くなるだけなので）。
 let queue = Promise.resolve();
 // Drive からの読み込みは、調べるのを待たずに先へ進める（調べている間に、次の
@@ -282,7 +284,7 @@ function breathe() {
 /**
  * ファイルを一覧に足し、順番が来たら読む。
  *
- * @param {{name:string, size?:number, driveId?:string,
+ * @param {{name:string, size?:number, driveId?:string, modified?:number|null,
  *          load:(onProgress:Function) => Promise<Uint8Array>}} source
  */
 function addFile(source) {
@@ -291,8 +293,10 @@ function addFile(source) {
     return;
   }
   const file = {
-    key: `f${nextKey++}`,
+    key: `f${nextKey}`,
+    added: nextKey++, // 追加した順（「追加順」に戻すときに使う）
     name: source.name,
+    modified: Number.isFinite(source.modified) ? source.modified : null, // 更新日時（ミリ秒）
     driveId: source.driveId || '',
     status: 'waiting', // waiting → loading → loaded → reading → ocr → ready / error
     error: '',
@@ -306,6 +310,7 @@ function addFile(source) {
     pages: [],
   };
   files.push(file);
+  sortFiles();
   renderFiles();
   log(`「${file.name}」を追加しました（${source.driveId ? 'Drive' : 'この端末'}）`);
   file.loaded = downloads.then(() => loadBytes(file, source));
@@ -813,6 +818,32 @@ function removeFile(file) {
   refresh();
 }
 
+const byName = (a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true });
+
+/**
+ * ファイルの一覧を、選んだ並び順に並べ直す。先頭・末尾に置くファイルのうち
+ * 番号を入れていないものは、この順に並ぶ（本文は頁番号で並ぶので変わらない）。
+ * 更新日時の分からないファイルは後ろへ。決まらないところは追加した順。
+ */
+function sortFiles() {
+  const byAdded = (a, b) => a.added - b.added;
+  const compare = {
+    added: byAdded,
+    name: (a, b) => byName(a, b) || byAdded(a, b),
+    // どちらも分からなければ Infinity - Infinity（NaN）になり、名前の順へ進む。
+    time: (a, b) =>
+      (a.modified ?? Infinity) - (b.modified ?? Infinity) || byName(a, b) || byAdded(a, b),
+  }[fileSort];
+  files.sort(compare);
+}
+
+function setFileSort(value) {
+  fileSort = value;
+  sortFiles();
+  log(`ファイルを${{ added: '追加した順', name: '名前の順', time: '更新日時の順' }[value]}に並べました`);
+  refresh();
+}
+
 // --- 並べて確かめる ----------------------------------------------------------
 
 function readyFiles() {
@@ -899,6 +930,7 @@ function smallButton(text, title, onClick, className = 'secondary') {
 function renderFiles() {
   const list = $('fileList');
   list.replaceChildren(...files.map(fileItem));
+  $('fileSort').hidden = files.length < 2;
   $('checkSection').hidden = readyFiles().length === 0;
   $('outputSection').hidden = readyFiles().length === 0;
 }
@@ -1513,11 +1545,12 @@ async function addFromDrive() {
 function addDriveFiles(picked) {
   picked
     .slice()
-    .sort((a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true }))
+    .sort(byName)
     .forEach((file) =>
       addFile({
         name: file.name,
         driveId: file.id,
+        modified: file.modifiedTime ? Date.parse(file.modifiedTime) : null,
         load: (onProgress, onWait) => downloadDriveFile(file, { onProgress, onWait }),
       })
     );
@@ -1528,10 +1561,11 @@ function addLocal(fileList) {
   if (pdfs.length < fileList.length) showMessage('PDF 以外のファイルは外しました。', 'red');
   else showMessage('');
   pdfs
-    .sort((a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true }))
+    .sort(byName)
     .forEach((file) =>
       addFile({
         name: file.name,
+        modified: file.lastModified,
         load: async (onProgress) => {
           const bytes = new Uint8Array(await file.arrayBuffer());
           onProgress(bytes.length, bytes.length);
@@ -1616,6 +1650,9 @@ function wireUp() {
       filter = radio.value;
       renderGrid();
     })
+  );
+  document.querySelectorAll('input[name="fileSort"]').forEach((radio) =>
+    radio.addEventListener('change', () => setFileSort(radio.value))
   );
   $('outputName').addEventListener('input', () => {
     $('outputName').dataset.suggested = 'false';
