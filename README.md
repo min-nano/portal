@@ -703,7 +703,17 @@ Hosting は `https://<サイトID>.firebaseapp.com` でも同じアプリを配�
 
 ### 8. GitHub Actions（CI/CD）
 
-`main` への push で本番デプロイ（`.github/workflows/deploy.yml`）、PR で Hosting のプレビューデプロイ（`.github/workflows/preview.yml`。後述）が走ります。Settings → Secrets and variables → Actions に以下の **Variables** を設定してください。**Secrets は使いません**（理由は「ランタイム環境変数の出どころ」）。
+`main` への push で本番デプロイ（`.github/workflows/deploy.yml`）、PR で Hosting のプレビューデプロイ（`.github/workflows/preview.yml`。後述）が走ります。
+
+`main` はマージキューを通してマージします。キューは自分で作る一時ブランチ（`gh-readonly-queue/main/…`）のコミットに必須チェックが揃うのを待つので、必須チェックを出すワークフローは `merge_group` でも動くようにしてあります。
+
+| 必須チェック | マージキューでの扱い |
+| --- | --- |
+| `Backend (pytest)` / `Frontend (vitest + build)` | `tests.yml` がキューのコミットでテストを走らせる（しきい値の判定も同じく走る。PR だけの差分カバレッジ・コメント・Claude のレビューは飛ぶ） |
+| `codecov/patch` | `tests.yml` の `codecov` ジョブがキューのコミットの計測も Codecov へ送り、Codecov がそのコミットに付ける |
+| `Preview environment` | `preview.yml` はキューでも起動するが、プレビューは作らずジョブを飛ばす（飛んだジョブは必須チェックとして成功に数えられる） |
+
+必須チェックを増やすときは、そのワークフローにも `merge_group` を足すこと（足さないとキューが結果を待ち続け、時間切れで PR がキューから外れる）。Settings → Secrets and variables → Actions に以下の **Variables** を設定してください。**Secrets は使いません**（理由は「ランタイム環境変数の出どころ」）。
 
 フロントエンドのビルドとバックエンドのランタイム設定は、本番・プレビューともこの表の値だけから決まります。GCP 側に手で設定しておく値はありません。
 

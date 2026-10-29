@@ -50,6 +50,13 @@ on:
     # ready_for_review を足す（下書きから Ready にしたときにレビューを走らせる。
     # テストもそのとき走り直す）。
     types: [opened, synchronize, reopened, ready_for_review]
+  # マージキュー。キューが作る一時ブランチ（gh-readonly-queue/…）のコミットに
+  # 必須チェック（Backend・Frontend、それに codecov ジョブの送信から Codecov が
+  # 付ける codecov/patch）が付かないと、キューはいつまでも待ち続ける。PR だけの
+  # 処理（diff-cover・カバレッジコメント・review ジョブ）は event_name で
+  # 飛ぶので、ここではテストとしきい値の判定、Codecov への送信だけが走る。
+  merge_group:
+    types: [checks_requested]
 
 # 既定はテストジョブに必要な最小限。coverage ジョブは PR コメントのために
 # pull-requests: write を、review ジョブはさらに Anthropic への WIF のために
@@ -585,7 +592,7 @@ jobs:
     # 前の実行の判定から後の変更だけを見る。続けて push したときは、待っている
     # 実行が新しいものに置き換わるので、まとめて 1 回になりやすい。
     concurrency:
-      # push（main）では if で飛ぶが、式が空にならないよう run_id で埋める。
+      # push（main）・マージキューでは if で飛ぶが、式が空にならないよう run_id で埋める。
       group: claude-review-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: false
     permissions:
