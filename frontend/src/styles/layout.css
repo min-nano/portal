@@ -178,14 +178,19 @@ body::after,
   transition: opacity var(--dur) var(--ease), visibility var(--dur) var(--ease);
 }
 
+/* ページ側の幕は、固定配置ではなく文書全体に敷く（html を基準にした
+   absolute）。iOS の Safari は半透明のツールバーの下にもページを描くが、
+   固定配置の要素はツールバーの手前で切り取るので、固定配置の幕では
+   ツールバーの下だけ暗くならない。文書の一部として敷けば、本文と同じく
+   ツールバーの下にも描かれる。html の高さは画面より短くならないように
+   しておく（中身の短いページでも画面いっぱいを覆う）。 */
+html {
+  position: relative;
+  min-height: 100%;
+}
+
 body::after {
-  position: fixed;
-  /* 画面の上下へはみ出させる。iOS の Safari は、半透明のツールバーの
-     下にもページを描くのに、固定配置の bottom: 0 はツールバーの上で
-     止まる（そこだけ幕が掛からず白く残る）。引っ張って跳ねたときに
-     のぞく上下の端も覆う。固定配置なので、はみ出してもスクロールは
-     増えない。 */
-  inset: -50vh 0;
+  position: absolute;
   z-index: calc(var(--z-header) - 1);
 }
 
