@@ -471,7 +471,7 @@ firebase.json                 # Hosting 設定（/api/** → Cloud Run リライ
   claude-review-status.sh     # Claude のレビューが付いたか・判定済みか・PR の状態を確認（PR エージェント）
   claude-review-plugin.sh     # 固定した commit から code-review プラグインを取り出す（PR エージェント）
   clerk-issuer.sh             # Publishable Key から CLERK_ISSUER を導出
-  coverage.py                 # カバレッジ XML のパス正規化と集計（テストのカバレッジ）
+  coverage.py                 # カバレッジ XML のパス正規化（Codecov へ送る前処理）
   check_howtec_worksheet.py   # 配布ページを見て表計算ツールの改訂を拾う
 .github/claude-plugins-official  # code-review プラグインの固定（submodule。チェックアウト不要）
 ```
@@ -709,7 +709,7 @@ Hosting は `https://<サイトID>.firebaseapp.com` でも同じアプリを配�
 
 | 必須チェック | マージキューでの扱い |
 | --- | --- |
-| `Backend (pytest)` / `Frontend (vitest + build)` | `tests.yml` がキューのコミットでテストを走らせる（しきい値の判定も同じく走る。PR だけの差分カバレッジ・コメント・Claude のレビューは飛ぶ） |
+| `Backend (pytest)` / `Frontend (vitest + build)` | `tests.yml` がキューのコミットでテストを走らせる（PR だけの Claude のレビューは飛ぶ） |
 | `codecov/patch` | `tests.yml` の `codecov` ジョブがキューのコミットの計測も Codecov へ送り、Codecov がそのコミットに付ける |
 | `Preview environment` | `preview.yml` はキューでも起動するが、プレビューは作らずジョブを飛ばす（飛んだジョブは必須チェックとして成功に数えられる） |
 
@@ -1015,7 +1015,7 @@ cd firestore && npm ci && npm test
 
 ### カバレッジ
 
-CI はテストを走らせるついでにカバレッジを測り、PR に貼り替え式のコメントとして 1 枚の表を出します。同じ計測は [Codecov](https://about.codecov.io/) にも送ります（後述）。計測はテストの実行に相乗りするので、テストが 2 度走ることはありません。
+CI はテストを走らせるついでにカバレッジを測り、[Codecov](https://about.codecov.io/) へ送ります。カバレッジのレポート（PR へのコメント、`codecov/patch` などのチェック、推移やファイル別の閲覧）は Codecov に一本化しています。計測はテストの実行に相乗りするので、テストが 2 度走ることはありません。
 
 | スイート | 計測 | 出力 |
 | --- | --- | --- |
@@ -1031,17 +1031,13 @@ cd backend  && python -m pytest --cov=app --cov-branch --cov-report=term-missing
 cd frontend && npm run test:coverage
 ```
 
-3 つの道具はどれも Cobertura XML を出せますが、**書かれるファイルパスの基準がばらばら**（`src/report.rs` / `main.py` / `src/api.js`）なので、そのままでは 1 つの表にまとめられません。`.github/scripts/coverage.py` がそれをリポジトリのルート基準（`core/src/report.rs` 等）に直し（`normalize`）、まとめて数えます（`summary`）。パスが揃っているおかげで、**この PR が変えた行だけのカバレッジ**（diff-cover）も 3 スイートまたいで 1 回で出せます。
+3 つの道具はどれも Cobertura XML を出せますが、**書かれるファイルパスの基準がばらばら**（`src/report.rs` / `main.py` / `src/api.js`）です。`.github/scripts/coverage.py` がそれをリポジトリのルート基準（`core/src/report.rs` 等）に直してから（`normalize`）送るので、Codecov は 3 スイートの計測を同じ基準で実際のファイルに突き合わせられます。
 
-`tests.yml` の `coverage` ジョブはこの集計を表にして貼るだけで、ビルドもテストもしません。したがって **`coverage` の赤はしきい値割れ（表の 🔴）** であって、テストの失敗ではありません（テストの赤は各スイートのジョブに出ます）。しきい値はジョブ内の `THRESHOLDS` 1 か所にまとまっていて、`yellow` が「割ったら落とす下限」、`green` が「目指す水準」です。
-
-- 画面（Frontend）の下限が低いのは、ブラウザの入口（各ツールの `main.js`・`auth.js`・`api.js` など）を単体テストが読み込まないためです。ロジックは `form-logic.js` / `form-dom.js` 側に寄せてあり、そちらはほぼ 100% 覆われています。**入口の配線だけを変える PR は差分カバレッジ（`Diff`）が落ちて赤くなり得ます**——その場合はテストを足すか、`THRESHOLDS.diff` を見直してください。
-- Firestore ルールのテストはエミュレータ上でのルール評価なので行カバレッジという概念がなく、表には含めていません。
-- 分岐（Branches）は参考値（常に ⚪）です。Rust の計測に分岐の情報が無く、スイートをまたぐと意味の違う数が混ざるためです。
+- Firestore ルールのテストはエミュレータ上でのルール評価なので行カバレッジという概念がなく、Codecov には送っていません。
 
 #### Codecov
 
-`tests.yml` の `codecov` ジョブが、3 スイートの計測（正規化済みの Cobertura XML）をスイートごとに flag（`core` / `backend` / `frontend`）を付けて Codecov へ送ります。推移やファイル別のカバレッジを見るためのもので、**しきい値で CI を守るのは引き続き `coverage` ジョブ**です。Codecov への送信が失敗しても CI は赤くなりません（失敗はジョブのログに出ます）。
+`tests.yml` の `codecov` ジョブが、3 スイートの計測（正規化済みの Cobertura XML）をスイートごとに flag（`core` / `backend` / `frontend`）を付けて Codecov へ送ります。ここではビルドもテストもしません。Codecov への送信が失敗しても CI は赤くなりません（失敗はジョブのログに出ます）。
 
 有効にするには次の 2 つが要ります。
 
