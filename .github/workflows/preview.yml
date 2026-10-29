@@ -22,15 +22,23 @@ name: Preview
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  # マージキュー。このジョブ（Preview environment）は必須チェックなので、
+  # キューが作る一時ブランチのコミットにも結果が付かないとキューが進まない。
+  # キューの中ではプレビューを作る意味が無いので、ジョブは if で飛ばす
+  # （if で飛んだジョブは、必須チェックとしては成功に数えられる）。
+  merge_group:
+    types: [checks_requested]
 
-# 同じ PR への連続 push は最後のものだけデプロイされればよい。
+# 同じ PR への連続 push は最後のものだけデプロイされればよい。マージキューの
+# 実行は PR 番号を持たないので、互いに打ち消し合わないよう run_id で分ける。
 concurrency:
-  group: preview-${{ github.event.pull_request.number }}
+  group: preview-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   deploy-preview:
     name: Preview environment
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
