@@ -47,9 +47,9 @@ const SEARCH_DELAY_MS = 350;
 // 選び始めない）。マウスは揺れが小さいので短くする。
 const DRAG_START_PX = { touch: 10, mouse: 5 };
 // なぞっている指が一覧の上下の端のこの幅に入ったら、一覧を送る（端に近いほど速く。
-// 1 フレームあたりの最大）。
+// 1 秒あたりの最大。60Hz の画面で 1 フレーム 16px）。
 const AUTO_SCROLL_EDGE_PX = 48;
-const AUTO_SCROLL_MAX_PX = 16;
+const AUTO_SCROLL_MAX_PX_PER_S = 960;
 
 // 開き直したときは、前回いた場所から始める（雛形と保存先を続けて選ぶときなど、
 // 同じフォルダの周りを行き来することが多いため）。ページを開き直せば忘れる。
@@ -320,6 +320,7 @@ function openPicker(options) {
   const doc = document;
   const dialog = dialogFor(doc);
   const $ = (selector) => dialog.querySelector(selector);
+  const body = $('.drive-picker-body');
   const list = $('.drive-picker-list');
   const status = $('.drive-picker-status');
   const more = $('.drive-picker-more');
@@ -428,7 +429,7 @@ function openPicker(options) {
       incomplete = false;
       list.replaceChildren();
       // 別の場所へ移ったら、一覧は先頭から見せる。
-      $('.drive-picker-body').scrollTop = 0;
+      body.scrollTop = 0;
       renderTabs();
       renderCrumbs();
     }
@@ -457,6 +458,8 @@ function openPicker(options) {
         shown.add(item.id);
         list.append(renderItem(item));
       });
+    // なぞっている最中に続きを読んだら、足した行もなぞれるようにする。
+    if (drag?.active) drag.rows = rows();
     nextPageToken = result.nextPageToken || null;
     incomplete = incomplete || Boolean(result.incomplete);
     // 絞り込みで 1 ページがまるごと対象外だった（0 件でも続きがある）ときは、
@@ -501,30 +504,28 @@ function openPicker(options) {
   // --- なぞって選ぶ（いくつも選ぶとき） ---
   // 押した行から、いま指のある行までを続けて選ぶ（なぞり始めた行を選んで
   // いなければ選び、選んでいれば外す）。一覧の上下の端まで来たら一覧を送る。
-  const body = $('.drive-picker-body');
   const view = doc.defaultView;
   let drag = null; // なぞっている最中の様子（押したときに作り、動き出したら active）
-  // なぞり終えたあとに届く click は、行を押したことにしない（マウスでは、
-  // なぞり終えた行や、押した行と離した行の共通の祖先で click が起きる）。
-  // 次に押すまで待つ（届くかどうか・いつ届くかはブラウザによるので、時間では
-  // 区切らない）。
+  // マウスでなぞり終えたあとに届く click は、行を押したことにしない（なぞり
+  // 終えた行や、押した行と離した行の共通の祖先で click が起きる）。次に押す
+  // まで待つ（いつ届くかはブラウザによるので、時間では区切らない）。
   let swallowClick = false;
 
   const rows = () => [...list.querySelectorAll('.drive-picker-item')];
 
+  // 指の下の行が変わったときだけ、選び直す。
   const extendDrag = () => {
-    const all = rows();
-    // 一覧を描き直すときは先になぞるのをやめる（stopDrag）ので、押した行は必ずある。
-    const from = all.indexOf(drag.row);
     // 一覧の外の指は、見えている端の行にいるとみなす（送ってあって見えていない
     // 行は選ばない。そうした行は、自動送りで見せてから選ぶ）。
     const { top, bottom } = body.getBoundingClientRect();
-    const to = rowIndexAt(all, Math.min(Math.max(drag.y, top), bottom - 1));
-    const items = all.map((row) => row.driveItem);
-    const next = dragSelection(drag.before, items, from, to, drag.select);
+    const to = rowIndexAt(drag.rows, Math.min(Math.max(drag.y, top), bottom - 1));
+    if (to === drag.to) return;
+    drag.to = to;
+    const items = drag.rows.map((row) => row.driveItem);
+    const next = dragSelection(drag.before, items, drag.from, to, drag.select);
     picked.clear();
     next.forEach((item, id) => picked.set(id, item));
-    all.forEach((row) => {
+    drag.rows.forEach((row) => {
       if (row.driveItem.folder) return;
       const pressed = String(picked.has(row.driveItem.id));
       if (row.getAttribute('aria-pressed') !== pressed) row.setAttribute('aria-pressed', pressed);
@@ -532,25 +533,52 @@ function openPicker(options) {
     updateChoose();
   };
 
-  // なぞり終えれば stopDrag が次のフレームを取り消すので、ここでは drag がある。
-  const autoScroll = () => {
+  /**
+   * 端の帯で一覧を送る速さ（-1〜1。0 なら送らない）。
+   *
+   * 端の行は、押した所がもう端の帯の中にある（行の高さより帯が広い）。その
+   * 端は、そちらへ動かすか、一度帯の外へ出るまでは送らない（端の行から反対へ
+   * なぞり始めたのに、一覧が逆へ流れて余計な行を選ばないように）。
+   */
+  const edgeSpeed = () => {
     const { top, bottom } = body.getBoundingClientRect();
     const edge = AUTO_SCROLL_EDGE_PX;
-    let speed = 0;
-    // 端の行は、押した所がもう端の幅に入っている（行の高さより幅が広い）。
-    // その端へ向けて動かしたときだけ送る（端の行から反対へなぞり始めたのに、
-    // 一覧が逆へ流れて余計な行を選ばないように）。
-    if (drag.y < top + edge && drag.y < drag.y0) {
-      speed = -Math.min(1, (top + edge - drag.y) / edge);
-    } else if (drag.y > bottom - edge && drag.y > drag.y0) {
-      speed = Math.min(1, (drag.y - (bottom - edge)) / edge);
+    const inTop = drag.y < top + edge;
+    const inBottom = drag.y > bottom - edge;
+    if (!inTop) drag.topArmed = true;
+    if (!inBottom) drag.bottomArmed = true;
+    if (inTop && (drag.topArmed || drag.y < drag.y0)) {
+      return -Math.min(1, (top + edge - drag.y) / edge);
     }
-    if (speed) {
-      const before = body.scrollTop;
-      body.scrollTop += speed * AUTO_SCROLL_MAX_PX;
-      // 指は止まっていても、下を通る行が変わる。
-      if (body.scrollTop !== before) extendDrag();
+    if (inBottom && (drag.bottomArmed || drag.y > drag.y0)) {
+      return Math.min(1, (drag.y - (bottom - edge)) / edge);
     }
+    return 0;
+  };
+
+  // 端の帯にいる間だけ回す（帯の外へ出たら止まり、次に入れば pointermove から
+  // また始める）。選び直すのは、送ったあとの scroll で行う。
+  const autoScroll = (now) => {
+    const speed = edgeSpeed();
+    if (!speed) {
+      drag.frame = 0;
+      return;
+    }
+    // 送る量は前のフレームからの時間に比例させる（リフレッシュレートが高い画面
+    // でも速くならないように）。1px に満たない分は次へ持ち越す。
+    const elapsed = drag.lastFrame === null ? 1000 / 60 : Math.min(now - drag.lastFrame, 100);
+    drag.lastFrame = now;
+    drag.carry += (speed * AUTO_SCROLL_MAX_PX_PER_S * elapsed) / 1000;
+    const step = Math.trunc(drag.carry);
+    drag.carry -= step;
+    if (step) body.scrollTop += step;
+    drag.frame = view.requestAnimationFrame(autoScroll);
+  };
+
+  const keepScrolling = () => {
+    if (drag.frame || !edgeSpeed()) return;
+    drag.lastFrame = null;
+    drag.carry = 0;
     drag.frame = view.requestAnimationFrame(autoScroll);
   };
 
@@ -558,6 +586,11 @@ function openPicker(options) {
     drag.active = true;
     drag.select = !picked.has(drag.row.driveItem.id);
     drag.before = new Map(picked);
+    // 行は、一覧を描き直すまで変わらない（描き直す前に stopDrag する。続きを
+    // 読んだときは load で足す）。
+    drag.rows = rows();
+    drag.from = drag.rows.indexOf(drag.row);
+    drag.to = null;
     // 一覧の外（上下の端より先）へ出ても、指を追い続ける。
     try {
       list.setPointerCapture?.(drag.pointerId);
@@ -565,11 +598,11 @@ function openPicker(options) {
       // 指がもう離れていた。続く pointerup / pointercancel で終わる。
     }
     extendDrag();
-    drag.frame = view.requestAnimationFrame(autoScroll);
+    keepScrolling();
   };
 
   function stopDrag() {
-    if (drag && drag.active) view.cancelAnimationFrame(drag.frame);
+    if (drag?.frame) view.cancelAnimationFrame(drag.frame);
     drag = null;
   }
 
@@ -606,11 +639,14 @@ function openPicker(options) {
 
     if (options.multiple) {
       on(list, 'pointerdown', (event) => {
-        if (drag || !event.isPrimary || event.button !== 0) return;
+        // なぞり始める前の drag が残っていたら（離したのを取り逃した）、押し直した
+        // ここから始め直す。
+        if (drag?.active || !event.isPrimary || event.button !== 0) return;
         const row = event.target.closest('.drive-picker-item');
         if (!row || row.driveItem.folder) return;
         drag = {
           pointerId: event.pointerId,
+          pointerType: event.pointerType,
           mouse: event.pointerType === 'mouse',
           // 丸の上では、どの向きに動かしてもなぞり始める（CSS でスクロールを
           // 止めてある）。
@@ -624,7 +660,7 @@ function openPicker(options) {
       });
       on(list, 'pointermove', (event) => {
         if (!drag || event.pointerId !== drag.pointerId) return;
-        // マウスのボタンを一覧の外で離すと、pointerup はここへ届かない（なぞり
+        // マウスのボタンをウィンドウの外で離すと、pointerup は届かない（なぞり
         // 始める前は一覧で捕まえていない）。ボタンを離したまま動かしたら終える。
         if (drag.mouse && !(event.buttons & 1)) {
           stopDrag();
@@ -634,6 +670,7 @@ function openPicker(options) {
         if (drag.active) {
           event.preventDefault();
           extendDrag();
+          keepScrolling();
           return;
         }
         const dx = Math.abs(event.clientX - drag.x0);
@@ -644,13 +681,19 @@ function openPicker(options) {
         if (drag.mouse || drag.onCheck || dx > dy) startDrag();
         else stopDrag();
       });
-      on(list, 'pointerup', (event) => {
+      // 離したのは、一覧の外でも受ける（なぞり始める前は一覧で捕まえていない）。
+      on(doc, 'pointerup', (event) => {
         if (!drag || event.pointerId !== drag.pointerId) return;
-        if (drag.active) swallowClick = true;
+        // 指でなぞったあとには click が来ない（動いたタッチは click にならない）。
+        if (drag.active && drag.pointerType !== 'touch') swallowClick = true;
         stopDrag();
       });
-      on(list, 'pointercancel', (event) => {
+      on(doc, 'pointercancel', (event) => {
         if (drag && event.pointerId === drag.pointerId) stopDrag();
+      });
+      // ホイール・慣性・自動送りのどれで送っても、指の下を通った行を選ぶ。
+      on(body, 'scroll', () => {
+        if (drag?.active) extendDrag();
       });
       // 次に押したら、その click は普通に受ける。
       on(
