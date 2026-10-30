@@ -5,8 +5,10 @@
 // 付く API クレジットの対象外だから（Claude Agent SDK は対象）。アクションが
 // 用意していたもののうち、プラグインが要るものだけをここで持つ:
 //
-//   - プラグインのコマンド（/code-review:code-review --comment）をそのまま渡す。
-//     プロンプトは書き足さない
+//   - プラグインのコマンドの本文（commands/code-review.md）を渡す。書き足すのは、
+//     手順の 1（レビューするかどうかの見極め）で止まってよい場合を「閉じている・
+//     下書き」だけに絞ること（と、再レビューで変える点）だけ。ほかの手順と、
+//     指摘を絞る基準はプラグインのまま
 //   - インラインコメントのツール（mcp__github_inline_comment__create_inline_comment）。
 //     アクションの同名ツールと同じ引数を受け、GitHub の API で付ける
 //   - GitHub の OIDC トークンの取得。起動時に 1 回だけ取り、環境変数
@@ -24,14 +26,17 @@
 // 環境変数: GITHUB_REPOSITORY・GH_TOKEN・PR_NUMBER・PR_URL・PLUGIN_DIR・
 // ACTIONS_ID_TOKEN_REQUEST_URL / _TOKEN（Actions が渡す）
 //
+// 手順の 1 を絞るのは、プラグインが「レビュー不要（自明な変更）」「Claude が既に
+// コメントした PR」と判断すると、何も書かずに終わるため。そうなると判定
+// （Approve / Request changes）の材料が無く、Ready の PR が判定の無いまま残る
+// （文書だけの PR が毎回これで止まった）。レビューするかどうかはワークフローが
+// 決めている（判定がまだ無い head にだけ走る）ので、ここで重ねて見極めない。
+//
 // 再レビュー（前回の判定から head が変わったとき）では、さらに PREVIOUS_SHA（前回の判定を
-// 出したときの head）と HEAD_SHA を渡す。プラグインは「Claude が既にコメント
-// した PR」を飛ばすので、コマンドとしては呼べない。代わりにプラグインの
-// コマンドの本文（commands/code-review.md）をそのまま渡し、再レビューで
-// 変える点（既存のコメントで飛ばさない・前回からの変更だけを見る・前回の
-// 指摘が残っていないか見る）だけを前に書き足す。REVIEW_BASE は差分の起点で、
-// 前回の head が今の head の祖先でない（force push した）ときは空になり、
-// PR 全体を見る。
+// 出したときの head）と HEAD_SHA を渡し、再レビューで変える点（前回からの変更
+// だけを見る・前回の指摘が残っていないか見る）も前に書き足す。REVIEW_BASE は
+// 差分の起点で、前回の head が今の head の祖先でない（force push した）ときは
+// 空になり、PR 全体を見る。
 import { readFile } from 'node:fs/promises';
 import { createSdkMcpServer, query, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
@@ -125,7 +130,38 @@ const createInlineComment = tool(
   }
 );
 
-// --- 再レビューの指示 -----------------------------------------------------------
+// --- レビューの指示 -------------------------------------------------------------
+
+// プラグインのコマンドの本文。先頭の front matter（allowed-tools など）は外す。
+async function procedure() {
+  const command = await readFile(`${pluginDir}/commands/code-review.md`, 'utf8');
+  return command.replace(/^---\n[\s\S]*?\n---\n/, '').trim();
+}
+
+// 手順の 1 で止まってよい場合。最初のレビューと再レビューで共通。
+const STEP_1 =
+  'In step 1, stop only if the pull request is closed or a draft. Do not stop because the change looks trivial or ' +
+  'obviously correct (documentation-only changes included), or because Claude has already commented on this pull ' +
+  'request: this workflow only runs when a verdict is due, and it turns the review you post into the verdict ' +
+  '(Approve or Request changes), so it must always get one.';
+
+// 指摘が無かったときのまとめコメント（ワークフローはこれを見て Approve する）。
+const SUMMARY =
+  'Use `--comment` behaviour: if no issues are found, post the summary comment in exactly the format the ' +
+  'procedure gives (starting with "## Code review" and containing "No issues found").';
+
+async function reviewPrompt() {
+  return `Review pull request ${prUrl}${headSha ? ` (head ${headSha})` : ''} by following the code review procedure
+below, with the \`--comment\` argument provided. Apply these changes, and pass them on to every subagent that they
+affect (the first one to the step 1 agent):
+
+1. ${STEP_1}
+2. ${SUMMARY}
+
+--- Code review procedure ---
+
+${await procedure()}`;
+}
 
 // 前回までに付けた指摘（インラインコメントのうちスレッドの起点。返信は除く）。
 // 起動時に取るので、この実行で付けるものは含まない。
@@ -140,9 +176,6 @@ async function previousFindings() {
 }
 
 async function rereviewPrompt() {
-  const command = await readFile(`${pluginDir}/commands/code-review.md`, 'utf8');
-  // 先頭の front matter（allowed-tools など）は外し、本文だけを渡す。
-  const procedure = command.replace(/^---\n[\s\S]*?\n---\n/, '').trim();
   const findings = await previousFindings();
   const listed = findings.length
     ? findings
@@ -159,29 +192,27 @@ async function rereviewPrompt() {
 Claude already reviewed this pull request at commit ${previousSha}. Follow the code review procedure below with
 these changes, and pass them on to every subagent that they affect:
 
-1. In step 1, do not stop because Claude has already commented on this pull request; that is expected for a
-   re-review. Do not stop because the change looks trivial either. Stop only if the pull request is closed or a draft.
+1. ${STEP_1} (Claude's earlier comments are expected for a re-review.)
 2. ${scope}
 3. These are the findings Claude posted in earlier reviews. For each one, check whether it still applies at the
    current head. A finding that still applies is an issue of this review: validate it like the others (step 5) and,
    if it is still valid, post a new inline comment on the current code that says it is still unresolved and links
    the original comment. Do not post anything for findings that have been fixed.
 ${listed}
-4. Use \`--comment\` behaviour: if no issues are found, post the summary comment in exactly the format the
-   procedure gives (starting with "## Code review" and containing "No issues found").
+4. ${SUMMARY}
 
 Read-only git commands (\`git diff\`, \`git log\`, \`git show\`) are available. The working directory is the
 pull request merged into its base branch, with full history (the current head is in it).
 
 --- Code review procedure ---
 
-${procedure}`;
+${await procedure()}`;
 }
 
 // --- 実行 ---------------------------------------------------------------------
 
 // 指示は OIDC トークンより先に組み立てる（トークンの寿命をレビューに回す）。
-const prompt = rereview ? await rereviewPrompt() : `/code-review:code-review --comment ${prUrl}`;
+const prompt = rereview ? await rereviewPrompt() : await reviewPrompt();
 
 // Claude に渡す環境から、OIDC トークンを取るための値を外し（Claude が別の
 // トークンを取れないように）、取ったトークンだけを渡す。
@@ -196,7 +227,6 @@ for await (const message of query({
   options: {
     model: MODEL,
     env,
-    plugins: rereview ? [] : [{ type: 'local', path: pluginDir }],
     mcpServers: {
       github_inline_comment: createSdkMcpServer({
         name: 'github_inline_comment',

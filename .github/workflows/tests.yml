@@ -28,8 +28,10 @@ name: Tests
 #   review
 #       PR だけ。4 つのテストジョブが全部通ってから、Claude が PR を
 #       レビューする（前回の判定があれば、その後の変更だけを再レビュー）。
-#       ここが赤いのは **レビューが付かなかった・判定できなかった** という
-#       意味で、テストの失敗ではない（詳しくはジョブのコメント）。
+#       判定（Approve / Request changes）は必ず出す。ここが赤いのは
+#       **レビューが最後まで終わらなかった**（そのときは Request changes を
+#       出してある）か、判定を出せなかったという意味で、テストの失敗ではない
+#       （詳しくはジョブのコメント）。
 #
 # カバレッジのレポートは Codecov に一本化している（PR へのコメントや
 # チェック〈codecov/patch など〉も Codecov が付ける）。各テストジョブが上げる
@@ -280,9 +282,10 @@ jobs:
   review:
     name: Auto review
     # Claude（PR エージェント）による自動レビュー。レビューの中身は Anthropic 公式の
-    # code-review プラグイン（`/code-review:code-review`）に任せ、ここでは
-    # プロンプトを書かない。何を見るか・どの指摘を捨てるかはプラグインが決める
-    # （並列のエージェントで CLAUDE.md 準拠とバグを見て、確信度の低い指摘を捨てる）。
+    # code-review プラグイン（`/code-review:code-review`）の手順に任せる。何を見るか・
+    # どの指摘を捨てるかはプラグインが決める（並列のエージェントで CLAUDE.md 準拠と
+    # バグを見て、確信度の低い指摘を捨てる）。書き足すのは、手順の最初の見極めで
+    # 止まってよい場合を「閉じている・下書き」に絞ることだけ（claude-review.mjs）。
     # リポジトリ固有の観点は CLAUDE.md に書けば、プラグインがそれに照らして見る。
     #
     # プラグインは Claude Agent SDK で動かす（.github/scripts/claude-review.mjs）。
@@ -329,15 +332,17 @@ jobs:
     # 新しい判定は前の判定を置き換える（GitHub は同じレビュアーの最新の判定を
     # 有効にする）。
     #
-    # プラグインは「レビュー不要」「Claude が既にコメントした」と判断すると何も
-    # 書かずに終わる。そのまま緑で終えると、Ready なのに未レビューの PR が
-    # 気付かれずに残るので、最後にレビューが付いたかを確かめ、付いていなければ
-    # ジョブを失敗にする。
+    # **判定（Approve / Request changes）は必ず出す。** Ready の PR を判定の無い
+    # まま残さないため。プラグインはそのままだと「レビュー不要（自明な変更）」
+    # 「Claude が既にコメントした」と判断して何も書かずに終わることがある（文書
+    # だけの PR が毎回これで止まった）ので、その見極めは「閉じている・下書き」
+    # だけに絞ってある（claude-review.mjs）。
     #
-    # レビューが付いたら、その結果を PR のレビュー（Approve / Request changes）として
-    # 出す。指摘があればプラグインはインラインコメントを付け、無ければ
-    # 「No issues found」のコメントを 1 件付けるので、判定はそれに従う
-    # （判定はここで機械的に行い、プラグインには何も足さない）。
+    # 判定はレビューの結果からここで機械的に出す。指摘があればプラグインは
+    # インラインコメントを付け、無ければ「No issues found」のコメントを 1 件付ける
+    # ので、それに従う。レビューが最後まで終わらなかったとき（失敗した・何も
+    # 付かなかった）は、承認しない側に倒して Request changes を出し、ジョブも
+    # 失敗にする（詳しくは判定の段）。
     #
     # bot（Dependabot など）の PR は対象外。依存の更新は CI とプレビューで見る。
     # フォークからの PR も対象外（OIDC トークンが出ないので、WIF が通らない）。
@@ -471,6 +476,7 @@ jobs:
           echo "PLUGIN_DIR=$plugin" >> "$GITHUB_ENV"
       - name: Review with the code-review plugin
         # PREVIOUS_SHA があれば再レビュー（claude-review.mjs）。
+        id: review
         if: steps.plan.outputs.mode != 'none'
         env:
           # WIF。これらは ID であって秘密ではないので、Variables に置く。
@@ -488,43 +494,44 @@ jobs:
           REVIEW_BASE: ${{ steps.plan.outputs.base }}
         run: node "$RUNNER_TEMP/claude-review/claude-review.mjs"
       - name: Check that the review was posted
+        # レビューが途中で失敗しても数える（判定の段が、その場合も判定を出す）。
         id: after
-        if: steps.plan.outputs.mode != 'none'
+        if: ${{ !cancelled() && steps.plan.outcome == 'success' && steps.plan.outputs.mode != 'none' }}
         env:
           GH_TOKEN: ${{ github.token }}
           SINCE: ${{ steps.start.outputs.since }}
           RETRIES: '5'
         run: .github/scripts/claude-review-status.sh
-      - name: Fail when a ready PR is left unreviewed
-        # 実行中に下書きへ戻された・閉じられた PR は、Ready ではないので問わない。
-        if: steps.plan.outputs.mode != 'none' && steps.after.outputs.state == 'open' && steps.after.outputs.reviewed != 'true'
-        env:
-          MODE: ${{ steps.plan.outputs.mode }}
-        run: |
-          if [ "$MODE" = 'rereview' ]; then
-            echo "::error::PR #${PR} の再レビューが付きませんでした。実行ログを確認し、このジョブを再実行してください。"
-          else
-            echo "::error::PR #${PR} は Ready ですが、レビューが付きませんでした。プラグインが「レビュー不要」または「Claude が既にコメント済み」と判断した可能性があります。実行ログを確認してください。"
-            echo "::error::PR に Claude のコメントが既にある場合（\`@claude\` とのやり取りや、中断された実行の残りなど）は、プラグインが毎回同じ理由で飛ばすため、再実行では解消しません。人がレビューするか、それらのコメントを消してから再実行してください。"
-          fi
-          exit 1
       - name: Submit the review verdict
-        # 指摘あり（インラインコメントがある）→ Request changes、
-        # 「No issues found」のまとめだけ → Approve。どちらでもない（まとめは
-        # あるが「No issues found」を含まない）なら、判定せずに落とす。
+        # 判定は必ず出す（実行中に下書きへ戻された・閉じられた PR は、Ready では
+        # ないので出さない）:
+        #
+        #   レビューが最後まで終わらなかった  → Request changes（目印なし）・ジョブを失敗に
+        #   指摘あり（インラインコメント）     → Request changes
+        #   「No issues found」のまとめだけ    → Approve
+        #   まとめはあるが「No issues found」が無い → Request changes（まとめを読んでもらう）
+        #
+        # 「終わらなかった」は、レビューの段が失敗した（途中で止まった・準備で
+        # 落ちた）か、成功したのに何も付かなかったとき。指摘が一部だけ付いて止まる
+        # こともあるので、付いたものの数では判定しない。承認しない側に倒すのは、
+        # 見ていない変更を Approve しないため。
         #
         # 本文の目印（claude-review-status.sh の MARKER）が「判定まで済んだ」の
-        # 印になる。判定はレビューした commit（HEAD_SHA）に付ける。`gh pr review`
-        # は commit を指定できず、出した時点の head に付くので、レビュー中に
-        # push されると、レビューしていない commit が「判定済み」になり、次の
-        # 実行がその変更を飛ばしてしまう（verdict_sha が再レビューの起点のため）。
+        # 印になる。終わらなかったときの Request changes には目印を付けない（付けると
+        # 次の実行が「この head まで見た」とみなし、見ていない変更を飛ばす。付けなければ
+        # 次の実行がもう一度レビューする）。判定はレビューした commit（HEAD_SHA）に
+        # 付ける。`gh pr review` は commit を指定できず、出した時点の head に付くので、
+        # レビュー中に push されると、レビューしていない commit が「判定済み」になり、
+        # 次の実行がその変更を飛ばしてしまう（verdict_sha が再レビューの起点のため）。
         #
         # 出すのは GITHUB_TOKEN（github-actions[bot]）。Approve には Settings →
         # Actions → General の「Allow GitHub Actions to create and approve pull
         # requests」が要る（howtec-worksheet-check.yml の PR 作成と同じ設定）。
-        if: steps.plan.outputs.mode != 'none' && steps.after.outputs.state == 'open' && steps.after.outputs.reviewed == 'true'
+        if: ${{ !cancelled() && steps.plan.outcome == 'success' && steps.plan.outputs.mode != 'none' && steps.after.outputs.state == 'open' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.review.outcome }}
+          REVIEWED: ${{ steps.after.outputs.reviewed }}
           INLINE: ${{ steps.after.outputs.inline }}
           CLEAN: ${{ steps.after.outputs.clean }}
           KIND: ${{ steps.plan.outputs.mode == 'rereview' && '再レビュー' || 'レビュー' }}
@@ -536,6 +543,12 @@ jobs:
             gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --silent \
               -f commit_id="$HEAD_SHA" -f event="$1" -f body="$2"
           }
+          if [ "$OUTCOME" != 'success' ] || [ "$REVIEWED" != 'true' ]; then
+            submit REQUEST_CHANGES \
+              "$(printf 'Claude の%sが最後まで終わらなかったので、承認しません（コードへの指摘ではありません）。Actions の実行ログを確認し、このジョブを再実行してください。' "$KIND")"
+            echo "::error::PR #${PR} の${KIND}が最後まで終わりませんでした（レビューの段: ${OUTCOME}、付いたレビュー: ${REVIEWED}）。Request changes を出しました。実行ログを確認し、このジョブを再実行してください。"
+            exit 1
+          fi
           if [ "$INLINE" -gt 0 ]; then
             submit REQUEST_CHANGES \
               "$(printf '%s\n\nClaude の%sで指摘が %s 件ありました。インラインコメントを確認してください。' "$MARKER" "$KIND" "$INLINE")"
@@ -546,6 +559,6 @@ jobs:
               exit 1
             fi
           else
-            echo "::error::Claude のまとめコメントに「No issues found」が無く、インラインコメントもありません。指摘の有無を判定できないので、まとめコメントを確認して人が判定してください。"
-            exit 1
+            submit REQUEST_CHANGES \
+              "$(printf '%s\n\nClaude の%sのまとめコメントに「No issues found」がありません。まとめコメントを確認してください。' "$MARKER" "$KIND")"
           fi
