@@ -248,7 +248,7 @@ export function portalToolsPlugin(tools, root) {
     // トップページのツール一覧は、載っているツールから作る。ツールを
     // 増やしても index.html を書き換えないで済むようにするため。
     transformIndexHtml: {
-      // %PORTAL_TITLE% の置換より先に処理する（説明文に混ざっていても効くように）。
+      // Vite 標準の %VITE_XXX% 置換より先に処理する（説明文に混ざっていても効くように）。
       order: 'pre',
       handler(html) {
         if (!html.includes(TOOL_LIST_MARKER)) return html;

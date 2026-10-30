@@ -116,6 +116,7 @@ form > button#submitBtn {
 
 /* 小さく添えるボタン（ヘッダー・雛形の設定・一括開閉）。 */
 .portal-header .account-menu button,
+.logo-row button,
 .template-chip button,
 portal-section-controls button,
 .folder-row button {
@@ -989,6 +990,47 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
 .folder-row button {
   margin-left: auto;
   flex: none;
+}
+
+/* ダイアログの中で、操作がうまくいかなかった理由（入力の不備・保存の失敗）。 */
+.dialog-error {
+  margin-top: var(--s-3);
+  font-size: var(--fs-sm);
+  color: var(--ng-600);
+}
+
+.dialog-error:empty {
+  display: none;
+}
+
+/* サイトの設定（src/site-settings-dialog.js）のロゴの行。見本・状態・
+   「画像を選ぶ」「外す」を、保存先フォルダの行と同じ形に並べる。 */
+.logo-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-1);
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.logo-row .site-logo {
+  width: 40px;
+  height: 40px;
+}
+
+.logo-row .unset {
+  color: var(--text-muted);
+}
+
+.logo-row button {
+  flex: none;
+}
+
+.logo-row button:first-of-type {
+  margin-left: auto;
 }
 
 /* --- Drive のファイル選択（src/drive-picker.js） -------------------------

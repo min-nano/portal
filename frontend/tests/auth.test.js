@@ -130,7 +130,7 @@ describe('requireSignIn（サインイン済み）', () => {
     const { requireSignIn } = await loadAuthModule();
     document.body.insertAdjacentHTML(
       'afterbegin',
-      '<portal-header class="portal-header" portal-name="社内ポータル"></portal-header>'
+      '<portal-header class="portal-header"></portal-header>'
     );
     signedInUser = { primaryEmailAddress: { emailAddress: 'taro@example.com' } };
 

@@ -7,9 +7,11 @@
 //
 //   1. 別ドメインなら、何もせずに終わる（Clerk を初期化しない）
 //   2. バックエンドは、サインインの確認と**同時に**起こす
-//   3. 未サインインなら、サインイン画面を出して終わる（準備は走らせない）
-//   4. 画面（#app）を出すのは、準備が終わってから
-//   5. 失敗したら、読み込み中を終わりにして理由を出す
+//   3. ポータルの名前とロゴは、サインインの確認を待たずに出す。「設定」の
+//      メニューは、サインインしてからつなぐ
+//   4. 未サインインなら、サインイン画面を出して終わる（準備は走らせない）
+//   5. 画面（#app）を出すのは、準備が終わってから
+//   6. 失敗したら、読み込み中を終わりにして理由を出す
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../src/components/index.js';
@@ -17,6 +19,8 @@ import '../src/components/index.js';
 const redirectToCanonicalHost = vi.fn();
 const requireSignIn = vi.fn();
 const warmUpApi = vi.fn();
+const showSite = vi.fn();
+const connectSiteSettingsMenu = vi.fn();
 
 vi.mock('../src/canonical-host.js', () => ({
   redirectToCanonicalHost: () => redirectToCanonicalHost(),
@@ -26,6 +30,10 @@ vi.mock('../src/auth.js', () => ({
   getSessionToken: async () => 'token',
 }));
 vi.mock('../src/api.js', () => ({ warmUpApi: () => warmUpApi() }));
+vi.mock('../src/site-settings.js', () => ({
+  showSite: () => showSite(),
+  connectSiteSettingsMenu: () => connectSiteSettingsMenu(),
+}));
 
 const { startPage } = await import('../src/page-start.js');
 
@@ -88,6 +96,32 @@ describe('startPage', () => {
     expect(warmedBeforeSignIn).toBe(true);
   });
 
+  it('ポータルの名前とロゴは、サインインの確認を待たずに出す', async () => {
+    let shownBeforeSignIn = false;
+    requireSignIn.mockImplementation(async () => {
+      shownBeforeSignIn = showSite.mock.calls.length === 1;
+      expect(connectSiteSettingsMenu).not.toHaveBeenCalled();
+      return CLERK;
+    });
+
+    startPage({});
+    await settle();
+
+    expect(shownBeforeSignIn).toBe(true);
+    // 「設定」は、サインインを確かめてからつなぐ。
+    expect(connectSiteSettingsMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it('未サインインのときも名前とロゴは出すが、「設定」はつながない', async () => {
+    requireSignIn.mockResolvedValue(null);
+
+    startPage({});
+    await settle();
+
+    expect(showSite).toHaveBeenCalledTimes(1);
+    expect(connectSiteSettingsMenu).not.toHaveBeenCalled();
+  });
+
   it('バックエンドを使わないページでは起こさない', async () => {
     startPage({});
     await settle();
@@ -106,6 +140,7 @@ describe('startPage', () => {
     await settle();
 
     expect(warmUpApi).not.toHaveBeenCalled();
+    expect(showSite).not.toHaveBeenCalled();
     expect(requireSignIn).not.toHaveBeenCalled();
     expect(prepare).not.toHaveBeenCalled();
     // 移動するまでのあいだ、読み込み中は出したままにする。

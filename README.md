@@ -31,7 +31,9 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
 
 ファイルを選ぶ画面はポータル自前の **Drive のファイル選択ダイアログ** です。一覧も上と同じ代理アクセス（`drive.readonly`）でバックエンドが取るので、出てくるのは本人が Drive で見られるものだけです。ブラウザから届くのは選ばれたファイル ID だけなので、種類・ゴミ箱・親フォルダの確認と実際の読み書きは、サーバー側の代理アクセスで行います（「4. Drive のファイル選択」参照）。
 
-全利用者共通の設定（雛形フォルダ ID・ファイル名。GAS 版のスクリプトプロパティ相当）は **Firestore** に保存します。人が直接編集できる Drive 上の JSON ファイルと違い、管理ユーザーの誤操作で設定が壊れるリスクがなく、アクセスはランタイム SA の IAM（`roles/datastore.user`）だけで完結します。delegation のスコープも広げません。保存先は環境（チャンネル）ごとに分かれています（「共有設定（Firestore）」参照）。
+全利用者共通の設定（雛形フォルダ ID・ファイル名。GAS 版のスクリプトプロパティ相当。ポータルの名前とロゴ）は **Firestore** に保存します。人が直接編集できる Drive 上の JSON ファイルと違い、管理ユーザーの誤操作で設定が壊れるリスクがなく、アクセスはランタイム SA の IAM（`roles/datastore.user`）だけで完結します。delegation のスコープも広げません。保存先は環境（チャンネル）ごとに分かれています（「共有設定（Firestore）」参照）。
+
+認証の要らない API は `/api/healthz` と、ポータルの名前とロゴを読む `GET /api/site` だけです（サインイン画面のヘッダーにも出すため。以前は同じものをビルド時に静的な HTML へ埋め込んで配っていたので、読める範囲は変わっていません）。書き換え（`PUT /api/site`）はサインインが要ります（「サイトの設定（ポータルの名前とロゴ）」参照）。
 
 ```
 ブラウザ (Firebase Hosting)
@@ -286,7 +288,7 @@ pdf.js には、PDF の外にあるデータ——**CMap・標準フォント・
 
 | 要素 | 役割 |
 | --- | --- |
-| `<portal-header>` | ヘッダー（ポータル名・サインイン中のアカウント欄）。**どの幅でも 1 行**に収め、長い名前は末尾を … で切る。アカウント欄は**アバター**（本人の写真か Google アカウントの写真。どちらも無ければ Clerk の既定のアイコン、画像を読めなければメールアドレスの頭文字）だけで、メールアドレスとサインアウトは、マウスを重ねるかタップすると開くメニューに入れる。メニューを開いているあいだは、メニュー以外を幕で暗くする（幕に触れると閉じる） |
+| `<portal-header>` | ヘッダー（ロゴ・ポータル名・サインイン中のアカウント欄）。ロゴと名前はサイトの設定から入る（`setSite`。ロゴが無ければ小さな四角）。**どの幅でも 1 行**に収め、長い名前は末尾を … で切る。アカウント欄は**アバター**（本人の写真か Google アカウントの写真。どちらも無ければ Clerk の既定のアイコン、画像を読めなければメールアドレスの頭文字）だけで、メールアドレス・**設定**・サインアウトは、マウスを重ねるかタップすると開くメニューに入れる。メニューを開いているあいだは、メニュー以外を幕で暗くする（幕に触れると閉じる） |
 | `<portal-loading>` | **読み込み中の表示**（JS を待たずに出る。`showApp()` で画面と入れ替わる） |
 | `<portal-auth-gate>` | サインインゲート（Clerk のサインイン画面のマウント先） |
 | `<portal-section>` | **折り畳めるセクション** |
@@ -307,6 +309,21 @@ pdf.js には、PDF の外にあるデータ——**CMap・標準フォント・
 
 部品を足すときの約束事は `frontend/src/components/index.js` の冒頭に書いてあります（要点は「名前は `portal-` で始める」「中身は原則 light DOM に作り、ページ共通の CSS と既存の id 参照をそのまま使えるようにする」「shadow DOM はページ側の CSS から隔てたい部分だけに使い、外から整えたいところは `part` で出す」）。
 
+### サイトの設定（ポータルの名前とロゴ）
+
+ポータルの名前（ヘッダーと、トップページのタブの名前）とロゴ（ヘッダーの名前の左）は、**画面から変えます**。ヘッダー右端のアバターから開くメニューの「**設定**」で、サイトの設定画面が開きます（`frontend/src/site-settings-dialog.js`。滅多に開かないので、押されてから読み込みます）。
+
+* **名前**: 60 文字まで。空にすると「社内ポータル」になります。
+* **ロゴ**: **PNG か SVG**、256KB まで。画像そのものを **base64** にして Firestore のドキュメントに入れます（Cloud Storage などの置き場所を別に持たないため。上限は base64 にしても Firestore のドキュメントの上限 1 MiB に余裕を持って収まる大きさです）。種類は申告やファイル名ではなく中身（PNG の署名・SVG の `<svg>` 要素）でサーバーが決めます。縦横比を保ったまま 24px の枠に収めて出します。未設定なら、これまでどおりの小さな四角です。
+* **SVG の安全**: 画面はロゴを `<img>` の `data:` URL として描きます。`<img>` で読み込んだ SVG はスクリプトを動かさないので、SVG の中に何が書かれていても画面の中では実行されません（SVG を単独の文書として、このポータルのオリジンで配ることもしていません）。
+* **書き換えられる人**: サインインできる人（許可ドメインのアカウント）なら誰でも。雛形の設定と同じ扱いです。
+
+保存先は共有設定と同じチャンネルの下の `site_settings/site` です（「共有設定（Firestore）」参照。`backend/app/site_settings.py`）。API は `GET /api/site`（**サインイン不要**。サインイン画面のヘッダーにも出すため）と `PUT /api/site`（サインインが要る）です。
+
+**ちらつかせない工夫**: 名前とロゴはページを開くたびに `/api/site` から読みますが、最後に読めた値をその端末（`localStorage`）に覚えておき、**まずそれを出してから**読み直します（`frontend/src/site-settings.js`）。ヘッダーは JS が組み立てるまで中身が無いので、組み立てと同じ流れで覚えた値を入れれば、初めて描かれるときにはもう正しい名前が入っています。読み直しはサインインの確認を待たずに始めます。読めなかったときは覚えている値のまま（初めての端末なら「社内ポータル」）で、ツールはふつうに使えます。ほかの人が設定を変えたときは、次にページを開いたときに届きます。
+
+> 以前はポータルの名前をビルド時の環境変数（リポジトリ変数 `PORTAL_TITLE` → `VITE_PORTAL_TITLE`）で HTML に埋め込んでいました。今は使っていないので、リポジトリ変数 `PORTAL_TITLE` は削除して構いません。**本番へ出したら、一度だけ設定画面で名前を入れ直してください**（入れるまでは「社内ポータル」と出ます）。
+
 ### 画面が出るまで（読み込み中の表示と、その短縮）
 
 画面を開いてから入力できるようになるまでには、次の 2 段があります。
@@ -320,7 +337,7 @@ pdf.js には、PDF の外にあるデータ——**CMap・標準フォント・
 
 各ページの HTML に `<portal-loading id="pageLoading">` を置いてあります。**回る輪は CSS の擬似要素だけで描き、文言は HTML に直接書く**ので、スクリプトを 1 行も読み込む前――HTML と CSS が届いた時点――で出ます（部品の登録すら待ちません）。見本は `/design/` の「9. 待たせるとき」にあります。
 
-* この段取り（ドメインを寄せる → バックエンドを起こす → サインインの確認 → 準備 → 画面を出す）は `frontend/src/page-start.js` に 1 つだけ置いてあります。各ページの入口は `startPage({ prepare, ... })` を呼び、**そのページの準備だけ**を書きます（5 つの入口に写して回るとずれるため）。
+* この段取り（ドメインを寄せる → バックエンドを起こす → ポータルの名前とロゴを出す → サインインの確認 → 準備 → 画面を出す）は `frontend/src/page-start.js` に 1 つだけ置いてあります。各ページの入口は `startPage({ prepare, ... })` を呼び、**そのページの準備だけ**を書きます（5 つの入口に写して回るとずれるため）。
 * 段が変わったら、待っているものを言い換えます（`setPageLoadingLabel()`。「サインインを確認しています…」→「計算の準備をしています…」）。`role="status"` が付くので読み上げにも伝わります。
 * **画面（`#app`）を出すのは「入力できるようになった時点」**です。組み立て途中のフォーム――空の選択肢や、まだ並んでいない入力欄――を一瞬見せないために、`#app` は `hidden` のまま始め、`prepare` が終わったところで `showApp()` が呼ばれます（画面が出て、読み込み中の表示が消えます）。準備の無いトップページは、サインインの確認が済んだ時点です。
 * **失敗して先に進めないときも必ず画面を出します**。理由を出す場所（`#message`）が画面の中にあるためで、回り続けたまま終わる画面を作らないためでもあります（トップページだけは画面にメッセージ欄が無いので、理由をサインインゲートに出します）。未サインインのとき（サインイン画面を出すとき）は `finishPageLoading()` で消し、代わりにゲートの中へ「サインイン画面を読み込んでいます…」を出します。
@@ -392,6 +409,8 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
     form-field.js             # 入力欄・選択肢・節の組み立て（全ツールの form-dom.js が使う）
     pdf-file-ui.js            # <portal-edit-bar> / <portal-save-bar> / <portal-save-dialogs>
   src/page-start.js           # 各ページの入口の共通の段取り（起動・サインイン・読み込み中・画面を出す）
+  src/site-settings.js        # ポータルの名前とロゴを出す（端末に覚えた値を先に出し、/api/site から読み直す）
+  src/site-settings-dialog.js # サイトの設定画面（アカウントのメニューの「設定」から開く）
   src/auth.js                 # Clerk（サインインゲート・トークン取得。サインイン画面は必要になってから読む）
   src/clerk-frontend-api.js   # Publishable Key から Clerk の接続先を取り出す（preconnect 用）
   src/api.js                  # Bearer 付き fetch ラッパー（バックエンドの起こし方も）
@@ -430,6 +449,7 @@ backend/                      # Cloud Run サービス (FastAPI)
   app/google_drive.py         # 代理トークン・Drive API
   app/google_docs.py          # Docs API（雛形のプレースホルダー置換）
   app/settings_store.py       # 共有設定（Firestore）
+  app/site_settings.py        # ポータルの名前とロゴ（/api/site。ロゴの確かめと base64 での保存）
   app/excel_report.py         # Excel 生成（旧 functions/main.py の移植）
   app/mapping.json            # セルマッピング（単一の情報源）
   app/structural_cert.py      # 証明書の生成・PDF 解析
@@ -566,7 +586,7 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 
 ### 5. 共有設定（Firestore）
 
-GAS 版のスクリプトプロパティに相当する、全利用者共通の設定置き場です。人が直接編集できるファイルに置くと管理ユーザーの誤操作で設定が壊れる恐れがあるため、Firestore を使います。手動でのデータ投入は不要で、画面のタイトル右にある雛形の「設定」ボタンから保存されます。
+GAS 版のスクリプトプロパティに相当する、全利用者共通の設定置き場です。人が直接編集できるファイルに置くと管理ユーザーの誤操作で設定が壊れる恐れがあるため、Firestore を使います。手動でのデータ投入は不要で、画面のタイトル右にある雛形の「設定」ボタン（ツールごと）と、アカウントのメニューの「設定」（ポータルの名前とロゴ）から保存されます。
 
 ```bash
 # Firestore データベース（Native モード）を作成し、ランタイム SA に読み書き権限を付与
@@ -586,13 +606,21 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 | development | `static-channels/development` | **既定**。ローカル開発 |
 | プレビュー | `preview-channels/pr-<番号>` | PR プレビュー（PR ごと） |
 
-環境変数で指定するのは **チャンネルのドキュメントパスまで** です。その下に何を置くかはアプリ側の都合なので、`tool_settings/<ツール名>` は `settings_store.py` が付けます。実際の保存先は例えばこうなります:
+環境変数で指定するのは **チャンネルのドキュメントパスまで** です。その下に何を置くかはアプリ側の都合なので、`tool_settings/<ツール名>` と `site_settings/site` は `settings_store.py` が付けます。実際の保存先は例えばこうなります:
 
 ```
 static-channels/production/tool_settings/excel-report-formatter
 static-channels/production/tool_settings/structural-cert-formatter
+static-channels/production/site_settings/site
 preview-channels/pr-29/tool_settings/excel-report-formatter
 ```
+
+ポータル全体の設定（`site_settings/site`）は次の形です（「サイトの設定（ポータルの名前とロゴ）」参照）。
+
+| キー | 中身 |
+| --- | --- |
+| `title` | ポータルの名前（空なら画面が「社内ポータル」を出す） |
+| `logo` | ロゴ。`{"mime_type": "image/png" か "image/svg+xml", "data": "<base64>"}`。無ければキーごと無い |
 
 ツールごとに保存する内容は次のとおりです（いずれも画面から保存され、手動でのデータ投入は不要）。
 
@@ -728,7 +756,6 @@ Hosting は `https://<サイトID>.firebaseapp.com` でも同じアプリを配�
 | `CLERK_PUBLISHABLE_KEY` | Clerk Publishable Key（**本番インスタンス** `pk_live_...`）。本番ビルドに埋め込み、バックエンドの `CLERK_ISSUER` もここから導出する | 本番 |
 | `CLERK_PUBLISHABLE_KEY_TEST` | Clerk Publishable Key（**開発インスタンス** `pk_test_...`）。プレビュービルドに埋め込み、プレビュー用バックエンドの `CLERK_ISSUER` もここから導出する | プレビュー |
 | `CANONICAL_HOST` | 本番のカスタムドメイン（例 `portal.example.com`）。`.web.app` へのアクセスをここへリダイレクトし、許可オリジンにも加える。未設定ならどちらも行わない | 本番 |
-| `PORTAL_TITLE` | ポータルの表示名（各ページのヘッダーと、トップページのタブ名）。ビルド時に `VITE_PORTAL_TITLE` として渡され HTML に埋め込まれる。未設定なら `社内ポータル` | 両方 |
 | `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。未設定なら既定の `(default)` | 本番 |
 | `ANTHROPIC_FEDERATION_RULE_ID` / `ANTHROPIC_ORGANIZATION_ID` / `ANTHROPIC_SERVICE_ACCOUNT_ID` / `ANTHROPIC_WORKSPACE_ID` | PR エージェント（Claude）の WIF。値と作り方は「Claude による PR レビュー（PR エージェント）」 | PR エージェント |
 
@@ -972,7 +999,7 @@ GOOGLE_APPLICATION_CREDENTIALS=~/keys/portal-api-dev.json \
 # フロントエンド（/api は vite が localhost:8080 へプロキシ）
 cd frontend
 cp .env.example .env   # VITE_CLERK_PUBLISHABLE_KEY を設定
-                       # 表示名を変えるなら VITE_PORTAL_TITLE も（省略可）
+                       # ポータルの名前とロゴは画面の「設定」から（development チャンネルに入る）
 npm install
 npm run dev
 ```
@@ -995,13 +1022,15 @@ cd core && cargo test
 # 保存時の突き合わせ・雛形設定・JWT 検証、必要壁量ツール（同梱した配布物へ実際に
 # 書き込み、触っていない部品が 1 つも欠けないことまで確かめる。さらに配布物の
 # 数式・入力例・圧縮基準強度の表と、写した計算を突き合わせる）、
-# 書籍スキャンの結合（Drive の PDF の確かめと、読み取り専用トークンの受け渡し）
+# 書籍スキャンの結合（Drive の PDF の確かめと、読み取り専用トークンの受け渡し）、
+# サイトの設定（名前とロゴ。PNG・SVG 以外と大きすぎる画像を断る）
 # （Drive/Docs/Firestore と認証はテスト内でフェイク）
 cd backend && python -m pytest
 
 # フロントエンド: フォームの純粋ロジック（バリデーション・数値正規化・ファイル名の組み立て・
 # 釘配列図の縮尺）、画面とデータの往復、画面共通の部品（セクションの開閉・
 # 各ページが id で探すマークアップ）、Drive のファイル選択ダイアログ、
+# サイトの設定（覚えた値を先に出して読み直す流れと、設定画面）、
 # ビルドした .wasm を実際に読み込んでの計算、書籍スキャンの結合（頁番号の推定・
 # 並び・画像の検査を合成データで、結合は pdf-lib で作った PDF を pdf.js で
 # 読み直して文字情報と頁ラベルが残ることまで。ToUnicode の無い日本語のフォントの文字を、同梱した CMap で読めること）
