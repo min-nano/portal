@@ -10,10 +10,13 @@
 //   2. バックエンド（Cloud Run）を起こしておく。ツールの準備は /config から
 //      始まり、その先頭がインスタンスの起動待ちを丸ごと被る。サインインの
 //      確認と同時に始めておけば、その分が待ち時間から消える
-//   3. サインインの確認。未サインインなら、サインイン画面を出して終わり
-//   4. 待っているものを言い換えて（サインインの確認 → ツールの準備）、
+//   3. ポータルの名前とロゴを出す（前回の値をすぐ出して、裏で読み直す。
+//      サインインの確認を待たない。サインイン画面のヘッダーにも出すため）
+//   4. サインインの確認。未サインインなら、サインイン画面を出して終わり。
+//      サインイン済みなら、アカウントのメニューの「設定」をつなぐ
+//   5. 待っているものを言い換えて（サインインの確認 → ツールの準備）、
 //      そのページの準備を走らせる
-//   5. 準備が終わったら画面を出す。**画面を出すのは「入力できるように
+//   6. 準備が終わったら画面を出す。**画面を出すのは「入力できるように
 //      なった時点」**で、組み立て途中のフォームは見せない
 //
 // どこで失敗しても、読み込み中の表示は必ず終わらせて理由を出す（回り続けた
@@ -24,6 +27,7 @@
 import { warmUpApi } from './api.js';
 import { requireSignIn } from './auth.js';
 import { redirectToCanonicalHost } from './canonical-host.js';
+import { connectSiteSettingsMenu, showSite } from './site-settings.js';
 import {
   finishPageLoading,
   setPageLoadingLabel,
@@ -59,9 +63,11 @@ export function startPage({
   async function begin() {
     if (redirectToCanonicalHost()) return; // 別ドメインへ移動中。
     if (usesApi) warmUpApi();
+    showSite();
 
     const clerk = await requireSignIn();
     if (!clerk) return; // サインイン画面を表示中。
+    connectSiteSettingsMenu();
 
     if (preparing) setPageLoadingLabel(preparing);
     if (prepare) await prepare(clerk);

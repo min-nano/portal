@@ -1,26 +1,8 @@
 import { resolve } from 'node:path';
 import { defineConfig, loadEnv } from 'vite';
 import { clerkFrontendApiHost } from './src/clerk-frontend-api.js';
-import { escapeHtml, resolvePortalTitle } from './src/portal-title.js';
 import tools from './tools.config.js';
 import { portalToolsPlugin, stageTools } from './tools-plugin.js';
-
-// HTML 内の %PORTAL_TITLE% を、環境変数 VITE_PORTAL_TITLE の値（未設定なら
-// 既定値）で置き換える。Vite 標準の %VITE_XXX% 置換は未設定だとプレース
-// ホルダがそのまま残ってしまうため、既定値を挟めるよう自前で処理する。
-function portalTitlePlugin(title) {
-  const escaped = escapeHtml(title);
-  return {
-    name: 'portal-title',
-    transformIndexHtml: {
-      // Vite 標準の %VITE_XXX% 置換より先に処理する。
-      order: 'pre',
-      handler(html) {
-        return html.replaceAll('%PORTAL_TITLE%', escaped);
-      },
-    },
-  };
-}
 
 // Clerk のフロントエンド API へ preconnect する <link> を、各ページの <head> の
 // 先頭に入れる。
@@ -77,7 +59,6 @@ export default defineConfig(({ mode }) => {
   return {
     appType: 'mpa',
     plugins: [
-      portalTitlePlugin(resolvePortalTitle(env.VITE_PORTAL_TITLE)),
       clerkPreconnectPlugin(env.VITE_CLERK_PUBLISHABLE_KEY),
       portalToolsPlugin(tools, import.meta.dirname),
     ],

@@ -6,7 +6,7 @@ name: Preview
 #   Hosting    : プレビューチャンネル pr-<番号>
 #   Clerk      : 開発（テスト）インスタンス
 #   Cloud Run  : PR ごとのサービス portal-api-pr-<番号>（このワークフローが自動生成）
-#   Firestore  : preview-channels/pr-<番号>/tool_settings（同一 DB 内で分離）
+#   Firestore  : preview-channels/pr-<番号>/tool_settings・site_settings（同一 DB 内で分離）
 #
 # バックエンドを PR ごとに立てるため、本番の Cloud Run は本番インスタンスの
 # トークンと本番オリジンだけを受け付ければよく、プレビュー用の発行者・
@@ -91,8 +91,6 @@ jobs:
       - name: Build (Clerk test instance)
         env:
           VITE_CLERK_PUBLISHABLE_KEY: '${{ vars.CLERK_PUBLISHABLE_KEY_TEST }}'
-          # 表示名は本番と揃える（未設定なら「社内ポータル」）。
-          VITE_PORTAL_TITLE: '${{ vars.PORTAL_TITLE }}'
           # デザインシステムの見本ページ（/design/）は、本番では配らず
           # プレビューだけに載せる（画面の変更をここで見比べるため）。
           PORTAL_DESIGN_PAGE: '1'
@@ -196,7 +194,7 @@ jobs:
               '- チャンネル: `pr-${{ env.PR }}`（最終デプロイから 7 日で失効、push ごとに更新）',
               '- 認証は Clerk の開発（テスト）インスタンスを使用します。',
               '- バックエンド: Cloud Run `portal-api-pr-${{ env.PR }}`（この PR 専用）',
-              '- 共有設定: Firestore `preview-channels/pr-${{ env.PR }}/tool_settings`（本番と分離。雛形の設定はこの PR 内でやり直しが必要です）',
+              '- 共有設定: Firestore `preview-channels/pr-${{ env.PR }}`（本番と分離。雛形の設定とサイトの設定（ポータルの名前・ロゴ）はこの PR 内でやり直しが必要です）',
               '',
               'バックエンド・共有設定とも本番から切り離されているため、この URL での操作が本番に影響することはありません。PR クローズ時にまとめて削除されます。',
             ].join('\n');

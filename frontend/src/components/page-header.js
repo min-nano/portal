@@ -1,18 +1,20 @@
 // ページ共通のヘッダー <portal-header>。
 //
-//   <portal-header class="portal-header" portal-name="%PORTAL_TITLE%" home></portal-header>
+//   <portal-header class="portal-header" home></portal-header>
 //
-// ポータルの表示名（ビルド時に vite が %PORTAL_TITLE% を差し替える）と、
-// サインイン中のアカウント欄を出す。home 属性を付けるとトップページへの
-// リンクになる（トップページ自身では付けない）。
+// ポータルのロゴと表示名、サインイン中のアカウント欄を出す。home 属性を
+// 付けるとトップページへのリンクになる（トップページ自身では付けない）。
+//
+// ロゴと表示名は Firestore のサイト設定から来る（../site-settings.js が
+// setSite で入れる）。入るまでは名前は空で、ロゴの場所には既定の四角を出す。
 //
 // ヘッダーは狭い画面でも常に 1 行に収める。アカウント欄はアバター（丸い顔
-// 写真）だけにして、メールアドレスとサインアウトはアバターに触れたとき
+// 写真）だけにして、メールアドレス・設定・サインアウトはアバターに触れたとき
 // （マウスなら重ねたとき、指ならタップしたとき）に開くメニューに入れる。
 // 毎回見る必要のないものでヘッダーを 2 行にしないため。
 //
 // 中身は light DOM に作る。アカウント欄の id（accountArea / accountEmail /
-// signOutBtn）は auth.js が探すので、shadow DOM に隠さない。
+// siteSettingsBtn / signOutBtn）は auth.js などが探すので、shadow DOM に隠さない。
 
 const TAG = 'portal-header';
 
@@ -24,22 +26,17 @@ export class PortalHeader extends HTMLElement {
 
     const title = doc.createElement('span');
     title.className = 'title';
-    const name = this.getAttribute('portal-name') || '';
+    // ロゴ。画像が無ければ空のままにして、CSS が既定の四角を描く。
+    const logo = doc.createElement('span');
+    logo.className = 'site-logo';
+    logo.id = 'siteLogo';
     // 長い名前は折り返さず、末尾を … で切る（ヘッダーを 1 行に保つ）。
-    // 省いた分はツールチップで読めるようにする。
-    title.title = name;
-    if (this.hasAttribute('home')) {
-      const link = doc.createElement('a');
-      link.href = '/';
-      link.className = 'name';
-      link.textContent = name;
-      title.appendChild(link);
-    } else {
-      const text = doc.createElement('span');
-      text.className = 'name';
-      text.textContent = name;
-      title.appendChild(text);
-    }
+    // 省いた分はツールチップで読めるようにする（setSite）。
+    const name = doc.createElement(this.hasAttribute('home') ? 'a' : 'span');
+    name.className = 'name';
+    name.id = 'siteName';
+    if (this.hasAttribute('home')) name.href = '/';
+    title.append(logo, name);
 
     const account = doc.createElement('span');
     account.className = 'account';
@@ -79,11 +76,17 @@ export class PortalHeader extends HTMLElement {
     const email = doc.createElement('span');
     email.className = 'account-email';
     email.id = 'accountEmail';
+    // ポータル全体の設定（表示名・ロゴ）。押したときの動きは site-settings.js。
+    const settings = doc.createElement('button');
+    settings.type = 'button';
+    settings.id = 'siteSettingsBtn';
+    settings.className = 'secondary';
+    settings.textContent = '設定';
     const signOut = doc.createElement('button');
     signOut.type = 'button';
     signOut.id = 'signOutBtn';
     signOut.textContent = 'サインアウト';
-    menu.append(email, signOut);
+    menu.append(email, settings, signOut);
 
     account.append(toggle, menu);
     this.append(title, account);
@@ -119,6 +122,36 @@ export class PortalHeader extends HTMLElement {
       setOpen(false);
       toggle.focus();
     });
+  }
+
+  /** メニューを閉じる（メニューから設定画面を開くとき）。 */
+  closeMenu() {
+    this.querySelector('#accountArea')?.classList.remove('open');
+    this.querySelector('#accountToggle')?.setAttribute('aria-expanded', 'false');
+  }
+
+  /**
+   * ポータルのロゴと表示名を出す（site-settings.js が呼ぶ）。
+   *
+   * @param {{ title: string, logo?: string|null }} site logo は data: URL
+   */
+  setSite({ title, logo }) {
+    const name = this.querySelector('#siteName');
+    if (!name) return;
+    name.textContent = title;
+    this.querySelector('.title').title = title;
+    const box = this.querySelector('#siteLogo');
+    const current = box.querySelector('img');
+    if (!logo) {
+      box.replaceChildren();
+    } else if (current?.getAttribute('src') !== logo) {
+      const img = this.ownerDocument.createElement('img');
+      img.alt = '';
+      // 読めない画像なら、既定の四角に戻す。
+      img.addEventListener('error', () => img.remove());
+      img.src = logo;
+      box.replaceChildren(img);
+    }
   }
 
   /**

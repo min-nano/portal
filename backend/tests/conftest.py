@@ -29,6 +29,7 @@ class FakeDrive:
 
     def __init__(self):
         self.settings = {}  # tool 名 -> 設定 dict
+        self.site = {}  # ポータル全体の設定（表示名・ロゴ）
         self.template_bytes = None  # fetch_latest_template が返すバイト列
         self.metadata = {}  # file_id -> files.get のメタデータ
         self.saved = []  # set_tool_settings の呼び出し記録
@@ -109,6 +110,12 @@ def drive(monkeypatch):
         fake.saved.append((tool, values))
 
     monkeypatch.setattr(settings_store, "set_tool_settings", set_tool_settings)
+    monkeypatch.setattr(settings_store, "get_site_settings", lambda: fake.site)
+
+    def set_site_settings(values):
+        fake.site = values
+
+    monkeypatch.setattr(settings_store, "set_site_settings", set_site_settings)
 
     def fetch_latest_template(session, folder_id, file_name):
         fake.fetch_calls.append((folder_id, file_name))

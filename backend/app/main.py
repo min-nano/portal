@@ -9,7 +9,7 @@
 
 このファイルが持つのは **組み立てだけ** で、ツールの中身は 1 行も無い:
 
-  - どのツールにも同じように効くもの（/healthz・/me・/drive/items）
+  - どのツールにも同じように効くもの（/healthz・/me・/drive/items・/site）
   - 失敗の返し方（PortalError なら status と日本語、それ以外は 500）
   - 載せるツール（app/tools/）のルーターを /api/tools/<id> へ載せる
 
@@ -22,7 +22,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import config, drive_browser, google_drive, portal_sdk
+from . import config, drive_browser, google_drive, portal_sdk, site_settings
 from .clerk_auth import User
 from .errors import PortalError
 from .portal_sdk import require_user
@@ -110,6 +110,10 @@ def list_drive_items(
         folders_only=foldersOnly,
         page_token=pageToken,
     )
+
+
+# ポータルの表示名とロゴ（設定画面から変える。site_settings 参照）。
+app.include_router(site_settings.router)
 
 
 # --- ツール ------------------------------------------------------------------

@@ -3,7 +3,9 @@
 // 実際のツールと同じ styles.css を読み込んで、部品をそのまま並べる
 // （見本のためだけの複製は作らない。複製を作ると、必ず実物とずれる）。
 //
-// ここでするのは 2 つだけ。
+// ここでするのは 3 つだけ。
+//   0. ヘッダーにポータルの名前とロゴを出す（実際のページと同じく、サイトの
+//      設定から。サインインは要らない）
 //   1. 明暗テーマの切り替え（<html data-theme> を書き換える）
 //   2. 判定（OK / NG）の切り替え。結果の節の見出しの帯の色と、狭い画面で
 //      出る「結果へ飛ぶ」ボタンが、判定の升目から決まることを見せる
@@ -15,6 +17,7 @@ import '../styles.css';
 import '../../tools/tools.css';
 import './page.css';
 import '../components/index.js';
+import { showSite } from '../site-settings.js';
 
 const THEMES = ['auto', 'light', 'dark'];
 const THEME_LABEL = { auto: '端末の設定', light: '明るい', dark: '暗い' };
@@ -58,5 +61,6 @@ function setUpVerdictToggle() {
   });
 }
 
+showSite();
 setUpThemeToggle();
 setUpVerdictToggle();

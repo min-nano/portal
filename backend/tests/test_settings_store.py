@@ -166,3 +166,28 @@ def test_firestore_failure_is_wrapped_with_guidance(monkeypatch):
     assert e.value.status == 500
     assert "Firestore" in str(e.value)
     assert "datastore.user" in str(e.value)
+
+
+def test_site_settings_live_beside_tool_settings_in_the_channel(fake_client, monkeypatch):
+    """ポータル全体の設定も、チャンネルの下（site_settings/site）に置く。"""
+    monkeypatch.setenv("SETTINGS_CHANNEL_PATH", "preview-channels/pr-7")
+    settings_store.set_site_settings({"title": "設計室"})
+
+    assert fake_client.documents == {
+        "preview-channels/pr-7/site_settings/site": {"title": "設計室"}
+    }
+    assert settings_store.get_site_settings() == {"title": "設計室"}
+    # ツールの設定とは混ざらない。
+    assert settings_store.get_tool_settings("site") == {}
+
+
+def test_missing_site_settings_return_empty_dict(fake_client):
+    assert settings_store.get_site_settings() == {}
+
+
+def test_site_settings_reject_a_channel_that_is_not_a_document(fake_client, monkeypatch):
+    monkeypatch.setenv("SETTINGS_CHANNEL_PATH", "static-channels")
+
+    with pytest.raises(SettingsError):
+        settings_store.set_site_settings({"title": "x"})
+    assert fake_client.documents == {}

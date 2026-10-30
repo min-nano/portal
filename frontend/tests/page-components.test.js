@@ -18,24 +18,67 @@ beforeEach(() => {
 });
 
 describe('portal-header', () => {
-  it('ポータル名とアカウント欄（初めは隠す）を出す', () => {
+  it('ロゴと名前の場所、アカウント欄（初めは隠す）を出す', () => {
     document.body.innerHTML =
-      '<portal-header class="portal-header" portal-name="社内ポータル"></portal-header>';
+      '<portal-header class="portal-header"></portal-header>';
 
-    expect(document.querySelector('.title').textContent).toBe('社内ポータル');
+    // 名前とロゴはサイトの設定が入れる（setSite）。それまでは空で、ロゴの
+    // 場所は CSS が既定の四角を描く。
+    expect(document.querySelector('.title').textContent).toBe('');
+    expect(document.getElementById('siteLogo').children).toHaveLength(0);
     // トップページ自身ではリンクにしない。
     expect(document.querySelector('.title a')).toBeNull();
     expect(document.getElementById('accountArea').hidden).toBe(true);
     expect(document.getElementById('accountEmail')).not.toBeNull();
     expect(document.getElementById('signOutBtn').textContent).toBe('サインアウト');
-    // メールアドレスとサインアウトは、アバターから開くメニューの中にある。
+    expect(document.getElementById('siteSettingsBtn').textContent).toBe('設定');
+    // メールアドレス・設定・サインアウトは、アバターから開くメニューの中にある。
     const menu = document.getElementById('accountMenu');
     expect(menu.contains(document.getElementById('accountEmail'))).toBe(true);
+    expect(menu.contains(document.getElementById('siteSettingsBtn'))).toBe(true);
     expect(menu.contains(document.getElementById('signOutBtn'))).toBe(true);
   });
 
+  it('setSite で名前とロゴを入れ、ロゴを外すと既定の四角に戻す', () => {
+    document.body.innerHTML = '<portal-header></portal-header>';
+    const header = document.querySelector('portal-header');
+    const logo = 'data:image/svg+xml;base64,PHN2Zy8+';
+
+    header.setSite({ title: '設計室ポータル', logo });
+
+    expect(document.getElementById('siteName').textContent).toBe('設計室ポータル');
+    // 長くて切れた名前もツールチップで読める。
+    expect(document.querySelector('.title').title).toBe('設計室ポータル');
+    const img = document.querySelector('#siteLogo img');
+    expect(img.getAttribute('src')).toBe(logo);
+
+    // 同じロゴなら作り直さない（読み直しのたびにちらつかない）。
+    header.setSite({ title: '設計室ポータル', logo });
+    expect(document.querySelector('#siteLogo img')).toBe(img);
+
+    // 読めない画像なら、既定の四角に戻す。
+    img.dispatchEvent(new Event('error'));
+    expect(document.getElementById('siteLogo').children).toHaveLength(0);
+
+    header.setSite({ title: '設計室ポータル', logo });
+    header.setSite({ title: '設計室ポータル', logo: null });
+    expect(document.getElementById('siteLogo').children).toHaveLength(0);
+  });
+
+  it('closeMenu で開いているメニューを閉じる', () => {
+    document.body.innerHTML = '<portal-header></portal-header>';
+    const header = document.querySelector('portal-header');
+    document.getElementById('accountToggle').click();
+    expect(document.getElementById('accountArea').classList.contains('open')).toBe(true);
+
+    header.closeMenu();
+
+    expect(document.getElementById('accountArea').classList.contains('open')).toBe(false);
+    expect(document.getElementById('accountToggle').getAttribute('aria-expanded')).toBe('false');
+  });
+
   it('setAccount でアカウント欄を出し、頭文字と写真を入れる', () => {
-    document.body.innerHTML = '<portal-header portal-name="社内ポータル"></portal-header>';
+    document.body.innerHTML = '<portal-header></portal-header>';
     const header = document.querySelector('portal-header');
 
     header.setAccount({ email: 'taro@example.com', imageUrl: 'https://example.com/a.png' });
@@ -54,7 +97,7 @@ describe('portal-header', () => {
   });
 
   it('メールアドレスも写真も無ければ、? を出して写真は読みに行かない', () => {
-    document.body.innerHTML = '<portal-header portal-name="社内ポータル"></portal-header>';
+    document.body.innerHTML = '<portal-header></portal-header>';
 
     document.querySelector('portal-header').setAccount({ email: '' });
 
@@ -65,7 +108,7 @@ describe('portal-header', () => {
 
   it('アバターのタップでメニューを開け閉めし、外に触れるか Esc で閉じる', () => {
     document.body.innerHTML =
-      '<portal-header portal-name="社内ポータル"></portal-header><p id="outside">本文</p>';
+      '<portal-header></portal-header><p id="outside">本文</p>';
     const area = document.getElementById('accountArea');
     const toggle = document.getElementById('accountToggle');
     area.hidden = false; // サインイン後の状態（隠れていると焦点を移せない）
@@ -115,14 +158,17 @@ describe('portal-header', () => {
     expect(area.classList.contains('open')).toBe(false);
   });
 
-  it('ページに置かれる前の setAccount は何もしない', () => {
+  it('ページに置かれる前の setAccount・setSite は何もしない', () => {
     const header = document.createElement('portal-header');
     expect(() => header.setAccount({ email: 'taro@example.com' })).not.toThrow();
+    expect(() => header.setSite({ title: 'x', logo: null })).not.toThrow();
     expect(header.children).toHaveLength(0);
   });
 
   it('home 属性を付けるとトップページへのリンクになる', () => {
-    document.body.innerHTML = '<portal-header portal-name="社内ポータル" home></portal-header>';
+    document.body.innerHTML = '<portal-header home></portal-header>';
+
+    document.querySelector('portal-header').setSite({ title: '社内ポータル' });
 
     const link = document.querySelector('.title a');
     expect(link.getAttribute('href')).toBe('/');
@@ -130,7 +176,7 @@ describe('portal-header', () => {
   });
 
   it('読み込み直しても中身が二重にならない', () => {
-    document.body.innerHTML = '<portal-header portal-name="社内ポータル"></portal-header>';
+    document.body.innerHTML = '<portal-header></portal-header>';
     const header = document.querySelector('portal-header');
     document.body.appendChild(header); // 付け直し（connectedCallback がもう一度走る）
 

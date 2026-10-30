@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>%PORTAL_TITLE%</title>
+  <!-- タブの名前はポータルの表示名（サイトの設定。src/site-settings.js が入れる）。 -->
+  <title data-site-title=""></title>
 </head>
 <body>
   <!-- ヘッダーとサインインゲートは全ページ共通の部品（src/components/）。
        id・class・hidden は、部品が読み込まれる前の描画のために HTML に置く。 -->
-  <portal-header class="portal-header" portal-name="%PORTAL_TITLE%"></portal-header>
+  <portal-header class="portal-header"></portal-header>
 
   <!-- 読み込み中の表示。サインインの確認が終わるまで（数秒かかることがある）
        出しておく。輪は CSS だけで回るので、JS を 1 行も読む前から出る。 -->

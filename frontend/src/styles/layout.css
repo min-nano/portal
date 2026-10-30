@@ -53,15 +53,31 @@
   text-overflow: ellipsis;
 }
 
-/* ポータルの印。名前だけだとどのページも同じ見出しに見えるので、
-   小さな四角を添えて「ここが最上位」だと分かるようにする。 */
-.portal-header .title::before {
+/* ポータルの印（ロゴ）。名前だけだとどのページも同じ見出しに見えるので、
+   名前の左に添えて「ここが最上位」だと分かるようにする。ロゴは設定画面で
+   入れる画像で、縦横比を保ったまま枠に収める。入れていなければ小さな
+   四角を描く。 */
+.site-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+}
+
+.site-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.site-logo:empty::before {
   content: '';
-  width: 18px;
-  height: 18px;
+  width: 75%;
+  height: 75%;
   border-radius: var(--r-sm);
   background: linear-gradient(135deg, var(--brand-500), var(--brand-800));
-  flex: none;
 }
 
 .portal-header .title a {

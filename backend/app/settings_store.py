@@ -11,8 +11,14 @@ Firestore に保存する。
   static-channels/production/tool_settings/excel-report-formatter:
     {"template_folder_id": "...", "template_file_name": "..."}
 
+ポータル全体（土台）の設定——表示名とロゴ——は、同じチャンネルの下の
+site_settings/site に置く（中身の決めごとは site_settings.py）:
+
+  static-channels/production/site_settings/site:
+    {"title": "...", "logo": {"mime_type": "image/png", "data": "<base64>"}}
+
 環境変数で決まるのはチャンネルのパスまでで、その下の構造（tool_settings/
-<ツール名>）はこのモジュールが決める。
+<ツール名>・site_settings/site）はこのモジュールが決める。
 
 アクセスには Cloud Run のランタイムサービスアカウントの ADC をそのまま使う。
 ランタイム SA に roles/datastore.user を付与しておくこと（README 参照）。
@@ -27,6 +33,8 @@ from .errors import PortalError
 
 # チャンネルの下に置くコレクション。環境ごとに変わらないためアプリ側で持つ。
 _COLLECTION = "tool_settings"
+# ポータル全体の設定。ドキュメントは 1 つだけ。
+_SITE_DOCUMENT = "site_settings/site"
 
 _client_instance = None
 _client_lock = threading.Lock()
@@ -48,8 +56,8 @@ def _client():
         return _client_instance
 
 
-def _document_path(tool: str) -> str:
-    """チャンネル配下の、そのツールのドキュメントパスを組み立てる。
+def _channel_path() -> str:
+    """チャンネル（ドキュメント）のパスを、確かめてから返す。
 
     Firestore のパスはコレクションとドキュメントが交互に並ぶため、チャンネル
     （ドキュメント）は偶数個のセグメントでなければならない。設定ミスで意図
@@ -61,7 +69,12 @@ def _document_path(tool: str) -> str:
             "SETTINGS_CHANNEL_PATH がドキュメントパスになっていません"
             f"（偶数個のセグメントが必要。例 static-channels/production）: {channel!r}"
         )
-    return f"{channel}/{_COLLECTION}/{tool}"
+    return channel
+
+
+def _document_path(tool: str) -> str:
+    """チャンネル配下の、そのツールのドキュメントパスを組み立てる。"""
+    return f"{_channel_path()}/{_COLLECTION}/{tool}"
 
 
 def _wrap_error(e: Exception) -> SettingsError:
@@ -71,10 +84,7 @@ def _wrap_error(e: Exception) -> SettingsError:
     )
 
 
-def get_tool_settings(tool: str) -> dict:
-    # パスの組み立て（設定の検証）は try の外。Firestore アクセスの失敗として
-    # 包み直すと、設定ミスが権限の問題に見えてしまうため。
-    path = _document_path(tool)
+def _get(path: str) -> dict:
     try:
         snapshot = _client().document(path).get()
     except Exception as e:
@@ -85,9 +95,28 @@ def get_tool_settings(tool: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def set_tool_settings(tool: str, values: dict):
-    path = _document_path(tool)
+def _set(path: str, values: dict):
     try:
         _client().document(path).set(values)
     except Exception as e:
         raise _wrap_error(e) from e
+
+
+# パスの組み立て（設定の検証）は _get / _set の try の外で行う。Firestore
+# アクセスの失敗として包み直すと、設定ミスが権限の問題に見えてしまうため。
+
+
+def get_tool_settings(tool: str) -> dict:
+    return _get(_document_path(tool))
+
+
+def set_tool_settings(tool: str, values: dict):
+    _set(_document_path(tool), values)
+
+
+def get_site_settings() -> dict:
+    return _get(f"{_channel_path()}/{_SITE_DOCUMENT}")
+
+
+def set_site_settings(values: dict):
+    _set(f"{_channel_path()}/{_SITE_DOCUMENT}", values)
