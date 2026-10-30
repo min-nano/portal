@@ -845,6 +845,30 @@ function setFileSort(value) {
   refresh();
 }
 
+/**
+ * 読み終えたファイルの役割をまとめて変える（例: 全部「先頭に置く」にして、一覧の
+ * 並び順のとおりに単純につなぐ）。auto は読み込んだときの推測に戻し、手で入れた
+ * 番号・進み方も消す。役割を選んだときは、ファイルごとの番号・進み方は残す。
+ */
+function setAllRoles(value) {
+  const ready = readyFiles();
+  for (const file of ready) {
+    if (value === 'auto') {
+      file.role = guessRole(file.name, file.pages);
+      file.manual = null;
+      file.coverStart = null;
+      file.coverStep = 1;
+    } else {
+      file.role = value;
+    }
+    queueLateOcr(file);
+  }
+  const text = value === 'auto' ? '自動' : ROLES[value];
+  log(`${ready.length} ファイルの役割を「${text}」にしました`);
+  $('bulkRole').value = '';
+  refresh();
+}
+
 // --- 並べて確かめる ----------------------------------------------------------
 
 function readyFiles() {
@@ -931,6 +955,7 @@ function renderFiles() {
   const list = $('fileList');
   list.replaceChildren(...files.map(fileItem));
   $('fileSortField').hidden = files.length < 2;
+  $('bulkRoleField').hidden = readyFiles().length < 2;
   $('checkSection').hidden = readyFiles().length === 0;
   $('outputSection').hidden = readyFiles().length === 0;
 }
@@ -1658,6 +1683,14 @@ function wireUp() {
     })
   );
   $('fileSort').addEventListener('change', (event) => setFileSort(event.target.value));
+  for (const [value, text] of Object.entries(ROLES)) {
+    const option = el(document, 'option', null, `すべて${text}`);
+    option.value = value;
+    $('bulkRole').append(option);
+  }
+  $('bulkRole').addEventListener('change', (event) => {
+    if (event.target.value) setAllRoles(event.target.value);
+  });
   $('outputName').addEventListener('input', () => {
     $('outputName').dataset.suggested = 'false';
     discardMerged();
