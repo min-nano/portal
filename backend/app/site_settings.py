@@ -40,11 +40,9 @@ SVG_MIME = "image/svg+xml"
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
-# 先頭の XML 宣言・コメント・DOCTYPE を読み飛ばした先に <svg が来るか。
-_SVG_ROOT = re.compile(
-    r"\A\s*(?:<\?xml[^>]*\?>\s*)?(?:(?:<!--.*?-->|<!DOCTYPE[^>]*>)\s*)*<svg[\s>/]",
-    re.DOTALL,
-)
+# 先頭に来てよいもの（XML 宣言・コメント・DOCTYPE）と、その終わりの印。
+_PROLOGUE = (("<?xml", "?>"), ("<!--", "-->"), ("<!DOCTYPE", ">"))
+_SVG_START = re.compile(r"<svg[\s>/]")
 
 _DATA_URL = re.compile(r"\Adata:([\w.+/-]+);base64,(.*)\Z", re.DOTALL)
 
@@ -61,7 +59,28 @@ def _sniff_mime_type(content: bytes) -> str | None:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:
         return None
-    return SVG_MIME if _SVG_ROOT.match(text) else None
+    return SVG_MIME if _starts_with_svg_root(text) else None
+
+
+def _starts_with_svg_root(text: str) -> bool:
+    """XML 宣言・コメント・DOCTYPE を読み飛ばした先に <svg が来るか。
+
+    正規表現 1 つで書くと、コメントの繰り返しで後戻りが膨らむ（送られてくる
+    のは誰でも作れる 256KB の文字列）。前から 1 度なめるだけにしておく。
+    """
+    pos = 0
+    while True:
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+        for start, end in _PROLOGUE:
+            if text.startswith(start, pos):
+                close = text.find(end, pos + len(start))
+                if close < 0:
+                    return False
+                pos = close + len(end)
+                break
+        else:
+            return _SVG_START.match(text, pos) is not None
 
 
 def parse_title(value) -> str:

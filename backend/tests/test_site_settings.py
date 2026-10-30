@@ -127,3 +127,36 @@ def test_broken_stored_logo_is_not_returned(client, drive):
     drive.site = {"title": 5, "logo": {"mime_type": "text/html", "data": "PGI+"}}
 
     assert client.get("/api/site").json() == {"title": "", "logo": None}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "<!--" + "--><!--" * 50000,
+        "<!--" + "<!---->" * 50000,
+        "<!DOCTYPE" + "--><!DOCTYPE" * 50000,
+        "<!---->" * 50000 + "<svg>",
+    ],
+)
+def test_svg_check_stays_fast_on_hostile_input(text):
+    """コメントを延々と並べた入力でも、すぐに答えが出る（後戻りしない）。"""
+    import time
+
+    started = time.perf_counter()
+    site_settings._sniff_mime_type(text.encode())
+    assert time.perf_counter() - started < 1
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("<svg/>", "image/svg+xml"),
+        ("\ufeff  <?xml version='1.0'?><!-- a --> <!DOCTYPE svg><svg\n>", "image/svg+xml"),
+        ("<!-- <svg> -->", None),
+        ("<!-- 閉じていない <svg>", None),
+        ("<svgx/>", None),
+        ("<?xml version='1.0'?><html/>", None),
+    ],
+)
+def test_svg_root_detection(text, expected):
+    assert site_settings._sniff_mime_type(text.encode()) == expected
