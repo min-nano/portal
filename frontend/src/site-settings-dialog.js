@@ -39,7 +39,7 @@ const LOGO_TYPES = { png: 'image/png', svg: 'image/svg+xml' };
  */
 export function logoMimeType(file) {
   if (Object.values(LOGO_TYPES).includes(file.type)) return file.type;
-  const extension = /\.([^.]+)$/.exec(file.name || '')?.[1]?.toLowerCase();
+  const extension = /\.([^.]+)$/.exec(file.name)?.[1].toLowerCase();
   return LOGO_TYPES[extension] || null;
 }
 
@@ -169,7 +169,7 @@ function buildDialog(doc) {
 
   chooseBtn.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', async () => {
-    const file = fileInput.files?.[0];
+    const file = fileInput.files[0];
     fileInput.value = ''; // 同じファイルを選び直しても change が起きるように。
     if (!file) return;
     const problem = logoFileProblem(file);

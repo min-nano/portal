@@ -42,9 +42,10 @@ function stubSite(site) {
   );
 }
 
-/** ファイルを選んだことにする。 */
+/** ファイルを選んだことにする（選ばずに閉じたなら file を渡さない）。 */
 function choose(file) {
-  Object.defineProperty($('siteLogoInput'), 'files', { value: [file], configurable: true });
+  const files = file ? [file] : [];
+  Object.defineProperty($('siteLogoInput'), 'files', { value: files, configurable: true });
   $('siteLogoInput').dispatchEvent(new Event('change'));
 }
 
@@ -131,6 +132,20 @@ describe('openSiteSettings', () => {
     expect(document.querySelector('#siteLogo img').getAttribute('src')).toBe(svgLogo);
     expect(document.title).toBe('設計室ポータル');
     expect(readCachedSite()).toEqual({ title: '設計室ポータル', logo: svgLogo });
+  });
+
+  it('「画像を選ぶ」でファイルの選択を開き、選ばずに閉じたら何も変えない', async () => {
+    stubSite({ title: '設計室', logo: PNG_LOGO });
+    await openSiteSettings();
+    const opened = vi.fn();
+    $('siteLogoInput').addEventListener('click', opened);
+
+    $('siteLogoChooseBtn').click();
+    expect(opened).toHaveBeenCalledTimes(1);
+
+    choose(null);
+    expect($('siteLogoPreview').querySelector('img').getAttribute('src')).toBe(PNG_LOGO);
+    expect($('siteSettingsMessage').textContent).toBe('');
   });
 
   it('受け付けない画像は送らずに理由を出す', async () => {

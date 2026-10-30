@@ -154,6 +154,23 @@ def test_tools_are_namespaced_per_document(fake_client):
     assert settings_store.get_tool_settings("tool-b") == {"y": 2}
 
 
+def test_firestore_write_failure_is_wrapped_with_guidance(monkeypatch):
+    class ReadOnlyDocument:
+        def set(self, values):
+            raise RuntimeError("permission denied")
+
+    class ReadOnlyClient:
+        def document(self, path):
+            return ReadOnlyDocument()
+
+    monkeypatch.setattr(settings_store, "_client", lambda: ReadOnlyClient())
+
+    with pytest.raises(SettingsError) as e:
+        settings_store.set_site_settings({"title": "x"})
+    assert e.value.status == 500
+    assert "datastore.user" in str(e.value)
+
+
 def test_firestore_failure_is_wrapped_with_guidance(monkeypatch):
     class BrokenClient:
         def document(self, path):

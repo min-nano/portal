@@ -64,6 +64,16 @@ def test_save_and_read_back_title_and_logo(client, drive, content, mime_type):
     assert client.get("/api/site").json() == expected
 
 
+def test_null_title_means_the_default_name(client, drive):
+    """名前に null を送るのは、空（既定の名前に戻す）と同じ。"""
+    drive.site = {"title": "前の名前"}
+
+    resp = client.put("/api/site", json={"title": None})
+
+    assert resp.json() == {"title": "", "logo": None}
+    assert drive.site == {"title": ""}
+
+
 def test_saving_without_logo_removes_it(client, drive):
     drive.site = {"title": "a", "logo": {"mime_type": "image/png", "data": "AAAA"}}
 
