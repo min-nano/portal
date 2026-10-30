@@ -453,6 +453,9 @@ describe('ファイルを足して並べる', () => {
     const keys = () => [...document.querySelectorAll('#pageGrid > li')].map((card) => card.dataset.pageKey);
     const roles = () => ['猫_奇数.pdf', '猫_偶数.pdf', '猫_表紙.pdf'].map((name) => fileItem(name).querySelector('select').value);
     expect($('bulkRoleField').hidden).toBe(false);
+    // 「まとめて変える…」を選び直しても、何も変えない。
+    change($('bulkRole'), '');
+    expect(roles()).toEqual(['body', 'body', 'front']);
 
     change($('fileSort'), 'name');
     change(stepSelect('猫_表紙.pdf'), '-1');
