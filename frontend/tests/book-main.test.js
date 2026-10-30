@@ -447,6 +447,32 @@ describe('ファイルを足して並べる', () => {
     expect($('logText').textContent).toContain('ファイルを「追加順（新しい順）」に並べました');
   });
 
+  it('役割を一括で変え、自動に戻せる（すべて先頭に置いて、名前順に単純につなぐ）', async () => {
+    expect($('bulkRoleField').hidden).toBe(true);
+    await addBook();
+    const keys = () => [...document.querySelectorAll('#pageGrid > li')].map((card) => card.dataset.pageKey);
+    const roles = () => ['猫_奇数.pdf', '猫_偶数.pdf', '猫_表紙.pdf'].map((name) => fileItem(name).querySelector('select').value);
+    expect($('bulkRoleField').hidden).toBe(false);
+
+    change($('fileSort'), 'name');
+    change(stepSelect('猫_表紙.pdf'), '-1');
+    change($('bulkRole'), 'front');
+    expect(roles()).toEqual(['front', 'front', 'front']);
+    // 選んだら「まとめて変える…」に戻る（同じ役割をもう一度選べるように）。
+    expect($('bulkRole').value).toBe('');
+    // 名前順（奇数・偶数・表紙）に、ファイルの中の頁の順でつなぐ。表紙の進み方は残す。
+    expect(keys()).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f2:0', 'f2:1', 'f2:2', 'f2:3', 'f3:1', 'f3:0']);
+
+    // 自動に戻すと、読み込んだときの推測に戻り、手で変えた進み方も消える。
+    change($('bulkRole'), 'auto');
+    expect(roles()).toEqual(['body', 'body', 'front']);
+    expect(gridLabels()).toEqual(['表紙', '表紙', '1 頁', '2 頁', '3 頁', '4 頁', '5 頁', '6 頁', '7 頁', '8 頁']);
+    expect(keys().slice(0, 2)).toEqual(['f3:0', 'f3:1']);
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('3 ファイルの役割を「自動」にしました');
+  });
+
   it('頁ごと・ファイルごとに番号を直せる', async () => {
     await addBook();
 

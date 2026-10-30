@@ -225,8 +225,11 @@ portal-section.bm-file.error {
   max-width: 6em;
 }
 
-/* 一覧の並び順。一覧のすぐ上に、一覧と間を空けて置く。 */
-.bm-sort {
+/* 一覧の並び順と役割の一括設定。一覧のすぐ上に、一覧と間を空けて並べる（狭ければ折り返す）。 */
+.bm-list-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
   margin-bottom: var(--s-2);
 }
 
