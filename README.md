@@ -1064,6 +1064,8 @@ cd frontend && npm run test:coverage
 
 - Firestore ルールのテストはエミュレータ上でのルール評価なので行カバレッジという概念がなく、Codecov には送っていません。
 
+**PR の差分は、可能な限り 100%（行・分岐とも）を目指します**（CLAUDE.md）。手元では上のコマンドの結果から、変えたファイルの測られていない行・分岐を確かめます（フロントエンドは表の幅でファイル名が切れるので、`--coverage.reporter=cobertura` の XML を見るほうが確か）。CI では Codecov の `codecov/patch` とコメントに「All modified and coverable lines are covered by tests」と出ていれば達しています。埋められない分岐は、まずその分岐が本当に要るかを疑い、それでも残るものは理由を PR に書きます。
+
 #### Codecov
 
 `tests.yml` の `codecov` ジョブが、3 スイートの計測（正規化済みの Cobertura XML）をスイートごとに flag（`core` / `backend` / `frontend`）を付けて Codecov へ送ります。ここではビルドもテストもしません。Codecov への送信が失敗しても CI は赤くなりません（失敗はジョブのログに出ます）。
