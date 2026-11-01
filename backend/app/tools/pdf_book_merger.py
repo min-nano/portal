@@ -1,4 +1,4 @@
-"""書籍スキャン PDF 結合ツールの API（/api/tools/pdf-book-merger/**）。
+"""PDF 結合ツールの API（/api/tools/pdf-book-merger/**）。
 
 結合も、頁番号の読み取りも、スキャンの検査も、すべて画面（ブラウザ）の中で
 行う。重い計算（画像の展開・OCR・結合）をサーバーで行うと Cloud Run の費用が
@@ -85,6 +85,6 @@ def file_info(file_id: str, user: User = Depends(require_user)):
 
 TOOL = Tool(
     id=TOOL_ID,
-    name="書籍スキャン PDF 結合ツール",
+    name="PDF 結合ツール",
     router=router,
 )

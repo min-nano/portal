@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// 書籍スキャン PDF 結合ツール: スキャンの頁の JPEG を、ブラウザに展開させて
+// PDF 結合ツール: スキャンの頁の JPEG を、ブラウザに展開させて
 // 描く（scan-images.js）。
 //
 //   - 頁の中身が JPEG 画像（と下地・透明な文字）だけのとき、その JPEG を取り出す

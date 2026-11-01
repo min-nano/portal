@@ -608,7 +608,7 @@ function openPicker(options) {
 
   const result = () => {
     if (options.multiple) {
-      // 更新日時も渡す（書籍スキャン PDF 結合ツールが、ファイルを更新日時の順に並べるのに使う）。
+      // 更新日時も渡す（PDF 結合ツールが、ファイルを更新日時の順に並べるのに使う）。
       return [...picked.values()].map(({ id, name, mimeType, modifiedTime }) => ({
         id,
         name,

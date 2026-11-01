@@ -15,7 +15,7 @@ GAS 版の「実行ユーザーの権限で DriveApp を読む」に相当し、
     Drive へ保存するために使う。書き込みが必要な操作だけこちらを使う。
 
 アクセストークンはブラウザへ渡さないのが原則。例外は delegated_read_token()
-（drive.readonly）だけで、書籍スキャン PDF 結合ツールが数百 MB のスキャンを
+（drive.readonly）だけで、PDF 結合ツールが数百 MB のスキャンを
 Drive から直接読むのに使う。
 
 JSON 鍵ファイルなしで動作するよう、Cloud Run 上ではランタイム
@@ -430,9 +430,9 @@ def download_file(
 def delegated_read_token(user_email: str) -> tuple[str, datetime.datetime | None]:
     """user_email の代理（読み取り専用・drive.readonly）のアクセストークンと期限（UTC）。
 
-    書籍スキャンの結合だけが使う。数百 MB のスキャンを Cloud Run と Hosting を
+    PDF の結合だけが使う。数百 MB のスキャンを Cloud Run と Hosting を
     通して運ぶと転送量が掛かるので、ブラウザがこのトークンで Drive から直接
-    読む（README「書籍スキャン PDF 結合ツール」）。トークンは本人が Drive で
+    読む（README「PDF 結合ツール」）。トークンは本人が Drive で
     読めるものすべてを、期限（1 時間。代理の仕組みで決まり、短くできない）まで
     読めるので、ほかの用途には渡さない。
 

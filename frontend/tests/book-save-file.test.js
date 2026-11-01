@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// 書籍スキャン PDF 結合ツール: 結合した PDF を、付けた名前のまま端末に保存する
+// PDF 結合ツール: 結合した PDF を、付けた名前のまま端末に保存する
 // （save-file.js）。パソコンは名前付きのダウンロード、iPhone・iPad・Android は
 // 共有シート（Safari はページの中で作った PDF をプレビューで開き、名前を
 // 落とすことがあるため）。

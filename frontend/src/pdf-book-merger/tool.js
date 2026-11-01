@@ -1,4 +1,4 @@
-// 書籍スキャン PDF 結合ツールの名乗り（マニフェスト）。
+// PDF 結合ツールの名乗り（マニフェスト）。
 // 書き方は README の「🧩 土台とツール」と、
 // src/excel-report-formatter/tool.js のコメントを参照。
 
@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 export default {
   id: 'pdf-book-merger',
-  name: '書籍スキャン PDF 結合ツール',
+  name: 'PDF 結合ツール',
   description: `
     裁断した本を分けてスキャンした PDF（奇数頁・偶数頁の束、表紙・裏表紙）を
     Google Drive から複数選び、頁番号を読み取って 1 冊ぶんの順に並べ、
@@ -14,7 +14,7 @@ export default {
     結合した PDF も元と突き合わせて検証します。処理はすべてブラウザの中で行い、
     検索できる文字情報はそのまま残ります。
   `,
-  title: '書籍スキャン PDF 結合ツール',
+  title: 'PDF 結合ツール',
   dir: fileURLToPath(new URL('.', import.meta.url)),
   page: 'page.html',
   // <div id="app"> の外に出す部分（拡大表示と、Drive への保存ダイアログ）。

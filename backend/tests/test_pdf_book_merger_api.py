@@ -1,4 +1,4 @@
-"""書籍スキャン PDF 結合ツールの API テスト（Drive の PDF を読む準備）。
+"""PDF 結合ツールの API テスト（Drive の PDF を読む準備）。
 
 結合そのものは画面の中で行い、結合した PDF はダウンロードするだけ。PDF の
 中身も、画面が Drive から直接読む（Cloud Run・Hosting の転送量を使わない）。
