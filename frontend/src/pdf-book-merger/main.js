@@ -94,7 +94,7 @@ let merged = null;
 let merging = false;
 /** 結合する中身（並び・名前）が変わるたびに進める番号（結合の途中で変わったら、その結合は捨てる）。 */
 let generation = 0;
-/** いまの並びのうち、結合する PDF を決める部分（頁・役割・頁番号）。変わったときだけ結合した PDF を捨てる。 */
+/** いまの並びのうち、結合する PDF を決める部分（頁・配置・頁番号）。変わったときだけ結合した PDF を捨てる。 */
 let orderKey = '';
 let filter = 'all';
 /** ファイルの一覧の並び順（added: 追加した順 / name: 名前の順 / time: 更新日時の古い順。-desc を付けると降順（新しい順））。 */
@@ -440,7 +440,7 @@ async function readFile(file) {
     log(`「${file.name}」の文字情報を読みました（${count} 頁、文字情報のある頁 ${textPages}、番号が見つかった頁 ${textNumbers}）`);
 
     // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
-    // もののほかは、役割を決める前に番号を読み切る（文字情報の無い束も、画像
+    // もののほかは、配置を決める前に番号を読み切る（文字情報の無い束も、画像
     // から番号が読めれば本文と分かる）。OCR の準備は、画像を描く間に進める。
     const ocrPages = new Set(
       !roleFromName(file.name)
@@ -846,9 +846,9 @@ function setFileSort(value) {
 }
 
 /**
- * 読み終えたファイルの役割をまとめて変える（例: 全部「先頭に置く」にして、一覧の
+ * 読み終えたファイルの配置をまとめて変える（例: 全部「先頭に置く」にして、一覧の
  * 並び順のとおりに単純につなぐ）。auto は読み込んだときの推測に戻し、手で入れた
- * 番号・進み方も消す。役割を選んだときは、ファイルごとの番号・進み方は残す。
+ * 番号・進み方も消す。配置を選んだときは、ファイルごとの番号・進み方は残す。
  */
 function setAllRoles(value) {
   const ready = readyFiles();
@@ -864,7 +864,7 @@ function setAllRoles(value) {
     queueLateOcr(file);
   }
   const text = value === 'auto' ? '自動' : ROLES[value];
-  log(`${ready.length} ファイルの役割を「${text}」にしました`);
+  log(`${ready.length} ファイルの配置を「${text}」にしました`);
   $('bulkRole').value = '';
   refresh();
 }
@@ -907,7 +907,7 @@ function refresh() {
     $('outputName').dataset.suggested = 'true';
   }
   // 裏の処理（ほかのファイルの読み込み・OCR）が終わっただけで、結合する中身
-  // （頁・役割・頁番号と、名前）が変わらなければ、結合した PDF はそのまま使える。
+  // （頁・配置・頁番号と、名前）が変わらなければ、結合した PDF はそのまま使える。
   // 名前は提案し直すことがあるので、ここで一緒に比べる。
   const key = mergeKey();
   if (key !== orderKey) {
@@ -919,7 +919,7 @@ function refresh() {
   renderReview();
 }
 
-/** 結合する中身（名前と、並びの頁・役割・頁番号）を 1 つの文字列にしたもの。 */
+/** 結合する中身（名前と、並びの頁・配置・頁番号）を 1 つの文字列にしたもの。 */
 function mergeKey() {
   return [outputName(), ...view.order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}`)].join('\n');
 }
@@ -1007,7 +1007,7 @@ const ROLE_SHORT = {
 };
 
 /**
- * 見出しの 2 行目。読み込みの経過か、役割と設定の要約（本文なら頁番号を並べて。
+ * 見出しの 2 行目。読み込みの経過か、配置と設定の要約（本文なら頁番号を並べて。
  * 例: 本文(頁番号: -11, -9, -7...13, 15)）。
  */
 function fileMeta(file) {
@@ -1049,7 +1049,7 @@ function fileControls(file) {
   const controls = el(document, 'div', 'bm-file-controls');
 
   const roleField = el(document, 'label', 'bm-inline');
-  roleField.append('役割 ');
+  roleField.append('配置 ');
   const role = el(document, 'select');
   for (const [value, text] of Object.entries(ROLES)) {
     const option = el(document, 'option', null, text);
