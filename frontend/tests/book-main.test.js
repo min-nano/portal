@@ -5,7 +5,7 @@
 // pdf.js・OCR・Drive・結合（pdf-lib）は偽物に差し替え、実際のページの
 // マークアップ（page.html / overlay.html）の上で、利用者の操作の流れを通す。
 //
-//   ファイルを足す → 番号を読んで並べる → 役割・番号を直す → 確かめる
+//   ファイルを足す → 番号を読んで並べる → 配置・番号を直す → 確かめる
 //   → 結合して検証する → ダウンロード / Drive に保存
 //
 // 偽物の PDF は「%PDF-」に続けて頁の仕様（JSON）を書いたバイト列で、
@@ -136,7 +136,7 @@ function installPage() {
 const $ = (id) => document.getElementById(id);
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-/** ファイルの読み込みが終わり、一覧に役割の選択が並ぶまで待つ。 */
+/** ファイルの読み込みが終わり、一覧に配置の選択が並ぶまで待つ。 */
 async function settled(count) {
   await vi.waitFor(
     () => {
@@ -167,7 +167,7 @@ function fileItem(name) {
   );
 }
 
-/** ファイルの「進み方」のセレクトボックス（役割の次）。 */
+/** ファイルの「進み方」のセレクトボックス（配置の次）。 */
 function stepSelect(name) {
   return fileItem(name).querySelectorAll('.bm-file-controls select')[1];
 }
@@ -316,7 +316,7 @@ describe('ファイルを足して並べる', () => {
     expect(meta('猫_奇数.pdf')).toBe('本文(頁番号: -11, -9, -7, -5, 手入力)');
   });
 
-  it('役割を変えると並びが変わる（表紙と裏表紙を 1 回で取ったファイル）', async () => {
+  it('配置を変えると並びが変わる（表紙と裏表紙を 1 回で取ったファイル）', async () => {
     await addBook();
 
     change(fileItem('猫_表紙.pdf').querySelector('select'), 'split');
@@ -447,7 +447,7 @@ describe('ファイルを足して並べる', () => {
     expect($('logText').textContent).toContain('ファイルを「追加順（新しい順）」に並べました');
   });
 
-  it('役割を一括で変え、自動に戻せる（すべて先頭に置いて、名前順に単純につなぐ）', async () => {
+  it('配置を一括で変え、自動に戻せる（すべて先頭に置いて、名前順に単純につなぐ）', async () => {
     expect($('bulkRoleField').hidden).toBe(true);
     await addBook();
     const keys = () => [...document.querySelectorAll('#pageGrid > li')].map((card) => card.dataset.pageKey);
@@ -461,7 +461,7 @@ describe('ファイルを足して並べる', () => {
     change(stepSelect('猫_表紙.pdf'), '-1');
     change($('bulkRole'), 'front');
     expect(roles()).toEqual(['front', 'front', 'front']);
-    // 選んだら「まとめて変える…」に戻る（同じ役割をもう一度選べるように）。
+    // 選んだら「まとめて変える…」に戻る（同じ配置をもう一度選べるように）。
     expect($('bulkRole').value).toBe('');
     // 名前順（奇数・偶数・表紙）に、ファイルの中の頁の順でつなぐ。表紙の進み方は残す。
     expect(keys()).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f2:0', 'f2:1', 'f2:2', 'f2:3', 'f3:1', 'f3:0']);
@@ -473,7 +473,7 @@ describe('ファイルを足して並べる', () => {
     expect(keys().slice(0, 2)).toEqual(['f3:0', 'f3:1']);
     $('logBox').open = true;
     $('logBox').dispatchEvent(new Event('toggle'));
-    expect($('logText').textContent).toContain('3 ファイルの役割を「自動」にしました');
+    expect($('logText').textContent).toContain('3 ファイルの配置を「自動」にしました');
   });
 
   it('頁ごと・ファイルごとに番号を直せる', async () => {

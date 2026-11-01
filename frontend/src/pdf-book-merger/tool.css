@@ -210,7 +210,7 @@ portal-section.bm-file.error {
   gap: var(--s-2);
   font-size: var(--fs-sm);
   color: var(--text-2);
-  /* 狭い画面では、項目名（「役割」など）を 1 字ずつ折り返さず、選択肢の側を縮める。 */
+  /* 狭い画面では、項目名（「配置」など）を 1 字ずつ折り返さず、選択肢の側を縮める。 */
   word-break: keep-all;
 }
 
@@ -225,7 +225,7 @@ portal-section.bm-file.error {
   max-width: 6em;
 }
 
-/* 一覧の並び順と役割の一括設定。一覧のすぐ上に、一覧と間を空けて並べる（狭ければ折り返す）。 */
+/* 一覧の並び順と配置の一括設定。一覧のすぐ上に、一覧と間を空けて並べる（狭ければ折り返す）。 */
 .bm-list-tools {
   display: flex;
   flex-wrap: wrap;
