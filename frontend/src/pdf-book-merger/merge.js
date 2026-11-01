@@ -66,12 +66,24 @@ function collectXObjects(context, resources, chunks, seen) {
   }
 }
 
+async function sha256(bytes) {
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+}
+
+function hex(bytes) {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 /**
  * 頁の「描くもの」の指紋（SHA-256 の 16 進）。
  *
  * 中身の命令（Contents）と、使っている画像・図形（XObject。中の画像も）の
  * バイト列から作る。pdf-lib が頁を写すときは、これらをバイト列のまま写すので、
  * 正しく写せていれば元の頁と同じ指紋になる。
+ *
+ * バイト列は 1 つずつ SHA-256 にして、その並びをもう 1 度 SHA-256 にする。
+ * つなげてから 1 度に求めると、頁の画像をまるごと写すことになるため
+ * （crypto.subtle.digest も、渡したものを写してから求める）。
  *
  * @param {import('pdf-lib').PDFPage} page
  */
@@ -86,21 +98,22 @@ export async function pageDigest(page) {
   }
   collectXObjects(node.context, node.Resources(), chunks, new Set());
 
-  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const all = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    all.set(chunk, offset);
-    offset += chunk.length;
-  }
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', all));
-  return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  const all = new Uint8Array(chunks.length * 32);
+  for (let i = 0; i < chunks.length; i++) all.set(await sha256(chunks[i]), i * 32);
+  return hex(await sha256(all));
 }
 
-/** PDF の全頁の指紋（結合した PDF を確かめるとき）。 */
+/**
+ * PDF の全頁の指紋（結合した PDF を確かめるとき）。
+ *
+ * 1 頁ずつ求める（全頁を並べて求めると、どの頁の画像も同時に写されて、本の
+ * 何冊ぶんものメモリを使う）。
+ */
 export async function pageDigests(bytes) {
   const doc = await PDFDocument.load(bytes, { updateMetadata: false });
-  return Promise.all(doc.getPages().map(pageDigest));
+  const digests = [];
+  for (const page of doc.getPages()) digests.push(await pageDigest(page));
+  return digests;
 }
 
 /** 元の文書の情報のうち、引き継ぐもの。 */

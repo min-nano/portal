@@ -32,6 +32,22 @@ export const OCR_PAGE_HEIGHT = 2400;
 export const PREVIEW_LONG_SIDE = 1600;
 
 /**
+ * どの文書も、1 つの worker で開く。
+ *
+ * pdf.js は、worker を渡さないと文書ごとに worker を作り、閉じたら止める。
+ * 1 頁のファイルを何百も読むと、そのたびに worker を起こして pdf.js の本体
+ * （数 MB）を読み直すことになる（200 ファイルで、調べる時間の半分ほどが
+ * これだった）。同じ worker を使い回し、文書を閉じたときは、その文書の
+ * 中身だけを手放す。
+ */
+let sharedWorker = null;
+
+function workerOf() {
+  sharedWorker ??= new pdfjs.PDFWorker();
+  return sharedWorker;
+}
+
+/**
  * PDF を開く。
  *
  * pdf.js は受け取ったバイト列を worker へ渡して手放してしまうので、
@@ -48,6 +64,7 @@ export async function openPdf(bytes, { safe = false } = {}) {
   safe ||= isIOS(globalThis.navigator);
   const doc = await pdfjs.getDocument({
     data: bytes.slice(),
+    worker: workerOf(),
     isEvalSupported: false,
     // CMap・標準フォント・画像の展開の wasm（pdf-data.js）。渡さないと、ToUnicode を
     // 持たない日本語のフォント（カタログの PDF によくある）の文字が消える。

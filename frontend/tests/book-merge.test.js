@@ -11,9 +11,9 @@
 // ことを縛る。あわせて、文字の位置の読み方（text-layer.js）と、突き合わせ
 // （verify.js）も確かめる。
 
-import { PDFDocument, PDFHexString, PDFName, StandardFonts } from 'pdf-lib';
+import { PDFDocument, PDFHexString, PDFName, PDFRawStream, StandardFonts } from 'pdf-lib';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { loadSource, mergePdf, pageDigest, pageDigests } from '../src/pdf-book-merger/merge.js';
 import { pageLabelRanges, pageLabelTexts } from '../src/pdf-book-merger/ordering.js';
 import { pageNumberCandidates } from '../src/pdf-book-merger/page-numbers.js';
@@ -284,6 +284,45 @@ describe('pageDigest', () => {
     expect(red).toMatch(/^[0-9a-f]{64}$/);
     expect(red).toBe(await pageDigest(await scanPage(RED)));
     expect(blue).not.toBe(red);
+  });
+
+  it('バイト列をつなげずに 1 つずつ求め、全頁の指紋も 1 頁ずつ求める（頁の画像を写して抱えない）', async () => {
+    // スキャンの JPEG の代わりに、中身を確かめない 5000 バイトの画像を 2 枚ずつ置く。
+    const IMAGE = 5000;
+    const doc = await PDFDocument.create();
+    for (let i = 0; i < 3; i++) {
+      const page = doc.addPage(SIZE);
+      for (const k of [0, 1]) {
+        const dict = doc.context.obj({ Type: 'XObject', Subtype: 'Image', Width: 1, Height: 1, ColorSpace: 'DeviceGray', BitsPerComponent: 8, Filter: 'DCTDecode' });
+        const image = doc.context.register(PDFRawStream.of(dict, new Uint8Array(IMAGE).fill(i * 2 + k)));
+        page.node.setXObject(PDFName.of(`Im${k}`), image);
+      }
+    }
+    const bytes = await doc.save();
+
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    const sizes = [];
+    let running = 0;
+    let overlap = 0;
+    const spy = vi.spyOn(crypto.subtle, 'digest').mockImplementation(async (algorithm, data) => {
+      sizes.push(data.byteLength);
+      overlap = Math.max(overlap, ++running);
+      try {
+        return await digest(algorithm, data);
+      } finally {
+        running--;
+      }
+    });
+    let digests;
+    try {
+      digests = await pageDigests(bytes);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(Math.max(...sizes)).toBe(IMAGE);
+    expect(overlap).toBe(1);
+    expect(new Set(digests).size).toBe(3);
   });
 
   it('描くものの無い頁にも指紋がある', async () => {

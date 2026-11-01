@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const opened = [];
 vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
   GlobalWorkerOptions: {},
+  PDFWorker: class PDFWorker {},
   AnnotationMode: { DISABLE: 0 },
   getDocument: (params) => {
     const doc = {
@@ -99,6 +100,20 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
     // 閉じると、開き直した文書も閉じる。
     await source.closePdf(doc);
     expect([doc.destroyed, safe.destroyed]).toEqual([true, true]);
+  });
+
+  it('どの文書も（開き直した文書も）、1 つの worker で開く', async () => {
+    vi.stubGlobal('navigator', { userAgent: MAC_SAFARI, platform: 'MacIntel', maxTouchPoints: 0 });
+    globalThis.__failWithOffscreen = true;
+    const doc = await source.openPdf(new Uint8Array([1]));
+    await source.renderPreview(doc, 0, 200);
+    await source.closePdf(doc);
+    await source.openPdf(new Uint8Array([2]));
+
+    expect(opened).toHaveLength(3);
+    const [{ params: first }] = opened;
+    expect(first.worker).toBeTruthy();
+    expect(opened.every(({ params }) => params.worker === first.worker)).toBe(true);
   });
 
   it('WebKit でなければ、描けなかったらそのまま失敗を返す', async () => {
