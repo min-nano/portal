@@ -1,4 +1,4 @@
-// 書籍スキャン PDF 結合ツールの、Drive の PDF の読み込み。
+// PDF 結合ツールの、Drive の PDF の読み込み。
 //
 // サーバーには PDF か確かめてもらい、読み取り専用のトークンを受け取るだけで、
 // 中身は画面が Drive から直接読む（src/pdf-book-merger/drive-download.js）。

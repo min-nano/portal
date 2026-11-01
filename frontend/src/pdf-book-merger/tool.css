@@ -1,4 +1,4 @@
-/* 書籍スキャン PDF 結合ツール にしか出てこない形。
+/* PDF 結合ツール にしか出てこない形。
  *
  * 骨組み（styles/layout.css）と部品（styles/components.css）で足りるものは
  * ここには書かない。色・余白・字送りは必ず styles/tokens.css の変数を使う。 */

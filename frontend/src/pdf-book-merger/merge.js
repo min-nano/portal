@@ -28,7 +28,7 @@ import {
 import './pdf-lib-views.js';
 
 /** 画面に名乗る、このツールの名前（文書の情報の「作成アプリ」に入れる）。 */
-const CREATOR = '書籍スキャン PDF 結合ツール';
+const CREATOR = 'PDF 結合ツール';
 
 /** 元のファイルを開く。暗号化されたものは写せないので、ここで止める。 */
 export async function loadSource(bytes, name) {

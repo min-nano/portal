@@ -1,4 +1,4 @@
-// 書籍スキャン PDF 結合ツール: 確認の画面に出すもの（頁ごとの指摘・一覧の並び）。
+// PDF 結合ツール: 確認の画面に出すもの（頁ごとの指摘・一覧の並び）。
 
 import { describe, expect, it } from 'vitest';
 import {
