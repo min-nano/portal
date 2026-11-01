@@ -233,6 +233,13 @@ portal-section.bm-file.error {
   margin-bottom: var(--s-2);
 }
 
+/* 並び順などの欄が 1 つも出ていないときと、ファイルがまだ無いときは、高さ 0 でも
+   節の中の間（.bm-step の margin-top）が付き、下に余白が重なるので、箱ごと消す。 */
+.bm-list-tools:not(:has(> :not([hidden]))),
+.bm-files:empty {
+  display: none;
+}
+
 /* --- 指摘 ---------------------------------------------------------------- */
 
 .bm-problems {
