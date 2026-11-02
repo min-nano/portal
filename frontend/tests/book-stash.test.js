@@ -272,6 +272,20 @@ describe('stash-worker（書く側）', () => {
     expect([...file.data]).toEqual([7]);
   });
 
+  it('ほかのところからの知らせは受けない', async () => {
+    await import('../src/pdf-book-merger/stash-worker.js');
+    workerScope.location = { origin: 'https://portal.example' };
+    const replies = [];
+    workerScope.postMessage = (reply) => replies.push(reply);
+
+    await workerScope.onmessage({ data: { id: 1, op: 'open', dir: 'd', name: 'x' }, origin: 'https://evil.example' });
+    expect(replies).toEqual([]);
+    expect(root.children.size).toBe(0);
+
+    await workerScope.onmessage({ data: { id: 2, op: 'open', dir: 'd', name: 'x' }, origin: 'https://portal.example' });
+    expect(replies).toEqual([{ id: 2 }]);
+  });
+
   it('失敗は、頼んだ画面へ知らせる', async () => {
     await import('../src/pdf-book-merger/stash-worker.js');
     const replies = [];

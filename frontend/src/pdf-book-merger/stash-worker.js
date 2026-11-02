@@ -49,7 +49,11 @@ export async function run(root, { op, dir, name, bytes }) {
   throw new Error(`知らない頼み（${op}）です。`);
 }
 
-self.onmessage = async ({ data }) => {
+self.onmessage = async (event) => {
+  // 専用の worker への知らせには送り主が付かない（空）。付いていれば、この
+  // 画面と同じところからのものだけを受ける。
+  if (event.origin && event.origin !== self.location?.origin) return;
+  const { data } = event;
   try {
     await run(await navigator.storage.getDirectory(), data);
     self.postMessage({ id: data.id });
