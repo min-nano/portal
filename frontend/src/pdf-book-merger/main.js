@@ -1400,7 +1400,9 @@ async function openPreview(pageKey) {
   // 使っていなければ閉じる）。
   setPreviewFile(file);
   try {
-    const url = await renderPreview(await pdfOf(file), entry.pageIndex);
+    const url = await renderPreview(await pdfOf(file), entry.pageIndex, {
+      softMasks: file.pages[entry.pageIndex].softMasks,
+    });
     if (previewKey !== pageKey) {
       URL.revokeObjectURL(url);
       return;

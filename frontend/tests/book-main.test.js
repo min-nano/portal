@@ -742,6 +742,8 @@ describe('ファイルを足して並べる', () => {
     document.querySelector('#pageGrid .bm-thumb').click();
     await vi.waitFor(() => expect($('previewImage').src).toBe('blob:preview'));
     expect(mocks.renderPreview.mock.calls[0][1]).toBe(0);
+    // 頁のソフトマスクの数も渡す（iPhone・iPad で帯に分けて描くか）。
+    expect(mocks.renderPreview.mock.calls[0][2]).toEqual({ softMasks: 0 });
     $('previewCloseBtn').click();
 
     // 名前の順に足す。

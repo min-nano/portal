@@ -18,6 +18,7 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
       destroyed: false,
       rendered: 0,
       canvases: [],
+      offsets: [],
       loadingTask: {
         destroy: async () => {
           doc.destroyed = true;
@@ -25,11 +26,20 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
       },
       getPage: async (pageNumber) => ({
         pageNumber,
-        getViewport: ({ scale }) => ({ width: 100 * scale, height: 140 * scale, transform: [scale, 0, 0, -scale, 0, 140 * scale] }),
-        render: ({ canvas }) => ({
+        getViewport: function viewportOf({ scale, offsetY = 0 }) {
+          return {
+            width: 100 * scale,
+            height: 140 * scale,
+            offsetY,
+            transform: [scale, 0, 0, -scale, 0, 140 * scale + offsetY],
+            clone: (changes) => viewportOf({ scale, offsetY, ...changes }),
+          };
+        },
+        render: ({ canvas, viewport }) => ({
           promise: (async () => {
             doc.rendered++;
             doc.canvases.push([canvas.width, canvas.height]);
+            doc.offsets.push(viewport.offsetY);
             if (doc.failAt === doc.rendered) throw new Error('render');
             // OffscreenCanvas を使う設定では描けない、という WebKit の偽物。
             if (params.isOffscreenCanvasSupported && doc.failWithOffscreen) {
@@ -90,7 +100,7 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
     const doc = await source.openPdf(new Uint8Array([1, 2, 3]));
     expect(source.redrawnSafely(doc)).toBe(false);
 
-    expect(await source.renderPreview(doc, 0, 200)).toBe('blob:preview');
+    expect(await source.renderPreview(doc, 0, { longSide: 200 })).toBe('blob:preview');
     // 描き直したことは、記録に出せるように覚えておく。
     expect(source.redrawnSafely(doc)).toBe(true);
     expect(opened).toHaveLength(2);
@@ -100,7 +110,7 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
     expect([doc.rendered, safe.rendered]).toEqual([1, 1]);
 
     // 2 頁目からは、初めから安全な文書で描く（失敗を繰り返さない）。
-    await source.renderPreview(doc, 1, 200);
+    await source.renderPreview(doc, 1, { longSide: 200 });
     expect([doc.rendered, safe.rendered]).toEqual([1, 2]);
     expect(opened).toHaveLength(2);
 
@@ -114,7 +124,7 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
     globalThis.__failWithOffscreen = true;
     const doc = await source.openPdf(new Uint8Array([1]));
 
-    await expect(source.renderPreview(doc, 0, 200)).rejects.toThrow('invalid state');
+    await expect(source.renderPreview(doc, 0, { longSide: 200 })).rejects.toThrow('invalid state');
     expect(opened).toHaveLength(1);
     expect(source.redrawnSafely(doc)).toBe(false);
   });
@@ -165,6 +175,67 @@ describe('ソフトマスクの多い頁は、viewport ごとに描く', () => {
     doc.canvases.length = 0;
     await source.renderMargins(doc, 0, null);
     expect(doc.canvases).toEqual([FULL]);
+  });
+
+  it('iPhone・iPad では、ソフトマスクの多い頁を帯に分けて描いてつなぐ（pdf.js が持つ canvas を小さくする）', async () => {
+    vi.stubGlobal('navigator', { userAgent: IPHONE });
+    const softMasks = 516;
+    const doc = await source.openPdf(new Uint8Array([1]));
+    const drawn = [];
+    HTMLCanvasElement.prototype.getContext.mockImplementation(function getContext() {
+      const canvas = this;
+      return {
+        drawImage: (image, x, y) => drawn.push([canvas.width, canvas.height, image.width, image.height, x, y]),
+        setTransform() {},
+        getImageData: () => ({ data: new Uint8ClampedArray(canvas.width * canvas.height * 4) }),
+      };
+    });
+    await source.renderPageImage(doc, 0, null, { margins: true, softMasks });
+
+    // 測る画像（714×1000）: 4,800 万画素 ÷（幅 714 × 2 × 516）= 65 行ずつ。
+    const rows = source.bandRows(ANALYSIS[0], softMasks);
+    expect(rows).toBe(65);
+    const analysis = doc.canvases.filter(([width]) => width === ANALYSIS[0]);
+    expect(analysis).toHaveLength(Math.ceil(1000 / rows));
+    expect(analysis.slice(0, -1).every(([, height]) => height === rows)).toBe(true);
+    expect(analysis.at(-1)).toEqual([ANALYSIS[0], 1000 - rows * (analysis.length - 1)]);
+    expect(doc.offsets.slice(0, 2)).toEqual([0, -rows]);
+    // 帯は、つないだ canvas の上から順に置く。
+    const placed = drawn.filter(([width, height]) => width === ANALYSIS[0] && height === ANALYSIS[1]);
+    expect(placed.map(([, , , , x, y]) => [x, y])).toEqual(analysis.map((_, k) => [0, k * rows]));
+
+    // 余白の帯（1714 幅）も、27 行ずつに分ける。
+    expect(source.bandRows(STRIP[0], softMasks)).toBe(27);
+    expect(doc.canvases.filter(([width]) => width === STRIP[0])).toHaveLength(2 * Math.ceil(336 / 27));
+
+    // 拡大表示も分けて描く。
+    doc.canvases.length = 0;
+    await source.renderPreview(doc, 0, { longSide: 1600, softMasks });
+    expect(doc.canvases.every(([width, height]) => width === 1143 && height <= source.bandRows(1143, softMasks))).toBe(true);
+    expect(doc.canvases.length).toBe(Math.ceil(1600 / source.bandRows(1143, softMasks)));
+  });
+
+  it('帯の高さは、ソフトマスクの少ない頁と iPhone・iPad でない端末では分けない。多すぎても下限より細くしない', () => {
+    vi.stubGlobal('navigator', { userAgent: IPHONE });
+    expect(source.bandRows(1000, source.SEPARATE_DRAW_SOFT_MASKS)).toBe(Infinity);
+    expect(source.bandRows(1000, 100000)).toBe(16);
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+    expect(source.bandRows(1000, 516)).toBe(Infinity);
+  });
+
+  it('帯の途中で描けなければ、つなぎかけの canvas を手放して失敗を返す', async () => {
+    vi.stubGlobal('navigator', { userAgent: IPHONE });
+    const doc = await source.openPdf(new Uint8Array([1]));
+    doc.failAt = 3;
+    const created = [];
+    const create = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((name) => {
+      const element = create(name);
+      if (name === 'canvas') created.push(element);
+      return element;
+    });
+    await expect(source.renderPreview(doc, 0, { softMasks: 516 })).rejects.toThrow('render');
+    expect(created.every((canvas) => canvas.width === 0 && canvas.height === 0)).toBe(true);
   });
 
   it('途中で描けなければ、描き終えた canvas を手放して失敗を返す', async () => {

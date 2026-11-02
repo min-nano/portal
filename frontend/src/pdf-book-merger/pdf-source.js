@@ -35,6 +35,13 @@ export const PREVIEW_LONG_SIDE = 1600;
  * スキャナの作る PDF では 0 か数個で、InDesign の影・ぼかしのある頁では数百になる。
  */
 export const SEPARATE_DRAW_SOFT_MASKS = 8;
+/**
+ * iPhone・iPad で、ソフトマスクの多い頁を描くときに、pdf.js が同時に持つ
+ * canvas の画素の目安の上限（4,800 万画素 ≒ 190 MB）。bandRows を参照。
+ */
+export const IOS_SOFT_MASK_PIXELS = 48e6;
+/** 帯に分けて描くときの、帯の高さの下限（px。細かく分けすぎると、帯ごとの手間が積み重なる）。 */
+const MIN_BAND_ROWS = 16;
 
 /**
  * PDF を開く。
@@ -119,6 +126,26 @@ function canvasOf(width, height) {
   return canvas;
 }
 
+/**
+ * ソフトマスクの多い頁を、何行ずつの帯に分けて描くか（分けないなら Infinity）。
+ *
+ * pdf.js は、ソフトマスクのために作った canvas（マスク 1 つにつき 2 枚ほど、
+ * 大きさは描く canvas に収まる分）を、頁を描き終えるまで手放さない。
+ * ソフトマスク 516 の頁を長辺 1000px で描くと、それだけで 1.4 GB になる。
+ * Mac では描けるが、iPhone・iPad はメモリが尽きてページごと落ちた。そこで
+ * iPhone・iPad では、頁を横長の帯に分けて描いてつなぐ（帯ごとに pdf.js が
+ * 持つ canvas は帯の大きさに収まる）。帯ごとに頁の中身を描き直す手間が
+ * 掛かるので（ソフトマスク 516 の頁で、帯 1 本につき 1 秒ほど）、Mac などでは
+ * 分けない。
+ *
+ * @param {number} width 描く canvas の幅（px）
+ * @param {number} softMasks 頁のソフトマスクの数
+ */
+export function bandRows(width, softMasks) {
+  if (softMasks <= SEPARATE_DRAW_SOFT_MASKS || !isIOS(globalThis.navigator)) return Infinity;
+  return Math.max(MIN_BAND_ROWS, Math.floor(IOS_SOFT_MASK_PIXELS / (width * 2 * softMasks)));
+}
+
 /** pdf.js で、viewport のとおりに描く。注釈（付箋・リンクの枠）は検査の邪魔なので描かない。 */
 async function renderTo(page, viewport, size) {
   const canvas = canvasOf(size.width, size.height);
@@ -132,10 +159,35 @@ async function renderTo(page, viewport, size) {
 }
 
 /**
+ * pdf.js で描く。rows が canvas の高さより小さければ、その行数ずつの帯に
+ * 分けて描いてつなぐ（bandRows）。
+ */
+async function drawPage(doc, page, viewport, size = viewport, rows = Infinity) {
+  const height = Math.max(1, Math.round(size.height));
+  if (rows >= height) return drawWhole(doc, page, viewport, size);
+  const canvas = canvasOf(size.width, height);
+  const context = canvas.getContext('2d');
+  try {
+    for (let y = 0; y < height; y += rows) {
+      const band = await drawWhole(doc, page, viewport.clone({ offsetY: viewport.offsetY - y }), {
+        width: canvas.width,
+        height: Math.min(rows, height - y),
+      });
+      context.drawImage(band, 0, y);
+      releaseCanvas(band);
+    }
+  } catch (error) {
+    releaseCanvas(canvas);
+    throw error;
+  }
+  return canvas;
+}
+
+/**
  * pdf.js で描く。WebKit で描けなかったときは、OffscreenCanvas も切った文書で
  * 描き直し、その文書の残りの頁もそちらで描く。
  */
-async function drawPage(doc, page, viewport, size = viewport) {
+async function drawWhole(doc, page, viewport, size = viewport) {
   const fallback = fallbacks.get(doc);
   if (!fallback?.failed) {
     try {
@@ -218,7 +270,10 @@ async function drawViewports(doc, page, viewports, sizes, scan, softMasks = 0) {
     if (softMasks > SEPARATE_DRAW_SOFT_MASKS) {
       const canvases = [];
       try {
-        for (const [k, viewport] of viewports.entries()) canvases.push(await drawPage(doc, page, viewport, sizes[k] ?? viewport));
+        for (const [k, viewport] of viewports.entries()) {
+          const size = sizes[k] ?? viewport;
+          canvases.push(await drawPage(doc, page, viewport, size, bandRows(size.width, softMasks)));
+        }
       } catch (error) {
         canvases.forEach(releaseCanvas);
         throw error;
@@ -384,14 +439,15 @@ export async function renderMargins(doc, index, scan = null, { softMasks = 0 } =
  *
  * @param {object} doc openPdf の結果
  * @param {number} index 0 から数えた頁の位置
- * @param {number} longSide 長辺の大きさ（px）
+ * @param {{longSide?: number, softMasks?: number}} [options] longSide は長辺の大きさ（px）、
+ *   softMasks は頁のソフトマスクの数（iPhone・iPad で帯に分けて描くか。bandRows）
  */
-export async function renderPreview(doc, index, longSide = PREVIEW_LONG_SIDE) {
+export async function renderPreview(doc, index, { longSide = PREVIEW_LONG_SIDE, softMasks = 0 } = {}) {
   const page = await doc.getPage(index + 1);
   try {
     const base = page.getViewport({ scale: 1 });
     const viewport = page.getViewport({ scale: longSide / Math.max(base.width, base.height) });
-    const canvas = await inTurn(() => drawPage(doc, page, viewport));
+    const canvas = await inTurn(() => drawPage(doc, page, viewport, viewport, bandRows(viewport.width, softMasks)));
     return await new Promise((resolve) => {
       canvas.toBlob(
         (blob) => {
