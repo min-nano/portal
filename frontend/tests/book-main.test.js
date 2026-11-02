@@ -61,6 +61,9 @@ const mocks = vi.hoisted(() => ({
   // pdf-lib に写させない書き換えが効いているか（pdf-lib-views.js）。
   views: true,
   mergePdf: vi.fn(),
+  writeMergedPdf: vi.fn(),
+  openStash: vi.fn(),
+  openOptions: [],
 }));
 
 vi.mock('../src/page-start.js', () => ({
@@ -87,8 +90,12 @@ vi.mock('../src/pdf-book-merger/ocr.js', () => ({
   readStrip: (...args) => mocks.readStrip(...args),
   releaseOcr: (...args) => mocks.releaseOcr(...args),
 }));
+vi.mock('../src/pdf-book-merger/stash.js', () => ({
+  openStash: (...args) => mocks.openStash(...args),
+}));
 vi.mock('../src/pdf-book-merger/merge.js', () => ({
   mergePdf: (...args) => mocks.mergePdf(...args),
+  writeMergedPdf: (...args) => mocks.writeMergedPdf(...args),
   // 結合した PDF の頁の「描くもの」の指紋。壊れた頁（corrupt）だけ違う指紋になる。
   pageDigests: async (bytes) =>
     JSON.parse(new TextDecoder().decode(bytes).slice('%PDF-'.length)).pages.map((p) =>
@@ -100,7 +107,8 @@ vi.mock('../src/pdf-book-merger/merge.js', () => ({
 vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
   const bottomNumber = (value) => [{ text: String(value), x0: 0.48, x1: 0.52, y: 0.95, h: 0.012 }];
   return {
-    openPdf: async (bytes) => {
+    openPdf: async (bytes, options) => {
+      mocks.openOptions.push(options);
       const text = new TextDecoder().decode(bytes);
       const spec = JSON.parse(text.slice('%PDF-'.length));
       return {
@@ -159,6 +167,67 @@ function drop(files) {
   $('filesSection').dispatchEvent(event);
 }
 
+/**
+ * 保存領域（stash.js）の偽物を使うように、画面を開き直す。中身はメモリに持ち、
+ * 読み書きを数える。failPut に名前を入れると、そのファイルは置けない。
+ */
+async function fakeStash() {
+  const files = new Map();
+  const stash = {
+    files,
+    reads: [],
+    removed: [],
+    failPut: new Set(),
+    failWrite: false,
+    put: vi.fn(async (name, bytes) => {
+      if (stash.failPut.has(name)) throw new Error('quota');
+      files.set(name, bytes.slice());
+    }),
+    read: async (name) => {
+      stash.reads.push(name);
+      if (!files.has(name)) throw new Error(`${name} not found`);
+      return files.get(name).slice();
+    },
+    remove: async (name) => {
+      stash.removed.push(name);
+      files.delete(name);
+    },
+    writer: async (name) => {
+      const chunks = [];
+      return {
+        write: async (chunk) => {
+          if (stash.failWrite) throw new Error('quota');
+          chunks.push(chunk);
+        },
+        close: async () => {
+          const blob = new Blob(chunks);
+          files.set(name, new Uint8Array(await blob.arrayBuffer()));
+          return new File(chunks, name);
+        },
+      };
+    },
+  };
+  mocks.openStash.mockResolvedValue(stash);
+  // 保存領域はツールを開いたときに用意するので、開き直す。
+  vi.resetModules();
+  installPage();
+  await import('../src/pdf-book-merger/main.js');
+  await mocks.prepare();
+  return stash;
+}
+
+/** 結合に渡されたファイルの中身を読み、並べる順の頁の仕様にする。 */
+async function sourcePages(sources, order) {
+  // 本物と同じく、ファイルごとに 1 度だけ読む。
+  const specs = new Map();
+  const pages = [];
+  for (const entry of order) {
+    if (!specs.has(entry.fileKey)) specs.set(entry.fileKey, specOf(await sources.get(entry.fileKey).load()));
+    pages.push(specs.get(entry.fileKey).pages[entry.pageIndex]);
+  }
+  return pages;
+}
+
 function file(name, bytes) {
   return new File([bytes], name, { type: 'application/pdf' });
 }
@@ -215,6 +284,9 @@ beforeEach(async () => {
   Object.values(mocks).forEach((mock) => typeof mock === 'function' && mock.mockReset?.());
   mocks.prepareOcr.mockResolvedValue({});
   mocks.releaseOcr.mockResolvedValue(undefined);
+  // 保存領域は、はじめは使えない（メモリに持つ）。使うテストは fakeStash に替える。
+  mocks.openStash.mockResolvedValue(null);
+  mocks.openOptions.length = 0;
   mocks.readStrip.mockImplementation(async (strip) =>
     strip.zone === 'bottom' && strip.page.ocr ? [{ text: String(strip.page.number), x0: 0.48, x1: 0.52, y: 0.95, h: 0.012 }] : []
   );
@@ -245,12 +317,23 @@ beforeEach(async () => {
   mocks.views = true;
   mocks.mergePdf.mockImplementation(async ({ sources, order, title, labels, onProgress }) => {
     const { pageLabelTexts } = await import('../src/pdf-book-merger/ordering.js');
-    const pages = order.map((entry) => specOf(sources.get(entry.fileKey).bytes).pages[entry.pageIndex]);
+    const pages = await sourcePages(sources, order);
     onProgress?.(order.length, order.length);
     return {
       bytes: pdf(pages, { title, labels: pageLabelTexts(labels, order.length) }),
       digests: pages.map((p) => `d-${p.id}`),
     };
+  });
+
+  // 少しずつ書き出す結合の偽物（2 つに分けて書く）。
+  mocks.writeMergedPdf.mockImplementation(async ({ sources, order, title, labels, write, onProgress }) => {
+    const { pageLabelTexts } = await import('../src/pdf-book-merger/ordering.js');
+    const pages = await sourcePages(sources, order);
+    onProgress?.(order.length, order.length);
+    const bytes = pdf(pages, { title, labels: pageLabelTexts(labels, order.length) });
+    await write(bytes.slice(0, 10));
+    await write(bytes.slice(10));
+    return { size: bytes.length, digests: pages.map((p) => `d-${p.id}`) };
   });
 
   created = [];
@@ -1232,14 +1315,119 @@ describe('結合と検証', () => {
     expect($('logText').textContent).toContain('「猫.pdf」をダウンロードしました');
   });
 
+  it('保存領域があれば、読み込んだ中身はそこに置いてメモリから手放し、結合した PDF もそこへ書き出す', async () => {
+    const stash = await fakeStash();
+    await addBook();
+    expect([...stash.files.keys()].sort()).toEqual(['f1.pdf', 'f2.pdf', 'f3.pdf']);
+    // 調べるときは、置いたものから読む（元のファイルは読み直さない）。
+    expect(stash.reads.sort()).toEqual(['f1.pdf', 'f2.pdf', 'f3.pdf']);
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'split');
+    stash.reads.length = 0;
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+
+    expect(mocks.mergePdf).not.toHaveBeenCalled();
+    expect(stash.reads.sort()).toEqual(['f1.pdf', 'f2.pdf', 'f3.pdf']);
+    expect(stash.files.has('merged.pdf')).toBe(true);
+    // 検証では、読んだ中身をそのまま pdf.js へ渡す（写しを作らない）。
+    expect(mocks.openOptions.at(-1)).toEqual({ transfer: true });
+    expect($('verifyResult').className).toBe('bm-verify ok');
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('保存領域に書き出し');
+
+    // 保存するのは、保存領域のファイル。
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    $('downloadBtn').click();
+    expect(click).toHaveBeenCalled();
+    expect(URL.createObjectURL.mock.calls.at(-1)[0].size).toBe(stash.files.get('merged.pdf').length);
+
+    // 外したファイルは、置いたものも消す。
+    fileItem('猫_偶数.pdf').querySelector('.danger').click();
+    expect(stash.removed).toContain('f2.pdf');
+  });
+
+  it('保存領域に置けなかったファイルはメモリに持ち、結合した PDF を書けなければメモリの上で結合し直す', async () => {
+    const stash = await fakeStash();
+    stash.failPut.add('f2.pdf');
+    await addBook();
+    expect([...stash.files.keys()].sort()).toEqual(['f1.pdf', 'f3.pdf']);
+    stash.failWrite = true;
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+
+    expect(mocks.writeMergedPdf).toHaveBeenCalled();
+    expect(mocks.mergePdf).toHaveBeenCalled();
+    expect(mocks.openOptions.at(-1)).toEqual({ transfer: false });
+    expect($('verifyResult').className).toBe('bm-verify ok');
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    const text = $('logText').textContent;
+    expect(text).toContain('「猫_偶数.pdf」を保存領域に置けなかったので、メモリに持ちます（quota）');
+    expect(text).toContain('結合した PDF を保存領域に書けなかったので、メモリの上で結合し直します（quota）');
+    expect(text).toContain('メモリの上で');
+  });
+
+  it('保存領域に書き出す結合が、書く以外のことで失敗したら、その理由を出す（メモリの上でやり直さない）', async () => {
+    await fakeStash();
+    await addBook();
+    mocks.writeMergedPdf.mockRejectedValue(new Error('「猫_奇数.pdf」は暗号化（パスワード保護）されているため結合できません。'));
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('message').textContent).toContain('暗号化'));
+    expect(mocks.mergePdf).not.toHaveBeenCalled();
+  });
+
+  it('保存領域に置いている間に外したファイルや、調べられなかったファイルは、置いたものを消す', async () => {
+    const stash = await fakeStash();
+    let release;
+    stash.put.mockImplementationOnce(async (name, bytes) => {
+      await new Promise((done) => (release = done));
+      stash.files.set(name, bytes.slice());
+    });
+    drop([file('猫_奇数.pdf', pdf(ODD))]);
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    fileItem('猫_奇数.pdf').querySelector('.danger').click();
+    release();
+    await vi.waitFor(() => expect(stash.removed).toContain('f1.pdf'));
+    expect(stash.files.size).toBe(0);
+
+    drop([file('壊れた.pdf', encoder.encode('not a pdf'))]);
+    await settled(1);
+    expect(fileItem('壊れた.pdf').classList.contains('error')).toBe(true);
+    expect(stash.removed).toContain('f2.pdf');
+    expect(stash.files.size).toBe(0);
+  });
+
+  it('保存領域に置いたファイルも、拡大表示とあとからの OCR では、置いたものから読む', async () => {
+    const stash = await fakeStash();
+    drop([file('猫_表紙.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+    stash.reads.length = 0;
+
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
+    await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalled());
+    await vi.waitFor(() => expect(fileItem('猫_表紙.pdf').textContent).not.toContain('余白を読み取り中'));
+    // 頁の JPEG は残していないので、置いたものを読んで調べ直す（PDF を開くのと 2 回）。
+    // （名前の順に足すので、猫_表紙.pdf は 2 つ目の f2）
+    expect(stash.reads).toEqual(['f2.pdf', 'f2.pdf']);
+    expect(mocks.findScanImages).toHaveBeenCalledTimes(3);
+
+    document.querySelector('#pageGrid [data-page-key="f1:0"] .bm-thumb').click();
+    await vi.waitFor(() => expect(stash.reads).toContain('f1.pdf'));
+  });
+
   it('問題が残っていれば確かめてから結合し、食い違いは頁ごとに挙げる', async () => {
     drop([file('猫_奇数.pdf', pdf(ODD))]);
     await settled(1);
     // 結合の途中で頁が化けた、という偽物。
     mocks.mergePdf.mockImplementation(async ({ sources, order, title }) => {
-      const source = order.map((entry) => specOf(sources.get(entry.fileKey).bytes).pages[entry.pageIndex]);
+      const source = await sourcePages(sources, order);
       const pages = source.map((p, i) => ({ ...p, noText: true, corrupt: i === 0 }));
-      return { bytes: pdf(pages, { title, labels: null }), digests: source.map((p) => `d-${p.id}`) };
+      // タイトルも書き込めていない。
+      return { bytes: pdf(pages, { title: '', labels: null }), digests: source.map((p) => `d-${p.id}`) };
     });
 
     window.confirm.mockReturnValueOnce(false);
@@ -1252,6 +1440,7 @@ describe('結合と検証', () => {
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
     expect($('verifyResult').className).toBe('bm-verify ng');
     expect($('verifyResult').textContent).toContain('検証で食い違いが見つかりました（4 頁）');
+    expect($('verifyResult').textContent).toContain('タイトル: （なし）');
     expect($('verifyResult').textContent).toContain('文字情報（検索できる文字）が失われています');
     expect($('verifyResult').textContent).toContain('1 枚目（1 頁）: 文字情報（検索できる文字）が失われています・画像・描く中身が元の頁と違います');
     expect($('verifyResult').textContent).toContain('書き込みを確かめられませんでした');

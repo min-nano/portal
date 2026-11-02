@@ -38,13 +38,13 @@ function download(file) {
  * PDF を保存する。押されたボタンの処理の中から、待たずに呼ぶこと（共有シートは
  * 利用者の操作の直後でないと開けない）。
  *
- * @param {Uint8Array} bytes
+ * @param {Uint8Array|Blob} data 中身（保存領域のファイルなら、メモリに読まずに渡す）
  * @param {string} fileName
  * @param {Navigator} [nav]
  * @returns {Promise<'shared'|'cancelled'|'downloaded'>}
  */
-export async function savePdf(bytes, fileName, nav = globalThis.navigator) {
-  const file = new File([bytes], fileName, { type: PDF_MIME });
+export async function savePdf(data, fileName, nav = globalThis.navigator) {
+  const file = new File([data], fileName, { type: PDF_MIME });
   if (isMobile(nav) && typeof nav.share === 'function' && nav.canShare?.({ files: [file] })) {
     try {
       // ファイルだけを渡す（title などを添えると、iOS はそれを「テキスト.txt」と

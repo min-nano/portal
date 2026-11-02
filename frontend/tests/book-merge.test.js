@@ -14,7 +14,7 @@
 import { PDFDocument, PDFHexString, PDFName, PDFRawStream, StandardFonts } from 'pdf-lib';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { describe, expect, it, vi } from 'vitest';
-import { loadSource, mergePdf, pageDigest, pageDigests } from '../src/pdf-book-merger/merge.js';
+import { loadSource, mergePdf, pageDigest, pageDigests, writeMergedPdf } from '../src/pdf-book-merger/merge.js';
 import { pageLabelRanges, pageLabelTexts } from '../src/pdf-book-merger/ordering.js';
 import { pageNumberCandidates } from '../src/pdf-book-merger/page-numbers.js';
 import { multiply, textItems, textSignature } from '../src/pdf-book-merger/text-layer.js';
@@ -167,6 +167,61 @@ describe('mergePdf', () => {
     await expect(
       mergePdf({ sources, order: [{ fileKey: 'b', pageIndex: 0 }], title: 't' })
     ).rejects.toThrow('結合するファイルの中身がありません。');
+  });
+
+  it('少しずつ書き出す: 1 ファイルずつ読み、大きな画像はそのまま、小さな物はまとめて渡す', async () => {
+    // 中身を確かめない画像を置いた頁（大きさは bytes）。
+    async function scanSource(sizes) {
+      const doc = await PDFDocument.create();
+      const font = await doc.embedFont(StandardFonts.Helvetica);
+      sizes.forEach((size, i) => {
+        const page = doc.addPage(SIZE);
+        const dict = doc.context.obj({ Type: 'XObject', Subtype: 'Image', Width: 1, Height: 1, ColorSpace: 'DeviceGray', BitsPerComponent: 8, Filter: 'DCTDecode' });
+        page.node.setXObject(PDFName.of('Im0'), doc.context.register(PDFRawStream.of(dict, new Uint8Array(size).fill(i + 1))));
+        page.drawText(`Body ${size}`, { x: 40, y: 300, size: 11, font });
+      });
+      return doc.save();
+    }
+    const MB = 1 << 20;
+    const big = await scanSource([1.5 * MB]);
+    const small = await scanSource([400_000, 400_000, 400_000]);
+    const loads = [];
+    const sources = new Map([
+      ['big', { name: 'big.pdf', load: async () => (loads.push('big'), big) }],
+      ['small', { name: 'small.pdf', load: async () => (loads.push('small'), small) }],
+    ]);
+    const order = [
+      { fileKey: 'small', pageIndex: 0 },
+      { fileKey: 'big', pageIndex: 0 },
+      { fileKey: 'small', pageIndex: 2 },
+      { fileKey: 'small', pageIndex: 1 },
+    ];
+    const chunks = [];
+
+    const { size, digests } = await writeMergedPdf({
+      sources,
+      order,
+      title: 't',
+      write: (chunk) => {
+        chunks.push(chunk);
+      },
+    });
+
+    expect(loads).toEqual(['small', 'big']);
+    // 大きな画像はそのまま 1 つで渡し、小さな物はまとめてから渡す（1 MB を超えたら）。
+    const sizes = chunks.map((chunk) => chunk.length);
+    expect(sizes.filter((n) => n > 1.5 * MB && n < 1.5 * MB + 1000)).toHaveLength(1); // 画像（と辞書）
+    expect(sizes.filter((n) => n >= MB && n < 1.5 * MB)).toHaveLength(1); // 400 KB の画像 3 つをまとめたもの
+    const bytes = new Uint8Array(size);
+    let at = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, at);
+      at += chunk.length;
+    }
+    expect(at).toBe(size);
+    const merged = await readBack(bytes);
+    expect(merged.pages.map((p) => p.text)).toEqual(['Body 400000', 'Body 1572864', 'Body 400000', 'Body 400000']);
+    expect(await pageDigests(bytes)).toEqual(digests);
   });
 
   it('PDF でないものは、ファイル名を添えて止める', async () => {

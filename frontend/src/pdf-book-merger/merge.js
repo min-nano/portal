@@ -19,6 +19,7 @@ import {
   PDFArray,
   PDFDict,
   PDFDocument,
+  PDFHeader,
   PDFHexString,
   PDFName,
   PDFNumber,
@@ -129,26 +130,118 @@ function sourceInfo(doc) {
   return { ...info, lang: typeof lang?.decodeText === 'function' ? lang.decodeText() : null };
 }
 
+/** 書き出すときに、小さな物をまとめて渡す大きさ（バイト）。 */
+const CHUNK = 1 << 20;
+
 /**
- * 頁を指定の順に並べた 1 つの PDF を作る。
+ * 書き出し口。渡したバイト列を順に write へ流し、書いた位置（offset）を数える。
+ * 小さな物はまとめてから渡し、大きな物（スキャンの画像）はそのまま渡す。
+ */
+function outputTo(write) {
+  let offset = 0;
+  let pending = [];
+  let pendingSize = 0;
+  // まとめているものを渡す（書く物の頭と終わりの印が必ずあるので、空にはならない）。
+  const flush = async () => {
+    const chunk = new Uint8Array(pendingSize);
+    let at = 0;
+    for (const part of pending) {
+      chunk.set(part, at);
+      at += part.length;
+    }
+    pending = [];
+    pendingSize = 0;
+    await write(chunk);
+  };
+  return {
+    get offset() {
+      return offset;
+    },
+    async push(bytes) {
+      offset += bytes.length;
+      if (bytes.length >= CHUNK) {
+        await flush();
+        await write(bytes);
+        return;
+      }
+      pending.push(bytes);
+      pendingSize += bytes.length;
+      if (pendingSize >= CHUNK) await flush();
+    },
+    async text(text) {
+      await this.push(new TextEncoder().encode(text));
+    },
+    flush,
+  };
+}
+
+/** pdf-lib の物を、PDF に書くバイト列にする。 */
+function bytesOf(object) {
+  const bytes = new Uint8Array(object.sizeInBytes());
+  object.copyBytesInto(bytes, 0);
+  return bytes;
+}
+
+/** 間接の物を 1 つ書く（「n 0 obj … endobj」）。書いた位置を offsets に残す。 */
+async function writeObject(out, offsets, ref, object) {
+  offsets[ref.objectNumber] = out.offset;
+  await out.text(`${ref.objectNumber} ${ref.generationNumber} obj\n`);
+  await out.push(bytesOf(object));
+  await out.text('\nendobj\n\n');
+}
+
+/**
+ * 相互参照表（xref）と trailer を書く。番号を振った物は、どれも書いてから
+ * 手放すので、1 から最後の番号まで、すべて書いてある。
+ */
+async function writeTrailer(out, offsets, context) {
+  const size = context.largestObjectNumber + 1;
+  const start = out.offset;
+  let xref = `xref\n0 ${size}\n0000000000 65535 f \n`;
+  for (let n = 1; n < size; n++) xref += `${String(offsets[n]).padStart(10, '0')} 00000 n \n`;
+  await out.text(xref);
+  const trailer = context.obj({ Size: size, Root: context.trailerInfo.Root, Info: context.trailerInfo.Info });
+  await out.text('trailer\n');
+  await out.push(bytesOf(trailer));
+  await out.text(`\nstartxref\n${start}\n%%EOF\n`);
+}
+
+/**
+ * 頁を指定の順に並べた 1 つの PDF を、少しずつ書き出す。
+ *
+ * 元のファイルは 1 つずつ読み（load）、頁を写したら、写した中身（画像・書体
+ * など）をすぐに書き出して手放す。結合した PDF をメモリの上で丸ごと組み立て
+ * ないので、使うメモリは、いちばん大きな元のファイル 1 つぶんほどで済む
+ * （pdf-lib の save は、元のファイルすべてと書き出した PDF を同時に持つ）。
+ * 頁そのもの（小さな辞書）は、並べ終えてから頁の木と一緒に書く。
  *
  * @param {object} options
- * @param {Map<string, {bytes:Uint8Array, name:string}>} options.sources ファイルの key → 中身
+ * @param {Map<string, {name:string, load:() => Promise<Uint8Array>}>} options.sources
+ *   ファイルの key → 名前と、中身を読む関数
  * @param {{fileKey:string, pageIndex:number}[]} options.order 並べる順
  * @param {string} options.title 文書のタイトル
  * @param {{start:number, style:string|null, prefix:string, first:number}[]} [options.labels]
  * @param {string} [options.infoFrom] 文書の情報を引き継ぐファイルの key
+ * @param {(chunk:Uint8Array) => (void|Promise<void>)} options.write 書き出す先
  * @param {(done:number, total:number) => void} [options.onProgress]
- * @returns {Promise<{bytes:Uint8Array, digests:string[]}>}
- *   digests は、並べた順の元の頁の指紋（pageDigest）
+ * @returns {Promise<{size:number, digests:string[]}>}
+ *   size は書き出した大きさ、digests は並べた順の元の頁の指紋（pageDigest）
  */
-export async function mergePdf({ sources, order, title, labels = [], infoFrom, onProgress }) {
+export async function writeMergedPdf({ sources, order, title, labels = [], infoFrom, write, onProgress }) {
   const merged = await PDFDocument.create();
+  const { context } = merged;
   const needed = new Map();
   for (const item of order) {
     if (!needed.has(item.fileKey)) needed.set(item.fileKey, new Set());
     needed.get(item.fileKey).add(item.pageIndex);
   }
+
+  const out = outputTo(write);
+  const offsets = [];
+  await out.push(bytesOf(PDFHeader.forVersion(1, 7)));
+  await out.text('\n\n');
+  // 最後まで残す物（文書の目録・頁の木・文書の情報と、写した頁）。
+  const kept = new Set(context.enumerateIndirectObjects().map(([ref]) => ref));
 
   // ファイルごとに 1 度だけ写す（同じファイルの頁が共有している画像や
   // 書体を、頁の数だけ複製しないため）。
@@ -159,7 +252,7 @@ export async function mergePdf({ sources, order, title, labels = [], infoFrom, o
   for (const [fileKey, indices] of needed) {
     const source = sources.get(fileKey);
     if (!source) throw new Error('結合するファイルの中身がありません。');
-    const doc = await loadSource(source.bytes, source.name);
+    const doc = await loadSource(await source.load(), source.name);
     if (fileKey === infoFrom || (!infoFrom && !info)) info = sourceInfo(doc);
     const list = [...indices].sort((a, b) => a - b);
     for (const index of list) {
@@ -169,7 +262,17 @@ export async function mergePdf({ sources, order, title, labels = [], infoFrom, o
     }
     for (const index of list) digests.set(`${fileKey}:${index}`, await pageDigest(doc.getPage(index)));
     const pages = await merged.copyPages(doc, list);
-    list.forEach((index, i) => copied.set(`${fileKey}:${index}`, pages[i]));
+    list.forEach((index, i) => {
+      copied.set(`${fileKey}:${index}`, pages[i]);
+      kept.add(pages[i].ref);
+    });
+    // 写した中身を書き出して、手放す（元のファイルのバイト列を指しているので、
+    // 手放せば元のファイルもまるごと手放せる）。
+    for (const [ref, object] of context.enumerateIndirectObjects()) {
+      if (kept.has(ref)) continue;
+      await writeObject(out, offsets, ref, object);
+      context.delete(ref);
+    }
     done += list.length;
     onProgress?.(done, order.length);
   }
@@ -188,10 +291,43 @@ export async function mergePdf({ sources, order, title, labels = [], infoFrom, o
 
   if (labels.length) setPageLabels(merged, labels);
 
+  // 残りの物（頁・頁の木・目録・文書の情報など）を書き、相互参照表で締める。
+  for (const [ref, object] of context.enumerateIndirectObjects()) await writeObject(out, offsets, ref, object);
+  await writeTrailer(out, offsets, context);
+  await out.flush();
+
   return {
-    bytes: await merged.save({ useObjectStreams: true }),
+    size: out.offset,
     digests: order.map((item) => digests.get(`${item.fileKey}:${item.pageIndex}`)),
   };
+}
+
+/**
+ * 頁を指定の順に並べた 1 つの PDF を、メモリの上に作る（保存領域を使えないとき）。
+ *
+ * @param {object} options writeMergedPdf と同じ（write は要らない）。sources の
+ *   中身は、load の代わりに bytes でも渡せる
+ * @returns {Promise<{bytes:Uint8Array, digests:string[]}>}
+ */
+export async function mergePdf({ sources, ...options }) {
+  const chunks = [];
+  const loaders = new Map(
+    [...sources].map(([key, source]) => [key, { name: source.name, load: source.load ?? (async () => source.bytes) }])
+  );
+  const { size, digests } = await writeMergedPdf({
+    ...options,
+    sources: loaders,
+    write: (chunk) => {
+      chunks.push(chunk);
+    },
+  });
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.length;
+  }
+  return { bytes, digests };
 }
 
 /** 頁ラベル（/PageLabels の数の木）を書き込む。 */

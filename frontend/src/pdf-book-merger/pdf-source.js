@@ -51,11 +51,13 @@ function workerOf() {
  * PDF を開く。
  *
  * pdf.js は受け取ったバイト列を worker へ渡して手放してしまうので、
- * 結合に使う元のバイト列は渡さず、複製を渡す。
+ * 結合に使う元のバイト列は渡さず、複製を渡す。transfer なら、写さずにそのまま
+ * 渡す（手元では使えなくなる。結合した PDF を検証するときに、本 1 冊ぶんの写しを
+ * 作らないため）。
  *
  * @param {Uint8Array} bytes
  */
-export async function openPdf(bytes, { safe = false } = {}) {
+export async function openPdf(bytes, { safe = false, transfer = false } = {}) {
   const webkit = isWebKit(globalThis.navigator);
   // iPhone・iPad では、はじめから OffscreenCanvas を切る。worker の中で
   // 600dpi のスキャン（3000 万画素ほど）を OffscreenCanvas に描くと、canvas の
@@ -63,7 +65,7 @@ export async function openPdf(bytes, { safe = false } = {}) {
   // 間にメモリが尽きてページごと落ちた。
   safe ||= isIOS(globalThis.navigator);
   const doc = await pdfjs.getDocument({
-    data: bytes.slice(),
+    data: transfer ? bytes : bytes.slice(),
     worker: workerOf(),
     isEvalSupported: false,
     // CMap・標準フォント・画像の展開の wasm（pdf-data.js）。渡さないと、ToUnicode を
