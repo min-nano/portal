@@ -39,12 +39,14 @@ async function removeStale(base, own, nav, now) {
 }
 
 /**
- * 保存領域を使えるようにする。使えなければ null。
+ * 保存領域を使えるようにする。使えなければ、その理由で失敗する（画面は
+ * メモリに持ち、理由を処理の記録に出す）。
  *
  * @param {{nav?: Navigator, WorkerClass?: typeof Worker, now?: number}} [options]
  */
 export async function openStash({ nav = globalThis.navigator, WorkerClass = globalThis.Worker, now = Date.now() } = {}) {
-  if (typeof nav?.storage?.getDirectory !== 'function' || typeof WorkerClass !== 'function') return null;
+  if (typeof nav?.storage?.getDirectory !== 'function') throw new Error('このブラウザには OPFS がありません');
+  if (typeof WorkerClass !== 'function') throw new Error('このブラウザでは worker を使えません');
   let worker = null;
   try {
     const root = await nav.storage.getDirectory();
@@ -61,9 +63,9 @@ export async function openStash({ nav = globalThis.navigator, WorkerClass = glob
     await stash.put('probe', new Uint8Array([1]));
     await stash.remove('probe');
     return stash;
-  } catch {
+  } catch (error) {
     worker?.terminate();
-    return null;
+    throw error;
   }
 }
 
@@ -78,8 +80,8 @@ function createStash(worker, dir, directory) {
     if (data.error) job.reject(new Error(data.error));
     else job.resolve();
   };
-  worker.onerror = () => {
-    broken = new Error('保存領域へ書く worker が止まりました。');
+  worker.onerror = (event) => {
+    broken = new Error(`保存領域へ書く worker が止まりました（${event.message || '理由不明'}）`);
     for (const job of pending.values()) job.reject(broken);
     pending.clear();
   };

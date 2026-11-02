@@ -35,6 +35,7 @@ import { savePdf } from './save-file.js';
 import { measure } from './measure-client.js';
 import { prepareOcr, readStrip, releaseOcr } from './ocr.js';
 import { openStash } from './stash.js';
+import { createCrashLog } from './crash-log.js';
 import {
   buildBookOrder,
   checkSequence,
@@ -112,6 +113,10 @@ let downloads = Promise.resolve();
  */
 let stash = null;
 let stashReady = Promise.resolve(null);
+/** 保存領域を使えない理由（処理の記録に出す）。 */
+let stashProblem = '';
+/** 保存領域を使うかどうかを、記録に出したか。 */
+let stashNoted = false;
 let ocrStarting = null;
 
 const $ = (id) => document.getElementById(id);
@@ -141,6 +146,8 @@ function showMessage(text, color = '') {
 
 const logLines = [];
 const LOG_LIMIT = 2000;
+/** ページが落ちても、次に開いたときに記録を見られるようにする（crash-log.js）。 */
+const crashLog = createCrashLog();
 
 /**
  * 仕事の流れ 1 つの進み具合を作る。
@@ -234,6 +241,7 @@ function renderProgress() {
   if (progress.fraction === null) bar.removeAttribute('value');
   else if (progress.text) bar.value = progress.overall();
   renderLog();
+  keepLog();
 }
 
 /** 調べる流れの進み具合を出す（ほとんどの経過はこちら）。 */
@@ -263,6 +271,13 @@ function log(text) {
   if (logLines.length > LOG_LIMIT) logLines.splice(0, logLines.length - LOG_LIMIT);
   $('logBox').hidden = false;
   renderLog();
+  keepLog();
+}
+
+/** 記録の終わりのほうと、いま実行中のことを残す（ページが落ちたときのため）。 */
+function keepLog() {
+  const running = [mergeProgress.text, readProgress.text].filter(Boolean).map((text) => `（実行中）${text}`);
+  crashLog.record([...logLines.slice(-200), ...running]);
 }
 
 function logText() {
@@ -425,6 +440,10 @@ function stashName(file) {
 /** 読み込んだ中身を保存領域へ写し、メモリからは手放す。写せなければメモリに持つ。 */
 async function stashBytes(file) {
   const target = await stashReady;
+  if (!stashNoted) {
+    stashNoted = true;
+    log(target ? '読み込んだ PDF は保存領域に置きます' : `保存領域を使えないので、読み込んだ PDF はメモリに持ちます（${stashProblem}）`);
+  }
   if (!target) return;
   try {
     await target.put(stashName(file), file.bytes);
@@ -1527,6 +1546,10 @@ async function mergeAndVerify() {
     mergeProgress.show('結合しています…', 0);
     const started = performance.now();
     // 結合の道具（pdf-lib）は、結合するときになってから読み込む。
+    log(
+      `結合を始めます（${sources.size} ファイル・${order.length} 頁、${stash ? '保存領域に書き出す' : 'メモリの上で'}、` +
+        `${navigator.userAgent}）`
+    );
     const { mergePdf, pageDigests, writeMergedPdf } = await import('./merge.js');
     const options = {
       sources,
@@ -1556,8 +1579,11 @@ async function mergeAndVerify() {
     // 保存領域に置いたものは、読んだ中身を pdf.js へそのまま渡す（写しを作らない）。
     // メモリの上のものは、保存するために手元に残す。
     const bytes = output.bytes ?? new Uint8Array(await output.file.arrayBuffer());
+    log('検証: 結合した PDF を読みました');
     const mergedDigests = await pageDigests(bytes);
+    log('検証: 頁の指紋を求めました');
     const doc = await openPdf(bytes, { transfer: !output.bytes });
+    log('検証: pdf.js で開きました');
     const actual = [];
     let labels;
     let info;
@@ -1777,7 +1803,24 @@ function wireUp() {
     // ファイルを読む前に知らせる（読み込んだ時点で、写しはもう作られる）。
     log('pdf-lib にバイト列を写させない設定が効いていません。大きな本ではメモリが足りなくなることがあります');
   }
-  stashReady = openStash().then((target) => (stash = target));
+  // 前回、途中でページが落ちていたら、その記録を出す。
+  const previous = crashLog.takePrevious();
+  crashLog.clearOnLeave();
+  if (previous.length) {
+    logLines.push('── 前回、途中でページが終わる前の記録 ──', ...previous, '── ここから今回の記録 ──');
+    $('logBox').hidden = false;
+    showMessage(
+      '前回は処理の途中でページが終わったようです。下の「処理の記録」を開いて「ログをコピー」し、知らせてください。',
+      'red'
+    );
+  }
+  stashReady = openStash().then(
+    (target) => (stash = target),
+    (error) => {
+      stashProblem = error.message;
+      return null;
+    }
+  );
   $('driveBtn').addEventListener('click', addFromDrive);
   $('localBtn').addEventListener('click', () => $('localInput').click());
   $('localInput').addEventListener('change', (event) => {

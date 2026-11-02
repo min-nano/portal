@@ -220,16 +220,16 @@ describe('保存領域（OPFS）', () => {
     expect(base.children.has('999999999-recent')).toBe(true);
   });
 
-  it('OPFS か worker が無ければ、使わない', async () => {
-    expect(await stashModule.openStash({ nav: {}, WorkerClass: FakeWorker })).toBeNull();
-    expect(await stashModule.openStash({ nav: nav(), WorkerClass: undefined })).toBeNull();
+  it('OPFS か worker が無ければ、その理由で使わない', async () => {
+    await expect(stashModule.openStash({ nav: {}, WorkerClass: FakeWorker })).rejects.toThrow('OPFS がありません');
+    await expect(stashModule.openStash({ nav: nav(), WorkerClass: undefined })).rejects.toThrow('worker を使えません');
     expect(FakeWorker.instances).toHaveLength(0);
   });
 
-  it('同期の書き口を使えなければ使わず、worker も止める', async () => {
+  it('同期の書き口を使えなければ、その理由で使わず、worker も止める', async () => {
     FakeFile.noSync = true;
 
-    expect(await open()).toBeNull();
+    await expect(open()).rejects.toThrow('createSyncAccessHandle is not supported');
     expect(FakeWorker.instances[0].terminated).toBe(true);
   });
 
@@ -244,8 +244,15 @@ describe('保存領域（OPFS）', () => {
     const [worker] = FakeWorker.instances;
     worker.crash = true;
 
-    await expect(stash.put('a.pdf', new Uint8Array([1]))).rejects.toThrow('worker が止まりました');
+    await expect(stash.put('a.pdf', new Uint8Array([1]))).rejects.toThrow('worker が止まりました（理由不明）');
     await expect(stash.writer('b.pdf')).rejects.toThrow('worker が止まりました');
+
+    // 理由が分かれば添える。
+    const again = await open();
+    FakeWorker.instances.at(-1).postMessage = function postMessage() {
+      this.onerror({ message: 'SyntaxError: Unexpected token' });
+    };
+    await expect(again.put('a.pdf', new Uint8Array([1]))).rejects.toThrow('（SyntaxError: Unexpected token）');
   });
 });
 

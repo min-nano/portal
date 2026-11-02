@@ -321,11 +321,13 @@ export async function mergePdf({ sources, ...options }) {
       chunks.push(chunk);
     },
   });
+  // つなげながら、写し終えた分は手放す（全部の分と、つなげたものを同時に持たない）。
   const bytes = new Uint8Array(size);
   let at = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, at);
-    at += chunk.length;
+  for (let i = 0; i < chunks.length; i++) {
+    bytes.set(chunks[i], at);
+    at += chunks[i].length;
+    chunks[i] = null;
   }
   return { bytes, digests };
 }

@@ -281,6 +281,8 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   vi.resetModules();
+  // 前のテストの記録（ページが落ちたときのために残すもの）を持ち越さない。
+  localStorage.clear();
   Object.values(mocks).forEach((mock) => typeof mock === 'function' && mock.mockReset?.());
   mocks.prepareOcr.mockResolvedValue({});
   mocks.releaseOcr.mockResolvedValue(undefined);
@@ -1364,6 +1366,49 @@ describe('結合と検証', () => {
     // 外したファイルは、置いたものも消す。
     fileItem('猫_偶数.pdf').querySelector('.danger').click();
     expect(stash.removed).toContain('f2.pdf');
+  });
+
+  it('保存領域を使えなければ、その理由を記録に出してメモリに持つ', async () => {
+    mocks.openStash.mockRejectedValue(new Error('このブラウザには OPFS がありません'));
+    vi.resetModules();
+    installPage();
+    await import('../src/pdf-book-merger/main.js');
+    await mocks.prepare();
+    drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    const text = $('logText').textContent;
+    // 1 度だけ出す。
+    expect(text.split('保存領域を使えないので').length).toBe(2);
+    expect(text).toContain('保存領域を使えないので、読み込んだ PDF はメモリに持ちます（このブラウザには OPFS がありません）');
+    expect(text).toContain('結合を始めます（2 ファイル・8 頁、メモリの上で、');
+    expect(text).toContain('検証: pdf.js で開きました');
+  });
+
+  it('途中でページが落ちたら、次に開いたときに前回の記録を出す（普通に閉じたら出さない）', async () => {
+    drop([file('猫_奇数.pdf', pdf(ODD))]);
+    await settled(1);
+    const kept = JSON.parse(localStorage.getItem('pdf-book-merger:log'));
+    expect(kept.some((line) => line.includes('「猫_奇数.pdf」を調べ終えました'))).toBe(true);
+
+    // 落ちた（pagehide が来ないまま、開き直した）。
+    vi.resetModules();
+    installPage();
+    await import('../src/pdf-book-merger/main.js');
+    await mocks.prepare();
+    expect($('message').textContent).toContain('前回は処理の途中でページが終わったようです');
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('── 前回、途中でページが終わる前の記録 ──');
+    expect($('logText').textContent).toContain('「猫_奇数.pdf」を調べ終えました');
+
+    // 普通に閉じたら消す。
+    window.dispatchEvent(new Event('pagehide'));
+    expect(localStorage.getItem('pdf-book-merger:log')).toBeNull();
   });
 
   it('保存領域に置けなかったファイルはメモリに持ち、結合した PDF を書けなければメモリの上で結合し直す', async () => {
