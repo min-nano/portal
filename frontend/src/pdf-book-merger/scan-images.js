@@ -305,7 +305,6 @@ function collect(context, content, resources, ctm, found, depth) {
  * @param {import('pdf-lib').PDFPage} page
  */
 export function softMaskCount(page) {
-  const { context } = page.node;
   const forms = new Map(); // フォーム → その中で使う回数
   const visiting = new Set(); // 自分を（間接に）呼ぶフォームを止める
   const countIn = (content, resources) => {
