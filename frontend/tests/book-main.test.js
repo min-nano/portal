@@ -82,6 +82,7 @@ vi.mock('../src/pdf-book-merger/pdf-lib-views.js', () => ({
   },
 }));
 vi.mock('../src/pdf-book-merger/ocr.js', () => ({
+  boxesReadSoFar: () => 0,
   prepareOcr: (...args) => mocks.prepareOcr(...args),
   readStrip: (...args) => mocks.readStrip(...args),
 }));
@@ -105,9 +106,13 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
         spec,
         numPages: spec.pages.length,
         getPageLabels: async () => spec.labels ?? null,
-        getMetadata: async () => ({ info: { Title: spec.title ?? '' } }),
+        getMetadata: async () => {
+          if (spec.metadataBroken) throw new Error('metadata');
+          return { info: { Title: spec.title ?? '', ...spec.info } };
+        },
       };
     },
+    redrawnSafely: (doc) => doc.spec.redrawn === true,
     readPageText: async (doc, index) => {
       const p = doc.spec.pages[index];
       if (p.broken) throw new Error(p.broken);
@@ -120,6 +125,7 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
     renderPageImage: (...args) => mocks.renderPageImage(...args),
     renderMargins: (...args) => mocks.renderMargins(...args),
     renderPreview: (...args) => mocks.renderPreview(...args),
+    manySoftMasks: (softMasks = 0) => softMasks > 8,
     closePdf: (...args) => mocks.closePdf(...args),
     releaseCanvas: () => {},
   };
@@ -222,6 +228,7 @@ beforeEach(async () => {
     const fallback = pages.filter((p) => p.jpeg === false).length;
     return {
       scans: pages.map((p) => (p.jpeg === false ? null : { jpeg: p.id })),
+      softMasks: pages.map((p) => p.softMasks ?? 0),
       reasons: new Map(fallback ? [['画像の上に図形を描いている', fallback]] : []),
       example: fallback ? '2 頁目: 画像 1 枚（DCTDecode 100×140 DeviceGray 8bit）' : '',
     };
@@ -754,6 +761,8 @@ describe('ファイルを足して並べる', () => {
     document.querySelector('#pageGrid .bm-thumb').click();
     await vi.waitFor(() => expect($('previewImage').src).toBe('blob:preview'));
     expect(mocks.renderPreview.mock.calls[0][1]).toBe(0);
+    // 頁のソフトマスクの数も渡す（iPhone・iPad で帯に分けて描くか）。
+    expect(mocks.renderPreview.mock.calls[0][2]).toEqual({ softMasks: 0 });
     $('previewCloseBtn').click();
 
     // 名前の順に足す。
@@ -879,16 +888,17 @@ describe('ファイルを足して並べる', () => {
   });
 
   it('JPEG 1 枚の形でない頁は、pdf.js で描いて読む', async () => {
-    const pages = [page('o1', 1), page('o3', 3, { ocr: true, jpeg: false }), page('o5', 5)];
+    const pages = [page('o1', 1), page('o3', 3, { ocr: true, jpeg: false, softMasks: 8 }), page('o5', 5)];
     drop([file('odd.pdf', pdf(pages))]);
     await settled(1);
 
-    // 何頁かを並べて描くので、頼んだ順は前後する。
+    // 何頁かを並べて描くので、頼んだ順は前後する。ソフトマスクの数も渡す
+    // （多い頁は粗く描く）。
     const calls = mocks.renderPageImage.mock.calls.map(([, index, scan, options]) => [index, scan, options]);
     expect(calls.sort((a, b) => a[0] - b[0])).toEqual([
-      [0, { jpeg: 'o1' }, { margins: false }],
-      [1, null, { margins: true }],
-      [2, { jpeg: 'o5' }, { margins: false }],
+      [0, { jpeg: 'o1' }, { margins: false, softMasks: 0 }],
+      [1, null, { margins: true, softMasks: 8 }],
+      [2, { jpeg: 'o5' }, { margins: false, softMasks: 0 }],
     ]);
     expect(document.querySelector('#pageGrid [data-page-key="f1:1"] img').src).toBe('blob:pdfjs-o3');
     $('logBox').open = true;
@@ -900,7 +910,7 @@ describe('ファイルを足して並べる', () => {
   });
 
   it('PDF の中を調べられなければ、すべての頁を pdf.js で描く', async () => {
-    mocks.findScanImages.mockResolvedValue({ scans: [], reasons: new Map([['PDF を読めない（暗号化）', 1]]), example: '' });
+    mocks.findScanImages.mockResolvedValue({ scans: [], softMasks: [], reasons: new Map([['PDF を読めない（暗号化）', 1]]), example: '' });
     drop([file('odd.pdf', pdf(ODD))]);
     await settled(1);
 
@@ -910,6 +920,32 @@ describe('ファイルを足して並べる', () => {
     $('logBox').open = true;
     $('logBox').dispatchEvent(new Event('toggle'));
     expect($('logText').textContent).toContain('「odd.pdf」の 4 頁は pdf.js で描きます（PDF を読めない（暗号化） 1 頁）。');
+  });
+
+  it('pdf.js で描く PDF は、作ったアプリと、開き直して描き直したかを記録に出す', async () => {
+    const pages = [page('o1', 1, { jpeg: false })];
+    // 1 つ目は、描けない理由の分からない頁として見つかる。
+    mocks.findScanImages.mockResolvedValueOnce({ scans: [null], softMasks: [0], reasons: new Map(), example: '' });
+    drop([
+      file('a.pdf', pdf(pages, { info: { Creator: 'Adobe Illustrator', Producer: 'Adobe PDF library' }, redrawn: true })),
+      file('b.pdf', pdf(pages, { info: { Creator: 'Word', Producer: 'Word' } })),
+      file('c.pdf', pdf(pages, { info: { Creator: ' ', Producer: 3 } })),
+      file('d.pdf', pdf(pages, { metadataBroken: true })),
+    ]);
+    await settled(4);
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    const lines = $('logText').textContent.split('\n');
+    const line = (name, what) => lines.find((text) => text.includes(`「${name}」${what}`));
+
+    expect(line('a.pdf', 'の 1 頁は pdf.js')).toMatch(/（理由不明）。作成: Adobe Illustrator \/ Adobe PDF library$/);
+    expect(line('b.pdf', 'の 1 頁は pdf.js')).toMatch(/。作成: Word$/);
+    // 名前の分からないものは添えない。
+    expect(line('c.pdf', 'の 1 頁は pdf.js')).not.toContain('作成');
+    expect(line('d.pdf', 'の 1 頁は pdf.js')).not.toContain('作成');
+
+    expect(line('a.pdf', 'の頁の画像を調べました')).toContain('安全な設定で開き直して描き直しました');
+    expect(line('b.pdf', 'の頁の画像を調べました')).not.toContain('描き直し');
   });
 
   it('Drive を待っている間は、見出しに待っていることを出す', async () => {
@@ -1065,6 +1101,53 @@ describe('ファイルを足して並べる', () => {
     // 調べたときの JPEG（ファイルの一部を指すだけ）で描く。
     expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
     expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o1' });
+  });
+
+  it('ソフトマスクの多い頁は、粗く描き、余白を OCR しない（あとから本文に変えても）', async () => {
+    const pages = [
+      page('o1', 1, { jpeg: false, softMasks: 516 }),
+      page('o3', 3, { ocr: true, jpeg: false, softMasks: 516 }),
+      page('o5', 5, { ocr: true }),
+      // JPEG のまま描く頁は、ソフトマスクがあっても重くないので、ふつうに描いて読む。
+      page('o7', 7, { ocr: true, softMasks: 516 }),
+    ];
+    drop([file('odd.pdf', pdf(pages)), file('表紙.pdf', pdf(pages))]);
+    await settled(2);
+
+    const calls = mocks.renderPageImage.mock.calls
+      .filter(([doc]) => doc === mocks.renderPageImage.mock.calls[0][0])
+      .map(([, index, , options]) => [index, options]);
+    expect(calls.sort((a, b) => a[0] - b[0])).toEqual([
+      [0, { margins: false, softMasks: 516 }],
+      [1, { margins: false, softMasks: 516 }],
+      [2, { margins: true, softMasks: 0 }],
+      [3, { margins: true, softMasks: 0 }],
+    ]);
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    const lines = $('logText').textContent.split('\n');
+    const imageLine = (name) => lines.find((text) => text.includes(`「${name}」の頁の画像を調べました`));
+    // 粗く描いた頁は 2 つ。そのうち OCR を見送ったのは、番号の見つからない 1 頁だけ。
+    expect(imageLine('odd.pdf')).toContain('余白を OCR 2 頁・うち番号が読めた頁 2');
+    expect(imageLine('odd.pdf')).toMatch(
+      /。ソフトマスクの多い 2 頁は粗く描きました（うち番号の見つからない 1 頁は、余白を OCR しませんでした）$/
+    );
+    // 名前で表紙と分かるファイルは、もともと OCR しないので、見送ったとは書かない。
+    expect(imageLine('表紙.pdf')).toMatch(/。ソフトマスクの多い 2 頁は粗く描きました$/);
+    // ソフトマスクの多い頁の番号は、前後の頁から補う。
+    expect(gridLabels()).toContain('3 頁');
+
+    // 名前で表紙と見たファイルを本文に変えても、その頁は OCR しない。
+    change(fileItem('表紙.pdf').querySelector('select'), 'body');
+    await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalled());
+    await vi.waitFor(() => expect(fileItem('表紙.pdf').textContent).not.toContain('余白を読み取り中'));
+    expect(mocks.renderMargins.mock.calls.map(([, index]) => index).sort()).toEqual([2, 3]);
+  });
+
+  it('OCR する頁が無ければ、OCR の準備を始めない（iPhone・iPad でメモリを余計に使わない）', async () => {
+    drop([file('odd.pdf', pdf([page('o1', 1), page('o3', 3)]))]);
+    await settled(1);
+    expect(mocks.prepareOcr).not.toHaveBeenCalled();
   });
 
   it('見出しの「?」は、押すと説明を開き、もう一度押すか外を押すか Esc で閉じる', () => {

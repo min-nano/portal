@@ -30,6 +30,30 @@ export const THUMB_WIDTH = 160;
 export const OCR_PAGE_HEIGHT = 2400;
 /** 拡大表示の長辺（px）。 */
 export const PREVIEW_LONG_SIDE = 1600;
+/**
+ * ソフトマスクを使う回数（scan-images.js の softMaskCount）がこれより多い頁は
+ * 「ソフトマスクの多い頁」として、粗く描き、余白を OCR しない（manySoftMasks）。
+ * スキャナの作る PDF では 0 か数回で、InDesign の影・ぼかしのある頁では
+ * 数百〜千回を超える。
+ */
+export const MANY_SOFT_MASKS = 8;
+/**
+ * ソフトマスクの多い頁を描くときの、描く画素の数 × ソフトマスクを使う回数の
+ * 上限（cappedScale）。pdf.js はソフトマスクを使うたびに描く canvas と同じ
+ * 大きさの作業をするので、描く手間はおよそこの積に比例する。1,032 回使う頁
+ * （InDesign の表紙）は 7.7 万画素（A4 で長辺 330px ほど）になり、iPhone mini で
+ * 1.7 秒で描けた。
+ */
+export const SOFT_MASK_WORK = 80e6;
+/** 拡大表示では、SOFT_MASK_WORK の何倍まで描くか（一覧より大きく見せる。粗くてよいので、待たせない方を取る）。 */
+const PREVIEW_SOFT_MASK_WORK = 2;
+/**
+ * iPhone・iPad で、ソフトマスクの多い頁を描くときに、pdf.js が同時に持つ
+ * canvas の画素の目安の上限（4,800 万画素 ≒ 190 MB）。bandRows を参照。
+ */
+export const IOS_SOFT_MASK_PIXELS = 48e6;
+/** 帯に分けて描くときの、帯の高さの下限（px。細かく分けすぎると、帯ごとの手間が積み重なる）。 */
+const MIN_BAND_ROWS = 16;
 
 /**
  * PDF を開く。
@@ -70,6 +94,14 @@ export async function openPdf(bytes, { safe = false } = {}) {
 /** WebKit で開いた文書 → 描けなかったときに開き直す、安全な設定の文書。 */
 const fallbacks = new WeakMap();
 
+/**
+ * その文書を、描けなかったために安全な設定で開き直して描いたか（記録に出す。
+ * 開き直すと PDF をもう 1 度読み、描き直すので、時間がかかる）。
+ */
+export function redrawnSafely(doc) {
+  return fallbacks.get(doc)?.failed === true;
+}
+
 function safeDocOf(doc) {
   const fallback = fallbacks.get(doc);
   if (!fallback) return null;
@@ -106,6 +138,53 @@ function canvasOf(width, height) {
   return canvas;
 }
 
+/**
+ * ソフトマスクの多い頁か（粗く描き、余白を OCR しない）。
+ *
+ * @param {number} [softMasks] 頁のソフトマスクの数（scan-images.js の findScanImages。
+ *   PDF を調べられなかったときは無い）
+ */
+export function manySoftMasks(softMasks = 0) {
+  return softMasks > MANY_SOFT_MASKS;
+}
+
+/**
+ * 頁を長辺 longSide で描く scale。ソフトマスクの多い頁は、描く画素の数 ×
+ * ソフトマスクの数が work に収まるまで小さくする。
+ *
+ * ソフトマスクを数百持つ頁（InDesign の影・ぼかし）を、ほかの頁と同じ細かさで
+ * 描くと、Mac の Safari で十数秒、iPhone で 30 秒ほどかかった。粗く描いても、
+ * 結合する PDF は頁をそのまま写すので変わらない。変わるのは一覧の縮小画像・
+ * 拡大表示の細かさと、測る画像の細かさ（中身の範囲や傾きは割合で測る）だけ。
+ *
+ * @param {{width:number, height:number}} base 頁の大きさ（scale 1 の viewport）
+ */
+export function cappedScale(base, longSide, softMasks = 0, work = SOFT_MASK_WORK) {
+  const scale = longSide / Math.max(base.width, base.height);
+  if (!manySoftMasks(softMasks)) return scale;
+  return Math.min(scale, Math.sqrt(work / softMasks / (base.width * base.height)));
+}
+
+/**
+ * ソフトマスクの多い頁を、何行ずつの帯に分けて描くか（分けないなら Infinity）。
+ *
+ * pdf.js は、ソフトマスクのために作った canvas（使う 1 回につき 1 枚ほど、
+ * 大きさは描く canvas に収まる分）を、頁を描き終えるまで手放さない。
+ * 1,032 回使う頁を長辺 1000px で描くと、それだけで 1.4 GB（1,037 枚）になる。
+ * Mac では描けるが、iPhone・iPad はメモリが尽きてページごと落ちた。そこで
+ * iPhone・iPad では、頁を横長の帯に分けて描いてつなぐ（帯ごとに pdf.js が
+ * 持つ canvas は帯の大きさに収まる）。帯ごとに頁の中身を描き直す手間が
+ * 掛かるので（1,032 回使う頁で、帯 1 本につき 1 秒ほど）、Mac などでは
+ * 分けない。
+ *
+ * @param {number} width 描く canvas の幅（px）
+ * @param {number} softMasks 頁がソフトマスクを使う回数
+ */
+export function bandRows(width, softMasks) {
+  if (!manySoftMasks(softMasks) || !isIOS(globalThis.navigator)) return Infinity;
+  return Math.max(MIN_BAND_ROWS, Math.floor(IOS_SOFT_MASK_PIXELS / (width * softMasks)));
+}
+
 /** pdf.js で、viewport のとおりに描く。注釈（付箋・リンクの枠）は検査の邪魔なので描かない。 */
 async function renderTo(page, viewport, size) {
   const canvas = canvasOf(size.width, size.height);
@@ -119,10 +198,35 @@ async function renderTo(page, viewport, size) {
 }
 
 /**
+ * pdf.js で描く。rows が canvas の高さより小さければ、その行数ずつの帯に
+ * 分けて描いてつなぐ（bandRows）。
+ */
+async function drawPage(doc, page, viewport, size = viewport, rows = Infinity) {
+  const height = Math.max(1, Math.round(size.height));
+  if (rows >= height) return drawWhole(doc, page, viewport, size);
+  const canvas = canvasOf(size.width, height);
+  const context = canvas.getContext('2d');
+  try {
+    for (let y = 0; y < height; y += rows) {
+      const band = await drawWhole(doc, page, viewport.clone({ offsetY: viewport.offsetY - y }), {
+        width: canvas.width,
+        height: Math.min(rows, height - y),
+      });
+      context.drawImage(band, 0, y);
+      releaseCanvas(band);
+    }
+  } catch (error) {
+    releaseCanvas(canvas);
+    throw error;
+  }
+  return canvas;
+}
+
+/**
  * pdf.js で描く。WebKit で描けなかったときは、OffscreenCanvas も切った文書で
  * 描き直し、その文書の残りの頁もそちらで描く。
  */
-async function drawPage(doc, page, viewport, size = viewport) {
+async function drawWhole(doc, page, viewport, size = viewport) {
   const fallback = fallbacks.get(doc);
   if (!fallback?.failed) {
     try {
@@ -184,8 +288,11 @@ function inScanTurn(run) {
  * その頁は pdf.js で描く。pdf.js では、細かさの違う何枚か（測る画像と OCR の
  * 帯）を、いちばん細かい大きさで頁を 1 回だけ描いてから切り出す（pdf.js は
  * 描くたびにスキャンの画像を描き直すので、1 回にまとめる）。
+ *
+ * softMasks は頁のソフトマスクの数。iPhone・iPad では、ソフトマスクの多い頁を
+ * 帯に分けて描く（bandRows）。
  */
-async function drawViewports(doc, page, viewports, sizes, scan) {
+async function drawViewports(doc, page, viewports, sizes, scan, softMasks = 0) {
   if (scan) {
     try {
       return await inScanTurn(() => drawScan(scan, viewports, sizes));
@@ -194,7 +301,10 @@ async function drawViewports(doc, page, viewports, sizes, scan) {
     }
   }
   return inTurn(async () => {
-    if (viewports.length === 1) return [await drawPage(doc, page, viewports[0], sizes[0])];
+    if (viewports.length === 1) {
+      const size = sizes[0] ?? viewports[0];
+      return [await drawPage(doc, page, viewports[0], size, bandRows(size.width, softMasks))];
+    }
     const finest = Math.max(...viewports.map((viewport) => Math.hypot(viewport.transform[0], viewport.transform[1])));
     const full = page.getViewport({ scale: finest });
     const source = await drawPage(doc, page, full);
@@ -284,23 +394,26 @@ function stripsOf(margins, canvases) {
  * @param {object} doc openPdf の結果
  * @param {number} index 0 から数えた頁の位置
  * @param {object|null} [scan] その頁の JPEG（scan-images.js）。無ければ pdf.js で描く
- * @param {{margins?: boolean}} [options]
+ * @param {{margins?: boolean, softMasks?: number}} [options] softMasks は頁のソフトマスクの数
+ *   （scan-images.js の findScanImages）。ソフトマスクの多い頁は粗く描く（cappedScale）。
+ *   その頁の余白は OCR しない（呼ぶ側が margins を頼まない）
  * @returns {Promise<{image:{width:number,height:number,gray:Uint8Array}, thumbUrl:string,
  *                    strips:{zone:'top'|'bottom', canvas:HTMLCanvasElement, top:number, height:number}[]}>}
  *   strips は margins のときだけ（そうでなければ空）。
  */
-export async function renderPageImage(doc, index, scan = null, { margins = false } = {}) {
+export async function renderPageImage(doc, index, scan = null, { margins = false, softMasks = 0 } = {}) {
   const page = await doc.getPage(index + 1);
   try {
     const base = page.getViewport({ scale: 1 });
-    const viewport = page.getViewport({ scale: ANALYSIS_LONG_SIDE / Math.max(base.width, base.height) });
+    const viewport = page.getViewport({ scale: cappedScale(base, ANALYSIS_LONG_SIDE, softMasks) });
     const bands = margins ? marginViewports(page) : [];
     const [canvas, ...stripCanvases] = await drawViewports(
       doc,
       page,
       [viewport, ...bands.map((band) => band.viewport)],
       [undefined, ...bands.map((band) => band.size)],
-      scan
+      scan,
+      softMasks
     );
     const context = canvas.getContext('2d', { willReadFrequently: true });
     const image = {
@@ -322,6 +435,9 @@ export async function renderPageImage(doc, index, scan = null, { margins = false
  * 頁全体を細かく描くと 1 頁で数十 MB の画素になるので、頁番号のある帯
  * （上下 MARGIN_ZONE）だけを描く。
  *
+ * @param {object} doc openPdf の結果
+ * @param {number} index 0 から数えた頁の位置
+ * @param {object|null} [scan] その頁の JPEG（scan-images.js）。無ければ pdf.js で描く
  * @returns {Promise<{zone:'top'|'bottom', canvas:HTMLCanvasElement, top:number, height:number}[]>}
  *   top と height は、帯の位置を頁の高さに対する割合で表したもの。
  */
@@ -347,14 +463,17 @@ export async function renderMargins(doc, index, scan = null) {
  *
  * @param {object} doc openPdf の結果
  * @param {number} index 0 から数えた頁の位置
- * @param {number} longSide 長辺の大きさ（px）
+ * @param {{longSide?: number, softMasks?: number}} [options] longSide は長辺の大きさ（px）、
+ *   softMasks は頁のソフトマスクの数（ソフトマスクの多い頁は粗く描き（cappedScale）、
+ *   iPhone・iPad では帯に分けて描く（bandRows））
  */
-export async function renderPreview(doc, index, longSide = PREVIEW_LONG_SIDE) {
+export async function renderPreview(doc, index, { longSide = PREVIEW_LONG_SIDE, softMasks = 0 } = {}) {
   const page = await doc.getPage(index + 1);
   try {
     const base = page.getViewport({ scale: 1 });
-    const viewport = page.getViewport({ scale: longSide / Math.max(base.width, base.height) });
-    const canvas = await inTurn(() => drawPage(doc, page, viewport));
+    const scale = cappedScale(base, longSide, softMasks, SOFT_MASK_WORK * PREVIEW_SOFT_MASK_WORK);
+    const viewport = page.getViewport({ scale });
+    const canvas = await inTurn(() => drawPage(doc, page, viewport, viewport, bandRows(viewport.width, softMasks)));
     return await new Promise((resolve) => {
       canvas.toBlob(
         (blob) => {
