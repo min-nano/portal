@@ -31,18 +31,20 @@ export const OCR_PAGE_HEIGHT = 2400;
 /** 拡大表示の長辺（px）。 */
 export const PREVIEW_LONG_SIDE = 1600;
 /**
- * ソフトマスクがこれより多い頁は「ソフトマスクの多い頁」として、粗く描き、
- * 余白を OCR しない（manySoftMasks）。スキャナの作る PDF では 0 か数個で、
- * InDesign の影・ぼかしのある頁では数百になる。
+ * ソフトマスクを使う回数（scan-images.js の softMaskCount）がこれより多い頁は
+ * 「ソフトマスクの多い頁」として、粗く描き、余白を OCR しない（manySoftMasks）。
+ * スキャナの作る PDF では 0 か数回で、InDesign の影・ぼかしのある頁では
+ * 数百〜千回を超える。
  */
 export const MANY_SOFT_MASKS = 8;
 /**
- * ソフトマスクの多い頁を描くときの、描く画素の数 × ソフトマスクの数の上限
- * （cappedScale）。pdf.js はソフトマスク 1 つごとに描く canvas と同じ大きさの
- * 作業をするので、描く手間はおよそこの積に比例する。ソフトマスク 516 の頁は
- * 7.7 万画素（A4 で長辺 330px ほど）になり、Mac の Safari で 1 秒かからない。
+ * ソフトマスクの多い頁を描くときの、描く画素の数 × ソフトマスクを使う回数の
+ * 上限（cappedScale）。pdf.js はソフトマスクを使うたびに描く canvas と同じ
+ * 大きさの作業をするので、描く手間はおよそこの積に比例する。1,032 回使う頁
+ * （InDesign の表紙）は 7.7 万画素（A4 で長辺 330px ほど）になり、iPhone mini で
+ * 1.7 秒で描けた。
  */
-export const SOFT_MASK_WORK = 40e6;
+export const SOFT_MASK_WORK = 80e6;
 /** 拡大表示では、SOFT_MASK_WORK の何倍まで描くか（一覧より大きく見せる。粗くてよいので、待たせない方を取る）。 */
 const PREVIEW_SOFT_MASK_WORK = 2;
 /**
@@ -166,21 +168,21 @@ export function cappedScale(base, longSide, softMasks = 0, work = SOFT_MASK_WORK
 /**
  * ソフトマスクの多い頁を、何行ずつの帯に分けて描くか（分けないなら Infinity）。
  *
- * pdf.js は、ソフトマスクのために作った canvas（マスク 1 つにつき 2 枚ほど、
+ * pdf.js は、ソフトマスクのために作った canvas（使う 1 回につき 1 枚ほど、
  * 大きさは描く canvas に収まる分）を、頁を描き終えるまで手放さない。
- * ソフトマスク 516 の頁を長辺 1000px で描くと、それだけで 1.4 GB になる。
+ * 1,032 回使う頁を長辺 1000px で描くと、それだけで 1.4 GB（1,037 枚）になる。
  * Mac では描けるが、iPhone・iPad はメモリが尽きてページごと落ちた。そこで
  * iPhone・iPad では、頁を横長の帯に分けて描いてつなぐ（帯ごとに pdf.js が
  * 持つ canvas は帯の大きさに収まる）。帯ごとに頁の中身を描き直す手間が
- * 掛かるので（ソフトマスク 516 の頁で、帯 1 本につき 1 秒ほど）、Mac などでは
+ * 掛かるので（1,032 回使う頁で、帯 1 本につき 1 秒ほど）、Mac などでは
  * 分けない。
  *
  * @param {number} width 描く canvas の幅（px）
- * @param {number} softMasks 頁のソフトマスクの数
+ * @param {number} softMasks 頁がソフトマスクを使う回数
  */
 export function bandRows(width, softMasks) {
   if (!manySoftMasks(softMasks) || !isIOS(globalThis.navigator)) return Infinity;
-  return Math.max(MIN_BAND_ROWS, Math.floor(IOS_SOFT_MASK_PIXELS / (width * 2 * softMasks)));
+  return Math.max(MIN_BAND_ROWS, Math.floor(IOS_SOFT_MASK_PIXELS / (width * softMasks)));
 }
 
 /** pdf.js で、viewport のとおりに描く。注釈（付箋・リンクの枠）は検査の邪魔なので描かない。 */

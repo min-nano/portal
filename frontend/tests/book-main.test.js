@@ -1086,7 +1086,13 @@ describe('ファイルを足して並べる', () => {
   });
 
   it('ソフトマスクの多い頁は、粗く描き、余白を OCR しない（あとから本文に変えても）', async () => {
-    const pages = [page('o1', 1), page('o3', 3, { ocr: true, jpeg: false, softMasks: 516 }), page('o5', 5, { ocr: true })];
+    const pages = [
+      page('o1', 1, { jpeg: false, softMasks: 516 }),
+      page('o3', 3, { ocr: true, jpeg: false, softMasks: 516 }),
+      page('o5', 5, { ocr: true }),
+      // JPEG のまま描く頁は、ソフトマスクがあっても重くないので、ふつうに描いて読む。
+      page('o7', 7, { ocr: true, softMasks: 516 }),
+    ];
     drop([file('odd.pdf', pdf(pages)), file('表紙.pdf', pdf(pages))]);
     await settled(2);
 
@@ -1094,14 +1100,22 @@ describe('ファイルを足して並べる', () => {
       .filter(([doc]) => doc === mocks.renderPageImage.mock.calls[0][0])
       .map(([, index, , options]) => [index, options]);
     expect(calls.sort((a, b) => a[0] - b[0])).toEqual([
-      [0, { margins: false, softMasks: 0 }],
+      [0, { margins: false, softMasks: 516 }],
       [1, { margins: false, softMasks: 516 }],
       [2, { margins: true, softMasks: 0 }],
+      [3, { margins: true, softMasks: 0 }],
     ]);
     $('logBox').open = true;
     $('logBox').dispatchEvent(new Event('toggle'));
-    expect($('logText').textContent).toContain('余白を OCR 1 頁・うち番号が読めた頁 1');
-    expect($('logText').textContent).toContain('。ソフトマスクの多い 1 頁は、粗く描き、余白を OCR しませんでした');
+    const lines = $('logText').textContent.split('\n');
+    const imageLine = (name) => lines.find((text) => text.includes(`「${name}」の頁の画像を調べました`));
+    // 粗く描いた頁は 2 つ。そのうち OCR を見送ったのは、番号の見つからない 1 頁だけ。
+    expect(imageLine('odd.pdf')).toContain('余白を OCR 2 頁・うち番号が読めた頁 2');
+    expect(imageLine('odd.pdf')).toMatch(
+      /。ソフトマスクの多い 2 頁は粗く描きました（うち番号の見つからない 1 頁は、余白を OCR しませんでした）$/
+    );
+    // 名前で表紙と分かるファイルは、もともと OCR しないので、見送ったとは書かない。
+    expect(imageLine('表紙.pdf')).toMatch(/。ソフトマスクの多い 2 頁は粗く描きました$/);
     // ソフトマスクの多い頁の番号は、前後の頁から補う。
     expect(gridLabels()).toContain('3 頁');
 
@@ -1109,7 +1123,13 @@ describe('ファイルを足して並べる', () => {
     change(fileItem('表紙.pdf').querySelector('select'), 'body');
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalled());
     await vi.waitFor(() => expect(fileItem('表紙.pdf').textContent).not.toContain('余白を読み取り中'));
-    expect(mocks.renderMargins.mock.calls.map(([, index]) => index)).toEqual([2]);
+    expect(mocks.renderMargins.mock.calls.map(([, index]) => index).sort()).toEqual([2, 3]);
+  });
+
+  it('OCR する頁が無ければ、OCR の準備を始めない（iPhone・iPad でメモリを余計に使わない）', async () => {
+    drop([file('odd.pdf', pdf([page('o1', 1), page('o3', 3)]))]);
+    await settled(1);
+    expect(mocks.prepareOcr).not.toHaveBeenCalled();
   });
 
   it('見出しの「?」は、押すと説明を開き、もう一度押すか外を押すか Esc で閉じる', () => {

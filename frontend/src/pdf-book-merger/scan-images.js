@@ -289,43 +289,58 @@ function collect(context, content, resources, ctm, found, depth) {
 }
 
 /**
- * 頁（と、その中のフォーム）が使うソフトマスク（ExtGState の SMask）の数。
+ * 頁の中身が、ソフトマスク（SMask の付いた ExtGState）を使う回数。
  *
- * pdf.js はソフトマスク 1 つごとに、描いている canvas と同じ大きさの作業用の
+ * pdf.js はソフトマスクを使うたびに、描いている canvas と同じ大きさの作業用の
  * canvas を作り、マスクを合成する（canvas の filter の無い Safari では、
  * 輝度を 1 画素ずつ JavaScript で透明度に直す）。InDesign の影・ぼかしの
- * ような効果は数百のソフトマスクになり、頁を細かく描くほど重くなる
- * （pdf-source.js はこの数で描き方を変える）。数えるのは資源に用意された
- * 数（頁の中身は読まない）。
+ * ような効果は数百回になり、頁を細かく描くほど重くなる（pdf-source.js は
+ * この数で描き方を変える）。
+ *
+ * 資源に用意された数ではなく、頁の中身（と、そこから呼ぶフォーム）の gs を
+ * 数える。資源は頁どうしで使い回されることがあり（文書全体の ExtGState を
+ * 1 つの資源にまとめる作り方）、用意された数では、使わない頁まで重く見える。
+ * フォームを何度も呼べば、その回数だけ数える（pdf.js はそのたびに描く）。
  *
  * @param {import('pdf-lib').PDFPage} page
  */
 export function softMaskCount(page) {
   const { context } = page.node;
-  const seen = new Set();
-  let count = 0;
-  const visit = (resources, depth) => {
-    if (!(resources instanceof PDFDict) || seen.has(resources)) return;
-    seen.add(resources);
-    const states = resources.lookupMaybe(PDFName.of('ExtGState'), PDFDict);
-    for (const [, state] of states?.entries() ?? []) {
-      const smask = context.lookup(state)?.lookup?.(PDFName.of('SMask'));
-      if (smask instanceof PDFDict) count++;
+  const forms = new Map(); // フォーム → その中で使う回数
+  const visiting = new Set(); // 自分を（間接に）呼ぶフォームを止める
+  const countIn = (content, resources) => {
+    let count = 0;
+    for (const { op, operands } of operations(content)) {
+      const name = operands.at(-1);
+      if (typeof name !== 'string') continue;
+      const key = PDFName.of(name.slice(1));
+      if (op === 'gs') {
+        const state = resources?.lookupMaybe(PDFName.of('ExtGState'), PDFDict)?.lookup(key);
+        if (state instanceof PDFDict && state.lookup(PDFName.of('SMask')) instanceof PDFDict) count++;
+      } else if (op === 'Do') {
+        const stream = resources?.lookupMaybe(PDFName.of('XObject'), PDFDict)?.lookup(key);
+        if (stream instanceof PDFRawStream && nameOf(stream.dict.lookup(PDFName.of('Subtype'))) === 'Form') {
+          count += formCount(stream, resources);
+        }
+      }
     }
-    if (depth >= MAX_FORM_DEPTH) return;
-    const xobjects = resources.lookupMaybe(PDFName.of('XObject'), PDFDict);
-    for (const [, ref] of xobjects?.entries() ?? []) {
-      const dict = context.lookup(ref)?.dict;
-      if (nameOf(dict?.lookup(PDFName.of('Subtype'))) !== 'Form') continue;
-      visit(dict.lookup(PDFName.of('Resources')), depth + 1);
-    }
+    return count;
+  };
+  const formCount = (stream, outer) => {
+    if (forms.has(stream)) return forms.get(stream);
+    if (visiting.has(stream)) return 0;
+    visiting.add(stream);
+    const count = countIn(decodedBytes([stream]), stream.dict.lookupMaybe(PDFName.of('Resources'), PDFDict) ?? outer);
+    visiting.delete(stream);
+    forms.set(stream, count);
+    return count;
   };
   try {
-    visit(page.node.Resources(), 0);
+    return countIn(contentBytes(page.node), page.node.Resources());
   } catch {
-    // 読めない資源は数えない（描き方を選ぶ目安にするだけなので）。
+    // 読めない中身・資源は数えない（描き方を選ぶ目安にするだけなので）。
+    return 0;
   }
-  return count;
 }
 
 /**

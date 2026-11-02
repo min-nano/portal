@@ -154,14 +154,14 @@ describe('ソフトマスクの多い頁は、粗く描く', () => {
   }
 
   // 偽物の頁は 100×140。測る画像は長辺 1000px、OCR の帯は頁の高さ 2400px の上下 14%。
-  const SOFT_MASKS = 516;
+  const SOFT_MASKS = 1032;
   const BASE = { width: 100, height: 140 };
 
   it('描く画素の数 × ソフトマスクの数が上限に収まるまで小さくする（少なければそのまま）', () => {
     const normal = 1000 / 140;
     expect(source.cappedScale(BASE, 1000, 0)).toBe(normal);
     expect(source.cappedScale(BASE, 1000, source.MANY_SOFT_MASKS)).toBe(normal);
-    // 516 なら、100×140 の頁を 7.7 万画素ほどに（長辺 330px ほど）。
+    // 1,032 回なら、100×140 の頁を 7.7 万画素ほどに（長辺 330px ほど）。
     const scale = source.cappedScale(BASE, 1000, SOFT_MASKS);
     expect(BASE.width * BASE.height * scale ** 2 * SOFT_MASKS).toBeCloseTo(source.SOFT_MASK_WORK, -3);
     expect(Math.round(BASE.height * scale)).toBe(329);
@@ -205,7 +205,7 @@ describe('ソフトマスクの多い頁は、粗く描く', () => {
     const doc = await source.openPdf(new Uint8Array([1]));
     await source.renderPageImage(doc, 0, null, { softMasks: SOFT_MASKS });
 
-    // 測る画像（235×329）: 4,800 万画素 ÷（幅 235 × 2 × 516）= 197 行ずつ。
+    // 測る画像（235×329）: 4,800 万画素 ÷（幅 235 × 1,032）= 197 行ずつ。
     const rows = source.bandRows(235.3, SOFT_MASKS);
     expect(rows).toBe(197);
     expect(doc.canvases).toEqual([

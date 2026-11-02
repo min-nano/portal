@@ -315,11 +315,6 @@ function addFile(source) {
   sortFiles();
   renderFiles();
   log(`「${file.name}」を追加しました（${source.driveId ? 'Drive' : 'この端末'}）`);
-  // 余白を OCR しそうなファイル（名前で表紙と分からないもの）なら、OCR の準備を
-  // ここで始める。準備には何秒もかかるので、読み込みと
-  // 文字情報を読む間に進めておく（番号が文字情報で見つかれば使わずに済むが、
-  // 読み込むのは初回だけで、あとはブラウザのキャッシュから）。
-  if (!roleFromName(file.name)) startOcr();
   file.loaded = downloads.then(() => loadBytes(file, source));
   downloads = file.loaded.catch(() => {});
   file.pending = true; // 調べ終えるまで（見出しの「n / m」に使う）
@@ -455,23 +450,22 @@ async function readFile(file) {
     showProgress(`「${file.name}」の頁の画像を調べています`, null);
     const imagesStarted = performance.now();
     const { scans, softMasks, reasons, example } = await findScanImages(file.bytes);
-    // 調べられなかった PDF（暗号化など）は数が無い（描くときは 0 として扱う）。
-    for (const page of file.pages) page.softMasks = softMasks[page.index];
+    // ソフトマスクの数は、pdf.js で描く頁の分だけ持つ（JPEG のまま描く頁は、
+    // JPEG だけを描くのでソフトマスクの手間が掛からない）。調べられなかった
+    // PDF（暗号化など）は数が無い（描くときは 0 として扱う）。
+    for (const page of file.pages) page.softMasks = scans[page.index] ? 0 : softMasks[page.index];
 
     // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
     // もののほかは、配置を決める前に番号を読み切る（文字情報の無い束も、画像
-    // から番号が読めれば本文と分かる）。OCR の準備は、ファイルを追加したときに
-    // 始めてある（addFile）。ソフトマスクの多い頁（InDesign の影・ぼかしの
-    // ある表紙など）は OCR しない（OCR に足りる細かさで描くと、1 頁で何十秒も
-    // かかる。pdf-source.js の manySoftMasks）。番号は前後の頁から補う。
-    const ocrPages = new Set(
-      !roleFromName(file.name)
-        ? file.pages
-            .filter((page) => page.candidates.length === 0 && !manySoftMasks(page.softMasks))
-            .map((page) => page.index)
-        : []
-    );
+    // から番号が読めれば本文と分かる）。OCR の準備は、画像を描く間に進める。
+    // ソフトマスクの多い頁（InDesign の影・ぼかしのある表紙など）は粗く描き、
+    // OCR しない（OCR に足りる細かさで描くと、1 頁で何十秒もかかる。
+    // pdf-source.js の manySoftMasks）。番号は前後の頁から補う。
+    const unnumbered = roleFromName(file.name) ? [] : file.pages.filter((page) => page.candidates.length === 0);
+    const ocrPages = new Set(unnumbered.filter((page) => !manySoftMasks(page.softMasks)).map((page) => page.index));
+    if (ocrPages.size) startOcr();
     const coarse = file.pages.filter((page) => manySoftMasks(page.softMasks)).length;
+    const skippedOcr = unnumbered.length - ocrPages.size;
     const jpegPages = scans.filter(Boolean).length;
     if (jpegPages < count) {
       const why = [...reasons].map(([reason, pages]) => `${reason} ${pages} 頁`).join('、');
@@ -494,7 +488,8 @@ async function readFile(file) {
       `「${file.name}」の頁の画像を調べました（JPEG のまま展開 ${jpegPages} / ${count} 頁、` +
         `余白を OCR ${ocrPages.size} 頁・うち番号が読めた頁 ${byOcr}、${seconds(imagesStarted)}。` +
         `うち頁を描き終えるまで ${seconds(imagesStarted, drawnAt)}、読んだ文字のかたまり ${boxesReadSoFar() - boxesBefore}）` +
-        (coarse ? `。ソフトマスクの多い ${coarse} 頁は、粗く描き、余白を OCR しませんでした` : '') +
+        (coarse ? `。ソフトマスクの多い ${coarse} 頁は粗く描きました` : '') +
+        (skippedOcr ? `（うち番号の見つからない ${skippedOcr} 頁は、余白を OCR しませんでした）` : '') +
         (redrawnSafely(file.doc) ? '。pdf.js で描けなかった頁があり、安全な設定で開き直して描き直しました' : '')
     );
 

@@ -10,7 +10,7 @@
 // OCR の本体と言語のデータは、外部の CDN ではなくこのポータルから配る
 // （Vite が assets/ に置く）。社内のネットワークで CDN が塞がれていても
 // 動くようにするため。準備（読み込みと WebAssembly の翻訳）には何秒も
-// かかるので、要りそうなファイルが追加された時点で読み込み始める（main.js）。
+// かかるので、使うときになってから読み込み、画像を描く間に進める（main.js）。
 
 import corePath from 'tesseract.js-core/tesseract-core-simd-lstm.wasm.js?url';
 import workerPath from 'tesseract.js/dist/worker.min.js?url';

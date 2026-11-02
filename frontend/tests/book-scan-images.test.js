@@ -214,50 +214,64 @@ describe('頁から JPEG を取り出す', () => {
 });
 
 describe('ソフトマスクを数える', () => {
-  /** ソフトマスク付きの ExtGState を count 個持つ資源。 */
-  const statesWith = (context, count, extra = {}) =>
+  /** ソフトマスク付きの ExtGState（GS0）と、マスクを外す ExtGState（GSNone）。使わない GS1 も用意する。 */
+  const states = (context) =>
     context.obj({
-      ExtGState: Object.fromEntries(
-        Array.from({ length: count }, (_, i) => [`GS${i}`, context.obj({ SMask: context.obj({ S: 'Luminosity' }) })])
-      ),
-      ...extra,
+      GS0: context.obj({ SMask: context.obj({ S: 'Luminosity' }) }),
+      GS1: context.obj({ SMask: context.obj({ S: 'Luminosity' }) }),
+      GSNone: context.obj({ SMask: 'None', ca: 0.5 }),
     });
-  const form = (context, resources) =>
-    context.register(context.stream('q Q', { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 1, 1], Resources: resources }));
+  const form = (context, content, resources) =>
+    context.register(
+      context.stream(content, { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 1, 1], ...(resources ? { Resources: resources } : {}) })
+    );
+  const setContent = (doc, page, content) => page.node.set(PDFName.of('Contents'), doc.context.register(doc.context.stream(content)));
 
-  it('頁と、入れ子のフォームの資源にあるソフトマスクを数える（InDesign の影・ぼかし）', async () => {
+  it('頁の中身と、そこから呼ぶフォームが使う回数を数える（用意されただけのものは数えない）', async () => {
     const page = await onePage(async (doc, page) => {
       const { context } = doc;
-      // 深さ 5 のフォームは数えない（MAX_FORM_DEPTH まで）。
-      let inner = form(context, statesWith(context, 100));
-      for (let depth = 4; depth >= 2; depth--) inner = form(context, statesWith(context, 1, { XObject: { Fm: inner } }));
-      const shared = context.register(statesWith(context, 3));
-      const resources = statesWith(context, 2, {
-        XObject: {
-          // 同じ資源を使い回すフォームは、1 度だけ数える。
-          Fm1: form(context, shared),
-          Fm2: form(context, shared),
-          Fm3: form(context, statesWith(context, 1, { XObject: { Fm: inner } })),
-          Im0: context.register(context.stream('', { Type: 'XObject', Subtype: 'Image', Width: 1, Height: 1 })),
-        },
+      // 資源を持たないフォームは、呼んだ側の資源を使う。2 回呼ぶので 2 回ずつ数える。
+      const inherit = form(context, 'q /GS0 gs Q q /GS0 gs Q /GS0 gs');
+      const own = form(context, '/GS0 gs /GSNone gs', context.obj({ ExtGState: states(context) }));
+      // 自分を呼ぶフォームは、2 度目からは数えない。
+      const loopRef = context.nextRef();
+      const loop = context.stream('/GS0 gs /Fm9 Do', {
+        Type: 'XObject',
+        Subtype: 'Form',
+        BBox: [0, 0, 1, 1],
+        Resources: context.obj({ ExtGState: states(context), XObject: { Fm9: loopRef } }),
       });
-      // SMask が /None の状態は、マスクを外すだけなので数えない。
-      resources.lookup(PDFName.of('ExtGState')).set(PDFName.of('GSNone'), context.obj({ SMask: 'None', ca: 0.5 }));
-      page.node.set(PDFName.of('Resources'), resources);
+      context.assign(loopRef, loop);
+      const image = context.register(context.stream('', { Type: 'XObject', Subtype: 'Image', Width: 1, Height: 1 }));
+      page.node.set(
+        PDFName.of('Resources'),
+        context.obj({ ExtGState: states(context), XObject: { Fm1: inherit, Fm2: own, Fm3: loopRef, Im0: image } })
+      );
+      setContent(doc, page, 'q /GS0 gs /GSNone gs /GSX gs Q /DeviceRGB cs /Fm1 Do /Fm1 Do /Fm2 Do /Fm3 Do /Im0 Do /FmX Do 1 0 0 1 0 0 cm');
     });
-    // 頁 2 + 使い回しの 3 + Fm3 1 + 深さ 2〜4 の 3。
+    // 頁 1 + Fm1 3×2 + Fm2 1 + Fm3 1。
     expect(softMaskCount(page)).toBe(9);
     expect(inspectPage(page)).toMatchObject({ softMasks: 9 });
     expect(inspectPage(page).outline).toContain('ソフトマスク 9');
   });
 
-  it('ソフトマスクが無ければ 0 で、頁の作りにも出さない。読めない資源は数えない', async () => {
-    const plain = await onePage(async (doc, page) => page.drawRectangle({ x: 0, y: 0, width: 5, height: 5 }));
-    expect(softMaskCount(plain)).toBe(0);
-    expect(inspectPage(plain).outline).not.toContain('ソフトマスク');
+  it('使わなければ 0 で、頁の作りにも出さない。資源の無い頁・読めない資源は数えない', async () => {
+    const unused = await onePage(async (doc, page) => {
+      page.node.set(PDFName.of('Resources'), doc.context.obj({ ExtGState: states(doc.context) }));
+      setContent(doc, page, '0 0 5 5 re f');
+    });
+    expect(softMaskCount(unused)).toBe(0);
+    expect(inspectPage(unused).outline).not.toContain('ソフトマスク');
+
+    const bare = await onePage(async (doc, page) => {
+      page.node.delete(PDFName.of('Resources'));
+      setContent(doc, page, '/GS0 gs');
+    });
+    expect(softMaskCount(bare)).toBe(0);
 
     const broken = await onePage(async (doc, page) => {
       page.node.set(PDFName.of('Resources'), doc.context.obj({ ExtGState: 3 }));
+      setContent(doc, page, '/GS0 gs');
     });
     expect(softMaskCount(broken)).toBe(0);
   });
@@ -265,7 +279,9 @@ describe('ソフトマスクを数える', () => {
   it('PDF の全頁を調べると、頁ごとの数を返す', async () => {
     const doc = await PDFDocument.create();
     doc.addPage([100, 100]);
-    doc.addPage([100, 100]).node.set(PDFName.of('Resources'), statesWith(doc.context, 4));
+    const page = doc.addPage([100, 100]);
+    page.node.set(PDFName.of('Resources'), doc.context.obj({ ExtGState: states(doc.context) }));
+    setContent(doc, page, '/GS0 gs /GS0 gs /GS1 gs /GS0 gs');
     const { softMasks } = await findScanImages(await doc.save());
     expect(softMasks).toEqual([0, 4]);
   });
