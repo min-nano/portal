@@ -91,13 +91,14 @@ export function prepareOcr() {
  * 広げ、縮めない。200 頁を読み終えると 2 つで 300 MB を超えていた（Chromium で
  * 測ると、止めたらページのメモリが 876 MB → 514 MB）。iPhone では、これを
  * 抱えたまま結合するとページごと落ちたので、読み終えたら手放す。
- * 読んでいる最中に呼ばないこと（読みかけの頁は失敗する）。
+ * 読んでいる最中に呼ばないこと（読みかけの頁は失敗する）。止め損ねても失敗に
+ * しない（次に読むときは、新しく用意する）。
  */
 export async function releaseOcr() {
   const starting = schedulerPromise;
   schedulerPromise = null;
   const scheduler = await starting;
-  await scheduler?.terminate();
+  await scheduler?.terminate().catch(() => {});
 }
 
 // 1 つのかたまりを読む字の高さ（px）。1 文字だけの「1」「9」は、大きさに

@@ -516,7 +516,7 @@ async function readFile(file) {
 function stopOcr() {
   if (!ocrStarting) return;
   ocrStarting = null;
-  releaseOcr().catch(() => {});
+  releaseOcr();
 }
 
 /** OCR を用意する（手放すまで 1 度だけ）。使えなければ false（文字情報だけで並べる）。 */

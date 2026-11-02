@@ -959,8 +959,6 @@ describe('ファイルを足して並べる', () => {
   });
 
   it('調べ終えたら OCR を手放し（結合の前にメモリを空ける）、あとから読むときに用意し直す', async () => {
-    // worker を止め損ねても、画面は続ける（次に要るときは用意し直す）。
-    mocks.releaseOcr.mockRejectedValue(new Error('terminate'));
     drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
     await settled(2);
     // 2 ファイルとも調べ終えて、順番待ちが空になってから 1 度だけ手放す。

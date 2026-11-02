@@ -48,6 +48,16 @@ describe('OCR の用意と手放し', () => {
     expect(schedulers).toHaveLength(2);
   });
 
+  it('止め損ねても失敗にせず、次は用意し直す', async () => {
+    const first = await ocr.prepareOcr();
+    first.terminate = async () => {
+      throw new Error('terminate');
+    };
+
+    await expect(ocr.releaseOcr()).resolves.toBeUndefined();
+    expect(await ocr.prepareOcr()).not.toBe(first);
+  });
+
   it('用意していなければ、手放すものは無い', async () => {
     await ocr.releaseOcr();
     expect(schedulers).toHaveLength(0);
