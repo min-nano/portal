@@ -30,6 +30,7 @@ vi.mock('@clerk/localizations', () => ({ jaJP: { locale: 'ja-JP' } }));
 let signedInUser = null;
 let loadOptions = null;
 let mountedInto = null;
+let mountedProps = null;
 
 vi.mock('@clerk/clerk-js', () => ({
   Clerk: class FakeClerk {
@@ -43,8 +44,9 @@ vi.mock('@clerk/clerk-js', () => ({
       this.user = signedInUser;
     }
 
-    mountSignIn(node) {
+    mountSignIn(node, props) {
       mountedInto = node;
+      mountedProps = props;
       // 本物も、渡された要素の中に自前の器を差し込む。
       node.appendChild(document.createElement('div'));
     }
@@ -65,6 +67,7 @@ async function loadAuthModule() {
   clerkUiLoaded = false;
   loadOptions = null;
   mountedInto = null;
+  mountedProps = null;
   await import('../src/components/index.js');
   document.body.innerHTML = PAGE;
   return import('../src/auth.js');
@@ -155,6 +158,8 @@ describe('requireSignIn（未サインイン）', () => {
 
     expect(clerkUiLoaded).toBe(true);
     expect(mountedInto).toBe(document.querySelector('.clerk-mount'));
+    // カードはゲートの幅に合わせる（Clerk の既定の 25rem だとはみ出す）。
+    expect(mountedProps.appearance.elements.cardBox).toEqual({ width: '100%', maxWidth: '100%' });
     // 渡してあった約束は、ここで果たされている（clerk-js がマウントできる）。
     expect(await isPending(loadOptions.ui.ClerkUI)).toBe(false);
   });

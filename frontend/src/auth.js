@@ -54,6 +54,20 @@ async function initClerk() {
   return clerkInstance;
 }
 
+// サインイン画面の見た目の調整。Clerk のカードは幅 25rem 固定で、ゲートの
+// 内側（余白を除いた幅）より広く、そのままでは右へはみ出す。ゲートの幅に
+// 合わせて縮める。
+// CSS では直せない: Clerk はマウント先の要素の class を自分のもの
+// （cl-rootBox …）で置き換えるため .clerk-mount を手がかりにできず、
+// cl- の名前を親子関係で狙う CSS には Clerk 自身が「内部構造に依存する」と
+// 警告を出す。appearance で渡すのが Clerk の用意している口。
+export const SIGN_IN_APPEARANCE = Object.freeze({
+  elements: {
+    rootBox: { width: '100%' },
+    cardBox: { width: '100%', maxWidth: '100%' },
+  },
+});
+
 /**
  * サインイン画面をゲートの中にマウントする。
  * 描き終わるまでのあいだは、ゲートに置いてある読み込み中の表示を残す
@@ -75,7 +89,7 @@ async function mountSignInInto(clerk, mount) {
 
   try {
     await loadClerkUI();
-    clerk.mountSignIn(mount);
+    clerk.mountSignIn(mount, { appearance: SIGN_IN_APPEARANCE });
   } catch (error) {
     // 出てこないものを待たせない（理由は呼び出し側が画面に出す）。
     observer.disconnect();
