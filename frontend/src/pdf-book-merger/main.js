@@ -148,6 +148,11 @@ function showMessage(text, color = '') {
 // 進み具合を足したもの。結合は読み込みの途中でもできるので、結合している
 // 間は結合を出し、済んだら調べる流れに戻す。バーは待っている仕事が無くなった
 // ときにだけ隠す（仕事の替わり目で隠すと、行が消えて画面がちらつく）。
+//
+// バーは、済んだところをベタ塗りにし、いま進めている区間（いまの段の終わりまで）を
+// 動くストライプで描く。段の中の割合が分からないとき（大きさの分からない読み込み
+// など）も、ブラウザの「分からない表示」（バー全体を往復する帯）にはしない。それだと
+// 済んだところと重なって、どこまで済んだかが読めなくなるため。
 
 const logLines = [];
 const LOG_LIMIT = 2000;
@@ -160,7 +165,7 @@ const crashLog = createCrashLog();
  * label は見出しを返す関数（バーの横に出す。出すたびに呼ぶ）。stage(from, to)
  * でいまの段の区間を決め、show(text, fraction, heading) で経過を出す。text は
  * 細かい経過（記録に出す）で、空なら済んだとして隠す。fraction は段の中の割合
- * （分からなければ null。バーは進み具合の分からない表示にする）。heading を
+ * （分からなければ null。バーは済んだところで止め、ストライプだけ動かす）。heading を
  * 渡すと、見出しの代わりにそれを出す（Drive を待っているときなど、見出しより
  * 先に知らせたいこと）。
  *
@@ -195,12 +200,23 @@ function createProgress({ jobs = false } = {}) {
       const fraction = Math.max(0, Math.min(1, progress.fraction ?? 0));
       return progress.from + (progress.to - progress.from) * fraction;
     },
+    /** 仕事を単位にした位置（済んだ仕事の数＋仕事の中の位置）を、流れ全体の位置（0〜1）に写す。 */
+    place(at) {
+      const { jobs } = progress;
+      if (!jobs?.total) return at;
+      return Math.min(1, jobs.base + ((1 - jobs.base) * (at - jobs.start)) / (jobs.total - jobs.start));
+    },
     /** 流れ全体の位置（0〜1）。 */
     overall() {
-      const { jobs } = progress;
-      if (!jobs?.total) return progress.inJob();
-      const at = jobs.done + progress.inJob();
-      return Math.min(1, jobs.base + ((1 - jobs.base) * (at - jobs.start)) / (jobs.total - jobs.start));
+      return progress.place((progress.jobs?.done ?? 0) + progress.inJob());
+    },
+    /**
+     * いま進めている区間の終わり（流れ全体の位置）。いまの段の終わりで、幅の無い段
+     * （読み込みを分けない手元のファイルや、仕事の替わり目）なら、仕事の終わり。
+     */
+    busyEnd() {
+      const to = progress.to > progress.from ? progress.to : 1;
+      return progress.place((progress.jobs?.done ?? 0) + to);
     },
     addJob() {
       const { jobs } = progress;
@@ -242,9 +258,18 @@ function renderProgress() {
   const progress = mergeProgress.text ? mergeProgress : readProgress;
   $('progress').hidden = !progress.text;
   $('progressText').textContent = progress.text ? progress.heading || progress.label() || progress.text : '';
-  const bar = $('progressBar');
-  if (progress.fraction === null) bar.removeAttribute('value');
-  else if (progress.text) bar.value = progress.overall();
+  if (progress.text) {
+    // 済んだところはベタ塗り、いま進めている区間（段の終わりまで）はストライプで描く。
+    // 段の中の割合が分からないときも、済んだところは出したまま、区間だけを動かす。
+    const done = progress.overall();
+    const end = Math.max(done, progress.busyEnd());
+    const bar = $('progressBar');
+    bar.dataset.busyEnd = String(end);
+    bar.setAttribute('aria-valuenow', String(done));
+    $('progressDone').style.width = `${done * 100}%`;
+    $('progressBusy').style.left = `${done * 100}%`;
+    $('progressBusy').style.width = `${(end - done) * 100}%`;
+  }
   renderLog();
   // 進み具合は頁ごとに変わるので、残すのは間を空けて（localStorage への書き込みは
   // 画面を止める）。
