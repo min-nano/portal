@@ -1547,7 +1547,8 @@ async function mergeAndVerify() {
     const started = performance.now();
     // 結合の道具（pdf-lib）は、結合するときになってから読み込む。
     log(
-      `結合を始めます（${sources.size} ファイル・${order.length} 頁、${stash ? '保存領域に書き出す' : 'メモリの上で'}、` +
+      `結合を始めます（${sources.size} ファイル・${order.length} 頁、` +
+        `${stash ? '保存領域に書き出す' : `メモリの上で（保存領域を使えない: ${stashProblem}）`}、` +
         `${navigator.userAgent}）`
     );
     const { mergePdf, pageDigests, writeMergedPdf } = await import('./merge.js');
@@ -1595,6 +1596,10 @@ async function mergeAndVerify() {
           readPageText(doc, index)
         );
         actual.push({ size: page.size, signature: page.signature, digest: mergedDigests[index] });
+        // 読んだ頁の書体などを、文書に溜めない（pdf.js は文書を閉じるまで抱える。
+        // 1 頁のファイルを何百もつないだ PDF は頁ごとに別の書体を持つので、iPhone
+        // では検証の途中でページごと落ちた）。
+        await doc.cleanup();
         if (index % 16 === 0) await breathe();
       }
       if (!stale()) {

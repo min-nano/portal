@@ -64,6 +64,7 @@ const mocks = vi.hoisted(() => ({
   writeMergedPdf: vi.fn(),
   openStash: vi.fn(),
   openOptions: [],
+  cleanups: 0,
 }));
 
 vi.mock('../src/page-start.js', () => ({
@@ -115,6 +116,9 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
         spec,
         numPages: spec.pages.length,
         getPageLabels: async () => spec.labels ?? null,
+        cleanup: async () => {
+          mocks.cleanups++;
+        },
         getMetadata: async () => ({ info: { Title: spec.title ?? '' } }),
       };
     },
@@ -289,6 +293,7 @@ beforeEach(async () => {
   // 保存領域は、はじめは使えない（メモリに持つ）。使うテストは fakeStash に替える。
   mocks.openStash.mockResolvedValue(null);
   mocks.openOptions.length = 0;
+  mocks.cleanups = 0;
   mocks.readStrip.mockImplementation(async (strip) =>
     strip.zone === 'bottom' && strip.page.ocr ? [{ text: String(strip.page.number), x0: 0.48, x1: 0.52, y: 0.95, h: 0.012 }] : []
   );
@@ -1385,7 +1390,9 @@ describe('結合と検証', () => {
     // 1 度だけ出す。
     expect(text.split('保存領域を使えないので').length).toBe(2);
     expect(text).toContain('保存領域を使えないので、読み込んだ PDF はメモリに持ちます（このブラウザには OPFS がありません）');
-    expect(text).toContain('結合を始めます（2 ファイル・8 頁、メモリの上で、');
+    expect(text).toContain('結合を始めます（2 ファイル・8 頁、メモリの上で（保存領域を使えない: このブラウザには OPFS がありません）、');
+    // 検証では、1 頁読むたびに pdf.js の文書に溜めたもの（書体など）を捨てる。
+    expect(mocks.cleanups).toBe(8);
     expect(text).toContain('検証: pdf.js で開きました');
   });
 
