@@ -55,6 +55,7 @@ const mocks = vi.hoisted(() => ({
   downloadDriveFile: vi.fn(),
   prepareOcr: vi.fn(),
   readStrip: vi.fn(),
+  releaseOcr: vi.fn(),
   renderPreview: vi.fn(),
   closePdf: vi.fn(),
   // pdf-lib に写させない書き換えが効いているか（pdf-lib-views.js）。
@@ -84,6 +85,7 @@ vi.mock('../src/pdf-book-merger/pdf-lib-views.js', () => ({
 vi.mock('../src/pdf-book-merger/ocr.js', () => ({
   prepareOcr: (...args) => mocks.prepareOcr(...args),
   readStrip: (...args) => mocks.readStrip(...args),
+  releaseOcr: (...args) => mocks.releaseOcr(...args),
 }));
 vi.mock('../src/pdf-book-merger/merge.js', () => ({
   mergePdf: (...args) => mocks.mergePdf(...args),
@@ -212,6 +214,7 @@ beforeEach(async () => {
   vi.resetModules();
   Object.values(mocks).forEach((mock) => typeof mock === 'function' && mock.mockReset?.());
   mocks.prepareOcr.mockResolvedValue({});
+  mocks.releaseOcr.mockResolvedValue(undefined);
   mocks.readStrip.mockImplementation(async (strip) =>
     strip.zone === 'bottom' && strip.page.ocr ? [{ text: String(strip.page.number), x0: 0.48, x1: 0.52, y: 0.95, h: 0.012 }] : []
   );
@@ -955,6 +958,26 @@ describe('ファイルを足して並べる', () => {
     expect(mocks.downloadDriveFile).not.toHaveBeenCalled();
   });
 
+  it('調べ終えたら OCR を手放し（結合の前にメモリを空ける）、あとから読むときに用意し直す', async () => {
+    // worker を止め損ねても、画面は続ける（次に要るときは用意し直す）。
+    mocks.releaseOcr.mockRejectedValue(new Error('terminate'));
+    drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+    // 2 ファイルとも調べ終えて、順番待ちが空になってから 1 度だけ手放す。
+    await vi.waitFor(() => expect(mocks.releaseOcr).toHaveBeenCalledTimes(1));
+    expect(mocks.prepareOcr).toHaveBeenCalledTimes(1);
+
+    // OCR を使わなかった仕事のあとは、手放すものが無い。
+    drop([file('猫_表紙.pdf', pdf(COVER))]);
+    await settled(3);
+    expect(mocks.releaseOcr).toHaveBeenCalledTimes(1);
+
+    // あとから本文に変えて読むときは、用意し直し、読み終えたらまた手放す。
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
+    await vi.waitFor(() => expect(mocks.releaseOcr).toHaveBeenCalledTimes(2));
+    expect(mocks.prepareOcr).toHaveBeenCalledTimes(2);
+  });
+
   it('OCR を使えなければ、文字情報だけで並べる', async () => {
     mocks.prepareOcr.mockRejectedValue(new Error('network'));
 
@@ -1002,9 +1025,9 @@ describe('ファイルを足して並べる', () => {
       expect(document.querySelector('#pageGrid [data-page-key="f1:2"] .bm-status').textContent).toBe('読取')
     );
     expect(mocks.renderMargins).toHaveBeenCalledTimes(1);
-    // 調べたときの JPEG を使う（PDF 全体を読み直さない）。
+    // 手元のファイルは調べ終えたときに中身を手放したので、読み直して 1 度だけ調べ直す。
     expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o5' });
-    expect(mocks.findScanImages).toHaveBeenCalledTimes(2);
+    expect(mocks.findScanImages).toHaveBeenCalledTimes(3);
     await vi.waitFor(() => expect(fileItem('猫_表紙.pdf').textContent).not.toContain('余白を読み取り中'));
   });
 
@@ -1035,9 +1058,11 @@ describe('ファイルを足して並べる', () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:scan-o3');
   });
 
-  it('番号の無い頁が多くても、あとから本文に変えたときに PDF を調べ直さない', async () => {
+  it('Drive のファイルは、番号の無い頁が多くても、あとから本文に変えたときに PDF を調べ直さない', async () => {
     const many = Array.from({ length: 40 }, (_, i) => page(`o${2 * i + 1}`, 2 * i + 1, { ocr: true }));
-    drop([file('cover.pdf', pdf(many))]);
+    mocks.pickFiles.mockResolvedValue([{ id: 'd-cover', name: 'cover.pdf' }]);
+    mocks.downloadDriveFile.mockResolvedValue(pdf(many));
+    $('driveBtn').click();
     await settled(1);
     expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
 
@@ -1209,6 +1234,41 @@ describe('結合と検証', () => {
     $('logBox').open = true;
     $('logBox').dispatchEvent(new Event('toggle'));
     expect($('logText').textContent).toContain('「猫.pdf」をダウンロードしました');
+  });
+
+  it('手元のファイルは調べ終えたら中身を手放し、結合のときに並べるものだけ読み直して、検証の前に手放す', async () => {
+    const reads = vi.spyOn(File.prototype, 'arrayBuffer');
+    await addBook();
+    const readsOf = (name) => reads.mock.contexts.filter((f) => f.name === name).length;
+    expect(readsOf('猫_奇数.pdf')).toBe(1);
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'exclude');
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+
+    expect(readsOf('猫_奇数.pdf')).toBe(2);
+    expect(readsOf('猫_偶数.pdf')).toBe(2);
+    expect(readsOf('猫_表紙.pdf')).toBe(1); // 結合しないファイルは読まない
+    expect($('verifyResult').className).toBe('bm-verify ok');
+    // 結合に渡した中身は、検証の前に手放している。
+    expect(mocks.mergePdf.mock.calls[0][0].sources.size).toBe(0);
+    reads.mockRestore();
+  });
+
+  it('Drive のファイルは中身を持ち続け、結合のときに転送し直さない', async () => {
+    mocks.pickFiles.mockResolvedValue([
+      { id: 'd-odd', name: '猫_奇数.pdf' },
+      { id: 'd-even', name: '猫_偶数.pdf' },
+    ]);
+    mocks.downloadDriveFile.mockImplementation(async (picked) => pdf(picked.id === 'd-odd' ? ODD : EVEN));
+    $('driveBtn').click();
+    await settled(2);
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+
+    expect(mocks.downloadDriveFile).toHaveBeenCalledTimes(2);
+    expect($('verifyResult').className).toBe('bm-verify ok');
   });
 
   it('問題が残っていれば確かめてから結合し、食い違いは頁ごとに挙げる', async () => {
