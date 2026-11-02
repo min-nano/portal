@@ -82,6 +82,7 @@ vi.mock('../src/pdf-book-merger/pdf-lib-views.js', () => ({
   },
 }));
 vi.mock('../src/pdf-book-merger/ocr.js', () => ({
+  boxesReadSoFar: () => 0,
   prepareOcr: (...args) => mocks.prepareOcr(...args),
   readStrip: (...args) => mocks.readStrip(...args),
 }));

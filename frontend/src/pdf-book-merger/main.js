@@ -33,7 +33,7 @@ import { downloadDriveFile } from './drive-download.js';
 import { compareScans } from './image-checks.js';
 import { savePdf } from './save-file.js';
 import { measure } from './measure-client.js';
-import { prepareOcr, readStrip } from './ocr.js';
+import { boxesReadSoFar, prepareOcr, readStrip } from './ocr.js';
 import {
   buildBookOrder,
   checkSequence,
@@ -266,8 +266,8 @@ async function copyLog() {
   setTimeout(() => (button.textContent = 'ログをコピー'), 2000);
 }
 
-function seconds(since) {
-  return `${((performance.now() - since) / 1000).toFixed(1)} 秒`;
+function seconds(since, until = performance.now()) {
+  return `${((until - since) / 1000).toFixed(1)} 秒`;
 }
 
 function megabytes(bytes) {
@@ -466,7 +466,8 @@ async function readFile(file) {
       const why = [...reasons].map(([reason, pages]) => `${reason} ${pages} 頁`).join('、');
       log(`「${file.name}」の ${count - jpegPages} 頁は pdf.js で描きます（${why || '理由不明'}）。${example}`);
     }
-    await analyzePages(file, scans, ocrPages);
+    const boxesBefore = boxesReadSoFar();
+    const drawnAt = await analyzePages(file, scans, ocrPages);
     // あとから本文に変えたとき（名前で表紙と見て OCR しなかったファイル）の
     // ために、番号の見つかっていない頁の JPEG を残す（PDF 全体を読み直さずに
     // 済む）。JPEG はファイルのバイト列の一部を指すだけなので（pdf-lib-views.js）、
@@ -480,7 +481,8 @@ async function readFile(file) {
     const byOcr = file.pages.filter((page) => page.ocr && page.candidates.some((c) => c.source === 'ocr')).length;
     log(
       `「${file.name}」の頁の画像を調べました（JPEG のまま展開 ${jpegPages} / ${count} 頁、` +
-        `余白を OCR ${ocrPages.size} 頁・うち番号が読めた頁 ${byOcr}、${seconds(imagesStarted)}）`
+        `余白を OCR ${ocrPages.size} 頁・うち番号が読めた頁 ${byOcr}、${seconds(imagesStarted)}。` +
+        `うち頁を描き終えるまで ${seconds(imagesStarted, drawnAt)}、読んだ文字のかたまり ${boxesReadSoFar() - boxesBefore}）`
     );
 
     file.role = guessRole(file.name, file.pages);
@@ -573,6 +575,8 @@ async function inPool(items, limit, run) {
  * @param {object} file
  * @param {(object|null)[]} scans 頁ごとの JPEG（scan-images.js。無い頁は pdf.js で描く）
  * @param {Set<number>} ocrPages 余白を OCR する頁の位置
+ * @returns {Promise<number>} 頁を描いて測り終えた時刻（performance.now()。余白の読み取りは
+ *   その後も続くことがあるので、どちらに時間がかかったかを記録に出すため）
  */
 async function analyzePages(file, scans, ocrPages) {
   const count = file.pages.length;
@@ -621,9 +625,11 @@ async function analyzePages(file, scans, ocrPages) {
       return reason;
     }
   );
+  const drawnAt = performance.now();
   // 読み取りも終わるのを待つ（失敗したときも。readStrips は失敗を投げない）。
   await Promise.all(reading);
   if (failed) throw error;
+  return drawnAt;
 }
 
 /** 1 頁の余白の帯を OCR して、番号の候補に足す。帯は読み終えたら手放す。 */

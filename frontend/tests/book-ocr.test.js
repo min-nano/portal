@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 //
-// PDF 結合ツール: OCR の準備（ocr.js の prepareOcr）。
+// PDF 結合ツール: OCR（ocr.js）。
 //
-// Tesseract.js は差し替え、worker を用意する順番と、失敗したときの扱いを確かめる。
+// Tesseract.js は差し替え、worker を用意する順番と、失敗したときの扱い、
+// 読んだかたまりの数え方を確かめる。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -27,12 +28,14 @@ vi.mock('tesseract.js', () => ({
 }));
 
 let prepareOcr;
+let readStrip;
+let boxesReadSoFar;
 
 beforeEach(async () => {
   tesseract.pending = [];
   tesseract.scheduler = { addWorker: vi.fn() };
   vi.resetModules();
-  ({ prepareOcr } = await import('../src/pdf-book-merger/ocr.js'));
+  ({ prepareOcr, readStrip, boxesReadSoFar } = await import('../src/pdf-book-merger/ocr.js'));
 });
 
 afterEach(() => {
@@ -111,5 +114,44 @@ describe('prepareOcr', () => {
     await expect(ready).resolves.toBe(tesseract.scheduler);
     expect(tesseract.scheduler.addWorker).toHaveBeenCalledTimes(1);
     expect(tesseract.scheduler.addWorker).toHaveBeenCalledWith(fine.worker);
+  });
+});
+
+/**
+ * 余白の帯の canvas の代わり。白地に、黒い四角（数字のかたまりの代わり）を
+ * 横に並べて置く。
+ */
+function stripCanvas(blocks) {
+  const width = 400;
+  const height = 60;
+  const data = new Uint8ClampedArray(width * height * 4).fill(255);
+  blocks.forEach((x0) => {
+    for (let y = 20; y < 40; y++) {
+      for (let x = x0; x < x0 + 12; x++) data.fill(0, (y * width + x) * 4, (y * width + x) * 4 + 3);
+    }
+  });
+  return { width, height, getContext: () => ({ getImageData: () => ({ data }) }) };
+}
+
+describe('readStrip', () => {
+  beforeEach(() => {
+    // jsdom の canvas は描けないので、切り出しに使う分だけ用意する。
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ fillRect() {}, drawImage() {} });
+  });
+
+  it('読んだかたまりを数える（記録に出す。読み取りの手間はこれに比例する）', async () => {
+    tesseract.scheduler.addJob = vi.fn().mockResolvedValue({ data: { text: '12', confidence: 90 } });
+    const reading = readStrip({ canvas: stripCanvas([100, 280]), top: 0.86, height: 0.14 });
+    await workersRequested(2);
+    tesseract.pending.forEach((pending) => pending.resolve());
+    const items = await reading;
+
+    expect(items.map((item) => item.text)).toEqual(['12', '12']);
+    // かたまりごとに 3 通りの大きさで読む。
+    expect(tesseract.scheduler.addJob).toHaveBeenCalledTimes(6);
+    expect(boxesReadSoFar()).toBe(2);
+
+    await readStrip({ canvas: stripCanvas([]), top: 0, height: 0.14 });
+    expect(boxesReadSoFar()).toBe(2);
   });
 });

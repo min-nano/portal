@@ -26,6 +26,14 @@ const MIN_CONFIDENCE = 60;
 
 let schedulerPromise = null;
 
+/** これまでに読んだかたまりの数（記録に出す。読み取りの手間はこれに比例する）。 */
+let boxesRead = 0;
+
+/** これまでに読んだかたまりの数。 */
+export function boxesReadSoFar() {
+  return boxesRead;
+}
+
 /** 相対の URL を、worker の中（blob: の URL）からでも引ける絶対の URL にする。 */
 function absolute(url) {
   return new URL(url, window.location.href).href;
@@ -187,6 +195,7 @@ export async function readStrip(strip) {
   const height = canvas.height;
   const pixels = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, width, height);
   const boxes = shortTextBoxes({ width, height, gray: toGray(pixels.data) });
+  boxesRead += boxes.length;
 
   const texts = await Promise.all(boxes.map((box) => readBox(scheduler, canvas, box)));
   const items = [];
