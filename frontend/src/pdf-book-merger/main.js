@@ -33,7 +33,7 @@ import { downloadDriveFile } from './drive-download.js';
 import { compareScans } from './image-checks.js';
 import { savePdf } from './save-file.js';
 import { measure } from './measure-client.js';
-import { prepareOcr, readStrip, releaseOcr } from './ocr.js';
+import { boxesReadSoFar, prepareOcr, readStrip, releaseOcr } from './ocr.js';
 import { blobStash, openStash } from './stash.js';
 import { CRASH_LOG_LINES, createCrashLog } from './crash-log.js';
 import {
@@ -52,8 +52,10 @@ import { findScanImages } from './scan-images.js';
 import { pdfLibViews } from './pdf-lib-views.js';
 import {
   closePdf,
+  manySoftMasks,
   openPdf,
   readPageText,
+  redrawnSafely,
   releaseCanvas,
   renderMargins,
   renderPageImage,
@@ -366,8 +368,8 @@ async function copyLog() {
   setTimeout(() => (button.textContent = 'ログをコピー'), 2000);
 }
 
-function seconds(since) {
-  return `${((performance.now() - since) / 1000).toFixed(1)} 秒`;
+function seconds(since, until = performance.now()) {
+  return `${((until - since) / 1000).toFixed(1)} 秒`;
 }
 
 function megabytes(bytes) {
@@ -584,6 +586,7 @@ async function readFile(file) {
         thumbUrl: '',
         ocr: false,
         scan: null,
+        softMasks: 0, // ソフトマスクの数（頁の画像を調べるときに数える。PDF を調べられなければ undefined）
       });
       if (index % 16 === 0) await breathe();
     }
@@ -591,28 +594,36 @@ async function readFile(file) {
     const textNumbers = file.pages.filter((page) => page.candidates.length > 0).length;
     log(`「${file.name}」の文字情報を読みました（${count} 頁、文字情報のある頁 ${textPages}、番号が見つかった頁 ${textNumbers}）`);
 
-    // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
-    // もののほかは、配置を決める前に番号を読み切る（文字情報の無い束も、画像
-    // から番号が読めれば本文と分かる）。OCR の準備は、画像を描く間に進める。
-    const ocrPages = new Set(
-      !roleFromName(file.name)
-        ? file.pages.filter((page) => page.candidates.length === 0).map((page) => page.index)
-        : []
-    );
-    if (ocrPages.size) startOcr();
     readProgress.stage(textEnd, 1);
 
     // 頁の画像を描いて測る（重いところ）。JPEG のまま描ける頁を先に調べておく。
     // 調べた JPEG は読み終えたら手放す（ファイルと同じだけの大きさがある）。
     showProgress(`「${file.name}」の頁の画像を調べています`, null);
     const imagesStarted = performance.now();
-    const { scans, reasons, example } = await findScanImages(file.bytes);
+    const { scans, softMasks, reasons, example } = await findScanImages(file.bytes);
+    // ソフトマスクの数は、pdf.js で描く頁の分だけ持つ（JPEG のまま描く頁は、
+    // JPEG だけを描くのでソフトマスクの手間が掛からない）。調べられなかった
+    // PDF（暗号化など）は数が無い（描くときは 0 として扱う）。
+    for (const page of file.pages) page.softMasks = scans[page.index] ? 0 : softMasks[page.index];
+
+    // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
+    // もののほかは、配置を決める前に番号を読み切る（文字情報の無い束も、画像
+    // から番号が読めれば本文と分かる）。OCR の準備は、画像を描く間に進める。
+    // ソフトマスクの多い頁（InDesign の影・ぼかしのある表紙など）は粗く描き、
+    // OCR しない（OCR に足りる細かさで描くと、1 頁で何十秒もかかる。
+    // pdf-source.js の manySoftMasks）。番号は前後の頁から補う。
+    const unnumbered = roleFromName(file.name) ? [] : file.pages.filter((page) => page.candidates.length === 0);
+    const ocrPages = new Set(unnumbered.filter((page) => !manySoftMasks(page.softMasks)).map((page) => page.index));
+    if (ocrPages.size) startOcr();
+    const coarse = file.pages.filter((page) => manySoftMasks(page.softMasks)).length;
+    const skippedOcr = unnumbered.length - ocrPages.size;
     const jpegPages = scans.filter(Boolean).length;
     if (jpegPages < count) {
       const why = [...reasons].map(([reason, pages]) => `${reason} ${pages} 頁`).join('、');
-      log(`「${file.name}」の ${count - jpegPages} 頁は pdf.js で描きます（${why || '理由不明'}）。${example}`);
+      log(`「${file.name}」の ${count - jpegPages} 頁は pdf.js で描きます（${why || '理由不明'}）。${[example, await madeWith(file.doc)].filter(Boolean).join('。')}`);
     }
-    await analyzePages(file, scans, ocrPages);
+    const boxesBefore = boxesReadSoFar();
+    const drawnAt = await analyzePages(file, scans, ocrPages);
     // あとから本文に変えたとき（名前で表紙と見て OCR しなかったファイル）の
     // ために、番号の見つかっていない頁の JPEG を残す（PDF 全体を読み直さずに
     // 済む）。JPEG はファイルのバイト列の一部を指すだけなので（pdf-lib-views.js）、
@@ -626,7 +637,11 @@ async function readFile(file) {
     const byOcr = file.pages.filter((page) => page.ocr && page.candidates.some((c) => c.source === 'ocr')).length;
     log(
       `「${file.name}」の頁の画像を調べました（JPEG のまま展開 ${jpegPages} / ${count} 頁、` +
-        `余白を OCR ${ocrPages.size} 頁・うち番号が読めた頁 ${byOcr}、${seconds(imagesStarted)}）`
+        `余白を OCR ${ocrPages.size} 頁・うち番号が読めた頁 ${byOcr}、${seconds(imagesStarted)}。` +
+        `うち頁を描き終えるまで ${seconds(imagesStarted, drawnAt)}、読んだ文字のかたまり ${boxesReadSoFar() - boxesBefore}）` +
+        (coarse ? `。ソフトマスクの多い ${coarse} 頁は粗く描きました` : '') +
+        (skippedOcr ? `（うち番号の見つからない ${skippedOcr} 頁は、余白を OCR しませんでした）` : '') +
+        (redrawnSafely(file.doc) ? '。pdf.js で描けなかった頁があり、安全な設定で開き直して描き直しました' : '')
     );
 
     file.role = guessRole(file.name, file.pages);
@@ -662,10 +677,25 @@ function stopOcr() {
   releaseOcr();
 }
 
+/**
+ * PDF を作ったアプリ（文書の情報の Creator・Producer）を、記録に添える形で返す。
+ * pdf.js で描くのに時間のかかる PDF が、どこで作られたものかを知るため。
+ */
+async function madeWith(doc) {
+  const info = (await doc.getMetadata().catch(() => null))?.info ?? {};
+  const names = [...new Set([info.Creator, info.Producer].filter((name) => typeof name === 'string' && name.trim()))];
+  return names.length ? `作成: ${names.join(' / ')}` : '';
+}
+
 /** OCR を用意する（手放すまで 1 度だけ）。使えなければ false（文字情報だけで並べる）。 */
 function startOcr() {
-  ocrStarting ??= prepareOcr().then(
-    () => true,
+  if (ocrStarting) return ocrStarting;
+  const started = performance.now();
+  ocrStarting = prepareOcr().then(
+    () => {
+      log(`画像から番号を読み取る準備ができました（${seconds(started)}）`);
+      return true;
+    },
     (error) => {
       showMessage(`画像からの読み取りを使えませんでした（${error.message}）。文字情報だけで並べます。`, 'red');
       return false;
@@ -724,6 +754,8 @@ async function inPool(items, limit, run) {
  * @param {object} file
  * @param {(object|null)[]} scans 頁ごとの JPEG（scan-images.js。無い頁は pdf.js で描く）
  * @param {Set<number>} ocrPages 余白を OCR する頁の位置
+ * @returns {Promise<number>} 頁を描いて測り終えた時刻（performance.now()。余白の読み取りは
+ *   その後も続くことがあるので、どちらに時間がかかったかを記録に出すため）
  */
 async function analyzePages(file, scans, ocrPages) {
   const count = file.pages.length;
@@ -746,7 +778,7 @@ async function analyzePages(file, scans, ocrPages) {
     const wantsOcr = ocrPages.has(page.index);
     if (wantsOcr) await ocrSlots.take();
     const { image, thumbUrl, strips } = await withContext(`${page.index + 1} 頁目の画像を描けませんでした`, () =>
-      renderPageImage(file.doc, page.index, scans[page.index] ?? null, { margins: wantsOcr })
+      renderPageImage(file.doc, page.index, scans[page.index] ?? null, { margins: wantsOcr, softMasks: page.softMasks })
     ).catch((error) => {
       if (wantsOcr) ocrSlots.give();
       throw error;
@@ -772,9 +804,11 @@ async function analyzePages(file, scans, ocrPages) {
       return reason;
     }
   );
+  const drawnAt = performance.now();
   // 読み取りも終わるのを待つ（失敗したときも。readStrips は失敗を投げない）。
   await Promise.all(reading);
   if (failed) throw error;
+  return drawnAt;
 }
 
 /** 1 頁の余白の帯を OCR して、番号の候補に足す。帯は読み終えたら手放す。 */
@@ -871,7 +905,7 @@ function queueLateOcr(file) {
   // 読んでいる最中のファイルは、もう一度は頼まない（切り替えを繰り返しても
   // 同じ頁を 2 度読まない）。
   if (file.role !== 'body' || file.ocrBusy) return;
-  const pages = file.pages.filter((page) => page.candidates.length === 0 && !page.ocr);
+  const pages = file.pages.filter((page) => page.candidates.length === 0 && !page.ocr && !manySoftMasks(page.softMasks));
   if (pages.length === 0) return;
   file.ocrBusy = true;
   renderFiles();
@@ -1548,7 +1582,9 @@ async function openPreview(pageKey) {
   // 使っていなければ閉じる）。
   setPreviewFile(file);
   try {
-    const url = await renderPreview(await pdfOf(file), entry.pageIndex);
+    const url = await renderPreview(await pdfOf(file), entry.pageIndex, {
+      softMasks: file.pages[entry.pageIndex].softMasks,
+    });
     if (previewKey !== pageKey) {
       URL.revokeObjectURL(url);
       return;

@@ -21,6 +21,7 @@ import {
   inflate,
   inspectPage,
   operations,
+  softMaskCount,
 } from '../src/pdf-book-merger/scan-images.js';
 
 // 8×6 の白い JPEG（灰色と CMYK）。
@@ -207,7 +208,82 @@ describe('頁から JPEG を取り出す', () => {
 
     const broken = await findScanImages(encode('not a pdf'));
     expect(broken.scans).toEqual([]);
+    expect(broken.softMasks).toEqual([]);
     expect([...broken.reasons.keys()][0]).toMatch(/^PDF を読めない/);
+  });
+});
+
+describe('ソフトマスクを数える', () => {
+  /** ソフトマスク付きの ExtGState（GS0）と、マスクを外す ExtGState（GSNone）。使わない GS1 も用意する。 */
+  const states = (context) =>
+    context.obj({
+      GS0: context.obj({ SMask: context.obj({ S: 'Luminosity' }) }),
+      GS1: context.obj({ SMask: context.obj({ S: 'Luminosity' }) }),
+      GSNone: context.obj({ SMask: 'None', ca: 0.5 }),
+    });
+  const form = (context, content, resources) =>
+    context.register(
+      context.stream(content, { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 1, 1], ...(resources ? { Resources: resources } : {}) })
+    );
+  const setContent = (doc, page, content) => page.node.set(PDFName.of('Contents'), doc.context.register(doc.context.stream(content)));
+
+  it('頁の中身と、そこから呼ぶフォームが使う回数を数える（用意されただけのものは数えない）', async () => {
+    const page = await onePage(async (doc, page) => {
+      const { context } = doc;
+      // 資源を持たないフォームは、呼んだ側の資源を使う。2 回呼ぶので 2 回ずつ数える。
+      const inherit = form(context, 'q /GS0 gs Q q /GS0 gs Q /GS0 gs');
+      const own = form(context, '/GS0 gs /GSNone gs', context.obj({ ExtGState: states(context) }));
+      // 自分を呼ぶフォームは、2 度目からは数えない。
+      const loopRef = context.nextRef();
+      const loop = context.stream('/GS0 gs /Fm9 Do', {
+        Type: 'XObject',
+        Subtype: 'Form',
+        BBox: [0, 0, 1, 1],
+        Resources: context.obj({ ExtGState: states(context), XObject: { Fm9: loopRef } }),
+      });
+      context.assign(loopRef, loop);
+      const image = context.register(context.stream('', { Type: 'XObject', Subtype: 'Image', Width: 1, Height: 1 }));
+      page.node.set(
+        PDFName.of('Resources'),
+        context.obj({ ExtGState: states(context), XObject: { Fm1: inherit, Fm2: own, Fm3: loopRef, Im0: image } })
+      );
+      setContent(doc, page, 'q /GS0 gs /GSNone gs /GSX gs Q /DeviceRGB cs /Fm1 Do /Fm1 Do /Fm2 Do /Fm3 Do /Im0 Do /FmX Do 1 0 0 1 0 0 cm');
+    });
+    // 頁 1 + Fm1 3×2 + Fm2 1 + Fm3 1。
+    expect(softMaskCount(page)).toBe(9);
+    expect(inspectPage(page)).toMatchObject({ softMasks: 9 });
+    expect(inspectPage(page).outline).toContain('ソフトマスク 9');
+  });
+
+  it('使わなければ 0 で、頁の作りにも出さない。資源の無い頁・読めない資源は数えない', async () => {
+    const unused = await onePage(async (doc, page) => {
+      page.node.set(PDFName.of('Resources'), doc.context.obj({ ExtGState: states(doc.context) }));
+      setContent(doc, page, '0 0 5 5 re f');
+    });
+    expect(softMaskCount(unused)).toBe(0);
+    expect(inspectPage(unused).outline).not.toContain('ソフトマスク');
+
+    const bare = await onePage(async (doc, page) => {
+      page.node.delete(PDFName.of('Resources'));
+      setContent(doc, page, '/GS0 gs');
+    });
+    expect(softMaskCount(bare)).toBe(0);
+
+    const broken = await onePage(async (doc, page) => {
+      page.node.set(PDFName.of('Resources'), doc.context.obj({ ExtGState: 3 }));
+      setContent(doc, page, '/GS0 gs');
+    });
+    expect(softMaskCount(broken)).toBe(0);
+  });
+
+  it('PDF の全頁を調べると、頁ごとの数を返す', async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([100, 100]);
+    const page = doc.addPage([100, 100]);
+    page.node.set(PDFName.of('Resources'), doc.context.obj({ ExtGState: states(doc.context) }));
+    setContent(doc, page, '/GS0 gs /GS0 gs /GS1 gs /GS0 gs');
+    const { softMasks } = await findScanImages(await doc.save());
+    expect(softMasks).toEqual([0, 4]);
   });
 });
 

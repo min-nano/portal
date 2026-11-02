@@ -1,103 +1,207 @@
 // @vitest-environment jsdom
 //
-// 書籍スキャン PDF 結合ツール: OCR（ocr.js）の用意と手放し。Tesseract.js は
-// 偽物に差し替え、worker を作る・止めることだけを確かめる。
+// PDF 結合ツール: OCR（ocr.js）。
+//
+// Tesseract.js は差し替え、worker を用意する順番と、失敗したときの扱い、
+// 読んだかたまりの数え方を確かめる。
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const schedulers = [];
-const gates = [];
+const tesseract = vi.hoisted(() => ({
+  /** createWorker の呼び出しごとの { resolve, reject, worker }。 */
+  pending: [],
+  scheduler: null,
+}));
+
 vi.mock('tesseract.js', () => ({
   OEM: { LSTM_ONLY: 1 },
-  PSM: { SINGLE_LINE: 7 },
-  // 待たせたいときは、gates に Promise を積む（呼ばれた順に 1 つずつ待つ）。
-  createWorker: async () => {
-    await gates.shift();
-    return { setParameters: async () => {} };
-  },
-  createScheduler: () => {
-    const scheduler = { workers: 0, terminated: false };
-    scheduler.addWorker = () => scheduler.workers++;
-    scheduler.terminate = async () => {
-      scheduler.terminated = true;
-    };
-    schedulers.push(scheduler);
-    return scheduler;
-  },
+  PSM: { SINGLE_LINE: '7' },
+  createScheduler: () => tesseract.scheduler,
+  createWorker: () =>
+    new Promise((resolve, reject) => {
+      const worker = {
+        setParameters: vi.fn().mockResolvedValue({}),
+        terminate: vi.fn().mockResolvedValue({}),
+      };
+      tesseract.pending.push({ resolve: () => resolve(worker), reject, worker });
+    }),
 }));
-vi.mock('tesseract.js-core/tesseract-core-simd-lstm.wasm.js?url', () => ({ default: '/core.js' }));
-vi.mock('tesseract.js/dist/worker.min.js?url', () => ({ default: '/worker.js' }));
-vi.mock('@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz?url', () => ({ default: '/eng.gz' }));
-vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({ GlobalWorkerOptions: {} }));
-vi.mock('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url', () => ({ default: 'worker.js' }));
 
-let ocr;
+let prepareOcr;
+let readStrip;
+let boxesReadSoFar;
+let releaseOcr;
 
 beforeEach(async () => {
+  tesseract.pending = [];
+  tesseract.scheduler = { addWorker: vi.fn() };
   vi.resetModules();
-  schedulers.length = 0;
-  gates.length = 0;
-  ocr = await import('../src/pdf-book-merger/ocr.js');
+  ({ prepareOcr, readStrip, boxesReadSoFar, releaseOcr } = await import('../src/pdf-book-merger/ocr.js'));
 });
 
-describe('OCR の用意と手放し', () => {
-  it('用意したものは使い回し、手放すと worker を止め、次は用意し直す', async () => {
-    const first = await ocr.prepareOcr();
-    expect(await ocr.prepareOcr()).toBe(first);
-    expect(first.workers).toBe(2);
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
-    await ocr.releaseOcr();
-    expect(first.terminated).toBe(true);
+/** createWorker が呼ばれるまで待つ（tesseract.js の読み込みを挟むので）。 */
+async function workersRequested(count) {
+  await vi.waitFor(() => expect(tesseract.pending).toHaveLength(count));
+}
 
-    const second = await ocr.prepareOcr();
-    expect(second).not.toBe(first);
-    expect(schedulers).toHaveLength(2);
+/** 約束が決着しているか（決着していなければ 'pending'）。 */
+async function state(promise) {
+  const pending = Symbol('pending');
+  const result = await Promise.race([promise.then(() => 'resolved', () => 'rejected'), Promise.resolve(pending)]);
+  return result === pending ? 'pending' : result;
+}
+
+describe('prepareOcr', () => {
+  it('worker を同時に用意し、1 つ目が用意できたところで使い始める', async () => {
+    const ready = prepareOcr();
+    // 1 つ目を待たずに、2 つ目も頼んでいる。
+    await workersRequested(2);
+    expect(await state(ready)).toBe('pending');
+
+    tesseract.pending[1].resolve();
+    await expect(ready).resolves.toBe(tesseract.scheduler);
+    expect(tesseract.scheduler.addWorker).toHaveBeenCalledTimes(1);
+    expect(tesseract.scheduler.addWorker).toHaveBeenCalledWith(tesseract.pending[1].worker);
+    expect(tesseract.pending[1].worker.setParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ tessedit_char_whitelist: '0123456789-()' })
+    );
+
+    // 残りも、用意できたら加わる。
+    tesseract.pending[0].resolve();
+    await vi.waitFor(() => expect(tesseract.scheduler.addWorker).toHaveBeenCalledTimes(2));
+    // 用意は 1 度だけ。
+    expect(prepareOcr()).toBe(ready);
   });
 
-  it('止め損ねても失敗にせず、次は用意し直す', async () => {
-    const first = await ocr.prepareOcr();
-    first.terminate = async () => {
-      throw new Error('terminate');
-    };
+  it('1 つが用意できなくても、ほかが用意できれば使える', async () => {
+    const ready = prepareOcr();
+    await workersRequested(2);
+    tesseract.pending[0].reject(new Error('first'));
+    await Promise.resolve();
+    expect(await state(ready)).toBe('pending');
+    tesseract.pending[1].resolve();
+    await expect(ready).resolves.toBe(tesseract.scheduler);
+  });
 
-    await expect(ocr.releaseOcr()).resolves.toBeUndefined();
-    expect(await ocr.prepareOcr()).not.toBe(first);
+  it('1 つも用意できなければ最初の失敗を返し、次の呼び出しでやり直す', async () => {
+    const ready = prepareOcr();
+    await workersRequested(2);
+    tesseract.pending[1].reject(new Error('first'));
+    tesseract.pending[0].reject(new Error('second'));
+    await expect(ready).rejects.toThrow('first');
+
+    const again = prepareOcr();
+    expect(again).not.toBe(ready);
+    await workersRequested(4);
+    tesseract.pending[2].resolve();
+    await expect(again).resolves.toBe(tesseract.scheduler);
+  });
+
+  it('設定できなかった worker は止めて、使わない', async () => {
+    const ready = prepareOcr();
+    await workersRequested(2);
+    const [broken, fine] = tesseract.pending;
+    broken.worker.setParameters.mockRejectedValue(new Error('setParameters'));
+    broken.worker.terminate.mockRejectedValue(new Error('terminate'));
+    broken.resolve();
+    await vi.waitFor(() => expect(broken.worker.terminate).toHaveBeenCalled());
+    expect(await state(ready)).toBe('pending');
+
+    fine.resolve();
+    await expect(ready).resolves.toBe(tesseract.scheduler);
+    expect(tesseract.scheduler.addWorker).toHaveBeenCalledTimes(1);
+    expect(tesseract.scheduler.addWorker).toHaveBeenCalledWith(fine.worker);
+  });
+});
+
+describe('releaseOcr', () => {
+  it('用意したものを止め、次は用意し直す', async () => {
+    tesseract.scheduler.terminate = vi.fn().mockResolvedValue();
+    const ready = prepareOcr();
+    await workersRequested(2);
+    tesseract.pending.forEach((pending) => pending.resolve());
+    await ready;
+
+    await releaseOcr();
+    expect(tesseract.scheduler.terminate).toHaveBeenCalledTimes(1);
+    expect(prepareOcr()).not.toBe(ready);
+  });
+
+  it('止め損ねても失敗にしない（次に読むときは、新しく用意する）', async () => {
+    tesseract.scheduler.terminate = vi.fn().mockRejectedValue(new Error('terminate'));
+    const ready = prepareOcr();
+    await workersRequested(2);
+    tesseract.pending[0].resolve();
+    await ready;
+
+    await expect(releaseOcr()).resolves.toBeUndefined();
   });
 
   it('用意している途中に手放して、その用意が失敗しても、あとで用意し直したものは残す', async () => {
-    let fail;
-    gates.push(new Promise((_, reject) => (fail = reject)));
-    const first = ocr.prepareOcr();
+    tesseract.scheduler.terminate = vi.fn().mockResolvedValue();
+    const first = prepareOcr();
     first.catch(() => {});
-    // 1 つ目の worker を待っているところまで進める（テストの偽物は、読み込みが
-    // 重なると本物の Tesseract.js が返ることがあるので、重ねない）。
-    await vi.waitFor(() => expect(gates).toHaveLength(0));
-    const releasing = ocr.releaseOcr();
-    // 前の用意（1 つ目の worker を待っている）とは別に、用意し直す。
-    const second = ocr.prepareOcr();
-    fail(new Error('network'));
+    await workersRequested(2);
+    const releasing = releaseOcr();
+    const second = prepareOcr();
+    await workersRequested(4);
+    tesseract.pending[0].reject(new Error('network'));
+    tesseract.pending[1].reject(new Error('network'));
     await expect(first).rejects.toThrow('network');
+    // 用意できなかったので、止めるものは無い。
     await expect(releasing).resolves.toBeUndefined();
+    expect(tesseract.scheduler.terminate).not.toHaveBeenCalled();
 
     // 失敗した前の用意が、あとの用意を消さない。
-    const ready = await second;
-    expect(ocr.prepareOcr()).toBe(second);
-    await ocr.releaseOcr();
-    expect(ready.terminated).toBe(true);
-  });
-
-  it('用意に失敗したら、次に呼んだときに用意し直す', async () => {
-    let fail;
-    gates.push(new Promise((_, reject) => (fail = reject)));
-    const first = ocr.prepareOcr();
-    fail(new Error('network'));
-    await expect(first).rejects.toThrow('network');
-
-    expect(await ocr.prepareOcr()).toBeTruthy();
+    tesseract.pending[2].resolve();
+    await second;
+    expect(prepareOcr()).toBe(second);
   });
 
   it('用意していなければ、手放すものは無い', async () => {
-    await ocr.releaseOcr();
-    expect(schedulers).toHaveLength(0);
+    await expect(releaseOcr()).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * 余白の帯の canvas の代わり。白地に、黒い四角（数字のかたまりの代わり）を
+ * 横に並べて置く。
+ */
+function stripCanvas(blocks) {
+  const width = 400;
+  const height = 60;
+  const data = new Uint8ClampedArray(width * height * 4).fill(255);
+  blocks.forEach((x0) => {
+    for (let y = 20; y < 40; y++) {
+      for (let x = x0; x < x0 + 12; x++) data.fill(0, (y * width + x) * 4, (y * width + x) * 4 + 3);
+    }
+  });
+  return { width, height, getContext: () => ({ getImageData: () => ({ data }) }) };
+}
+
+describe('readStrip', () => {
+  beforeEach(() => {
+    // jsdom の canvas は描けないので、切り出しに使う分だけ用意する。
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ fillRect() {}, drawImage() {} });
+  });
+
+  it('読んだかたまりを数える（記録に出す。読み取りの手間はこれに比例する）', async () => {
+    tesseract.scheduler.addJob = vi.fn().mockResolvedValue({ data: { text: '12', confidence: 90 } });
+    const reading = readStrip({ canvas: stripCanvas([100, 280]), top: 0.86, height: 0.14 });
+    await workersRequested(2);
+    tesseract.pending.forEach((pending) => pending.resolve());
+    const items = await reading;
+
+    expect(items.map((item) => item.text)).toEqual(['12', '12']);
+    // かたまりごとに 3 通りの大きさで読む。
+    expect(tesseract.scheduler.addJob).toHaveBeenCalledTimes(6);
+    expect(boxesReadSoFar()).toBe(2);
+
+    await readStrip({ canvas: stripCanvas([]), top: 0, height: 0.14 });
+    expect(boxesReadSoFar()).toBe(2);
   });
 });

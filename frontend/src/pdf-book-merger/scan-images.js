@@ -289,12 +289,67 @@ function collect(context, content, resources, ctm, found, depth) {
 }
 
 /**
+ * 頁の中身が、ソフトマスク（SMask の付いた ExtGState）を使う回数。
+ *
+ * pdf.js はソフトマスクを使うたびに、描いている canvas と同じ大きさの作業用の
+ * canvas を作り、マスクを合成する（canvas の filter の無い Safari では、
+ * 輝度を 1 画素ずつ JavaScript で透明度に直す）。InDesign の影・ぼかしの
+ * ような効果は数百回になり、頁を細かく描くほど重くなる（pdf-source.js は
+ * この数で描き方を変える）。
+ *
+ * 資源に用意された数ではなく、頁の中身（と、そこから呼ぶフォーム）の gs を
+ * 数える。資源は頁どうしで使い回されることがあり（文書全体の ExtGState を
+ * 1 つの資源にまとめる作り方）、用意された数では、使わない頁まで重く見える。
+ * フォームを何度も呼べば、その回数だけ数える（pdf.js はそのたびに描く）。
+ *
+ * @param {import('pdf-lib').PDFPage} page
+ */
+export function softMaskCount(page) {
+  const forms = new Map(); // フォーム → その中で使う回数
+  const visiting = new Set(); // 自分を（間接に）呼ぶフォームを止める
+  const countIn = (content, resources) => {
+    let count = 0;
+    for (const { op, operands } of operations(content)) {
+      const name = operands.at(-1);
+      if (typeof name !== 'string') continue;
+      const key = PDFName.of(name.slice(1));
+      if (op === 'gs') {
+        const state = resources?.lookupMaybe(PDFName.of('ExtGState'), PDFDict)?.lookup(key);
+        if (state instanceof PDFDict && state.lookup(PDFName.of('SMask')) instanceof PDFDict) count++;
+      } else if (op === 'Do') {
+        const stream = resources?.lookupMaybe(PDFName.of('XObject'), PDFDict)?.lookup(key);
+        if (stream instanceof PDFRawStream && nameOf(stream.dict.lookup(PDFName.of('Subtype'))) === 'Form') {
+          count += formCount(stream, resources);
+        }
+      }
+    }
+    return count;
+  };
+  const formCount = (stream, outer) => {
+    if (forms.has(stream)) return forms.get(stream);
+    if (visiting.has(stream)) return 0;
+    visiting.add(stream);
+    const count = countIn(decodedBytes([stream]), stream.dict.lookupMaybe(PDFName.of('Resources'), PDFDict) ?? outer);
+    visiting.delete(stream);
+    forms.set(stream, count);
+    return count;
+  };
+  try {
+    return countIn(contentBytes(page.node), page.node.Resources());
+  } catch {
+    // 読めない中身・資源は数えない（描き方を選ぶ目安にするだけなので）。
+    return 0;
+  }
+}
+
+/**
  * 1 頁が、JPEG 画像をブラウザに展開させて描ける形か調べる。
  *
  * @param {import('pdf-lib').PDFPage} page
  * @returns {{scan: {images:{jpeg:Uint8Array, flate:boolean, width:number, height:number, matrix:number[]}[]} | null,
- *            reason: string|null, outline: string}}
+ *            reason: string|null, outline: string, softMasks: number}}
  *   scan は描けるときだけ。reason は描けない理由、outline は頁の作り（記録に出す）。
+ *   softMasks はソフトマスクの数（softMaskCount。pdf.js で描くときの描き方を選ぶ）。
  *   jpeg は PDF の中のバイト列のまま（flate なら Flate で包んだまま。描くときに開く）。
  */
 export function inspectPage(page) {
@@ -313,7 +368,9 @@ export function inspectPage(page) {
   const parts = [`画像 ${found.infos.length} 枚${found.infos.length ? `（${found.infos.slice(0, 4).join('、')}${found.infos.length > 4 ? '、…' : ''}）` : ''}`];
   if (found.paints) parts.push(`下地の塗り ${found.paints}`);
   if (found.forms) parts.push(`フォーム ${found.forms}`);
-  return { scan: reason ? null : { images: found.images }, reason, outline: parts.join('・') };
+  const softMasks = softMaskCount(page);
+  if (softMasks) parts.push(`ソフトマスク ${softMasks}`);
+  return { scan: reason ? null : { images: found.images }, reason, outline: parts.join('・'), softMasks };
 }
 
 /**
@@ -322,9 +379,10 @@ export function inspectPage(page) {
  * 読めない PDF（暗号化など）は、すべての頁を pdf.js で描く。
  *
  * @param {Uint8Array} bytes
- * @returns {Promise<{scans:(object|null)[], reasons:Map<string, number>, example:string}>}
- *   scans は頁ごと（描けない頁は null）。reasons は描けない理由ごとの頁数、
- *   example は描けなかった最初の頁の作り（どちらも記録に出す）。
+ * @returns {Promise<{scans:(object|null)[], softMasks:number[], reasons:Map<string, number>, example:string}>}
+ *   scans は頁ごと（描けない頁は null）。softMasks は頁ごとのソフトマスクの数。
+ *   reasons は描けない理由ごとの頁数、example は描けなかった最初の頁の作り
+ *   （どちらも記録に出す）。
  */
 export async function findScanImages(bytes) {
   let doc;
@@ -332,19 +390,22 @@ export async function findScanImages(bytes) {
     // 数百頁の PDF でも画面を固めないよう、少しずつ読む。
     doc = await PDFDocument.load(bytes, { updateMetadata: false, objectsPerTick: 50 });
   } catch (error) {
-    return { scans: [], reasons: new Map([[`PDF を読めない（${error?.message || error}）`, 1]]), example: '' };
+    // pdf-lib の失敗は Error で届く。
+    return { scans: [], softMasks: [], reasons: new Map([[`PDF を読めない（${error.message}）`, 1]]), example: '' };
   }
   const scans = [];
+  const softMasks = [];
   const reasons = new Map();
   let example = '';
   doc.getPages().forEach((page, index) => {
-    const { scan, reason, outline } = inspectPage(page);
+    const { scan, reason, outline, softMasks: count } = inspectPage(page);
     scans.push(scan);
+    softMasks.push(count);
     if (!reason) return;
     reasons.set(reason, (reasons.get(reason) || 0) + 1);
     example ||= `${index + 1} 頁目: ${outline}`;
   });
-  return { scans, reasons, example };
+  return { scans, softMasks, reasons, example };
 }
 
 // --- 描く ----------------------------------------------------------------------

@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 //
-// PDF 結合ツール: WebKit（Safari・iPhone・iPad）で pdf.js が頁を
-// 描けなかったとき、OffscreenCanvas も切った文書で開き直して描き直す
-// （pdf-source.js）。pdf.js は偽物に差し替え、渡した設定と描き直しを確かめる。
+// PDF 結合ツール: pdf.js で頁を描く（pdf-source.js）。pdf.js は偽物に差し替える。
+//
+//   - WebKit（Safari・iPhone・iPad）で描けなかったとき、OffscreenCanvas も
+//     切った文書で開き直して描き直す。渡した設定と描き直しを確かめる
+//   - ソフトマスクの多い頁は粗く描き、iPhone・iPad では帯に分けて描く
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -16,6 +18,8 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
       params,
       destroyed: false,
       rendered: 0,
+      canvases: [],
+      offsets: [],
       loadingTask: {
         destroy: async () => {
           doc.destroyed = true;
@@ -23,10 +27,21 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
       },
       getPage: async (pageNumber) => ({
         pageNumber,
-        getViewport: ({ scale }) => ({ width: 100 * scale, height: 140 * scale, transform: [scale, 0, 0, -scale, 0, 140 * scale] }),
-        render: () => ({
+        getViewport: function viewportOf({ scale, offsetY = 0 }) {
+          return {
+            width: 100 * scale,
+            height: 140 * scale,
+            offsetY,
+            transform: [scale, 0, 0, -scale, 0, 140 * scale + offsetY],
+            clone: (changes) => viewportOf({ scale, offsetY, ...changes }),
+          };
+        },
+        render: ({ canvas, viewport }) => ({
           promise: (async () => {
             doc.rendered++;
+            doc.canvases.push([canvas.width, canvas.height]);
+            doc.offsets.push(viewport.offsetY);
+            if (doc.failAt === doc.rendered) throw new Error('render');
             // OffscreenCanvas を使う設定では描けない、という WebKit の偽物。
             if (params.isOffscreenCanvasSupported && doc.failWithOffscreen) {
               throw new DOMException('The object is in an invalid state.', 'InvalidStateError');
@@ -84,8 +99,11 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
     vi.stubGlobal('navigator', { userAgent: MAC_SAFARI, platform: 'MacIntel', maxTouchPoints: 0 });
     globalThis.__failWithOffscreen = true;
     const doc = await source.openPdf(new Uint8Array([1, 2, 3]));
+    expect(source.redrawnSafely(doc)).toBe(false);
 
-    expect(await source.renderPreview(doc, 0, 200)).toBe('blob:preview');
+    expect(await source.renderPreview(doc, 0, { longSide: 200 })).toBe('blob:preview');
+    // 描き直したことは、記録に出せるように覚えておく。
+    expect(source.redrawnSafely(doc)).toBe(true);
     expect(opened).toHaveLength(2);
     const [, safe] = opened;
     expect([safe.params.isImageDecoderSupported, safe.params.isOffscreenCanvasSupported]).toEqual([false, false]);
@@ -93,7 +111,7 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
     expect([doc.rendered, safe.rendered]).toEqual([1, 1]);
 
     // 2 頁目からは、初めから安全な文書で描く（失敗を繰り返さない）。
-    await source.renderPreview(doc, 1, 200);
+    await source.renderPreview(doc, 1, { longSide: 200 });
     expect([doc.rendered, safe.rendered]).toEqual([1, 2]);
     expect(opened).toHaveLength(2);
 
@@ -132,7 +150,132 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
     globalThis.__failWithOffscreen = true;
     const doc = await source.openPdf(new Uint8Array([1]));
 
-    await expect(source.renderPreview(doc, 0, 200)).rejects.toThrow('invalid state');
+    await expect(source.renderPreview(doc, 0, { longSide: 200 })).rejects.toThrow('invalid state');
     expect(opened).toHaveLength(1);
+    expect(source.redrawnSafely(doc)).toBe(false);
+  });
+});
+
+describe('ソフトマスクの多い頁は、粗く描く', () => {
+  beforeEach(() => {
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** jsdom の canvas は描けないので、使う分だけ用意する。drawImage の置き場所を drawn に残す。 */
+  function fakeContexts() {
+    const drawn = [];
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function getContext() {
+      const canvas = this;
+      return {
+        drawImage: (image, x, y) => drawn.push([canvas.width, canvas.height, image.width, image.height, x, y]),
+        setTransform() {},
+        getImageData: () => ({ data: new Uint8ClampedArray(canvas.width * canvas.height * 4) }),
+      };
+    });
+    return drawn;
+  }
+
+  // 偽物の頁は 100×140。測る画像は長辺 1000px、OCR の帯は頁の高さ 2400px の上下 14%。
+  const SOFT_MASKS = 1032;
+  const BASE = { width: 100, height: 140 };
+
+  it('描く画素の数 × ソフトマスクの数が上限に収まるまで小さくする（少なければそのまま）', () => {
+    const normal = 1000 / 140;
+    expect(source.cappedScale(BASE, 1000, 0)).toBe(normal);
+    expect(source.cappedScale(BASE, 1000, source.MANY_SOFT_MASKS)).toBe(normal);
+    // 1,032 回なら、100×140 の頁を 7.7 万画素ほどに（長辺 330px ほど）。
+    const scale = source.cappedScale(BASE, 1000, SOFT_MASKS);
+    expect(BASE.width * BASE.height * scale ** 2 * SOFT_MASKS).toBeCloseTo(source.SOFT_MASK_WORK, -3);
+    expect(Math.round(BASE.height * scale)).toBe(329);
+    // ソフトマスクが多くても、もとの大きさより大きくはしない。
+    expect(source.cappedScale(BASE, 10, SOFT_MASKS)).toBe(10 / 140);
+    expect(source.manySoftMasks()).toBe(false);
+    expect(source.manySoftMasks(source.MANY_SOFT_MASKS + 1)).toBe(true);
+  });
+
+  it('ソフトマスクの多い頁は、測る画像も拡大表示も粗く描く', async () => {
+    fakeContexts();
+    const doc = await source.openPdf(new Uint8Array([1]));
+    const { image } = await source.renderPageImage(doc, 0, null, { softMasks: SOFT_MASKS });
+    expect([image.width, image.height]).toEqual([235, 329]);
+    expect(doc.canvases).toEqual([[235, 329]]);
+
+    doc.canvases.length = 0;
+    await source.renderPreview(doc, 0, { softMasks: SOFT_MASKS });
+    // 拡大表示は、一覧の 2 倍の画素まで。
+    expect(doc.canvases).toEqual([[333, 466]]);
+    doc.canvases.length = 0;
+    await source.renderPreview(doc, 0);
+    expect(doc.canvases).toEqual([[1143, 1600]]);
+  });
+
+  it('ソフトマスクが少なければ、いちばん細かい大きさで頁を 1 回だけ描いて切り出す', async () => {
+    fakeContexts();
+    const doc = await source.openPdf(new Uint8Array([1]));
+    const { image } = await source.renderPageImage(doc, 0, null, { margins: true, softMasks: source.MANY_SOFT_MASKS });
+    expect([image.width, image.height]).toEqual([714, 1000]);
+    expect(doc.canvases).toEqual([[1714, 2400]]);
+
+    doc.canvases.length = 0;
+    await source.renderMargins(doc, 0, null);
+    expect(doc.canvases).toEqual([[1714, 2400]]);
+  });
+
+  it('iPhone・iPad では、ソフトマスクの多い頁を帯に分けて描いてつなぐ（pdf.js が持つ canvas を小さくする）', async () => {
+    vi.stubGlobal('navigator', { userAgent: IPHONE });
+    const drawn = fakeContexts();
+    const doc = await source.openPdf(new Uint8Array([1]));
+    await source.renderPageImage(doc, 0, null, { softMasks: SOFT_MASKS });
+
+    // 測る画像（235×329）: 4,800 万画素 ÷（幅 235 × 1,032）= 197 行ずつ。
+    const rows = source.bandRows(235.3, SOFT_MASKS);
+    expect(rows).toBe(197);
+    expect(doc.canvases).toEqual([
+      [235, rows],
+      [235, 329 - rows],
+    ]);
+    expect(doc.offsets).toEqual([0, -rows]);
+    // 帯は、つないだ canvas の上から順に置く。
+    const placed = drawn.filter(([width, height]) => width === 235 && height === 329);
+    expect(placed.map(([, , , , x, y]) => [x, y])).toEqual([
+      [0, 0],
+      [0, rows],
+    ]);
+
+    // 拡大表示も分けて描く。
+    doc.canvases.length = 0;
+    await source.renderPreview(doc, 0, { softMasks: SOFT_MASKS });
+    const previewRows = source.bandRows(332.8, SOFT_MASKS);
+    expect(doc.canvases).toHaveLength(Math.ceil(466 / previewRows));
+    expect(doc.canvases.every(([width, height]) => width === 333 && height <= previewRows)).toBe(true);
+  });
+
+  it('帯の高さは、ソフトマスクの少ない頁と iPhone・iPad でない端末では分けない。多すぎても下限より細くしない', () => {
+    vi.stubGlobal('navigator', { userAgent: IPHONE });
+    expect(source.bandRows(1000, source.MANY_SOFT_MASKS)).toBe(Infinity);
+    expect(source.bandRows(1000, 100000)).toBe(16);
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+    expect(source.bandRows(1000, SOFT_MASKS)).toBe(Infinity);
+  });
+
+  it('帯の途中で描けなければ、つなぎかけの canvas を手放して失敗を返す', async () => {
+    vi.stubGlobal('navigator', { userAgent: IPHONE });
+    fakeContexts();
+    const doc = await source.openPdf(new Uint8Array([1]));
+    doc.failAt = 3;
+    const created = [];
+    const create = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((name) => {
+      const element = create(name);
+      if (name === 'canvas') created.push(element);
+      return element;
+    });
+    await expect(source.renderPreview(doc, 0, { softMasks: SOFT_MASKS })).rejects.toThrow('render');
+    expect(doc.rendered).toBe(3);
+    expect(created.every((canvas) => canvas.width === 0 && canvas.height === 0)).toBe(true);
   });
 });
