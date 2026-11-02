@@ -311,9 +311,6 @@ function addFile(source) {
     coverStep: 1, // 先頭・末尾に置くファイルの進み方（-1 なら最後の頁から）
     open: false, // 一覧で設定の欄を開いているか（描き直しても保つ）
     bytes: null,
-    // 手元のファイルは、調べ終えたら中身を手放し、要るときにここから読み直す
-    // （bytesOf）。Drive のファイルは読み直すと転送し直しになるので、持ち続ける。
-    reload: source.local ? () => source.load(() => {}) : null,
     doc: null,
     pages: [],
   };
@@ -475,7 +472,7 @@ async function readFile(file) {
     // 済む）。JPEG はファイルのバイト列の一部を指すだけなので（pdf-lib-views.js）、
     // 残してもメモリはほとんど使わない。その書き換えが効いていないと JPEG は
     // 写しなので、残さずに、あとで調べ直す。
-    if (pdfLibViews && !file.reload) {
+    if (pdfLibViews) {
       for (const page of file.pages) {
         if (page.candidates.length === 0 && !page.ocr) page.scan = scans[page.index] ?? null;
       }
@@ -488,9 +485,6 @@ async function readFile(file) {
 
     file.role = guessRole(file.name, file.pages);
     file.status = 'ready';
-    // 手元のファイルは、ここで中身を手放す（ファイルの数だけ本が丸ごとメモリに
-    // 乗ったままにしない。iPhone では、結合のときにページごと落ちた）。
-    if (file.reload) file.bytes = null;
     log(`「${file.name}」を調べ終えました（${ROLES[file.role]}、合計 ${seconds(started)}）`);
   } catch (error) {
     file.status = 'error';
@@ -681,12 +675,12 @@ async function readMarginsWithOcr(file, pages) {
   if (pages.length === 0 || !(await startOcr())) return;
   if (!files.includes(file)) return; // 順番を待つ間に外された。
   readProgress.label = () => '余白を読み取っています';
-  // JPEG を残していなければ（pdf-lib の書き換えが効いていないときと、中身を
-  // 手放した手元のファイル）、ここで 1 度だけ調べ直し、読む頁の分だけを取っておく。
-  if (!pdfLibViews || file.reload) {
+  // JPEG を残していなければ（pdf-lib の書き換えが効いていないとき）、ここで
+  // 1 度だけ調べ直し、読む頁の分だけを取っておく。
+  if (!pdfLibViews) {
     readProgress.stage(0, 0.1);
     showProgress(`「${file.name}」の頁の画像を調べ直しています`, null);
-    const { scans } = await findScanImages(await bytesOf(file));
+    const { scans } = await findScanImages(file.bytes);
     for (const page of pages) page.scan = scans[page.index] ?? null;
     readProgress.stage(0.1, 1);
   }
@@ -751,7 +745,7 @@ function queueLateOcr(file) {
  */
 function pdfOf(file) {
   if (!file.opening) {
-    const opening = bytesOf(file).then(openPdf).then(
+    const opening = openPdf(file.bytes).then(
       (doc) => {
         // 開いている間に閉じられていたら、開いたものはすぐ閉じる（閉じた文書を残さない）。
         if (file.opening !== opening) {
@@ -769,11 +763,6 @@ function pdfOf(file) {
     file.opening = opening;
   }
   return file.opening;
-}
-
-/** ファイルの中身。手放した手元のファイルは、ファイルから読み直す。 */
-async function bytesOf(file) {
-  return file.bytes ?? (await file.reload());
 }
 
 /** ファイルを使い始める（使い終えるまで閉じない）。 */
@@ -1462,21 +1451,13 @@ async function mergeAndVerify() {
   try {
     const fileName = outputName();
     const ranges = pageLabelRanges(order);
+    const sources = new Map(readyFiles().map((file) => [file.key, { bytes: file.bytes, name: file.name }]));
     const infoFrom = order.find((entry) => entry.role === 'body')?.fileKey;
     // 結合と検証で、バーの前半と後半を受け持つ。
     mergeProgress.label = () => '結合しています';
     mergeProgress.stage(0, 0.5);
     mergeProgress.show('結合しています…', 0);
     const started = performance.now();
-    // 並べるファイルの中身（手放した手元のファイルは、ここで読み直す）。結合し
-    // 終えたら、検証の前に手放す（元のファイル・結合した PDF・検証で pdf.js に
-    // 渡す写しの 3 冊ぶんを、同時に持たない）。
-    const sources = new Map();
-    for (const file of readyFiles()) {
-      if (order.some((entry) => entry.fileKey === file.key)) {
-        sources.set(file.key, { bytes: await bytesOf(file), name: file.name });
-      }
-    }
     // 結合の道具（pdf-lib）は、結合するときになってから読み込む。
     const { mergePdf, pageDigests } = await import('./merge.js');
     const { bytes, digests } = await mergePdf({
@@ -1487,7 +1468,6 @@ async function mergeAndVerify() {
       infoFrom,
       onProgress: (done, total) => mergeProgress.show(`結合しています（${done} / ${total} 頁）`, done / total),
     });
-    sources.clear();
 
     // 結合した PDF を読み直し、元の頁と突き合わせる（頁を描き直さないので軽い）。
     log(`結合しました（${order.length} 頁、${megabytes(bytes.length)}、${seconds(started)}）`);
@@ -1630,7 +1610,6 @@ function addLocal(fileList) {
       addFile({
         name: file.name,
         modified: file.lastModified,
-        local: true,
         load: async (onProgress) => {
           const bytes = new Uint8Array(await file.arrayBuffer());
           onProgress(bytes.length, bytes.length);
