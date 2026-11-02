@@ -9,8 +9,8 @@
 //
 // OCR の本体と言語のデータは、外部の CDN ではなくこのポータルから配る
 // （Vite が assets/ に置く）。社内のネットワークで CDN が塞がれていても
-// 動くようにするため。初回は読み込みに数秒かかるので、使うときになって
-// から読み込む。
+// 動くようにするため。準備（読み込みと WebAssembly の翻訳）には何秒も
+// かかるので、要りそうなファイルが追加された時点で読み込み始める（main.js）。
 
 import corePath from 'tesseract.js-core/tesseract-core-simd-lstm.wasm.js?url';
 import workerPath from 'tesseract.js/dist/worker.min.js?url';
@@ -47,18 +47,16 @@ function languagePath() {
   return `${absolute(languageUrl)}?file=`;
 }
 
-async function createScheduler() {
-  const Tesseract = await import('tesseract.js');
-  const scheduler = Tesseract.createScheduler();
-  for (let i = 0; i < WORKERS; i++) {
-    const worker = await Tesseract.createWorker('eng', Tesseract.OEM.LSTM_ONLY, {
-      workerPath: absolute(workerPath),
-      corePath: absolute(corePath),
-      langPath: languagePath(),
-      // 言語のデータはブラウザのキャッシュ（/assets/ は中身が変わらない限り
-      // 使い回される）に任せ、Tesseract.js 独自の保存領域には残さない。
-      cacheMethod: 'none',
-    });
+async function addWorker(Tesseract, scheduler) {
+  const worker = await Tesseract.createWorker('eng', Tesseract.OEM.LSTM_ONLY, {
+    workerPath: absolute(workerPath),
+    corePath: absolute(corePath),
+    langPath: languagePath(),
+    // 言語のデータはブラウザのキャッシュ（/assets/ は中身が変わらない限り
+    // 使い回される）に任せ、Tesseract.js 独自の保存領域には残さない。
+    cacheMethod: 'none',
+  });
+  try {
     await worker.setParameters({
       // 渡すのは切り出した短いかたまり 1 つずつなので、1 行として読む。
       tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
@@ -68,8 +66,35 @@ async function createScheduler() {
       // 伝えないと、読むたびに推定してその旨を出力する。
       user_defined_dpi: '300',
     });
-    scheduler.addWorker(worker);
+  } catch (error) {
+    await worker.terminate().catch(() => {});
+    throw error;
   }
+  scheduler.addWorker(worker);
+}
+
+/**
+ * OCR の worker を用意する。
+ *
+ * worker ごとの準備（本体の WebAssembly の読み込みと翻訳・言語のデータの展開）は
+ * 重く、端末やブラウザによっては 1 つに何秒もかかる。worker はそれぞれ別の
+ * スレッドで動くので、1 つずつ順に待たずに全部を同時に用意し、1 つ目が
+ * 用意できたところで使い始める（頼んだ読み取りは scheduler が順番待ちに
+ * 持ち、あとから加わった worker にも振り分ける）。1 つも用意できなければ、
+ * 最初の失敗を返す。
+ */
+async function createScheduler() {
+  const Tesseract = await import('tesseract.js');
+  const scheduler = Tesseract.createScheduler();
+  const adding = Array.from({ length: WORKERS }, () => addWorker(Tesseract, scheduler));
+  await new Promise((resolve, reject) => {
+    const errors = [];
+    for (const promise of adding) {
+      promise.then(resolve, (error) => {
+        if (errors.push(error) === adding.length) reject(errors[0]);
+      });
+    }
+  });
   return scheduler;
 }
 

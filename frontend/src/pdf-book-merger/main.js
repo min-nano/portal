@@ -313,6 +313,11 @@ function addFile(source) {
   sortFiles();
   renderFiles();
   log(`「${file.name}」を追加しました（${source.driveId ? 'Drive' : 'この端末'}）`);
+  // 余白を OCR しそうなファイル（名前で表紙と分からないもの）なら、OCR の準備を
+  // ここで始める。準備には何秒もかかるので、読み込みと
+  // 文字情報を読む間に進めておく（番号が文字情報で見つかれば使わずに済むが、
+  // 読み込むのは初回だけで、あとはブラウザのキャッシュから）。
+  if (!roleFromName(file.name)) startOcr();
   file.loaded = downloads.then(() => loadBytes(file, source));
   downloads = file.loaded.catch(() => {});
   file.pending = true; // 調べ終えるまで（見出しの「n / m」に使う）
@@ -442,13 +447,13 @@ async function readFile(file) {
 
     // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
     // もののほかは、配置を決める前に番号を読み切る（文字情報の無い束も、画像
-    // から番号が読めれば本文と分かる）。OCR の準備は、画像を描く間に進める。
+    // から番号が読めれば本文と分かる）。OCR の準備は、ファイルを追加したときに
+    // 始めてある（addFile）。
     const ocrPages = new Set(
       !roleFromName(file.name)
         ? file.pages.filter((page) => page.candidates.length === 0).map((page) => page.index)
         : []
     );
-    if (ocrPages.size) startOcr();
     readProgress.stage(textEnd, 1);
 
     // 頁の画像を描いて測る（重いところ）。JPEG のまま描ける頁を先に調べておく。
@@ -503,8 +508,13 @@ async function readFile(file) {
 
 /** OCR を用意する（1 度だけ）。使えなければ false（文字情報だけで並べる）。 */
 function startOcr() {
-  ocrStarting ??= prepareOcr().then(
-    () => true,
+  if (ocrStarting) return ocrStarting;
+  const started = performance.now();
+  ocrStarting = prepareOcr().then(
+    () => {
+      log(`画像から番号を読み取る準備ができました（${seconds(started)}）`);
+      return true;
+    },
     (error) => {
       showMessage(`画像からの読み取りを使えませんでした（${error.message}）。文字情報だけで並べます。`, 'red');
       return false;
