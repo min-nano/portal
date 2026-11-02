@@ -439,7 +439,7 @@ async function readFile(file) {
         thumbUrl: '',
         ocr: false,
         scan: null,
-        softMasks: 0, // ソフトマスクの数（頁の画像を調べるときに数える）
+        softMasks: 0, // ソフトマスクの数（頁の画像を調べるときに数える。PDF を調べられなければ undefined）
       });
       if (index % 16 === 0) await breathe();
     }
@@ -463,7 +463,8 @@ async function readFile(file) {
     showProgress(`「${file.name}」の頁の画像を調べています`, null);
     const imagesStarted = performance.now();
     const { scans, softMasks, reasons, example } = await findScanImages(file.bytes);
-    for (const page of file.pages) page.softMasks = softMasks[page.index] ?? 0;
+    // 調べられなかった PDF（暗号化など）は数が無い（描くときは 0 として扱う）。
+    for (const page of file.pages) page.softMasks = softMasks[page.index];
     const jpegPages = scans.filter(Boolean).length;
     if (jpegPages < count) {
       const why = [...reasons].map(([reason, pages]) => `${reason} ${pages} 頁`).join('、');

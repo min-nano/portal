@@ -376,7 +376,8 @@ export async function findScanImages(bytes) {
     // 数百頁の PDF でも画面を固めないよう、少しずつ読む。
     doc = await PDFDocument.load(bytes, { updateMetadata: false, objectsPerTick: 50 });
   } catch (error) {
-    return { scans: [], softMasks: [], reasons: new Map([[`PDF を読めない（${error?.message || error}）`, 1]]), example: '' };
+    // pdf-lib の失敗は Error で届く。
+    return { scans: [], softMasks: [], reasons: new Map([[`PDF を読めない（${error.message}）`, 1]]), example: '' };
   }
   const scans = [];
   const softMasks = [];
