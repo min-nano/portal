@@ -565,35 +565,28 @@ describe('ファイルを足して並べる', () => {
   });
 
   /**
-   * バーに出した値と、そのときの見出しを記録する（進み具合が分からない表示は null）。
-   * 返す関数で記録をやめる。
+   * バーに出した値（済んだところ）と、そのときの見出しを記録する。返す関数で記録をやめる。
+   * withEnd なら、いま進めている区間の終わり（ストライプの右端）も記録する。
    */
-  function watchBar() {
+  function watchBar({ withEnd = false } = {}) {
     const seen = [];
     const bar = $('progressBar');
-    const { set } = Object.getOwnPropertyDescriptor(HTMLProgressElement.prototype, 'value');
-    Object.defineProperty(bar, 'value', {
-      configurable: true,
-      set(value) {
-        seen.push({ value, label: $('progressText').textContent });
-        set.call(this, value);
-      },
-    });
-    const removeAttribute = bar.removeAttribute.bind(bar);
-    bar.removeAttribute = (name) => {
-      if (name === 'value') seen.push({ value: null, label: $('progressText').textContent });
-      removeAttribute(name);
+    const setAttribute = bar.setAttribute.bind(bar);
+    bar.setAttribute = (name, value) => {
+      if (name === 'aria-valuenow') {
+        const entry = { value: Number(value), label: $('progressText').textContent };
+        if (withEnd) entry.end = Number(bar.dataset.busyEnd);
+        seen.push(entry);
+      }
+      setAttribute(name, value);
     };
-    seen.stop = () => {
-      delete bar.value;
-      delete bar.removeAttribute;
-    };
+    seen.stop = () => delete bar.setAttribute;
     return seen;
   }
 
-  /** 記録したバーの値（分からない表示は除く）が、一度も戻っていないこと。 */
+  /** 記録したバーの値が、一度も戻っていないこと。 */
   function expectNeverBack(seen) {
-    const values = seen.map((s) => s.value).filter((value) => value !== null);
+    const values = seen.map((s) => s.value);
     expect(values.length).toBeGreaterThan(4);
     values.forEach((value, i) => expect(value).toBeGreaterThanOrEqual(values[i - 1] ?? 0));
   }
@@ -618,7 +611,7 @@ describe('ファイルを足して並べる', () => {
 
     expectNeverBack(seen);
     // 1 つめのファイルは前半、2 つめは後半に写す。
-    const at = (label) => seen.filter((s) => s.label === label && s.value !== null).map((s) => s.value);
+    const at = (label) => seen.filter((s) => s.label === label).map((s) => s.value);
     const first = at('ファイルを調べています（1 / 2）');
     const second = at('ファイルを調べています（2 / 2）');
     expect(first.length).toBeGreaterThan(2);
@@ -633,7 +626,7 @@ describe('ファイルを足して並べる', () => {
     const hidden = [];
     const observer = new MutationObserver(() => hidden.push($('progress').hidden));
     observer.observe($('progress'), { attributes: true, attributeFilter: ['hidden'] });
-    const seen = watchBar();
+    const seen = watchBar({ withEnd: true });
     drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
     await settled(2);
     await flush();
@@ -643,7 +636,8 @@ describe('ファイルを足して並べる', () => {
     // 出したら、隠すのは最後の 1 度だけ。
     expect(hidden).toEqual([false, true]);
     // 替わり目では、1 つめを済ませた位置（半分）で止め、2 つめの見出しに替える。
-    expect(seen).toContainEqual({ value: 0.5, label: 'ファイルを調べています（2 / 2）' });
+    // ストライプは 2 つめの仕事の終わりまで。
+    expect(seen).toContainEqual({ value: 0.5, end: 1, label: 'ファイルを調べています（2 / 2）' });
     expectNeverBack(seen);
   });
 
@@ -666,7 +660,7 @@ describe('ファイルを足して並べる', () => {
     expect(seen.map((s) => s.label)).toContain('ファイルを調べています（3 / 3）');
   });
 
-  it('進み具合が分からないあいだは、バーを分からない表示にする', async () => {
+  it('進み具合が分からないあいだも、済んだところは出したまま、進めている区間をストライプで出す', async () => {
     let release;
     mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
     mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress }) => {
@@ -677,7 +671,13 @@ describe('ファイルを足して並べる', () => {
     $('driveBtn').click();
     await vi.waitFor(() => expect(release).toBeTypeOf('function'));
     expect($('progress').hidden).toBe(false);
-    expect($('progressBar').hasAttribute('value')).toBe(false);
+    // 読み込みの段（仕事の 3 割）は、済んだところ 0 から、段の終わりまでのストライプ。
+    const bar = $('progressBar');
+    expect(bar.getAttribute('aria-valuenow')).toBe('0');
+    expect(Number(bar.dataset.busyEnd)).toBeCloseTo(0.3);
+    expect($('progressDone').style.width).toBe('0%');
+    expect($('progressBusy').style.left).toBe('0%');
+    expect(parseFloat($('progressBusy').style.width)).toBeCloseTo(30);
     release();
     await settled(1);
   });
@@ -688,22 +688,22 @@ describe('ファイルを足して並べる', () => {
     const release = holdImage('c2');
     drop([file('猫_表紙.pdf', pdf(COVER))]);
     // 調べる流れが止まるところまで待つ。c1 と c2 は並べて描くので、c2 を止めても
-    // c1 は描き終えてバーを進める。c2 を描き始める前に、バーは分からない表示に
-    // なる（頁の画像を調べています）ので、c2 を描き始めたあとに値が付いていれば、
-    // それは c1 を測り終えたときの値で、c2 を放すまで変わらない。
+    // c1 は描き終えてバーを進める。c2 を描き始める前に、バーは画像の段の始まりで
+    // 止まる（頁の画像を調べています。割合は分からない）ので、c2 を描き始めたあとに
+    // そこより進んでいれば、それは c1 を測り終えたときの値で、c2 を放すまで変わらない。
     await vi.waitFor(() => {
       expect($('progressText').textContent).toBe('ファイルを調べています（3 / 3）');
       expect(mocks.renderPageImage.mock.calls.some(([doc, index]) => doc.spec.pages[index].id === 'c2')).toBe(true);
-      expect($('progressBar').hasAttribute('value')).toBe(true);
+      // 画像の段（手元のファイルなので 0.1 から）に入ってから、c1 の分だけ進んでいる。
+      expect(Number($('progressBar').getAttribute('aria-valuenow'))).toBeGreaterThan(0.1 + 1e-9);
     });
-    const reading = $('progressBar').value;
-    expect(reading).toBeGreaterThan(0);
+    const reading = $('progressBar').getAttribute('aria-valuenow');
 
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('downloadBtn').disabled).toBe(false));
     expect($('progress').hidden).toBe(false);
     expect($('progressText').textContent).toBe('ファイルを調べています（3 / 3）');
-    expect($('progressBar').value).toBe(reading);
+    expect($('progressBar').getAttribute('aria-valuenow')).toBe(reading);
 
     release();
     await settled(3);
