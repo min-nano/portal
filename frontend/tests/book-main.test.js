@@ -106,9 +106,13 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
         spec,
         numPages: spec.pages.length,
         getPageLabels: async () => spec.labels ?? null,
-        getMetadata: async () => ({ info: { Title: spec.title ?? '' } }),
+        getMetadata: async () => {
+          if (spec.metadataBroken) throw new Error('metadata');
+          return { info: { Title: spec.title ?? '', ...spec.info } };
+        },
       };
     },
+    redrawnSafely: (doc) => doc.spec.redrawn === true,
     readPageText: async (doc, index) => {
       const p = doc.spec.pages[index];
       if (p.broken) throw new Error(p.broken);
@@ -893,6 +897,32 @@ describe('ファイルを足して並べる', () => {
     $('logBox').open = true;
     $('logBox').dispatchEvent(new Event('toggle'));
     expect($('logText').textContent).toContain('「odd.pdf」の 4 頁は pdf.js で描きます（PDF を読めない（暗号化） 1 頁）。');
+  });
+
+  it('pdf.js で描く PDF は、作ったアプリと、開き直して描き直したかを記録に出す', async () => {
+    const pages = [page('o1', 1, { jpeg: false })];
+    // 1 つ目は、描けない理由の分からない頁として見つかる。
+    mocks.findScanImages.mockResolvedValueOnce({ scans: [null], reasons: new Map(), example: '' });
+    drop([
+      file('a.pdf', pdf(pages, { info: { Creator: 'Adobe Illustrator', Producer: 'Adobe PDF library' }, redrawn: true })),
+      file('b.pdf', pdf(pages, { info: { Creator: 'Word', Producer: 'Word' } })),
+      file('c.pdf', pdf(pages, { info: { Creator: ' ', Producer: 3 } })),
+      file('d.pdf', pdf(pages, { metadataBroken: true })),
+    ]);
+    await settled(4);
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    const lines = $('logText').textContent.split('\n');
+    const line = (name, what) => lines.find((text) => text.includes(`「${name}」${what}`));
+
+    expect(line('a.pdf', 'の 1 頁は pdf.js')).toMatch(/（理由不明）。作成: Adobe Illustrator \/ Adobe PDF library$/);
+    expect(line('b.pdf', 'の 1 頁は pdf.js')).toMatch(/。作成: Word$/);
+    // 名前の分からないものは添えない。
+    expect(line('c.pdf', 'の 1 頁は pdf.js')).not.toContain('作成');
+    expect(line('d.pdf', 'の 1 頁は pdf.js')).not.toContain('作成');
+
+    expect(line('a.pdf', 'の頁の画像を調べました')).toContain('安全な設定で開き直して描き直しました');
+    expect(line('b.pdf', 'の頁の画像を調べました')).not.toContain('描き直し');
   });
 
   it('Drive を待っている間は、見出しに待っていることを出す', async () => {

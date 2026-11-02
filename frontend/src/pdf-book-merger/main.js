@@ -52,6 +52,7 @@ import {
   closePdf,
   openPdf,
   readPageText,
+  redrawnSafely,
   releaseCanvas,
   renderMargins,
   renderPageImage,
@@ -464,7 +465,7 @@ async function readFile(file) {
     const jpegPages = scans.filter(Boolean).length;
     if (jpegPages < count) {
       const why = [...reasons].map(([reason, pages]) => `${reason} ${pages} 頁`).join('、');
-      log(`「${file.name}」の ${count - jpegPages} 頁は pdf.js で描きます（${why || '理由不明'}）。${example}`);
+      log(`「${file.name}」の ${count - jpegPages} 頁は pdf.js で描きます（${why || '理由不明'}）。${[example, await madeWith(file.doc)].filter(Boolean).join('。')}`);
     }
     const boxesBefore = boxesReadSoFar();
     const drawnAt = await analyzePages(file, scans, ocrPages);
@@ -482,7 +483,8 @@ async function readFile(file) {
     log(
       `「${file.name}」の頁の画像を調べました（JPEG のまま展開 ${jpegPages} / ${count} 頁、` +
         `余白を OCR ${ocrPages.size} 頁・うち番号が読めた頁 ${byOcr}、${seconds(imagesStarted)}。` +
-        `うち頁を描き終えるまで ${seconds(imagesStarted, drawnAt)}、読んだ文字のかたまり ${boxesReadSoFar() - boxesBefore}）`
+        `うち頁を描き終えるまで ${seconds(imagesStarted, drawnAt)}、読んだ文字のかたまり ${boxesReadSoFar() - boxesBefore}）` +
+        (redrawnSafely(file.doc) ? '。pdf.js で描けなかった頁があり、安全な設定で開き直して描き直しました' : '')
     );
 
     file.role = guessRole(file.name, file.pages);
@@ -506,6 +508,16 @@ async function readFile(file) {
     showProgress('');
     if (files.includes(file)) refresh();
   }
+}
+
+/**
+ * PDF を作ったアプリ（文書の情報の Creator・Producer）を、記録に添える形で返す。
+ * pdf.js で描くのに時間のかかる PDF が、どこで作られたものかを知るため。
+ */
+async function madeWith(doc) {
+  const info = (await doc.getMetadata().catch(() => null))?.info ?? {};
+  const names = [...new Set([info.Creator, info.Producer].filter((name) => typeof name === 'string' && name.trim()))];
+  return names.length ? `作成: ${names.join(' / ')}` : '';
 }
 
 /** OCR を用意する（1 度だけ）。使えなければ false（文字情報だけで並べる）。 */

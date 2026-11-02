@@ -70,6 +70,14 @@ export async function openPdf(bytes, { safe = false } = {}) {
 /** WebKit で開いた文書 → 描けなかったときに開き直す、安全な設定の文書。 */
 const fallbacks = new WeakMap();
 
+/**
+ * その文書を、描けなかったために安全な設定で開き直して描いたか（記録に出す。
+ * 開き直すと PDF をもう 1 度読み、描き直すので、時間がかかる）。
+ */
+export function redrawnSafely(doc) {
+  return fallbacks.get(doc)?.failed === true;
+}
+
 function safeDocOf(doc) {
   const fallback = fallbacks.get(doc);
   if (!fallback) return null;

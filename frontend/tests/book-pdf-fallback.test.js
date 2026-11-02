@@ -83,8 +83,11 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
     vi.stubGlobal('navigator', { userAgent: MAC_SAFARI, platform: 'MacIntel', maxTouchPoints: 0 });
     globalThis.__failWithOffscreen = true;
     const doc = await source.openPdf(new Uint8Array([1, 2, 3]));
+    expect(source.redrawnSafely(doc)).toBe(false);
 
     expect(await source.renderPreview(doc, 0, 200)).toBe('blob:preview');
+    // 描き直したことは、記録に出せるように覚えておく。
+    expect(source.redrawnSafely(doc)).toBe(true);
     expect(opened).toHaveLength(2);
     const [, safe] = opened;
     expect([safe.params.isImageDecoderSupported, safe.params.isOffscreenCanvasSupported]).toEqual([false, false]);
@@ -108,5 +111,6 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
 
     await expect(source.renderPreview(doc, 0, 200)).rejects.toThrow('invalid state');
     expect(opened).toHaveLength(1);
+    expect(source.redrawnSafely(doc)).toBe(false);
   });
 });
