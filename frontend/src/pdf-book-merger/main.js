@@ -50,6 +50,7 @@ import { findScanImages } from './scan-images.js';
 import { pdfLibViews } from './pdf-lib-views.js';
 import {
   closePdf,
+  manySoftMasks,
   openPdf,
   readPageText,
   redrawnSafely,
@@ -447,15 +448,6 @@ async function readFile(file) {
     const textNumbers = file.pages.filter((page) => page.candidates.length > 0).length;
     log(`「${file.name}」の文字情報を読みました（${count} 頁、文字情報のある頁 ${textPages}、番号が見つかった頁 ${textNumbers}）`);
 
-    // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
-    // もののほかは、配置を決める前に番号を読み切る（文字情報の無い束も、画像
-    // から番号が読めれば本文と分かる）。OCR の準備は、ファイルを追加したときに
-    // 始めてある（addFile）。
-    const ocrPages = new Set(
-      !roleFromName(file.name)
-        ? file.pages.filter((page) => page.candidates.length === 0).map((page) => page.index)
-        : []
-    );
     readProgress.stage(textEnd, 1);
 
     // 頁の画像を描いて測る（重いところ）。JPEG のまま描ける頁を先に調べておく。
@@ -465,6 +457,21 @@ async function readFile(file) {
     const { scans, softMasks, reasons, example } = await findScanImages(file.bytes);
     // 調べられなかった PDF（暗号化など）は数が無い（描くときは 0 として扱う）。
     for (const page of file.pages) page.softMasks = softMasks[page.index];
+
+    // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
+    // もののほかは、配置を決める前に番号を読み切る（文字情報の無い束も、画像
+    // から番号が読めれば本文と分かる）。OCR の準備は、ファイルを追加したときに
+    // 始めてある（addFile）。ソフトマスクの多い頁（InDesign の影・ぼかしの
+    // ある表紙など）は OCR しない（OCR に足りる細かさで描くと、1 頁で何十秒も
+    // かかる。pdf-source.js の manySoftMasks）。番号は前後の頁から補う。
+    const ocrPages = new Set(
+      !roleFromName(file.name)
+        ? file.pages
+            .filter((page) => page.candidates.length === 0 && !manySoftMasks(page.softMasks))
+            .map((page) => page.index)
+        : []
+    );
+    const coarse = file.pages.filter((page) => manySoftMasks(page.softMasks)).length;
     const jpegPages = scans.filter(Boolean).length;
     if (jpegPages < count) {
       const why = [...reasons].map(([reason, pages]) => `${reason} ${pages} 頁`).join('、');
@@ -487,6 +494,7 @@ async function readFile(file) {
       `「${file.name}」の頁の画像を調べました（JPEG のまま展開 ${jpegPages} / ${count} 頁、` +
         `余白を OCR ${ocrPages.size} 頁・うち番号が読めた頁 ${byOcr}、${seconds(imagesStarted)}。` +
         `うち頁を描き終えるまで ${seconds(imagesStarted, drawnAt)}、読んだ文字のかたまり ${boxesReadSoFar() - boxesBefore}）` +
+        (coarse ? `。ソフトマスクの多い ${coarse} 頁は、粗く描き、余白を OCR しませんでした` : '') +
         (redrawnSafely(file.doc) ? '。pdf.js で描けなかった頁があり、安全な設定で開き直して描き直しました' : '')
     );
 
@@ -712,7 +720,7 @@ async function readMarginsWithOcr(file, pages) {
     await ocrSlots.take();
     let strips;
     try {
-      strips = await renderMargins(await pdfOf(file), page.index, page.scan, { softMasks: page.softMasks });
+      strips = await renderMargins(await pdfOf(file), page.index, page.scan);
       // 描いたら JPEG は要らない（書き換えが効かないときは写しなので、早く手放す）。
       page.scan = null;
     } catch {
@@ -736,7 +744,7 @@ function queueLateOcr(file) {
   // 読んでいる最中のファイルは、もう一度は頼まない（切り替えを繰り返しても
   // 同じ頁を 2 度読まない）。
   if (file.role !== 'body' || file.ocrBusy) return;
-  const pages = file.pages.filter((page) => page.candidates.length === 0 && !page.ocr);
+  const pages = file.pages.filter((page) => page.candidates.length === 0 && !page.ocr && !manySoftMasks(page.softMasks));
   if (pages.length === 0) return;
   file.ocrBusy = true;
   renderFiles();

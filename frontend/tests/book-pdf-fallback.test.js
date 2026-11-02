@@ -4,7 +4,7 @@
 //
 //   - WebKit（Safari・iPhone・iPad）で描けなかったとき、OffscreenCanvas も
 //     切った文書で開き直して描き直す。渡した設定と描き直しを確かめる
-//   - ソフトマスクの多い頁は、頁全体を細かく描かず、viewport ごとに描く
+//   - ソフトマスクの多い頁は粗く描き、iPhone・iPad では帯に分けて描く
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -130,59 +130,19 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
   });
 });
 
-describe('ソフトマスクの多い頁は、viewport ごとに描く', () => {
+describe('ソフトマスクの多い頁は、粗く描く', () => {
   beforeEach(() => {
     vi.stubGlobal('navigator', { userAgent: CHROME });
-    // jsdom の canvas は描けないので、使う分だけ用意する。
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function getContext() {
-      return {
-        drawImage() {},
-        setTransform() {},
-        getImageData: () => ({ data: new Uint8ClampedArray(this.width * this.height * 4) }),
-      };
-    });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  // 偽物の頁は 100×140。測る画像は長辺 1000px、OCR の帯は頁の高さ 2400px の上下 14%。
-  const ANALYSIS = [714, 1000];
-  const STRIP = [1714, 336];
-  const FULL = [1714, 2400];
-
-  it('ソフトマスクの多い頁は、測る画像と余白の帯を、それぞれの大きさで描く（頁全体を細かく描かない）', async () => {
-    const doc = await source.openPdf(new Uint8Array([1]));
-    const { strips } = await source.renderPageImage(doc, 0, null, {
-      margins: true,
-      softMasks: source.SEPARATE_DRAW_SOFT_MASKS + 1,
-    });
-    expect(doc.canvases).toEqual([ANALYSIS, STRIP, STRIP]);
-    expect(strips.map((strip) => [strip.canvas.width, strip.canvas.height])).toEqual([STRIP, STRIP]);
-
-    // あとからの OCR（帯だけ描く）も同じ。
-    doc.canvases.length = 0;
-    await source.renderMargins(doc, 0, null, { softMasks: source.SEPARATE_DRAW_SOFT_MASKS + 1 });
-    expect(doc.canvases).toEqual([STRIP, STRIP]);
-  });
-
-  it('ソフトマスクが少なければ、いちばん細かい大きさで頁を 1 回だけ描いて切り出す', async () => {
-    const doc = await source.openPdf(new Uint8Array([1]));
-    await source.renderPageImage(doc, 0, null, { margins: true, softMasks: source.SEPARATE_DRAW_SOFT_MASKS });
-    expect(doc.canvases).toEqual([FULL]);
-
-    doc.canvases.length = 0;
-    await source.renderMargins(doc, 0, null);
-    expect(doc.canvases).toEqual([FULL]);
-  });
-
-  it('iPhone・iPad では、ソフトマスクの多い頁を帯に分けて描いてつなぐ（pdf.js が持つ canvas を小さくする）', async () => {
-    vi.stubGlobal('navigator', { userAgent: IPHONE });
-    const softMasks = 516;
-    const doc = await source.openPdf(new Uint8Array([1]));
+  /** jsdom の canvas は描けないので、使う分だけ用意する。drawImage の置き場所を drawn に残す。 */
+  function fakeContexts() {
     const drawn = [];
-    HTMLCanvasElement.prototype.getContext.mockImplementation(function getContext() {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function getContext() {
       const canvas = this;
       return {
         drawImage: (image, x, y) => drawn.push([canvas.width, canvas.height, image.width, image.height, x, y]),
@@ -190,41 +150,95 @@ describe('ソフトマスクの多い頁は、viewport ごとに描く', () => {
         getImageData: () => ({ data: new Uint8ClampedArray(canvas.width * canvas.height * 4) }),
       };
     });
-    await source.renderPageImage(doc, 0, null, { margins: true, softMasks });
+    return drawn;
+  }
 
-    // 測る画像（714×1000）: 4,800 万画素 ÷（幅 714 × 2 × 516）= 65 行ずつ。
-    const rows = source.bandRows(ANALYSIS[0], softMasks);
-    expect(rows).toBe(65);
-    const analysis = doc.canvases.filter(([width]) => width === ANALYSIS[0]);
-    expect(analysis).toHaveLength(Math.ceil(1000 / rows));
-    expect(analysis.slice(0, -1).every(([, height]) => height === rows)).toBe(true);
-    expect(analysis.at(-1)).toEqual([ANALYSIS[0], 1000 - rows * (analysis.length - 1)]);
-    expect(doc.offsets.slice(0, 2)).toEqual([0, -rows]);
+  // 偽物の頁は 100×140。測る画像は長辺 1000px、OCR の帯は頁の高さ 2400px の上下 14%。
+  const SOFT_MASKS = 516;
+  const BASE = { width: 100, height: 140 };
+
+  it('描く画素の数 × ソフトマスクの数が上限に収まるまで小さくする（少なければそのまま）', () => {
+    const normal = 1000 / 140;
+    expect(source.cappedScale(BASE, 1000, 0)).toBe(normal);
+    expect(source.cappedScale(BASE, 1000, source.MANY_SOFT_MASKS)).toBe(normal);
+    // 516 なら、100×140 の頁を 7.7 万画素ほどに（長辺 330px ほど）。
+    const scale = source.cappedScale(BASE, 1000, SOFT_MASKS);
+    expect(BASE.width * BASE.height * scale ** 2 * SOFT_MASKS).toBeCloseTo(source.SOFT_MASK_WORK, -3);
+    expect(Math.round(BASE.height * scale)).toBe(329);
+    // ソフトマスクが多くても、もとの大きさより大きくはしない。
+    expect(source.cappedScale(BASE, 10, SOFT_MASKS)).toBe(10 / 140);
+    expect(source.manySoftMasks()).toBe(false);
+    expect(source.manySoftMasks(source.MANY_SOFT_MASKS + 1)).toBe(true);
+  });
+
+  it('ソフトマスクの多い頁は、測る画像も拡大表示も粗く描く', async () => {
+    fakeContexts();
+    const doc = await source.openPdf(new Uint8Array([1]));
+    const { image } = await source.renderPageImage(doc, 0, null, { softMasks: SOFT_MASKS });
+    expect([image.width, image.height]).toEqual([235, 329]);
+    expect(doc.canvases).toEqual([[235, 329]]);
+
+    doc.canvases.length = 0;
+    await source.renderPreview(doc, 0, { softMasks: SOFT_MASKS });
+    // 拡大表示は、一覧の 2 倍の画素まで。
+    expect(doc.canvases).toEqual([[333, 466]]);
+    doc.canvases.length = 0;
+    await source.renderPreview(doc, 0);
+    expect(doc.canvases).toEqual([[1143, 1600]]);
+  });
+
+  it('ソフトマスクが少なければ、いちばん細かい大きさで頁を 1 回だけ描いて切り出す', async () => {
+    fakeContexts();
+    const doc = await source.openPdf(new Uint8Array([1]));
+    const { image } = await source.renderPageImage(doc, 0, null, { margins: true, softMasks: source.MANY_SOFT_MASKS });
+    expect([image.width, image.height]).toEqual([714, 1000]);
+    expect(doc.canvases).toEqual([[1714, 2400]]);
+
+    doc.canvases.length = 0;
+    await source.renderMargins(doc, 0, null);
+    expect(doc.canvases).toEqual([[1714, 2400]]);
+  });
+
+  it('iPhone・iPad では、ソフトマスクの多い頁を帯に分けて描いてつなぐ（pdf.js が持つ canvas を小さくする）', async () => {
+    vi.stubGlobal('navigator', { userAgent: IPHONE });
+    const drawn = fakeContexts();
+    const doc = await source.openPdf(new Uint8Array([1]));
+    await source.renderPageImage(doc, 0, null, { softMasks: SOFT_MASKS });
+
+    // 測る画像（235×329）: 4,800 万画素 ÷（幅 235 × 2 × 516）= 197 行ずつ。
+    const rows = source.bandRows(235.3, SOFT_MASKS);
+    expect(rows).toBe(197);
+    expect(doc.canvases).toEqual([
+      [235, rows],
+      [235, 329 - rows],
+    ]);
+    expect(doc.offsets).toEqual([0, -rows]);
     // 帯は、つないだ canvas の上から順に置く。
-    const placed = drawn.filter(([width, height]) => width === ANALYSIS[0] && height === ANALYSIS[1]);
-    expect(placed.map(([, , , , x, y]) => [x, y])).toEqual(analysis.map((_, k) => [0, k * rows]));
-
-    // 余白の帯（1714 幅）も、27 行ずつに分ける。
-    expect(source.bandRows(STRIP[0], softMasks)).toBe(27);
-    expect(doc.canvases.filter(([width]) => width === STRIP[0])).toHaveLength(2 * Math.ceil(336 / 27));
+    const placed = drawn.filter(([width, height]) => width === 235 && height === 329);
+    expect(placed.map(([, , , , x, y]) => [x, y])).toEqual([
+      [0, 0],
+      [0, rows],
+    ]);
 
     // 拡大表示も分けて描く。
     doc.canvases.length = 0;
-    await source.renderPreview(doc, 0, { longSide: 1600, softMasks });
-    expect(doc.canvases.every(([width, height]) => width === 1143 && height <= source.bandRows(1143, softMasks))).toBe(true);
-    expect(doc.canvases.length).toBe(Math.ceil(1600 / source.bandRows(1143, softMasks)));
+    await source.renderPreview(doc, 0, { softMasks: SOFT_MASKS });
+    const previewRows = source.bandRows(332.8, SOFT_MASKS);
+    expect(doc.canvases).toHaveLength(Math.ceil(466 / previewRows));
+    expect(doc.canvases.every(([width, height]) => width === 333 && height <= previewRows)).toBe(true);
   });
 
   it('帯の高さは、ソフトマスクの少ない頁と iPhone・iPad でない端末では分けない。多すぎても下限より細くしない', () => {
     vi.stubGlobal('navigator', { userAgent: IPHONE });
-    expect(source.bandRows(1000, source.SEPARATE_DRAW_SOFT_MASKS)).toBe(Infinity);
+    expect(source.bandRows(1000, source.MANY_SOFT_MASKS)).toBe(Infinity);
     expect(source.bandRows(1000, 100000)).toBe(16);
     vi.stubGlobal('navigator', { userAgent: CHROME });
-    expect(source.bandRows(1000, 516)).toBe(Infinity);
+    expect(source.bandRows(1000, SOFT_MASKS)).toBe(Infinity);
   });
 
   it('帯の途中で描けなければ、つなぎかけの canvas を手放して失敗を返す', async () => {
     vi.stubGlobal('navigator', { userAgent: IPHONE });
+    fakeContexts();
     const doc = await source.openPdf(new Uint8Array([1]));
     doc.failAt = 3;
     const created = [];
@@ -234,29 +248,8 @@ describe('ソフトマスクの多い頁は、viewport ごとに描く', () => {
       if (name === 'canvas') created.push(element);
       return element;
     });
-    await expect(source.renderPreview(doc, 0, { softMasks: 516 })).rejects.toThrow('render');
+    await expect(source.renderPreview(doc, 0, { softMasks: SOFT_MASKS })).rejects.toThrow('render');
+    expect(doc.rendered).toBe(3);
     expect(created.every((canvas) => canvas.width === 0 && canvas.height === 0)).toBe(true);
-  });
-
-  it('途中で描けなければ、描き終えた canvas を手放して失敗を返す', async () => {
-    const doc = await source.openPdf(new Uint8Array([1]));
-    doc.failAt = 2;
-    const created = [];
-    const create = document.createElement.bind(document);
-    vi.spyOn(document, 'createElement').mockImplementation((name) => {
-      const element = create(name);
-      if (name === 'canvas') created.push(element);
-      return element;
-    });
-
-    await expect(
-      source.renderPageImage(doc, 0, null, { margins: true, softMasks: source.SEPARATE_DRAW_SOFT_MASKS + 1 })
-    ).rejects.toThrow('render');
-    expect(doc.rendered).toBe(2);
-    // 描き終えた測る画像も、描けなかった帯も、大きさを 0 にして手放してある。
-    expect(created.map((canvas) => [canvas.width, canvas.height])).toEqual([
-      [0, 0],
-      [0, 0],
-    ]);
   });
 });
