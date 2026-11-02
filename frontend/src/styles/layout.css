@@ -240,6 +240,9 @@ body:has(.portal-header .account.open)::after,
 /* --- ページ本体 ---------------------------------------------------------- */
 
 .container {
+  /* 広い画面では左右に台紙を残し、角の丸い紙が画面の端に接しないようにする
+     （ヘッダーの中身の左右の余白 --s-4 と揃える）。狭い画面では下で外す。 */
+  width: calc(100% - 2 * var(--s-4));
   max-width: var(--shell-max);
   margin: 0 auto;
   padding: clamp(var(--s-4), 2vw, var(--s-8));
@@ -252,6 +255,7 @@ body:has(.portal-header .account.open)::after,
 @media (max-width: 640px) {
   /* 狭い画面では紙の縁を出さない（横幅を 1px も無駄にしない）。 */
   .container {
+    width: auto;
     border-radius: 0;
     border-left: none;
     border-right: none;
