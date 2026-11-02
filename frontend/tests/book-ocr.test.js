@@ -30,12 +30,13 @@ vi.mock('tesseract.js', () => ({
 let prepareOcr;
 let readStrip;
 let boxesReadSoFar;
+let releaseOcr;
 
 beforeEach(async () => {
   tesseract.pending = [];
   tesseract.scheduler = { addWorker: vi.fn() };
   vi.resetModules();
-  ({ prepareOcr, readStrip, boxesReadSoFar } = await import('../src/pdf-book-merger/ocr.js'));
+  ({ prepareOcr, readStrip, boxesReadSoFar, releaseOcr } = await import('../src/pdf-book-merger/ocr.js'));
 });
 
 afterEach(() => {
@@ -114,6 +115,55 @@ describe('prepareOcr', () => {
     await expect(ready).resolves.toBe(tesseract.scheduler);
     expect(tesseract.scheduler.addWorker).toHaveBeenCalledTimes(1);
     expect(tesseract.scheduler.addWorker).toHaveBeenCalledWith(fine.worker);
+  });
+});
+
+describe('releaseOcr', () => {
+  it('用意したものを止め、次は用意し直す', async () => {
+    tesseract.scheduler.terminate = vi.fn().mockResolvedValue();
+    const ready = prepareOcr();
+    await workersRequested(2);
+    tesseract.pending.forEach((pending) => pending.resolve());
+    await ready;
+
+    await releaseOcr();
+    expect(tesseract.scheduler.terminate).toHaveBeenCalledTimes(1);
+    expect(prepareOcr()).not.toBe(ready);
+  });
+
+  it('止め損ねても失敗にしない（次に読むときは、新しく用意する）', async () => {
+    tesseract.scheduler.terminate = vi.fn().mockRejectedValue(new Error('terminate'));
+    const ready = prepareOcr();
+    await workersRequested(2);
+    tesseract.pending[0].resolve();
+    await ready;
+
+    await expect(releaseOcr()).resolves.toBeUndefined();
+  });
+
+  it('用意している途中に手放して、その用意が失敗しても、あとで用意し直したものは残す', async () => {
+    tesseract.scheduler.terminate = vi.fn().mockResolvedValue();
+    const first = prepareOcr();
+    first.catch(() => {});
+    await workersRequested(2);
+    const releasing = releaseOcr();
+    const second = prepareOcr();
+    await workersRequested(4);
+    tesseract.pending[0].reject(new Error('network'));
+    tesseract.pending[1].reject(new Error('network'));
+    await expect(first).rejects.toThrow('network');
+    // 用意できなかったので、止めるものは無い。
+    await expect(releasing).resolves.toBeUndefined();
+    expect(tesseract.scheduler.terminate).not.toHaveBeenCalled();
+
+    // 失敗した前の用意が、あとの用意を消さない。
+    tesseract.pending[2].resolve();
+    await second;
+    expect(prepareOcr()).toBe(second);
+  });
+
+  it('用意していなければ、手放すものは無い', async () => {
+    await expect(releaseOcr()).resolves.toBeUndefined();
   });
 });
 

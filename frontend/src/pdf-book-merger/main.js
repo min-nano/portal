@@ -33,7 +33,9 @@ import { downloadDriveFile } from './drive-download.js';
 import { compareScans } from './image-checks.js';
 import { savePdf } from './save-file.js';
 import { measure } from './measure-client.js';
-import { boxesReadSoFar, prepareOcr, readStrip } from './ocr.js';
+import { boxesReadSoFar, prepareOcr, readStrip, releaseOcr } from './ocr.js';
+import { blobStash, openStash } from './stash.js';
+import { CRASH_LOG_LINES, createCrashLog } from './crash-log.js';
 import {
   buildBookOrder,
   checkSequence,
@@ -95,6 +97,8 @@ let view = { order: [], problems: [], issues: new Map(), numberings: new Map() }
 let merged = null;
 /** 結合と検証の途中か（その間は、拡大表示のために PDF を開かない）。 */
 let merging = false;
+/** 保存（ダウンロード・共有）している間か。 */
+let saving = false;
 /** 結合する中身（並び・名前）が変わるたびに進める番号（結合の途中で変わったら、その結合は捨てる）。 */
 let generation = 0;
 /** いまの並びのうち、結合する PDF を決める部分（頁・配置・頁番号）。変わったときだけ結合した PDF を捨てる。 */
@@ -107,6 +111,19 @@ let queue = Promise.resolve();
 // Drive からの読み込みは、調べるのを待たずに先へ進める（調べている間に、次の
 // ファイルを読んでおく）。読み込みどうしは 1 つずつ。
 let downloads = Promise.resolve();
+/**
+ * 読み込んだ PDF と結合した PDF を置く保存領域（stash.js）。使えなければ null
+ * （メモリに持つ）。ツールを開いたときに用意する。
+ */
+let stash = null;
+let stashReady = Promise.resolve(null);
+/** 結合した回数と、保存領域に置いている結合した PDF の名前。 */
+let mergeCount = 0;
+let mergedName = null;
+/** 保存領域を使えない理由（処理の記録に出す）。 */
+let stashProblem = '';
+/** 保存領域を使うかどうかを、記録に出したか。 */
+let stashNoted = false;
 let ocrStarting = null;
 
 const $ = (id) => document.getElementById(id);
@@ -141,6 +158,8 @@ function showMessage(text, color = '') {
 
 const logLines = [];
 const LOG_LIMIT = 2000;
+/** ページが落ちても、次に開いたときに記録を見られるようにする（crash-log.js）。 */
+const crashLog = createCrashLog();
 
 /**
  * 仕事の流れ 1 つの進み具合を作る。
@@ -254,6 +273,9 @@ function renderProgress() {
     $('progressBusy').style.width = `${(end - done) * 100}%`;
   }
   renderLog();
+  // 進み具合は頁ごとに変わるので、残すのは間を空けて（localStorage への書き込みは
+  // 画面を止める）。
+  keepLog(false);
 }
 
 /** 調べる流れの進み具合を出す（ほとんどの経過はこちら）。 */
@@ -261,13 +283,22 @@ function showProgress(text, fraction, heading = '') {
   readProgress.show(text, fraction, heading);
 }
 
-/** 仕事を順番待ちに足す（ファイルを調べる・あとからの OCR）。済んだら数える。 */
+/**
+ * 仕事を順番待ちに足す（ファイルを調べる・あとからの OCR）。済んだら数える。
+ * 順番待ちが空になったら、OCR を手放す（結合の前に、メモリを空けておく）。
+ */
 function enqueue(task) {
   readProgress.addJob();
   queue = queue
     .then(task)
     .catch(() => {})
-    .then(() => readProgress.finishJob());
+    .then(() => {
+      readProgress.finishJob();
+      if (readProgress.jobs.total === 0) {
+        stopOcr();
+        keepLog(); // 処理を終えたので、残した記録を消す
+      }
+    });
 }
 
 /** ログに 1 行足す（時刻付き）。 */
@@ -277,11 +308,42 @@ function log(text) {
   if (logLines.length > LOG_LIMIT) logLines.splice(0, logLines.length - LOG_LIMIT);
   $('logBox').hidden = false;
   renderLog();
+  keepLog();
+}
+
+/** いま実行中のこと（記録の終わりに添える）。 */
+function runningLines() {
+  return [mergeProgress.text, readProgress.text].filter(Boolean).map((text) => `（実行中）${text}`);
+}
+
+/** 処理しているか（調べる・あとからの OCR・結合と検証・保存）。 */
+function busy() {
+  return merging || saving || readProgress.jobs.total > 0;
+}
+
+/** 進み具合だけが変わったときに残す間隔（ミリ秒）。 */
+const KEEP_EVERY_MS = 500;
+let keptAt = 0;
+
+/**
+ * 記録の終わりのほうと、いま実行中のことを残す（ページが落ちたときのため）。
+ * always でなければ、前に残してから KEEP_EVERY_MS 経つまでは残さない。
+ */
+function keepLog(always = true) {
+  // 処理していないときは残さない（裏に回したタブを iPhone が片付けたときに、
+  // 「途中で終わった」と出さないように）。
+  if (!busy()) {
+    crashLog.clear();
+    return;
+  }
+  const now = Date.now();
+  if (!always && now - keptAt < KEEP_EVERY_MS) return;
+  keptAt = now;
+  crashLog.record([...logLines.slice(-CRASH_LOG_LINES), ...runningLines()]);
 }
 
 function logText() {
-  const running = [mergeProgress.text, readProgress.text].filter(Boolean).map((text) => `（実行中）${text}`);
-  return [...logLines, ...running].join('\n');
+  return [...logLines, ...runningLines()].join('\n');
 }
 
 function renderLog() {
@@ -387,7 +449,10 @@ function showWaiting(file) {
  * ファイルの中身を読み（Drive なら転送）、file.bytes に入れる。
  *
  * 中身は file.bytes にだけ持つ（読み込みの約束には残さない）。調べられなかった
- * ファイルや外したファイルは、file.bytes を捨てればメモリが空く。
+ * ファイルや外したファイルは、file.bytes を捨てればメモリが空く。保存領域を
+ * 使えるときは、そこへ写してメモリからは手放す（調べる・結合するときに、そこから
+ * 読む）。元のファイルを読み直さないのは、端末のファイルでも実体がクラウドに
+ * あって、取り直しになることがあるため。
  */
 async function loadBytes(file, source) {
   if (!files.includes(file)) return;
@@ -421,10 +486,54 @@ async function loadBytes(file, source) {
   log(`「${file.name}」を読み込みました（${megabytes(bytes.length)}、${seconds(started)}）`);
   if (!files.includes(file)) return; // 読んでいる間に外された。
   file.bytes = bytes;
+  await stashBytes(file);
   if (file.status === 'loading') {
     file.status = 'loaded';
     renderFiles();
   }
+}
+
+/** 保存領域での、ファイルの名前。 */
+function stashName(file) {
+  return `${file.key}.pdf`;
+}
+
+/** 読み込んだ中身を保存領域へ写し、メモリからは手放す。写せなければメモリに持つ。 */
+async function stashBytes(file) {
+  const target = await stashReady;
+  if (!stashNoted) {
+    stashNoted = true;
+    log(stashDescription(target, '読み込んだ PDF は'));
+  }
+  if (!target) return;
+  try {
+    await target.put(stashName(file), file.bytes);
+  } catch (error) {
+    log(`「${file.name}」を保存領域に置けなかったので、メモリに持ちます（${error.message}）`);
+    target.remove(stashName(file)); // 書きかけを残さない
+    return;
+  }
+  if (!files.includes(file)) {
+    target.remove(stashName(file));
+    return;
+  }
+  file.stashed = true;
+  // 調べるときは、そこから読み直す（読み込みは調べるより先に進むので、先に
+  // 読んだファイルの中身をメモリに溜めない）。
+  file.bytes = null;
+}
+
+/** どこに置くかを、記録に出す言葉にする。 */
+function stashDescription(target, subject) {
+  if (target?.kind === 'opfs') return `${subject}保存領域に置きます`;
+  const why = `保存領域を使えない: ${stashProblem}`;
+  return target ? `${subject} Blob にしてページの外に置きます（${why}）` : `${subject}メモリに持ちます（${why}）`;
+}
+
+/** ファイルの中身。保存領域に置いたものは、そこから読む。 */
+async function bytesOf(file) {
+  if (file.bytes) return file.bytes;
+  return file.stashed ? stash.read(stashName(file)) : null;
 }
 
 async function readFile(file) {
@@ -438,7 +547,7 @@ async function readFile(file) {
     // 段ごとの区間。Drive の読み込みを待つ（先読みが済んでいない）ときは、
     // 読み込みにも区間を分ける（大きなファイルは読み込みに数分かかる。この端末の
     // ファイルはすぐ読み終えるので分けない）。
-    const loadEnd = file.driveId && !file.bytes ? 0.3 : 0;
+    const loadEnd = file.driveId && file.status !== 'loaded' ? 0.3 : 0;
     const textEnd = loadEnd + (1 - loadEnd) * 0.1;
     readProgress.stage(0, loadEnd);
     file.waiting = true;
@@ -447,7 +556,11 @@ async function readFile(file) {
     await file.loaded;
     file.waiting = false;
     clearTimeout(file.waitTimer);
-    if (!file.bytes || !files.includes(file)) return;
+    if (!files.includes(file)) return;
+    // 調べている間は、中身をメモリに持つ（調べ終えたら、保存領域に置いたものは手放す）。
+    const bytes = await bytesOf(file);
+    if (!files.includes(file)) return; // 読んでいる間に外された（中身は持たない）。
+    file.bytes = bytes;
     if (!isPdf(file.bytes)) throw new Error('PDF ファイルではありません。');
 
     file.status = 'reading';
@@ -516,7 +629,7 @@ async function readFile(file) {
     // 済む）。JPEG はファイルのバイト列の一部を指すだけなので（pdf-lib-views.js）、
     // 残してもメモリはほとんど使わない。その書き換えが効いていないと JPEG は
     // 写しなので、残さずに、あとで調べ直す。
-    if (pdfLibViews) {
+    if (pdfLibViews && !file.stashed) {
       for (const page of file.pages) {
         if (page.candidates.length === 0 && !page.ocr) page.scan = scans[page.index] ?? null;
       }
@@ -533,8 +646,11 @@ async function readFile(file) {
 
     file.role = guessRole(file.name, file.pages);
     file.status = 'ready';
+    if (file.stashed) file.bytes = null;
     log(`「${file.name}」を調べ終えました（${ROLES[file.role]}、合計 ${seconds(started)}）`);
   } catch (error) {
+    // 外したファイルは、読めなくても知らせない（置いたものを先に消したため）。
+    if (!files.includes(file)) return;
     file.status = 'error';
     file.error = error.message || String(error);
     log(`「${file.name}」を調べられませんでした（${file.error}）`);
@@ -542,6 +658,7 @@ async function readFile(file) {
     // PDF の中身（読み込みの結果に残るものも）と縮小画像を手放す。
     file.bytes = null;
     file.loaded = null;
+    forgetStashed(file);
     for (const page of file.pages) {
       if (page.thumbUrl) URL.revokeObjectURL(page.thumbUrl);
       page.thumbUrl = '';
@@ -551,6 +668,13 @@ async function readFile(file) {
     if (held) releaseDoc(file);
     if (files.includes(file)) refresh();
   }
+}
+
+/** OCR を使っていれば手放す（次に要るときは startOcr で用意し直す）。 */
+function stopOcr() {
+  if (!ocrStarting) return;
+  ocrStarting = null;
+  releaseOcr();
 }
 
 /**
@@ -563,7 +687,7 @@ async function madeWith(doc) {
   return names.length ? `作成: ${names.join(' / ')}` : '';
 }
 
-/** OCR を用意する（1 度だけ）。使えなければ false（文字情報だけで並べる）。 */
+/** OCR を用意する（手放すまで 1 度だけ）。使えなければ false（文字情報だけで並べる）。 */
 function startOcr() {
   if (ocrStarting) return ocrStarting;
   const started = performance.now();
@@ -734,11 +858,16 @@ async function readMarginsWithOcr(file, pages) {
   if (pages.length === 0 || !(await startOcr())) return;
   if (!files.includes(file)) return; // 順番を待つ間に外された。
   readProgress.label = () => '余白を読み取っています';
-  // JPEG を残していなければ（pdf-lib の書き換えが効いていないとき）、ここで
-  // 1 度だけ調べ直し、読む頁の分だけを取っておく。
-  if (!pdfLibViews) {
+  // JPEG を残していなければ（pdf-lib の書き換えが効いていないときと、中身を
+  // 保存領域に置いたとき）、ここで 1 度だけ調べ直し、読む頁の分だけを取っておく。
+  if (!pdfLibViews || file.stashed) {
     readProgress.stage(0, 0.1);
     showProgress(`「${file.name}」の頁の画像を調べ直しています`, null);
+    // 保存領域に置いたものは、読む間だけメモリに持つ（PDF を開くのにも同じものを
+    // 使い、2 度読まない。queueLateOcr が読み終えたら手放す）。
+    const bytes = await bytesOf(file);
+    if (!files.includes(file)) return; // 読んでいる間に外された（中身は持たない）。
+    file.bytes = bytes;
     const { scans } = await findScanImages(file.bytes);
     for (const page of pages) page.scan = scans[page.index] ?? null;
     readProgress.stage(0.1, 1);
@@ -788,6 +917,7 @@ function queueLateOcr(file) {
     } finally {
       file.ocrBusy = false;
       for (const page of pages) page.scan = null;
+      if (file.stashed) file.bytes = null;
       if (files.includes(file)) refresh();
     }
   });
@@ -803,7 +933,12 @@ function queueLateOcr(file) {
  */
 function pdfOf(file) {
   if (!file.opening) {
-    const opening = openPdf(file.bytes).then(
+    // 保存領域から読んだ中身は、写さずに pdf.js へ渡す（手元には残さない。描き直しで
+    // 開き直すときは、もう 1 度読む）。
+    const opened = file.bytes
+      ? openPdf(file.bytes)
+      : bytesOf(file).then((bytes) => openPdf(bytes, { transfer: true, reload: bytesOf.bind(null, file) }));
+    const opening = opened.then(
       (doc) => {
         // 開いている間に閉じられていたら、開いたものはすぐ閉じる（閉じた文書を残さない）。
         if (file.opening !== opening) {
@@ -884,8 +1019,16 @@ function removeFile(file) {
   if (!file.docUsers) closeDoc(file);
   file.bytes = null;
   file.loaded = null;
+  forgetStashed(file);
   for (const page of file.pages) page.scan = null; // バイト列の一部を指しているので
   refresh();
+}
+
+/** 保存領域に置いた中身を消す。 */
+function forgetStashed(file) {
+  if (!file.stashed) return;
+  file.stashed = false;
+  stash.remove(stashName(file));
 }
 
 const byName = (a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true });
@@ -1511,7 +1654,8 @@ async function mergeAndVerify() {
   try {
     const fileName = outputName();
     const ranges = pageLabelRanges(order);
-    const sources = new Map(readyFiles().map((file) => [file.key, { bytes: file.bytes, name: file.name }]));
+    // 中身は、結合するときに 1 ファイルずつ読む（保存領域に置いたものは、そこから）。
+    const sources = new Map(readyFiles().map((file) => [file.key, { name: file.name, load: () => bytesOf(file) }]));
     const infoFrom = order.find((entry) => entry.role === 'body')?.fileKey;
     // 結合と検証で、バーの前半と後半を受け持つ。
     mergeProgress.label = () => '結合しています';
@@ -1519,18 +1663,30 @@ async function mergeAndVerify() {
     mergeProgress.show('結合しています…', 0);
     const started = performance.now();
     // 結合の道具（pdf-lib）は、結合するときになってから読み込む。
-    const { mergePdf, pageDigests } = await import('./merge.js');
-    const { bytes, digests } = await mergePdf({
+    log(
+      `結合を始めます（${sources.size} ファイル・${order.length} 頁、` +
+        `${stashDescription(stash, '結合した PDF は')}、` +
+        `${navigator.userAgent}）`
+    );
+    const { mergePdf, pageDigests, writeMergedPdf } = await import('./merge.js');
+    const options = {
       sources,
       order,
       title: fileName.replace(/\.pdf$/i, ''),
       labels: ranges,
       infoFrom,
       onProgress: (done, total) => mergeProgress.show(`結合しています（${done} / ${total} 頁）`, done / total),
-    });
+    };
+    // 保存領域があれば、そこへ少しずつ書き出す（結合した PDF をメモリに持たない）。
+    // 書けなければ（容量の上限など）、メモリの上で結合し直す。
+    let output = null;
+    if (stash) output = await mergeIntoStash(writeMergedPdf, options);
+    output ??= await mergePdf(options);
+    const { digests, size = output.bytes.length } = output;
 
     // 結合した PDF を読み直し、元の頁と突き合わせる（頁を描き直さないので軽い）。
-    log(`結合しました（${order.length} 頁、${megabytes(bytes.length)}、${seconds(started)}）`);
+    const where = !output.file ? 'メモリの上で' : stash.kind === 'opfs' ? '保存領域に書き出し' : 'Blob に書き出し';
+    log(`結合しました（${order.length} 頁、${megabytes(size)}、${where}、${seconds(started)}）`);
     if (stale()) {
       abandon();
       return;
@@ -1538,8 +1694,14 @@ async function mergeAndVerify() {
     mergeProgress.label = () => '検証しています';
     mergeProgress.stage(0.5, 1);
     mergeProgress.show('結合した PDF を検証しています…', null);
+    // 保存領域に置いたものは、読んだ中身を pdf.js へそのまま渡す（写しを作らない）。
+    // メモリの上のものは、保存するために手元に残す。
+    const bytes = output.bytes ?? new Uint8Array(await output.file.arrayBuffer());
+    log('検証: 結合した PDF を読みました');
     const mergedDigests = await pageDigests(bytes);
-    const doc = await openPdf(bytes);
+    log('検証: 頁の指紋を求めました');
+    const doc = await openPdf(bytes, { transfer: !output.bytes });
+    log('検証: pdf.js で開きました');
     const actual = [];
     let labels;
     let info;
@@ -1551,6 +1713,10 @@ async function mergeAndVerify() {
           readPageText(doc, index)
         );
         actual.push({ size: page.size, signature: page.signature, digest: mergedDigests[index] });
+        // 読んだ頁の書体などを、文書に溜めない（pdf.js は文書を閉じるまで抱える。
+        // 1 頁のファイルを何百もつないだ PDF は頁ごとに別の書体を持つので、iPhone
+        // では検証の途中でページごと落ちた）。
+        await doc.cleanup();
         if (index % 16 === 0) await breathe();
       }
       if (!stale()) {
@@ -1575,7 +1741,7 @@ async function mergeAndVerify() {
     const result = compareOutput(expected, actual);
     const wantLabels = pageLabelTexts(ranges, order.length);
     const labelsOk = Array.isArray(labels) && labels.every((label, i) => label === wantLabels[i]);
-    merged = { bytes, fileName, result, labelsOk, title: info?.Title || '' };
+    merged = { data: output.file ?? output.bytes, size, fileName, result, labelsOk, title: info.Title || '' };
     log(
       result.ok && labelsOk
         ? `検証しました（${result.pageCount.actual} 頁すべて一致）`
@@ -1584,9 +1750,15 @@ async function mergeAndVerify() {
     renderVerify();
     $('downloadBtn').disabled = false;
   } catch (error) {
+    // 並びが変わっていれば（外したファイルの中身を読めなかったなど）、捨てたことにする。
+    if (stale()) {
+      abandon();
+      return;
+    }
     showMessage(error.message || String(error), 'red');
   } finally {
     merging = false;
+    keepLog(); // 処理を終えたので、残した記録を消す（調べている途中なら、そちらを残す）
     mergeProgress.show('');
     button.disabled = false;
     // 結合の途中に開いた拡大表示は縮小画像だけなので、大きく描き直す。
@@ -1594,9 +1766,44 @@ async function mergeAndVerify() {
   }
 }
 
+/**
+ * 結合した PDF を、保存領域へ少しずつ書き出す。書けなかったら null（メモリの
+ * 上で結合し直す）。結合そのものの失敗（暗号化されたファイルなど）はそのまま投げる。
+ */
+async function mergeIntoStash(writeMergedPdf, options) {
+  let failed = null;
+  const guard = async (run) => {
+    try {
+      return await run();
+    } catch (error) {
+      failed = error;
+      throw error;
+    }
+  };
+  // 結合するたびに別の名前で書く（前に結合した PDF を、保存している最中に
+  // 書き換えないように）。前のものは、書き終えてから消す。
+  const name = `merged-${++mergeCount}.pdf`;
+  let writer = null;
+  try {
+    writer = await guard(() => stash.writer(name));
+    const { size, digests } = await writeMergedPdf({ ...options, write: (chunk) => guard(() => writer.write(chunk)) });
+    const file = await guard(() => writer.close());
+    if (mergedName) stash.remove(mergedName);
+    mergedName = name;
+    return { file, size, digests };
+  } catch (error) {
+    // 書きかけは閉じて消す（書き口を開いたままにすると、次の結合で開けない）。
+    if (writer) await writer.close().catch(() => {});
+    await stash.remove(name);
+    if (error !== failed) throw error;
+    log(`結合した PDF を保存領域に書けなかったので、メモリの上で結合し直します（${error.message}）`);
+    return null;
+  }
+}
+
 function renderVerify() {
   const box = $('verifyResult');
-  const { result, labelsOk, bytes, title } = merged;
+  const { result, labelsOk, size, title } = merged;
   const ok = result.ok && labelsOk;
   box.className = `bm-verify ${ok ? 'ok' : 'ng'}`;
   const lines = [];
@@ -1611,7 +1818,7 @@ function renderVerify() {
   lines.push(
     `文字情報（検索できる文字）のある頁: ${result.textPages} / ${result.pageCount.actual} 頁。` +
       `頁ラベル（ビューアーに出る頁番号）: ${labelsOk ? '本の頁番号と一致' : '書き込みを確かめられませんでした'}。` +
-      `タイトル: ${title || '（なし）'}。大きさ: ${megabytes(bytes.length)}。`
+      `タイトル: ${title || '（なし）'}。大きさ: ${megabytes(size)}。`
   );
   box.replaceChildren(...lines.map((line) => el(document, 'p', null, line)));
   if (result.mismatches.length) {
@@ -1630,8 +1837,13 @@ async function download() {
   if (!merged) return;
   // 共有シートを開いている間に、名前を変えるなどして結合した PDF が捨てられる
   // ことがあるので、渡すものは先に取っておく。
-  const { bytes, fileName } = merged;
-  const how = await savePdf(bytes, fileName);
+  const { data, fileName, size } = merged;
+  saving = true;
+  log(`「${fileName}」を保存します（${megabytes(size)}）`);
+  const how = await savePdf(data, fileName).finally(() => {
+    saving = false;
+    keepLog();
+  });
   if (how === 'shared') log(`「${fileName}」を共有シートに渡しました`);
   else if (how === 'downloaded') log(`「${fileName}」をダウンロードしました`);
 }
@@ -1724,10 +1936,31 @@ function wireHelp() {
 }
 
 function wireUp() {
+  // 前回、途中でページが落ちていたら、その記録を出す。
+  crashLog.clearOnLeave();
+  crashLog.takePrevious().then((previous) => {
+    if (!previous.length) return;
+    logLines.unshift('── 前回、途中でページが終わる前の記録 ──', ...previous, '── ここから今回の記録 ──');
+    $('logBox').hidden = false;
+    renderLog();
+    showMessage(
+      '前回は処理の途中でページが終わったようです。下の「処理の記録」を開いて「ログをコピー」し、知らせてください。',
+      'red'
+    );
+  });
   if (!pdfLibViews) {
     // ファイルを読む前に知らせる（読み込んだ時点で、写しはもう作られる）。
     log('pdf-lib にバイト列を写させない設定が効いていません。大きな本ではメモリが足りなくなることがあります');
   }
+  stashReady = openStash().then(
+    (target) => (stash = target),
+    (error) => {
+      // 保存領域を使えなければ、Blob にしてページの外に置く（stash.js）。
+      stashProblem = error.message;
+      stash = blobStash();
+      return stash;
+    }
+  );
   $('driveBtn').addEventListener('click', addFromDrive);
   $('localBtn').addEventListener('click', () => $('localInput').click());
   $('localInput').addEventListener('change', (event) => {

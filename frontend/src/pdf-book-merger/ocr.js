@@ -109,12 +109,32 @@ async function createScheduler() {
 /** OCR を使えるようにしておく（初回の読み込み）。失敗したら次の呼び出しでやり直す。 */
 export function prepareOcr() {
   if (!schedulerPromise) {
-    schedulerPromise = createScheduler().catch((error) => {
-      schedulerPromise = null;
+    const starting = createScheduler().catch((error) => {
+      // 用意している間に手放され、別のものを用意し始めていたら、そちらは残す。
+      if (schedulerPromise === starting) schedulerPromise = null;
       throw error;
     });
+    schedulerPromise = starting;
   }
   return schedulerPromise;
+}
+
+/**
+ * OCR を手放す（worker を止める）。次に読むときは、prepareOcr で用意し直す。
+ *
+ * Tesseract.js の worker は、読んだ画像に合わせて WebAssembly のメモリを
+ * 広げ、縮めない。200 頁を読み終えると 2 つで 300 MB を超えていた（Chromium で
+ * 測ると、止めたらページのメモリが 876 MB → 514 MB）。iPhone では、これを
+ * 抱えたまま結合するとページごと落ちたので、読み終えたら手放す。
+ * 読んでいる最中に呼ばないこと（読みかけの頁は失敗する）。止め損ねても失敗に
+ * しない（次に読むときは、新しく用意する）。
+ */
+export async function releaseOcr() {
+  const starting = schedulerPromise;
+  schedulerPromise = null;
+  // 用意している途中に失敗したら、止めるものは無い。
+  const scheduler = await starting?.catch(() => null);
+  await scheduler?.terminate().catch(() => {});
 }
 
 // 1 つのかたまりを読む字の高さ（px）。1 文字だけの「1」「9」は、大きさに

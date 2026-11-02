@@ -56,14 +56,33 @@ export const IOS_SOFT_MASK_PIXELS = 48e6;
 const MIN_BAND_ROWS = 16;
 
 /**
+ * どの文書も、1 つの worker で開く。
+ *
+ * pdf.js は、worker を渡さないと文書ごとに worker を作り、閉じたら止める。
+ * 1 頁のファイルを何百も読むと、そのたびに worker を起こして pdf.js の本体
+ * （数 MB）を読み直すことになる（200 ファイルで、調べる時間の半分ほどが
+ * これだった）。同じ worker を使い回し、文書を閉じたときは、その文書の
+ * 中身だけを手放す。
+ */
+let sharedWorker = null;
+
+function workerOf() {
+  sharedWorker ??= new pdfjs.PDFWorker();
+  return sharedWorker;
+}
+
+/**
  * PDF を開く。
  *
  * pdf.js は受け取ったバイト列を worker へ渡して手放してしまうので、
- * 結合に使う元のバイト列は渡さず、複製を渡す。
+ * 結合に使う元のバイト列は渡さず、複製を渡す。transfer なら、写さずにそのまま
+ * 渡す（手元では使えなくなる。結合した PDF を検証するときや、保存領域から
+ * 読んだときに、本 1 冊ぶんの写しを作らないため）。reload は、WebKit で描き
+ * 直しのために開き直すときに中身を読み直す関数（transfer のときに渡す）。
  *
  * @param {Uint8Array} bytes
  */
-export async function openPdf(bytes, { safe = false } = {}) {
+export async function openPdf(bytes, { safe = false, transfer = false, reload = null } = {}) {
   const webkit = isWebKit(globalThis.navigator);
   // iPhone・iPad では、はじめから OffscreenCanvas を切る。worker の中で
   // 600dpi のスキャン（3000 万画素ほど）を OffscreenCanvas に描くと、canvas の
@@ -71,7 +90,8 @@ export async function openPdf(bytes, { safe = false } = {}) {
   // 間にメモリが尽きてページごと落ちた。
   safe ||= isIOS(globalThis.navigator);
   const doc = await pdfjs.getDocument({
-    data: bytes.slice(),
+    data: transfer ? bytes : bytes.slice(),
+    worker: workerOf(),
     isEvalSupported: false,
     // CMap・標準フォント・画像の展開の wasm（pdf-data.js）。渡さないと、ToUnicode を
     // 持たない日本語のフォント（カタログの PDF によくある）の文字が消える。
@@ -87,7 +107,8 @@ export async function openPdf(bytes, { safe = false } = {}) {
     // （drawPage）。
     isOffscreenCanvasSupported: !(webkit && safe),
   }).promise;
-  if (webkit && !safe) fallbacks.set(doc, { bytes, safe: null, failed: false });
+  // 描き直しで開き直すときの中身（写さずに渡したときは、もう手元に無いので読み直す）。
+  if (webkit && !safe) fallbacks.set(doc, { load: reload ?? (() => bytes), safe: null, failed: false });
   return doc;
 }
 
@@ -105,7 +126,7 @@ export function redrawnSafely(doc) {
 function safeDocOf(doc) {
   const fallback = fallbacks.get(doc);
   if (!fallback) return null;
-  fallback.safe ??= openPdf(fallback.bytes, { safe: true });
+  fallback.safe ??= Promise.resolve(fallback.load()).then((bytes) => openPdf(bytes, { safe: true }));
   return fallback.safe;
 }
 

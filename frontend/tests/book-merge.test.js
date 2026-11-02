@@ -11,10 +11,10 @@
 // ことを縛る。あわせて、文字の位置の読み方（text-layer.js）と、突き合わせ
 // （verify.js）も確かめる。
 
-import { PDFDocument, PDFHexString, PDFName, StandardFonts } from 'pdf-lib';
+import { PDFDocument, PDFHexString, PDFName, PDFRawStream, PDFRef, StandardFonts } from 'pdf-lib';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { describe, expect, it } from 'vitest';
-import { loadSource, mergePdf, pageDigest, pageDigests } from '../src/pdf-book-merger/merge.js';
+import { describe, expect, it, vi } from 'vitest';
+import { loadSource, mergePdf, pageDigest, pageDigests, writeMergedPdf } from '../src/pdf-book-merger/merge.js';
 import { pageLabelRanges, pageLabelTexts } from '../src/pdf-book-merger/ordering.js';
 import { pageNumberCandidates } from '../src/pdf-book-merger/page-numbers.js';
 import { multiply, textItems, textSignature } from '../src/pdf-book-merger/text-layer.js';
@@ -169,6 +169,81 @@ describe('mergePdf', () => {
     ).rejects.toThrow('結合するファイルの中身がありません。');
   });
 
+  it('少しずつ書き出す: 1 ファイルずつ読み、大きな画像はそのまま、小さな物はまとめて渡す', async () => {
+    // 中身を確かめない画像を置いた頁（大きさは bytes）。
+    async function scanSource(sizes) {
+      const doc = await PDFDocument.create();
+      const font = await doc.embedFont(StandardFonts.Helvetica);
+      sizes.forEach((size, i) => {
+        const page = doc.addPage(SIZE);
+        const dict = doc.context.obj({ Type: 'XObject', Subtype: 'Image', Width: 1, Height: 1, ColorSpace: 'DeviceGray', BitsPerComponent: 8, Filter: 'DCTDecode' });
+        page.node.setXObject(PDFName.of('Im0'), doc.context.register(PDFRawStream.of(dict, new Uint8Array(size).fill(i + 1))));
+        page.drawText(`Body ${size}`, { x: 40, y: 300, size: 11, font });
+      });
+      return doc.save();
+    }
+    const MB = 1 << 20;
+    const big = await scanSource([1.5 * MB]);
+    const small = await scanSource([400_000, 400_000, 400_000]);
+    const loads = [];
+    const sources = new Map([
+      ['big', { name: 'big.pdf', load: async () => (loads.push('big'), big) }],
+      ['small', { name: 'small.pdf', load: async () => (loads.push('small'), small) }],
+    ]);
+    const order = [
+      { fileKey: 'small', pageIndex: 0 },
+      { fileKey: 'big', pageIndex: 0 },
+      { fileKey: 'small', pageIndex: 2 },
+      { fileKey: 'small', pageIndex: 1 },
+    ];
+    const chunks = [];
+
+    const { size, digests } = await writeMergedPdf({
+      sources,
+      order,
+      title: 't',
+      write: (chunk) => {
+        chunks.push(chunk);
+      },
+    });
+
+    expect(loads).toEqual(['small', 'big']);
+    // 大きな画像はそのまま 1 つで渡し、小さな物はまとめてから渡す（1 MB を超えたら）。
+    const sizes = chunks.map((chunk) => chunk.length);
+    // 大きな物の前には必ずその頭（「n 0 obj」）があるので、空のまま渡すことは無い。
+    expect(Math.min(...sizes)).toBeGreaterThan(0);
+    expect(sizes.filter((n) => n > 1.5 * MB && n < 1.5 * MB + 1000)).toHaveLength(1); // 画像（と辞書）
+    expect(sizes.filter((n) => n >= MB && n < 1.5 * MB)).toHaveLength(1); // 400 KB の画像 3 つをまとめたもの
+    const bytes = new Uint8Array(size);
+    let at = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, at);
+      at += chunk.length;
+    }
+    expect(at).toBe(size);
+    const merged = await readBack(bytes);
+    expect(merged.pages.map((p) => p.text)).toEqual(['Body 400000', 'Body 1572864', 'Body 400000', 'Body 400000']);
+    expect(await pageDigests(bytes)).toEqual(digests);
+  });
+
+  it('元のファイルが無い物を指していても、壊れていない PDF を書く（その番号は空きにする）', async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const page = doc.addPage(SIZE);
+    page.drawText('dangling', { x: 40, y: 300, size: 11, font });
+    // 中身の無い番号を指す（スキャナが作る PDF に、ときどきある）。
+    page.node.set(PDFName.of('PieceInfo'), PDFRef.of(9999));
+    const source = await doc.save();
+
+    const { bytes } = await mergePdf({ sources: new Map([['a', { bytes: source, name: 'a.pdf' }]]), order: [{ fileKey: 'a', pageIndex: 0 }], title: 't' });
+
+    const text = new TextDecoder('latin1').decode(bytes);
+    expect(text).not.toContain('undefined');
+    expect(text).toMatch(/0000000000 00000 f \n/);
+    const merged = await readBack(bytes);
+    expect(merged.pages.map((p) => p.text)).toEqual(['dangling']);
+  });
+
   it('PDF でないものは、ファイル名を添えて止める', async () => {
     await expect(loadSource(new TextEncoder().encode('not a pdf'), 'x.pdf')).rejects.toThrow(
       '「x.pdf」を PDF として読み込めませんでした'
@@ -284,6 +359,45 @@ describe('pageDigest', () => {
     expect(red).toMatch(/^[0-9a-f]{64}$/);
     expect(red).toBe(await pageDigest(await scanPage(RED)));
     expect(blue).not.toBe(red);
+  });
+
+  it('バイト列をつなげずに 1 つずつ求め、全頁の指紋も 1 頁ずつ求める（頁の画像を写して抱えない）', async () => {
+    // スキャンの JPEG の代わりに、中身を確かめない 5000 バイトの画像を 2 枚ずつ置く。
+    const IMAGE = 5000;
+    const doc = await PDFDocument.create();
+    for (let i = 0; i < 3; i++) {
+      const page = doc.addPage(SIZE);
+      for (const k of [0, 1]) {
+        const dict = doc.context.obj({ Type: 'XObject', Subtype: 'Image', Width: 1, Height: 1, ColorSpace: 'DeviceGray', BitsPerComponent: 8, Filter: 'DCTDecode' });
+        const image = doc.context.register(PDFRawStream.of(dict, new Uint8Array(IMAGE).fill(i * 2 + k)));
+        page.node.setXObject(PDFName.of(`Im${k}`), image);
+      }
+    }
+    const bytes = await doc.save();
+
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    const sizes = [];
+    let running = 0;
+    let overlap = 0;
+    const spy = vi.spyOn(crypto.subtle, 'digest').mockImplementation(async (algorithm, data) => {
+      sizes.push(data.byteLength);
+      overlap = Math.max(overlap, ++running);
+      try {
+        return await digest(algorithm, data);
+      } finally {
+        running--;
+      }
+    });
+    let digests;
+    try {
+      digests = await pageDigests(bytes);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(Math.max(...sizes)).toBe(IMAGE);
+    expect(overlap).toBe(1);
+    expect(new Set(digests).size).toBe(3);
   });
 
   it('描くものの無い頁にも指紋がある', async () => {
