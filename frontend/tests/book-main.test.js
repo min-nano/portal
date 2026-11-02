@@ -715,6 +715,24 @@ describe('ファイルを足して並べる', () => {
     expect(Math.max(...second)).toBeGreaterThan(0.9);
   });
 
+  it('ファイルの替わり目ではバーを隠さず、すべて調べ終えてから隠す（画面がちらつかないように）', async () => {
+    const hidden = [];
+    const observer = new MutationObserver(() => hidden.push($('progress').hidden));
+    observer.observe($('progress'), { attributes: true, attributeFilter: ['hidden'] });
+    const seen = watchBar();
+    drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+    await flush();
+    seen.stop();
+    observer.disconnect();
+
+    // 出したら、隠すのは最後の 1 度だけ。
+    expect(hidden).toEqual([false, true]);
+    // 替わり目では、1 つめを済ませた位置（半分）で止め、2 つめの見出しに替える。
+    expect(seen).toContainEqual({ value: 0.5, label: 'ファイルを調べています（2 / 2）' });
+    expectNeverBack(seen);
+  });
+
   it('調べている途中でファイルを足しても、バーは戻らない', async () => {
     const release = holdImage('o3');
     const seen = watchBar();
