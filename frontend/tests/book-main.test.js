@@ -65,6 +65,7 @@ const mocks = vi.hoisted(() => ({
   openStash: vi.fn(),
   openOptions: [],
   cleanups: 0,
+  releasePdfWorker: vi.fn(),
 }));
 
 vi.mock('../src/page-start.js', () => ({
@@ -144,6 +145,7 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
     manySoftMasks: (softMasks = 0) => softMasks > 8,
     closePdf: (...args) => mocks.closePdf(...args),
     releaseCanvas: () => {},
+    releasePdfWorker: () => mocks.releasePdfWorker(),
   };
 });
 
@@ -316,6 +318,8 @@ beforeEach(async () => {
   mocks.openStash.mockResolvedValue(null);
   mocks.openOptions.length = 0;
   mocks.cleanups = 0;
+  mocks.releasePdfWorker.mockReset();
+  mocks.releasePdfWorker.mockReturnValue(true);
   mocks.readStrip.mockImplementation(async (strip) =>
     strip.zone === 'bottom' && strip.page.ocr ? [{ text: String(strip.page.number), x0: 0.48, x1: 0.52, y: 0.95, h: 0.012 }] : []
   );
@@ -1505,6 +1509,9 @@ describe('結合と検証', () => {
     expect(text).toContain('検証: pdf.js で開きました');
     // 検証では、1 頁読むたびに pdf.js の文書に溜めたもの（書体など）を捨てる。
     expect(mocks.cleanups).toBe(8);
+    // 検証を終えたら、pdf.js の worker ごと止めて、結合した PDF の写しを返す。
+    expect(mocks.releasePdfWorker).toHaveBeenCalledTimes(1);
+    expect(text).toContain('検証: pdf.js の worker を止めて、結合した PDF の写しを手放しました');
 
     // 保存するのは、その Blob。
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
@@ -1514,6 +1521,8 @@ describe('結合と検証', () => {
   });
 
   it('保存領域の代わりも使えなければ（テストの偽物だけ）、メモリに持つと記録に出す', async () => {
+    // ほかに開いている文書があれば、worker は止めない（記録にも出さない）。
+    mocks.releasePdfWorker.mockReturnValue(false);
     drop([file('猫_奇数.pdf', pdf(ODD))]);
     await settled(1);
     $('mergeBtn').click();
@@ -1521,6 +1530,7 @@ describe('結合と検証', () => {
     $('logBox').open = true;
     $('logBox').dispatchEvent(new Event('toggle'));
     expect($('logText').textContent).toContain('読み込んだ PDF はメモリに持ちます');
+    expect($('logText').textContent).not.toContain('worker を止めて');
     expect($('logText').textContent).toContain('メモリの上で');
   });
 

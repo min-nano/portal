@@ -11,7 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const opened = [];
 vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
   GlobalWorkerOptions: {},
-  PDFWorker: class PDFWorker {},
+  PDFWorker: class PDFWorker {
+    destroy() {
+      this.destroyed = true;
+    }
+  },
   AnnotationMode: { DISABLE: 0 },
   getDocument: (params) => {
     const doc = {
@@ -52,6 +56,7 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
       }),
     };
     doc.failWithOffscreen = globalThis.__failWithOffscreen;
+    if (globalThis.__failToOpen) return { promise: Promise.reject(new Error('Invalid PDF structure')) };
     opened.push(doc);
     return { promise: Promise.resolve(doc) };
   },
@@ -68,6 +73,7 @@ beforeEach(async () => {
   vi.resetModules();
   opened.length = 0;
   globalThis.__failWithOffscreen = false;
+  globalThis.__failToOpen = false;
   HTMLCanvasElement.prototype.toBlob = function toBlob(callback) {
     callback(new Blob(['x']));
   };
@@ -132,6 +138,30 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
     const [{ params: first }] = opened;
     expect(first.worker).toBeTruthy();
     expect(opened.every(({ params }) => params.worker === first.worker)).toBe(true);
+  });
+
+  it('開いている文書が無いときだけ、worker を止める（次に開くときに作り直す）', async () => {
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+    // まだ worker が無ければ、止めるものは無い。
+    expect(source.releasePdfWorker()).toBe(false);
+
+    const doc = await source.openPdf(new Uint8Array([1]));
+    const worker = opened[0].params.worker;
+    expect(source.releasePdfWorker()).toBe(false);
+    expect(worker.destroyed).toBeUndefined();
+
+    await source.closePdf(doc);
+    expect(source.releasePdfWorker()).toBe(true);
+    expect(worker.destroyed).toBe(true);
+
+    // 開けなかった文書は数えない。
+    globalThis.__failToOpen = true;
+    await expect(source.openPdf(new Uint8Array([2]))).rejects.toThrow('Invalid PDF structure');
+    expect(source.releasePdfWorker()).toBe(true);
+
+    globalThis.__failToOpen = false;
+    await source.openPdf(new Uint8Array([3]));
+    expect(opened.at(-1).params.worker).not.toBe(worker);
   });
 
   it('写さずに渡すときは、渡したバイト列をそのまま pdf.js に渡す', async () => {

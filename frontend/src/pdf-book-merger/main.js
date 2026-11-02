@@ -57,6 +57,7 @@ import {
   readPageText,
   redrawnSafely,
   releaseCanvas,
+  releasePdfWorker,
   renderMargins,
   renderPageImage,
   renderPreview,
@@ -1726,6 +1727,9 @@ async function mergeAndVerify() {
     } finally {
       // 失敗しても閉じる（結合した PDF 全体を worker に残さない）。
       await closePdf(doc);
+      // ほかに開いている文書が無ければ worker ごと止めて、写しをその場で返す
+      // （保存で共有シートへ渡すときに、メモリを空けておく）。
+      if (releasePdfWorker()) log('検証: pdf.js の worker を止めて、結合した PDF の写しを手放しました');
     }
     if (stale()) {
       abandon();
