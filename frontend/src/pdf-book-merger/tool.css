@@ -99,11 +99,57 @@ button.bm-help-btn:hover,
   white-space: nowrap;
 }
 
-.bm-progress progress {
+/* バー。済んだところはベタ塗り、いま進めている区間は動くストライプで描き分ける
+   （ブラウザの「分からない表示」はバー全体を往復して、済んだところと重なるため使わない）。 */
+.bm-bar {
+  position: relative;
   flex: 1 1 auto;
   min-width: 4rem;
   max-width: 16rem;
-  accent-color: var(--brand-600);
+  height: 0.5rem;
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: var(--border);
+}
+
+.bm-bar-done,
+.bm-bar-busy {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+}
+
+.bm-bar-done {
+  background: var(--brand-600);
+}
+
+.bm-bar-busy {
+  /* 区間が細くても（ファイルが数百あると 1 つ分は 1px に満たない）動いているのが見える幅は取る。 */
+  min-width: 0.75rem;
+  /* ベタ塗りと同じ色を薄めて使う（明るい・暗いどちらの配色でも同じ見え方にする）。 */
+  --bm-bar-stripe: color-mix(in srgb, var(--brand-600) 60%, transparent);
+  background: linear-gradient(
+    45deg,
+    var(--bm-bar-stripe) 25%,
+    transparent 25% 50%,
+    var(--bm-bar-stripe) 50% 75%,
+    transparent 75%
+  );
+  background-size: 0.75rem 0.75rem;
+  animation: bm-bar-busy 0.8s linear infinite;
+}
+
+@keyframes bm-bar-busy {
+  to {
+    background-position: 0.75rem 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bm-bar-busy {
+    animation: none;
+  }
 }
 
 /* ログ。畳んだ見出しは控えめにし、開いたら等幅で読めるようにする。 */
