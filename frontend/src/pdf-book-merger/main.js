@@ -35,7 +35,7 @@ import { savePdf } from './save-file.js';
 import { measure } from './measure-client.js';
 import { prepareOcr, readStrip, releaseOcr } from './ocr.js';
 import { blobStash, openStash } from './stash.js';
-import { createCrashLog } from './crash-log.js';
+import { CRASH_LOG_LINES, createCrashLog } from './crash-log.js';
 import {
   buildBookOrder,
   checkSequence,
@@ -241,7 +241,9 @@ function renderProgress() {
   if (progress.fraction === null) bar.removeAttribute('value');
   else if (progress.text) bar.value = progress.overall();
   renderLog();
-  keepLog();
+  // 進み具合は頁ごとに変わるので、残すのは間を空けて（localStorage への書き込みは
+  // 画面を止める）。
+  keepLog(false);
 }
 
 /** 調べる流れの進み具合を出す（ほとんどの経過はこちら）。 */
@@ -274,15 +276,28 @@ function log(text) {
   keepLog();
 }
 
-/** 記録の終わりのほうと、いま実行中のことを残す（ページが落ちたときのため）。 */
-function keepLog() {
-  const running = [mergeProgress.text, readProgress.text].filter(Boolean).map((text) => `（実行中）${text}`);
-  crashLog.record([...logLines.slice(-200), ...running]);
+/** いま実行中のこと（記録の終わりに添える）。 */
+function runningLines() {
+  return [mergeProgress.text, readProgress.text].filter(Boolean).map((text) => `（実行中）${text}`);
+}
+
+/** 進み具合だけが変わったときに残す間隔（ミリ秒）。 */
+const KEEP_EVERY_MS = 500;
+let keptAt = 0;
+
+/**
+ * 記録の終わりのほうと、いま実行中のことを残す（ページが落ちたときのため）。
+ * always でなければ、前に残してから KEEP_EVERY_MS 経つまでは残さない。
+ */
+function keepLog(always = true) {
+  const now = Date.now();
+  if (!always && now - keptAt < KEEP_EVERY_MS) return;
+  keptAt = now;
+  crashLog.record([...logLines.slice(-CRASH_LOG_LINES), ...runningLines()]);
 }
 
 function logText() {
-  const running = [mergeProgress.text, readProgress.text].filter(Boolean).map((text) => `（実行中）${text}`);
-  return [...logLines, ...running].join('\n');
+  return [...logLines, ...runningLines()].join('\n');
 }
 
 function renderLog() {
@@ -766,7 +781,10 @@ async function readMarginsWithOcr(file, pages) {
   if (!pdfLibViews || file.stashed) {
     readProgress.stage(0, 0.1);
     showProgress(`「${file.name}」の頁の画像を調べ直しています`, null);
-    const { scans } = await findScanImages(await bytesOf(file));
+    // 保存領域に置いたものは、読む間だけメモリに持つ（PDF を開くのにも同じものを
+    // 使い、2 度読まない。queueLateOcr が読み終えたら手放す）。
+    file.bytes = await bytesOf(file);
+    const { scans } = await findScanImages(file.bytes);
     for (const page of pages) page.scan = scans[page.index] ?? null;
     readProgress.stage(0.1, 1);
   }
@@ -815,6 +833,7 @@ function queueLateOcr(file) {
     } finally {
       file.ocrBusy = false;
       for (const page of pages) page.scan = null;
+      if (file.stashed) file.bytes = null;
       if (files.includes(file)) refresh();
     }
   });
@@ -1669,12 +1688,16 @@ async function mergeIntoStash(writeMergedPdf, options) {
       throw error;
     }
   };
+  let writer = null;
   try {
-    const writer = await guard(() => stash.writer('merged.pdf'));
+    writer = await guard(() => stash.writer('merged.pdf'));
     const { size, digests } = await writeMergedPdf({ ...options, write: (chunk) => guard(() => writer.write(chunk)) });
     const file = await guard(() => writer.close());
     return { file, size, digests };
   } catch (error) {
+    // 書きかけは閉じて消す（書き口を開いたままにすると、次の結合で開けない）。
+    if (writer) await writer.close().catch(() => {});
+    await stash.remove('merged.pdf');
     if (error !== failed) throw error;
     log(`結合した PDF を保存領域に書けなかったので、メモリの上で結合し直します（${error.message}）`);
     return null;
@@ -1811,10 +1834,6 @@ function wireHelp() {
 }
 
 function wireUp() {
-  if (!pdfLibViews) {
-    // ファイルを読む前に知らせる（読み込んだ時点で、写しはもう作られる）。
-    log('pdf-lib にバイト列を写させない設定が効いていません。大きな本ではメモリが足りなくなることがあります');
-  }
   // 前回、途中でページが落ちていたら、その記録を出す。
   const previous = crashLog.takePrevious();
   crashLog.clearOnLeave();
@@ -1825,6 +1844,10 @@ function wireUp() {
       '前回は処理の途中でページが終わったようです。下の「処理の記録」を開いて「ログをコピー」し、知らせてください。',
       'red'
     );
+  }
+  if (!pdfLibViews) {
+    // ファイルを読む前に知らせる（読み込んだ時点で、写しはもう作られる）。
+    log('pdf-lib にバイト列を写させない設定が効いていません。大きな本ではメモリが足りなくなることがあります');
   }
   stashReady = openStash().then(
     (target) => (stash = target),

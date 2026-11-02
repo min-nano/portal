@@ -27,23 +27,28 @@ async function directoryOf(root, dir) {
 export async function run(root, { op, dir, name, bytes }) {
   const key = `${dir}/${name}`;
   if (op === 'open') {
+    // 前の書き口が残っていれば閉じる（同じファイルには 1 つしか開けない）。
+    await open.get(key)?.access.close();
+    open.delete(key);
     const directory = await directoryOf(root, dir);
     const file = await directory.getFileHandle(name, { create: true });
     const access = await file.createSyncAccessHandle();
-    access.truncate(0);
+    // Safari 16.3 までは、書き口の操作が Promise を返す（いまの決まりでは返さない）。
+    // どちらでも済むのを待つ。
+    await access.truncate(0);
     open.set(key, { access, at: 0 });
     return;
   }
   const writing = open.get(key);
   if (!writing) throw new Error(`「${name}」は書き口が開いていません。`);
   if (op === 'append') {
-    writing.at += writing.access.write(bytes, { at: writing.at });
+    writing.at += await writing.access.write(bytes, { at: writing.at });
     return;
   }
   if (op === 'close') {
     open.delete(key);
-    writing.access.flush();
-    writing.access.close();
+    await writing.access.flush();
+    await writing.access.close();
     return;
   }
   throw new Error(`知らない頼み（${op}）です。`);

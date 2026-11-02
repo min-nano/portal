@@ -6,10 +6,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const schedulers = [];
+const gates = [];
 vi.mock('tesseract.js', () => ({
   OEM: { LSTM_ONLY: 1 },
   PSM: { SINGLE_LINE: 7 },
-  createWorker: async () => ({ setParameters: async () => {} }),
+  // 待たせたいときは、gates に Promise を積む（呼ばれた順に 1 つずつ待つ）。
+  createWorker: async () => {
+    await gates.shift();
+    return { setParameters: async () => {} };
+  },
   createScheduler: () => {
     const scheduler = { workers: 0, terminated: false };
     scheduler.addWorker = () => scheduler.workers++;
@@ -31,6 +36,7 @@ let ocr;
 beforeEach(async () => {
   vi.resetModules();
   schedulers.length = 0;
+  gates.length = 0;
   ocr = await import('../src/pdf-book-merger/ocr.js');
 });
 
@@ -56,6 +62,38 @@ describe('OCR の用意と手放し', () => {
 
     await expect(ocr.releaseOcr()).resolves.toBeUndefined();
     expect(await ocr.prepareOcr()).not.toBe(first);
+  });
+
+  it('用意している途中に手放して、その用意が失敗しても、あとで用意し直したものは残す', async () => {
+    let fail;
+    gates.push(new Promise((_, reject) => (fail = reject)));
+    const first = ocr.prepareOcr();
+    first.catch(() => {});
+    // 1 つ目の worker を待っているところまで進める（テストの偽物は、読み込みが
+    // 重なると本物の Tesseract.js が返ることがあるので、重ねない）。
+    await vi.waitFor(() => expect(gates).toHaveLength(0));
+    const releasing = ocr.releaseOcr();
+    // 前の用意（1 つ目の worker を待っている）とは別に、用意し直す。
+    const second = ocr.prepareOcr();
+    fail(new Error('network'));
+    await expect(first).rejects.toThrow('network');
+    await expect(releasing).resolves.toBeUndefined();
+
+    // 失敗した前の用意が、あとの用意を消さない。
+    const ready = await second;
+    expect(ocr.prepareOcr()).toBe(second);
+    await ocr.releaseOcr();
+    expect(ready.terminated).toBe(true);
+  });
+
+  it('用意に失敗したら、次に呼んだときに用意し直す', async () => {
+    let fail;
+    gates.push(new Promise((_, reject) => (fail = reject)));
+    const first = ocr.prepareOcr();
+    fail(new Error('network'));
+    await expect(first).rejects.toThrow('network');
+
+    expect(await ocr.prepareOcr()).toBeTruthy();
   });
 
   it('用意していなければ、手放すものは無い', async () => {

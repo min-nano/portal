@@ -11,7 +11,7 @@
 // ことを縛る。あわせて、文字の位置の読み方（text-layer.js）と、突き合わせ
 // （verify.js）も確かめる。
 
-import { PDFDocument, PDFHexString, PDFName, PDFRawStream, StandardFonts } from 'pdf-lib';
+import { PDFDocument, PDFHexString, PDFName, PDFRawStream, PDFRef, StandardFonts } from 'pdf-lib';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { describe, expect, it, vi } from 'vitest';
 import { loadSource, mergePdf, pageDigest, pageDigests, writeMergedPdf } from '../src/pdf-book-merger/merge.js';
@@ -222,6 +222,24 @@ describe('mergePdf', () => {
     const merged = await readBack(bytes);
     expect(merged.pages.map((p) => p.text)).toEqual(['Body 400000', 'Body 1572864', 'Body 400000', 'Body 400000']);
     expect(await pageDigests(bytes)).toEqual(digests);
+  });
+
+  it('元のファイルが無い物を指していても、壊れていない PDF を書く（その番号は空きにする）', async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const page = doc.addPage(SIZE);
+    page.drawText('dangling', { x: 40, y: 300, size: 11, font });
+    // 中身の無い番号を指す（スキャナが作る PDF に、ときどきある）。
+    page.node.set(PDFName.of('PieceInfo'), PDFRef.of(9999));
+    const source = await doc.save();
+
+    const { bytes } = await mergePdf({ sources: new Map([['a', { bytes: source, name: 'a.pdf' }]]), order: [{ fileKey: 'a', pageIndex: 0 }], title: 't' });
+
+    const text = new TextDecoder('latin1').decode(bytes);
+    expect(text).not.toContain('undefined');
+    expect(text).toMatch(/0000000000 00000 f \n/);
+    const merged = await readBack(bytes);
+    expect(merged.pages.map((p) => p.text)).toEqual(['dangling']);
   });
 
   it('PDF でないものは、ファイル名を添えて止める', async () => {

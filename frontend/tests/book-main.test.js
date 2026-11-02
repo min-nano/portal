@@ -186,6 +186,7 @@ async function fakeStash() {
     removed: [],
     failPut: new Set(),
     failWrite: false,
+    failOpen: false,
     put: vi.fn(async (name, bytes) => {
       if (stash.failPut.has(name)) throw new Error('quota');
       files.set(name, bytes.slice());
@@ -200,6 +201,7 @@ async function fakeStash() {
       files.delete(name);
     },
     writer: async (name) => {
+      if (stash.failOpen) throw new Error('NoModificationAllowedError');
       const chunks = [];
       return {
         write: async (chunk) => {
@@ -207,6 +209,7 @@ async function fakeStash() {
           chunks.push(chunk);
         },
         close: async () => {
+          if (stash.failWrite) throw new Error('not open');
           const blob = new Blob(chunks);
           files.set(name, new Uint8Array(await blob.arrayBuffer()));
           return new File(chunks, name);
@@ -1463,6 +1466,17 @@ describe('結合と検証', () => {
     expect(text).toContain('「猫_偶数.pdf」を保存領域に置けなかったので、メモリに持ちます（quota）');
     expect(text).toContain('結合した PDF を保存領域に書けなかったので、メモリの上で結合し直します（quota）');
     expect(text).toContain('メモリの上で');
+    // 書きかけは消す。
+    expect(stash.removed).toContain('merged.pdf');
+
+    // 書き口を開けなかったときも、メモリの上で結合し直す。
+    stash.failWrite = false;
+    stash.failOpen = true;
+    mocks.mergePdf.mockClear();
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'front');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    expect(mocks.mergePdf).toHaveBeenCalled();
   });
 
   it('保存領域に書き出す結合が、書く以外のことで失敗したら、その理由を出す（メモリの上でやり直さない）', async () => {
@@ -1470,9 +1484,12 @@ describe('結合と検証', () => {
     await addBook();
     mocks.writeMergedPdf.mockRejectedValue(new Error('「猫_奇数.pdf」は暗号化（パスワード保護）されているため結合できません。'));
 
+    const stash = await mocks.openStash();
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('message').textContent).toContain('暗号化'));
     expect(mocks.mergePdf).not.toHaveBeenCalled();
+    // 書きかけは閉じて消す（書き口を開いたままにすると、次の結合で開けない）。
+    expect(stash.removed).toContain('merged.pdf');
   });
 
   it('保存領域に置いている間に外したファイルや、調べられなかったファイルは、置いたものを消す', async () => {
@@ -1505,9 +1522,9 @@ describe('結合と検証', () => {
     change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalled());
     await vi.waitFor(() => expect(fileItem('猫_表紙.pdf').textContent).not.toContain('余白を読み取り中'));
-    // 頁の JPEG は残していないので、置いたものを読んで調べ直す（PDF を開くのと 2 回）。
-    // （名前の順に足すので、猫_表紙.pdf は 2 つ目の f2）
-    expect(stash.reads).toEqual(['f2.pdf', 'f2.pdf']);
+    // 頁の JPEG は残していないので、置いたものを 1 度だけ読んで調べ直す（PDF を
+    // 開くのにも同じものを使う）。（名前の順に足すので、猫_表紙.pdf は 2 つ目の f2）
+    expect(stash.reads).toEqual(['f2.pdf']);
     expect(mocks.findScanImages).toHaveBeenCalledTimes(3);
 
     document.querySelector('#pageGrid [data-page-key="f1:0"] .bm-thumb').click();

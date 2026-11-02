@@ -116,6 +116,17 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
     expect(opened.every(({ params }) => params.worker === first.worker)).toBe(true);
   });
 
+  it('写さずに渡すときは、渡したバイト列をそのまま pdf.js に渡す', async () => {
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+    const bytes = new Uint8Array([1, 2]);
+    await source.openPdf(bytes, { transfer: true });
+    await source.openPdf(bytes);
+
+    expect(opened[0].params.data).toBe(bytes);
+    expect(opened[1].params.data).not.toBe(bytes);
+    expect([...opened[1].params.data]).toEqual([1, 2]);
+  });
+
   it('WebKit でなければ、描けなかったらそのまま失敗を返す', async () => {
     vi.stubGlobal('navigator', { userAgent: CHROME });
     globalThis.__failWithOffscreen = true;

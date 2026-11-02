@@ -76,10 +76,12 @@ async function createScheduler() {
 /** OCR を使えるようにしておく（初回の読み込み）。失敗したら次の呼び出しでやり直す。 */
 export function prepareOcr() {
   if (!schedulerPromise) {
-    schedulerPromise = createScheduler().catch((error) => {
-      schedulerPromise = null;
+    const starting = createScheduler().catch((error) => {
+      // 用意している間に手放され、別のものを用意し始めていたら、そちらは残す。
+      if (schedulerPromise === starting) schedulerPromise = null;
       throw error;
     });
+    schedulerPromise = starting;
   }
   return schedulerPromise;
 }
@@ -97,7 +99,8 @@ export function prepareOcr() {
 export async function releaseOcr() {
   const starting = schedulerPromise;
   schedulerPromise = null;
-  const scheduler = await starting;
+  // 用意している途中に失敗したら、止めるものは無い。
+  const scheduler = await starting?.catch(() => null);
   await scheduler?.terminate().catch(() => {});
 }
 

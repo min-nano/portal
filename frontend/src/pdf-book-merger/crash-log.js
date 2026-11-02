@@ -10,7 +10,7 @@
 
 const KEY = 'pdf-book-merger:log';
 /** 残す行の数（書くたびにまるごと書き直すので、多くしない）。 */
-const KEEP = 200;
+export const CRASH_LOG_LINES = 200;
 
 function storageOf(win) {
   try {
@@ -39,7 +39,7 @@ export function createCrashLog(win = globalThis.window) {
     /** いまの記録の終わりのほうを残す。 */
     record(lines) {
       try {
-        storage?.setItem(KEY, JSON.stringify(lines.slice(-KEEP)));
+        storage?.setItem(KEY, JSON.stringify(lines.slice(-CRASH_LOG_LINES)));
       } catch {
         // 容量の上限など。残せなくても、処理は続ける。
       }

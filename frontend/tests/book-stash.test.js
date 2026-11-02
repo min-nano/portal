@@ -267,6 +267,18 @@ describe('stash-worker（書く側）', () => {
     await expect(run(root, { op: 'rename', dir: 'd', name: 'x' })).rejects.toThrow('知らない頼み（rename）');
   });
 
+  it('閉じていない書き口が残っていても、閉じてから開き直す', async () => {
+    const { run } = await import('../src/pdf-book-merger/stash-worker.js');
+    await run(root, { op: 'open', dir: 'd', name: 'x' });
+    await run(root, { op: 'append', dir: 'd', name: 'x', bytes: new Uint8Array([1, 2]) });
+    await run(root, { op: 'open', dir: 'd', name: 'x' });
+    await run(root, { op: 'append', dir: 'd', name: 'x', bytes: new Uint8Array([3]) });
+    await run(root, { op: 'close', dir: 'd', name: 'x' });
+    const file = await (await (await root.getDirectoryHandle('pdf-merger')).getDirectoryHandle('d')).getFileHandle('x');
+
+    expect([...file.data]).toEqual([3]);
+  });
+
   it('開き直すと空から書き直す', async () => {
     const { run } = await import('../src/pdf-book-merger/stash-worker.js');
     for (const bytes of [new Uint8Array([1, 2, 3]), new Uint8Array([7])]) {

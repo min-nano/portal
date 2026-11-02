@@ -191,14 +191,16 @@ async function writeObject(out, offsets, ref, object) {
 }
 
 /**
- * 相互参照表（xref）と trailer を書く。番号を振った物は、どれも書いてから
- * 手放すので、1 から最後の番号まで、すべて書いてある。
+ * 相互参照表（xref）と trailer を書く。書いていない番号は空き（f）にする
+ * （元のファイルが無い物を指していると、pdf-lib は番号だけ振って中身を入れない）。
  */
 async function writeTrailer(out, offsets, context) {
   const size = context.largestObjectNumber + 1;
   const start = out.offset;
   let xref = `xref\n0 ${size}\n0000000000 65535 f \n`;
-  for (let n = 1; n < size; n++) xref += `${String(offsets[n]).padStart(10, '0')} 00000 n \n`;
+  for (let n = 1; n < size; n++) {
+    xref += offsets[n] === undefined ? '0000000000 00000 f \n' : `${String(offsets[n]).padStart(10, '0')} 00000 n \n`;
+  }
   await out.text(xref);
   const trailer = context.obj({ Size: size, Root: context.trailerInfo.Root, Info: context.trailerInfo.Info });
   await out.text('trailer\n');

@@ -93,9 +93,13 @@ export async function openStash({ nav = globalThis.navigator, WorkerClass = glob
     const root = await nav.storage.getDirectory();
     const base = await root.getDirectoryHandle('pdf-merger', { create: true });
     const dir = `${now}-${Math.random().toString(36).slice(2, 10)}`;
+    // 開いている間はロックを持つ（返さない）。置き場所を作る前に持つ（作ってから
+    // 持つまでの間に、ほかのタブの後片付けに消されないように）。
+    await new Promise((resolve) => {
+      if (!nav.locks) resolve();
+      else nav.locks.request(`${LOCK_PREFIX}${dir}`, () => (resolve(), new Promise(() => {})));
+    });
     const directory = await base.getDirectoryHandle(dir, { create: true });
-    // 開いている間はロックを持つ（返さない）。
-    nav.locks?.request(`${LOCK_PREFIX}${dir}`, () => new Promise(() => {}));
     removeStale(base, dir, nav, now).catch(() => {});
 
     worker = new WorkerClass(new URL('./stash-worker.js', import.meta.url), { type: 'module' });
