@@ -91,7 +91,9 @@ vi.mock('../src/pdf-book-merger/ocr.js', () => ({
   readStrip: (...args) => mocks.readStrip(...args),
   releaseOcr: (...args) => mocks.releaseOcr(...args),
 }));
-vi.mock('../src/pdf-book-merger/stash.js', () => ({
+vi.mock('../src/pdf-book-merger/stash.js', async (importOriginal) => ({
+  // 保存領域を使えないときの置き場所（Blob）は本物を使う。
+  ...(await importOriginal()),
   openStash: (...args) => mocks.openStash(...args),
 }));
 vi.mock('../src/pdf-book-merger/merge.js', () => ({
@@ -178,6 +180,7 @@ function drop(files) {
 async function fakeStash() {
   const files = new Map();
   const stash = {
+    kind: 'opfs',
     files,
     reads: [],
     removed: [],
@@ -1373,8 +1376,8 @@ describe('結合と検証', () => {
     expect(stash.removed).toContain('f2.pdf');
   });
 
-  it('保存領域を使えなければ、その理由を記録に出してメモリに持つ', async () => {
-    mocks.openStash.mockRejectedValue(new Error('このブラウザには OPFS がありません'));
+  it('保存領域を使えなければ、その理由を記録に出し、Blob にしてページの外に置く', async () => {
+    mocks.openStash.mockRejectedValue(new Error('Context not access storage'));
     vi.resetModules();
     installPage();
     await import('../src/pdf-book-merger/main.js');
@@ -1384,16 +1387,38 @@ describe('結合と検証', () => {
 
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    expect(mocks.writeMergedPdf).toHaveBeenCalled();
+    expect(mocks.mergePdf).not.toHaveBeenCalled();
+    // 検証では、読んだ中身をそのまま pdf.js へ渡す（写しを作らない）。
+    expect(mocks.openOptions.at(-1)).toEqual({ transfer: true });
     $('logBox').open = true;
     $('logBox').dispatchEvent(new Event('toggle'));
     const text = $('logText').textContent;
     // 1 度だけ出す。
-    expect(text.split('保存領域を使えないので').length).toBe(2);
-    expect(text).toContain('保存領域を使えないので、読み込んだ PDF はメモリに持ちます（このブラウザには OPFS がありません）');
-    expect(text).toContain('結合を始めます（2 ファイル・8 頁、メモリの上で（保存領域を使えない: このブラウザには OPFS がありません）、');
+    expect(text.split('読み込んだ PDF は').length).toBe(2);
+    expect(text).toContain('読み込んだ PDF は Blob にしてページの外に置きます（保存領域を使えない: Context not access storage）');
+    expect(text).toContain('結合を始めます（2 ファイル・8 頁、結合した PDF は Blob にしてページの外に置きます（保存領域を使えない: Context not access storage）、');
+    expect(text).toContain('Blob に書き出し');
+    expect(text).toContain('検証: pdf.js で開きました');
     // 検証では、1 頁読むたびに pdf.js の文書に溜めたもの（書体など）を捨てる。
     expect(mocks.cleanups).toBe(8);
-    expect(text).toContain('検証: pdf.js で開きました');
+
+    // 保存するのは、その Blob。
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    $('downloadBtn').click();
+    expect(click).toHaveBeenCalled();
+    expect(URL.createObjectURL.mock.calls.at(-1)[0].size).toBeGreaterThan(0);
+  });
+
+  it('保存領域の代わりも使えなければ（テストの偽物だけ）、メモリに持つと記録に出す', async () => {
+    drop([file('猫_奇数.pdf', pdf(ODD))]);
+    await settled(1);
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('読み込んだ PDF はメモリに持ちます');
+    expect($('logText').textContent).toContain('メモリの上で');
   });
 
   it('途中でページが落ちたら、次に開いたときに前回の記録を出す（普通に閉じたら出さない）', async () => {

@@ -11,8 +11,49 @@
 // 次に開いたときに、ロックの無い（閉じたか落ちたページの）置き場所を消す。
 //
 // 書くのは worker（stash-worker.js）、読むのは画面の側。使えない環境（古い
-// ブラウザ・容量の上限など）では openStash が null を返し、画面はこれまでどおり
-// メモリに持つ。
+// ブラウザ・プライベートブラウズなど）では openStash がその理由で失敗し、画面は
+// 代わりに blobStash を使う。
+
+/**
+ * 保存領域を使えないときの置き場所。中身を Blob にして持つ。
+ *
+ * iPhone の Safari では、保存領域を使えないことがある（「Context not access
+ * storage」。プライベートブラウズやアプリの中のブラウザなど）。Blob の中身は、
+ * ブラウザがページとは別のところ（Safari ではネットワークのプロセス、Chromium
+ * ではブラウザのプロセスかディスク）に持つので、Blob にしておけば、ページの
+ * メモリからは外せる。ページが落ちるのは、ページのメモリが上限に届いたとき。
+ */
+export function blobStash() {
+  const blobs = new Map();
+  return {
+    kind: 'blob',
+    async put(name, bytes) {
+      blobs.set(name, new Blob([bytes]));
+    },
+    async writer(name) {
+      // 少しずつ Blob にしていく（つなげた中身をページのメモリに組み立てない）。
+      const parts = [];
+      return {
+        write: async (chunk) => {
+          parts.push(new Blob([chunk]));
+        },
+        close: async () => {
+          blobs.set(name, new Blob(parts));
+          return blobs.get(name);
+        },
+      };
+    },
+    async read(name) {
+      return new Uint8Array(await blobs.get(name).arrayBuffer());
+    },
+    async file(name) {
+      return blobs.get(name);
+    },
+    async remove(name) {
+      blobs.delete(name);
+    },
+  };
+}
 
 /** 開いたページの置き場所の名前の頭（ロックの名前にも使う）。 */
 const LOCK_PREFIX = 'pdf-merger:';
@@ -98,6 +139,7 @@ function createStash(worker, dir, directory) {
   const fileOf = async (name) => (await directory.getFileHandle(name)).getFile();
 
   return {
+    kind: 'opfs',
     /**
      * 中身を書く（写して渡すので、bytes は手元に残る。書けなかったときに
      * メモリに持ち続けられるように）。

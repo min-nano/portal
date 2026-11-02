@@ -34,7 +34,7 @@ import { compareScans } from './image-checks.js';
 import { savePdf } from './save-file.js';
 import { measure } from './measure-client.js';
 import { prepareOcr, readStrip, releaseOcr } from './ocr.js';
-import { openStash } from './stash.js';
+import { blobStash, openStash } from './stash.js';
 import { createCrashLog } from './crash-log.js';
 import {
   buildBookOrder,
@@ -442,7 +442,7 @@ async function stashBytes(file) {
   const target = await stashReady;
   if (!stashNoted) {
     stashNoted = true;
-    log(target ? '読み込んだ PDF は保存領域に置きます' : `保存領域を使えないので、読み込んだ PDF はメモリに持ちます（${stashProblem}）`);
+    log(stashDescription(target, '読み込んだ PDF は'));
   }
   if (!target) return;
   try {
@@ -459,6 +459,13 @@ async function stashBytes(file) {
   // 調べるときは、そこから読み直す（読み込みは調べるより先に進むので、先に
   // 読んだファイルの中身をメモリに溜めない）。
   file.bytes = null;
+}
+
+/** どこに置くかを、記録に出す言葉にする。 */
+function stashDescription(target, subject) {
+  if (target?.kind === 'opfs') return `${subject}保存領域に置きます`;
+  const why = `保存領域を使えない: ${stashProblem}`;
+  return target ? `${subject} Blob にしてページの外に置きます（${why}）` : `${subject}メモリに持ちます（${why}）`;
 }
 
 /** ファイルの中身。保存領域に置いたものは、そこから読む。 */
@@ -1548,7 +1555,7 @@ async function mergeAndVerify() {
     // 結合の道具（pdf-lib）は、結合するときになってから読み込む。
     log(
       `結合を始めます（${sources.size} ファイル・${order.length} 頁、` +
-        `${stash ? '保存領域に書き出す' : `メモリの上で（保存領域を使えない: ${stashProblem}）`}、` +
+        `${stashDescription(stash, '結合した PDF は')}、` +
         `${navigator.userAgent}）`
     );
     const { mergePdf, pageDigests, writeMergedPdf } = await import('./merge.js');
@@ -1568,7 +1575,7 @@ async function mergeAndVerify() {
     const { digests, size = output.bytes.length } = output;
 
     // 結合した PDF を読み直し、元の頁と突き合わせる（頁を描き直さないので軽い）。
-    const where = output.file ? '保存領域に書き出し' : 'メモリの上で';
+    const where = !output.file ? 'メモリの上で' : stash.kind === 'opfs' ? '保存領域に書き出し' : 'Blob に書き出し';
     log(`結合しました（${order.length} 頁、${megabytes(size)}、${where}、${seconds(started)}）`);
     if (stale()) {
       abandon();
@@ -1822,8 +1829,10 @@ function wireUp() {
   stashReady = openStash().then(
     (target) => (stash = target),
     (error) => {
+      // 保存領域を使えなければ、Blob にしてページの外に置く（stash.js）。
       stashProblem = error.message;
-      return null;
+      stash = blobStash();
+      return stash;
     }
   );
   $('driveBtn').addEventListener('click', addFromDrive);

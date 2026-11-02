@@ -303,3 +303,23 @@ describe('stash-worker（書く側）', () => {
     expect(replies).toEqual([{ id: 7, error: '「nothing」は書き口が開いていません。' }]);
   });
 });
+
+describe('blobStash（保存領域を使えないときの置き場所）', () => {
+  it('中身を Blob にして持ち、読む・渡す・消す・少しずつ書くができる', async () => {
+    const stash = stashModule.blobStash();
+    expect(stash.kind).toBe('blob');
+    await stash.put('a.pdf', new Uint8Array([1, 2, 3]));
+    expect([...(await stash.read('a.pdf'))]).toEqual([1, 2, 3]);
+    expect((await stash.file('a.pdf')).size).toBe(3);
+
+    const writer = await stash.writer('merged.pdf');
+    await writer.write(new Uint8Array([4, 5]));
+    await writer.write(new Uint8Array([6]));
+    const merged = await writer.close();
+    expect([...new Uint8Array(await merged.arrayBuffer())]).toEqual([4, 5, 6]);
+    expect(await stash.file('merged.pdf')).toBe(merged);
+
+    await stash.remove('a.pdf');
+    await expect(stash.read('a.pdf')).rejects.toThrow();
+  });
+});
