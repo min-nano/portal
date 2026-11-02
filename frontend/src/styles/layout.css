@@ -316,6 +316,15 @@ body:has(.portal-header .account.open)::after,
   justify-content: center;
 }
 
+/* Clerk のサインイン画面は幅 25rem 固定のカードで、ゲートの内側（余白を除いた幅）
+   より広いため、そのままでは右へはみ出す。ゲートの幅に合わせて縮める
+   （.cl-rootBox・.cl-cardBox は Clerk が見た目の上書き用に公開している名前）。 */
+.auth-gate .clerk-mount .cl-rootBox,
+.auth-gate .clerk-mount .cl-cardBox {
+  width: 100%;
+  max-width: 100%;
+}
+
 /* --- 入力欄の並べ方 ------------------------------------------------------
  * 1 行 1 欄で縦に積むと、デスクトップでは横が余り、縦に長くなって
  * 「どこに入れるのか」が分からなくなる。関係する欄は横に並べ、狭い画面では
