@@ -95,9 +95,9 @@ export async function openStash({ nav = globalThis.navigator, WorkerClass = glob
     const dir = `${now}-${Math.random().toString(36).slice(2, 10)}`;
     // 開いている間はロックを持つ（返さない）。置き場所を作る前に持つ（作ってから
     // 持つまでの間に、ほかのタブの後片付けに消されないように）。
-    await new Promise((resolve) => {
+    await new Promise((resolve, reject) => {
       if (!nav.locks) resolve();
-      else nav.locks.request(`${LOCK_PREFIX}${dir}`, () => (resolve(), new Promise(() => {})));
+      else nav.locks.request(`${LOCK_PREFIX}${dir}`, () => (resolve(), new Promise(() => {}))).catch(reject);
     });
     const directory = await base.getDirectoryHandle(dir, { create: true });
     removeStale(base, dir, nav, now).catch(() => {});
@@ -119,8 +119,9 @@ function createStash(worker, dir, directory) {
   let broken = null;
   const pending = new Map();
   worker.onmessage = ({ data }) => {
-    // 返事は、頼んだ id にだけ来る（worker が止まったら、もう返事は来ない）。
+    // worker が止まったあとに届いた返事は、もう待っていない。
     const job = pending.get(data.id);
+    if (!job) return;
     pending.delete(data.id);
     if (data.error) job.reject(new Error(data.error));
     else job.resolve();
@@ -150,8 +151,12 @@ function createStash(worker, dir, directory) {
      */
     async put(name, bytes) {
       await call('open', name);
-      await call('append', name, bytes);
-      await call('close', name);
+      try {
+        await call('append', name, bytes);
+      } finally {
+        // 書けなくても閉じる（開いたままだと、消すことも開き直すこともできない）。
+        await call('close', name).catch(() => {});
+      }
     },
     /** 少しずつ書く。書く分は渡して手放す。close で、書いたファイルを返す。 */
     async writer(name) {

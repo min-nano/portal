@@ -46,9 +46,12 @@ export async function run(root, { op, dir, name, bytes }) {
     return;
   }
   if (op === 'close') {
-    open.delete(key);
-    await writing.access.flush();
-    await writing.access.close();
+    try {
+      await writing.access.flush();
+    } finally {
+      open.delete(key);
+      await writing.access.close();
+    }
     return;
   }
   throw new Error(`知らない頼み（${op}）です。`);

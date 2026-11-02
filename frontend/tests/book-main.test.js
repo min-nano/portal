@@ -191,8 +191,18 @@ async function fakeStash() {
       if (stash.failPut.has(name)) throw new Error('quota');
       files.set(name, bytes.slice());
     }),
+    // 読む途中で待たせる（readGate）。待ったあとに、置いたものが消えていたら失敗する。
+    readGate: null,
     read: async (name) => {
       stash.reads.push(name);
+      const before = files.get(name)?.slice();
+      if (stash.readGate) {
+        await stash.readGate;
+        if (!files.has(name)) {
+          if (stash.readStale) return before;
+          throw new Error(`${name} not found`);
+        }
+      }
       if (!files.has(name)) throw new Error(`${name} not found`);
       return files.get(name).slice();
     },
@@ -1360,7 +1370,7 @@ describe('結合と検証', () => {
 
     expect(mocks.mergePdf).not.toHaveBeenCalled();
     expect(stash.reads.sort()).toEqual(['f1.pdf', 'f2.pdf', 'f3.pdf']);
-    expect(stash.files.has('merged.pdf')).toBe(true);
+    expect(stash.files.has('merged-1.pdf')).toBe(true);
     // 検証では、読んだ中身をそのまま pdf.js へ渡す（写しを作らない）。
     expect(mocks.openOptions.at(-1)).toEqual({ transfer: true });
     expect($('verifyResult').className).toBe('bm-verify ok');
@@ -1372,7 +1382,14 @@ describe('結合と検証', () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     $('downloadBtn').click();
     expect(click).toHaveBeenCalled();
-    expect(URL.createObjectURL.mock.calls.at(-1)[0].size).toBe(stash.files.get('merged.pdf').length);
+    expect(URL.createObjectURL.mock.calls.at(-1)[0].size).toBe(stash.files.get('merged-1.pdf').length);
+
+    // 結合し直すときは別の名前で書き（保存中のものを書き換えない）、書き終えたら前のものを消す。
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'front');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    expect(stash.files.has('merged-2.pdf')).toBe(true);
+    expect(stash.files.has('merged-1.pdf')).toBe(false);
 
     // 外したファイルは、置いたものも消す。
     fileItem('猫_偶数.pdf').querySelector('.danger').click();
@@ -1424,26 +1441,65 @@ describe('結合と検証', () => {
     expect($('logText').textContent).toContain('メモリの上で');
   });
 
-  it('途中でページが落ちたら、次に開いたときに前回の記録を出す（普通に閉じたら出さない）', async () => {
-    drop([file('猫_奇数.pdf', pdf(ODD))]);
+  it('処理している間だけ記録を残し、途中でページが落ちたら、次に開いたときに前回の記録を出す', async () => {
+    const kept = () =>
+      Object.keys(localStorage)
+        .filter((key) => key.startsWith('pdf-book-merger:log'))
+        .map((key) => JSON.parse(localStorage.getItem(key)).lines);
+    // 処理を終えたら、残した記録は消す（裏に回したタブが片付けられても「落ちた」と出さない）。
+    drop([file('猫_偶数.pdf', pdf(EVEN))]);
     await settled(1);
-    const kept = JSON.parse(localStorage.getItem('pdf-book-merger:log'));
-    expect(kept.some((line) => line.includes('「猫_奇数.pdf」を調べ終えました'))).toBe(true);
+    expect(kept()).toEqual([]);
+
+    // 調べている途中で止めておく。
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    const render = mocks.renderPageImage.getMockImplementation();
+    mocks.renderPageImage.mockImplementation(async (doc, index, ...rest) => {
+      if (doc.spec.pages[index].id === 'o3') await gate;
+      return render(doc, index, ...rest);
+    });
+    drop([file('猫_奇数.pdf', pdf(ODD))]);
+    await vi.waitFor(() => expect(kept().some((lines) => lines.some((line) => line.includes('猫_奇数.pdf')))).toBe(true));
 
     // 落ちた（pagehide が来ないまま、開き直した）。
     vi.resetModules();
     installPage();
     await import('../src/pdf-book-merger/main.js');
     await mocks.prepare();
-    expect($('message').textContent).toContain('前回は処理の途中でページが終わったようです');
+    await vi.waitFor(() => expect($('message').textContent).toContain('前回は処理の途中でページが終わったようです'));
     $('logBox').open = true;
     $('logBox').dispatchEvent(new Event('toggle'));
     expect($('logText').textContent).toContain('── 前回、途中でページが終わる前の記録 ──');
-    expect($('logText').textContent).toContain('「猫_奇数.pdf」を調べ終えました');
+    expect($('logText').textContent).toContain('「猫_奇数.pdf」の文字情報を読みました');
+    // 落ちる前のページの仕事を終わらせる（終えたら、その記録も消える）。
+    release();
+    await vi.waitFor(() => {
+      expect(mocks.renderPageImage.mock.calls.some(([doc, index]) => doc.spec.pages[index].id === 'o7')).toBe(true);
+      expect(kept()).toEqual([]);
+    });
+    await flush();
+  });
 
-    // 普通に閉じたら消す。
-    window.dispatchEvent(new Event('pagehide'));
-    expect(localStorage.getItem('pdf-book-merger:log')).toBeNull();
+  it('保存している間も記録を残し、終えたら消す', async () => {
+    drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('downloadBtn').disabled).toBe(false));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {
+      // 保存している最中に残っている。
+      expect(Object.keys(localStorage).some((key) => key.startsWith('pdf-book-merger:log'))).toBe(true);
+    });
+    $('downloadBtn').click();
+    await vi.waitFor(() => expect(click).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(Object.keys(localStorage).some((key) => key.startsWith('pdf-book-merger:log'))).toBe(false)
+    );
+    await vi.waitFor(() => expect($('progress').hidden).toBe(true));
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('「猫.pdf」を保存します（');
+    await flush(); // 開いた記録の toggle（あとから届く）を、テストの間に受ける
   });
 
   it('保存領域に置けなかったファイルはメモリに持ち、結合した PDF を書けなければメモリの上で結合し直す', async () => {
@@ -1467,7 +1523,7 @@ describe('結合と検証', () => {
     expect(text).toContain('結合した PDF を保存領域に書けなかったので、メモリの上で結合し直します（quota）');
     expect(text).toContain('メモリの上で');
     // 書きかけは消す。
-    expect(stash.removed).toContain('merged.pdf');
+    expect(stash.removed).toContain('merged-1.pdf');
 
     // 書き口を開けなかったときも、メモリの上で結合し直す。
     stash.failWrite = false;
@@ -1489,7 +1545,7 @@ describe('結合と検証', () => {
     await vi.waitFor(() => expect($('message').textContent).toContain('暗号化'));
     expect(mocks.mergePdf).not.toHaveBeenCalled();
     // 書きかけは閉じて消す（書き口を開いたままにすると、次の結合で開けない）。
-    expect(stash.removed).toContain('merged.pdf');
+    expect(stash.removed).toContain('merged-1.pdf');
   });
 
   it('保存領域に置いている間に外したファイルや、調べられなかったファイルは、置いたものを消す', async () => {
@@ -1511,6 +1567,47 @@ describe('結合と検証', () => {
     expect(fileItem('壊れた.pdf').classList.contains('error')).toBe(true);
     expect(stash.removed).toContain('f2.pdf');
     expect(stash.files.size).toBe(0);
+  });
+
+  it('置いたものを読んでいる間に外したファイルは、読み終えても中身を持たず、読めなくても知らせない', async () => {
+    const stash = await fakeStash();
+    for (const stale of [true, false]) {
+      let release;
+      stash.readGate = new Promise((resolve) => (release = resolve));
+      stash.readStale = stale;
+      const name = stale ? '猫_奇数.pdf' : '猫_偶数.pdf';
+      drop([file(name, pdf(stale ? ODD : EVEN))]);
+      await vi.waitFor(() => expect(stash.reads).toHaveLength(stale ? 1 : 2));
+      fileItem(name).querySelector('.danger').click();
+      release();
+      await vi.waitFor(() => expect(document.querySelectorAll('#fileList .bm-file')).toHaveLength(0));
+      // 順番待ちが空になるまで待つ（テストを終えたあとに画面へ書かないように）。
+      await vi.waitFor(() => expect($('progress').hidden).toBe(true));
+    }
+    stash.readGate = null;
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).not.toContain('調べられませんでした');
+    expect(mocks.findScanImages).not.toHaveBeenCalled();
+    await flush(); // 開いた記録の toggle（あとから届く）を、テストの間に受ける
+  });
+
+  it('あとからの OCR で置いたものを読んでいる間に外したファイルは、中身を持たない', async () => {
+    const stash = await fakeStash();
+    drop([file('猫_表紙.pdf', pdf(ODD))]);
+    await settled(1);
+    let release;
+    stash.readGate = new Promise((resolve) => (release = resolve));
+    stash.readStale = true;
+    stash.reads.length = 0;
+    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
+    await vi.waitFor(() => expect(stash.reads).toHaveLength(1));
+    fileItem('猫_表紙.pdf').querySelector('.danger').click();
+    release();
+    await vi.waitFor(() => expect($('progress').hidden).toBe(true));
+    // 調べ直さない（外したので）。
+    expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
+    expect(mocks.renderMargins).not.toHaveBeenCalled();
   });
 
   it('保存領域に置いたファイルも、拡大表示とあとからの OCR では、置いたものから読む', async () => {

@@ -210,6 +210,8 @@ describe('mergePdf', () => {
     expect(loads).toEqual(['small', 'big']);
     // 大きな画像はそのまま 1 つで渡し、小さな物はまとめてから渡す（1 MB を超えたら）。
     const sizes = chunks.map((chunk) => chunk.length);
+    // 大きな物の前には必ずその頭（「n 0 obj」）があるので、空のまま渡すことは無い。
+    expect(Math.min(...sizes)).toBeGreaterThan(0);
     expect(sizes.filter((n) => n > 1.5 * MB && n < 1.5 * MB + 1000)).toHaveLength(1); // 画像（と辞書）
     expect(sizes.filter((n) => n >= MB && n < 1.5 * MB)).toHaveLength(1); // 400 KB の画像 3 つをまとめたもの
     const bytes = new Uint8Array(size);

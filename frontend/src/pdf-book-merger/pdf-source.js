@@ -52,12 +52,13 @@ function workerOf() {
  *
  * pdf.js は受け取ったバイト列を worker へ渡して手放してしまうので、
  * 結合に使う元のバイト列は渡さず、複製を渡す。transfer なら、写さずにそのまま
- * 渡す（手元では使えなくなる。結合した PDF を検証するときに、本 1 冊ぶんの写しを
- * 作らないため）。
+ * 渡す（手元では使えなくなる。結合した PDF を検証するときや、保存領域から
+ * 読んだときに、本 1 冊ぶんの写しを作らないため）。reload は、WebKit で描き
+ * 直しのために開き直すときに中身を読み直す関数（transfer のときに渡す）。
  *
  * @param {Uint8Array} bytes
  */
-export async function openPdf(bytes, { safe = false, transfer = false } = {}) {
+export async function openPdf(bytes, { safe = false, transfer = false, reload = null } = {}) {
   const webkit = isWebKit(globalThis.navigator);
   // iPhone・iPad では、はじめから OffscreenCanvas を切る。worker の中で
   // 600dpi のスキャン（3000 万画素ほど）を OffscreenCanvas に描くと、canvas の
@@ -82,7 +83,8 @@ export async function openPdf(bytes, { safe = false, transfer = false } = {}) {
     // （drawPage）。
     isOffscreenCanvasSupported: !(webkit && safe),
   }).promise;
-  if (webkit && !safe) fallbacks.set(doc, { bytes, safe: null, failed: false });
+  // 描き直しで開き直すときの中身（写さずに渡したときは、もう手元に無いので読み直す）。
+  if (webkit && !safe) fallbacks.set(doc, { load: reload ?? (() => bytes), safe: null, failed: false });
   return doc;
 }
 
@@ -92,7 +94,7 @@ const fallbacks = new WeakMap();
 function safeDocOf(doc) {
   const fallback = fallbacks.get(doc);
   if (!fallback) return null;
-  fallback.safe ??= openPdf(fallback.bytes, { safe: true });
+  fallback.safe ??= Promise.resolve(fallback.load()).then((bytes) => openPdf(bytes, { safe: true }));
   return fallback.safe;
 }
 

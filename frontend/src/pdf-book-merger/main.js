@@ -95,6 +95,8 @@ let view = { order: [], problems: [], issues: new Map(), numberings: new Map() }
 let merged = null;
 /** 結合と検証の途中か（その間は、拡大表示のために PDF を開かない）。 */
 let merging = false;
+/** 保存（ダウンロード・共有）している間か。 */
+let saving = false;
 /** 結合する中身（並び・名前）が変わるたびに進める番号（結合の途中で変わったら、その結合は捨てる）。 */
 let generation = 0;
 /** いまの並びのうち、結合する PDF を決める部分（頁・配置・頁番号）。変わったときだけ結合した PDF を捨てる。 */
@@ -113,6 +115,9 @@ let downloads = Promise.resolve();
  */
 let stash = null;
 let stashReady = Promise.resolve(null);
+/** 結合した回数と、保存領域に置いている結合した PDF の名前。 */
+let mergeCount = 0;
+let mergedName = null;
 /** 保存領域を使えない理由（処理の記録に出す）。 */
 let stashProblem = '';
 /** 保存領域を使うかどうかを、記録に出したか。 */
@@ -262,7 +267,10 @@ function enqueue(task) {
     .catch(() => {})
     .then(() => {
       readProgress.finishJob();
-      if (readProgress.jobs.total === 0) stopOcr();
+      if (readProgress.jobs.total === 0) {
+        stopOcr();
+        keepLog(); // 処理を終えたので、残した記録を消す
+      }
     });
 }
 
@@ -281,6 +289,11 @@ function runningLines() {
   return [mergeProgress.text, readProgress.text].filter(Boolean).map((text) => `（実行中）${text}`);
 }
 
+/** 処理しているか（調べる・あとからの OCR・結合と検証・保存）。 */
+function busy() {
+  return merging || saving || readProgress.jobs.total > 0;
+}
+
 /** 進み具合だけが変わったときに残す間隔（ミリ秒）。 */
 const KEEP_EVERY_MS = 500;
 let keptAt = 0;
@@ -290,6 +303,12 @@ let keptAt = 0;
  * always でなければ、前に残してから KEEP_EVERY_MS 経つまでは残さない。
  */
 function keepLog(always = true) {
+  // 処理していないときは残さない（裏に回したタブを iPhone が片付けたときに、
+  // 「途中で終わった」と出さないように）。
+  if (!busy()) {
+    crashLog.clear();
+    return;
+  }
   const now = Date.now();
   if (!always && now - keptAt < KEEP_EVERY_MS) return;
   keptAt = now;
@@ -464,6 +483,7 @@ async function stashBytes(file) {
     await target.put(stashName(file), file.bytes);
   } catch (error) {
     log(`「${file.name}」を保存領域に置けなかったので、メモリに持ちます（${error.message}）`);
+    target.remove(stashName(file)); // 書きかけを残さない
     return;
   }
   if (!files.includes(file)) {
@@ -500,7 +520,7 @@ async function readFile(file) {
     // 段ごとの区間。Drive の読み込みを待つ（先読みが済んでいない）ときは、
     // 読み込みにも区間を分ける（大きなファイルは読み込みに数分かかる。この端末の
     // ファイルはすぐ読み終えるので分けない）。
-    const loadEnd = file.driveId && !file.bytes ? 0.3 : 0;
+    const loadEnd = file.driveId && file.status !== 'loaded' ? 0.3 : 0;
     const textEnd = loadEnd + (1 - loadEnd) * 0.1;
     readProgress.stage(0, loadEnd);
     file.waiting = true;
@@ -511,8 +531,9 @@ async function readFile(file) {
     clearTimeout(file.waitTimer);
     if (!files.includes(file)) return;
     // 調べている間は、中身をメモリに持つ（調べ終えたら、保存領域に置いたものは手放す）。
-    file.bytes = await bytesOf(file);
-    if (!file.bytes || !files.includes(file)) return;
+    const bytes = await bytesOf(file);
+    if (!files.includes(file)) return; // 読んでいる間に外された（中身は持たない）。
+    file.bytes = bytes;
     if (!isPdf(file.bytes)) throw new Error('PDF ファイルではありません。');
 
     file.status = 'reading';
@@ -588,6 +609,8 @@ async function readFile(file) {
     if (file.stashed) file.bytes = null;
     log(`「${file.name}」を調べ終えました（${ROLES[file.role]}、合計 ${seconds(started)}）`);
   } catch (error) {
+    // 外したファイルは、読めなくても知らせない（置いたものを先に消したため）。
+    if (!files.includes(file)) return;
     file.status = 'error';
     file.error = error.message || String(error);
     log(`「${file.name}」を調べられませんでした（${file.error}）`);
@@ -783,7 +806,9 @@ async function readMarginsWithOcr(file, pages) {
     showProgress(`「${file.name}」の頁の画像を調べ直しています`, null);
     // 保存領域に置いたものは、読む間だけメモリに持つ（PDF を開くのにも同じものを
     // 使い、2 度読まない。queueLateOcr が読み終えたら手放す）。
-    file.bytes = await bytesOf(file);
+    const bytes = await bytesOf(file);
+    if (!files.includes(file)) return; // 読んでいる間に外された（中身は持たない）。
+    file.bytes = bytes;
     const { scans } = await findScanImages(file.bytes);
     for (const page of pages) page.scan = scans[page.index] ?? null;
     readProgress.stage(0.1, 1);
@@ -849,7 +874,12 @@ function queueLateOcr(file) {
  */
 function pdfOf(file) {
   if (!file.opening) {
-    const opening = bytesOf(file).then(openPdf).then(
+    // 保存領域から読んだ中身は、写さずに pdf.js へ渡す（手元には残さない。描き直しで
+    // 開き直すときは、もう 1 度読む）。
+    const opened = file.bytes
+      ? openPdf(file.bytes)
+      : bytesOf(file).then((bytes) => openPdf(bytes, { transfer: true, reload: bytesOf.bind(null, file) }));
+    const opening = opened.then(
       (doc) => {
         // 開いている間に閉じられていたら、開いたものはすぐ閉じる（閉じた文書を残さない）。
         if (file.opening !== opening) {
@@ -1667,6 +1697,7 @@ async function mergeAndVerify() {
     showMessage(error.message || String(error), 'red');
   } finally {
     merging = false;
+    keepLog(); // 処理を終えたので、残した記録を消す（調べている途中なら、そちらを残す）
     mergeProgress.show('');
     button.disabled = false;
     // 結合の途中に開いた拡大表示は縮小画像だけなので、大きく描き直す。
@@ -1688,16 +1719,21 @@ async function mergeIntoStash(writeMergedPdf, options) {
       throw error;
     }
   };
+  // 結合するたびに別の名前で書く（前に結合した PDF を、保存している最中に
+  // 書き換えないように）。前のものは、書き終えてから消す。
+  const name = `merged-${++mergeCount}.pdf`;
   let writer = null;
   try {
-    writer = await guard(() => stash.writer('merged.pdf'));
+    writer = await guard(() => stash.writer(name));
     const { size, digests } = await writeMergedPdf({ ...options, write: (chunk) => guard(() => writer.write(chunk)) });
     const file = await guard(() => writer.close());
+    if (mergedName) stash.remove(mergedName);
+    mergedName = name;
     return { file, size, digests };
   } catch (error) {
     // 書きかけは閉じて消す（書き口を開いたままにすると、次の結合で開けない）。
     if (writer) await writer.close().catch(() => {});
-    await stash.remove('merged.pdf');
+    await stash.remove(name);
     if (error !== failed) throw error;
     log(`結合した PDF を保存領域に書けなかったので、メモリの上で結合し直します（${error.message}）`);
     return null;
@@ -1740,8 +1776,13 @@ async function download() {
   if (!merged) return;
   // 共有シートを開いている間に、名前を変えるなどして結合した PDF が捨てられる
   // ことがあるので、渡すものは先に取っておく。
-  const { data, fileName } = merged;
-  const how = await savePdf(data, fileName);
+  const { data, fileName, size } = merged;
+  saving = true;
+  log(`「${fileName}」を保存します（${megabytes(size)}）`);
+  const how = await savePdf(data, fileName).finally(() => {
+    saving = false;
+    keepLog();
+  });
   if (how === 'shared') log(`「${fileName}」を共有シートに渡しました`);
   else if (how === 'downloaded') log(`「${fileName}」をダウンロードしました`);
 }
@@ -1835,16 +1876,17 @@ function wireHelp() {
 
 function wireUp() {
   // 前回、途中でページが落ちていたら、その記録を出す。
-  const previous = crashLog.takePrevious();
   crashLog.clearOnLeave();
-  if (previous.length) {
-    logLines.push('── 前回、途中でページが終わる前の記録 ──', ...previous, '── ここから今回の記録 ──');
+  crashLog.takePrevious().then((previous) => {
+    if (!previous.length) return;
+    logLines.unshift('── 前回、途中でページが終わる前の記録 ──', ...previous, '── ここから今回の記録 ──');
     $('logBox').hidden = false;
+    renderLog();
     showMessage(
       '前回は処理の途中でページが終わったようです。下の「処理の記録」を開いて「ログをコピー」し、知らせてください。',
       'red'
     );
-  }
+  });
   if (!pdfLibViews) {
     // ファイルを読む前に知らせる（読み込んだ時点で、写しはもう作られる）。
     log('pdf-lib にバイト列を写させない設定が効いていません。大きな本ではメモリが足りなくなることがあります');

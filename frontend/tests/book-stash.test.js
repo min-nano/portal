@@ -25,8 +25,12 @@ class FakeFile {
         file.data = next;
         return bytes.length;
       },
-      flush() {},
-      close() {},
+      flush() {
+        if (file.flushFails) throw new Error('flush failed');
+      },
+      close() {
+        file.closed = true;
+      },
     };
   }
 
@@ -233,6 +237,12 @@ describe('保存領域（OPFS）', () => {
     expect(FakeWorker.instances[0].terminated).toBe(true);
   });
 
+  it('ロックを取れなければ、その理由で使わない（待ち続けない）', async () => {
+    const locks = { request: () => Promise.reject(new DOMException('denied', 'SecurityError')) };
+
+    await expect(open({ locks })).rejects.toThrow('denied');
+  });
+
   it('既定では、このページの navigator と Worker を使う', async () => {
     vi.stubGlobal('Worker', FakeWorker);
 
@@ -246,6 +256,22 @@ describe('保存領域（OPFS）', () => {
 
     await expect(stash.put('a.pdf', new Uint8Array([1]))).rejects.toThrow('worker が止まりました（理由不明）');
     await expect(stash.writer('b.pdf')).rejects.toThrow('worker が止まりました');
+
+    // 書く途中で止まっても、閉じに行く（閉じられなくても失敗は 1 つにまとめる）。
+    const third = await open();
+    const failing = FakeWorker.instances.at(-1);
+    const post = failing.postMessage.bind(failing);
+    failing.postMessage = async function postMessage(data, transfer) {
+      if (data.op === 'append') {
+        this.onerror({ message: 'quota' });
+        return;
+      }
+      return post(data, transfer);
+    };
+    await expect(third.put('c.pdf', new Uint8Array([1]))).rejects.toThrow('（quota）');
+
+    // 止まったあとに遅れて届いた返事は捨てる。
+    failing.onmessage({ data: { id: 9999 } });
 
     // 理由が分かれば添える。
     const again = await open();
@@ -277,6 +303,19 @@ describe('stash-worker（書く側）', () => {
     const file = await (await (await root.getDirectoryHandle('pdf-merger')).getDirectoryHandle('d')).getFileHandle('x');
 
     expect([...file.data]).toEqual([3]);
+  });
+
+  it('書き出しに失敗しても、書き口は閉じる', async () => {
+    const { run } = await import('../src/pdf-book-merger/stash-worker.js');
+    await run(root, { op: 'open', dir: 'd', name: 'x' });
+    const file = await (await (await root.getDirectoryHandle('pdf-merger')).getDirectoryHandle('d')).getFileHandle('x');
+    file.flushFails = true;
+    await expect(run(root, { op: 'close', dir: 'd', name: 'x' })).rejects.toThrow('flush');
+    // 閉じたので、もう書けない（開いていない）。
+    await expect(run(root, { op: 'append', dir: 'd', name: 'x', bytes: new Uint8Array(1) })).rejects.toThrow(
+      '書き口が開いていません'
+    );
+    expect(file.closed).toBe(true);
   });
 
   it('開き直すと空から書き直す', async () => {
