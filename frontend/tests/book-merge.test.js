@@ -1,4 +1,4 @@
-// 書籍スキャン PDF 結合ツール: 結合（pdf-lib）と、結合した PDF の検証。
+// PDF 結合ツール: 結合（pdf-lib）と、結合した PDF の検証。
 //
 // 結合は「頁の中身をそのまま写す」ことで、サーチャブル PDF の文字情報を
 // 残す。ここでは pdf-lib で文字の入った PDF を作って結合し、画面と同じ
@@ -136,7 +136,7 @@ describe('mergePdf', () => {
     // 文書の情報（タイトルは保存名、作成者と言語は本文の最初のファイルから）。
     expect(merged.info.Title).toBe('吾輩は猫である');
     expect(merged.info.Author).toBe('夏目漱石');
-    expect(merged.info.Creator).toBe('書籍スキャン PDF 結合ツール');
+    expect(merged.info.Creator).toBe('PDF 結合ツール');
     const lang = (await PDFDocument.load(bytes)).catalog.lookup(PDFName.of('Lang'));
     expect(lang.decodeText()).toBe('ja');
 

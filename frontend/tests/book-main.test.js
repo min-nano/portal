@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// 書籍スキャン PDF 結合ツールの画面（main.js）。
+// PDF 結合ツールの画面（main.js）。
 //
 // pdf.js・OCR・Drive・結合（pdf-lib）は偽物に差し替え、実際のページの
 // マークアップ（page.html / overlay.html）の上で、利用者の操作の流れを通す。

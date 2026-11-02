@@ -1,4 +1,4 @@
-// 書籍スキャン PDF 結合ツール: pdf.js を呼ぶ側の、ブラウザごとの手当て。
+// PDF 結合ツール: pdf.js を呼ぶ側の、ブラウザごとの手当て。
 //
 // Safari（と iPhone・iPad のすべてのブラウザ）では、pdf.js が worker の中で
 // 画像を ImageDecoder・OffscreenCanvas で展開すると失敗することがあるので、

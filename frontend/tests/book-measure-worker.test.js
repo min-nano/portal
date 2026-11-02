@@ -1,4 +1,4 @@
-// 書籍スキャン PDF 結合ツール: 画像を worker で測るところ（measure-client.js・
+// PDF 結合ツール: 画像を worker で測るところ（measure-client.js・
 // measure-worker.js）。worker の偽物で、頼み方・受け取り方・壊れたときに
 // その場で測り直すことを縛る。
 

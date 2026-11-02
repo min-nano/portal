@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// 書籍スキャン PDF 結合ツール: WebKit（Safari・iPhone・iPad）で pdf.js が頁を
+// PDF 結合ツール: WebKit（Safari・iPhone・iPad）で pdf.js が頁を
 // 描けなかったとき、OffscreenCanvas も切った文書で開き直して描き直す
 // （pdf-source.js）。pdf.js は偽物に差し替え、渡した設定と描き直しを確かめる。
 

@@ -1,4 +1,4 @@
-// 書籍スキャン PDF 結合ツール: pdf.js に渡す、PDF の外のデータ（pdf-data.js）。
+// PDF 結合ツール: pdf.js に渡す、PDF の外のデータ（pdf-data.js）。
 //
 // Illustrator・InDesign で作ったカタログの PDF は、日本語のフォント（Adobe-Japan1、
 // Identity-H）に ToUnicode を持たず、文字の番号を CMap で Unicode に引く前提に
