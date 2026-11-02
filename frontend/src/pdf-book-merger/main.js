@@ -129,7 +129,8 @@ function showMessage(text, color = '') {
 // 変わるたびにバーが空に戻らないように）。調べる流れは、待っている仕事
 // （ファイルを調べる・あとからの OCR）のうち済んだ数に、いまの仕事の中の
 // 進み具合を足したもの。結合は読み込みの途中でもできるので、結合している
-// 間は結合を出し、済んだら調べる流れに戻す。
+// 間は結合を出し、済んだら調べる流れに戻す。バーは待っている仕事が無くなった
+// ときにだけ隠す（仕事の替わり目で隠すと、行が消えて画面がちらつく）。
 
 const logLines = [];
 const LOG_LIMIT = 2000;
@@ -191,10 +192,22 @@ function createProgress({ jobs = false } = {}) {
       }
       jobs.total++;
     },
+    /**
+     * 仕事を 1 つ済ませる。待っている仕事が残っていれば、バーは隠さずに済んだ
+     * 位置で止めておく（次の仕事が経過を出すまでの間に隠すと、仕事が替わる
+     * たびに行が消えて下が詰まり、画面がちらつく）。残っていなければ隠す。
+     */
     finishJob() {
       const { jobs } = progress;
       jobs.done++;
-      if (jobs.done >= jobs.total) Object.assign(jobs, { total: 0, done: 0, base: 0, start: 0 });
+      if (jobs.done >= jobs.total) {
+        Object.assign(jobs, { total: 0, done: 0, base: 0, start: 0 });
+        progress.show('');
+        return;
+      }
+      progress.stage(0, 0);
+      Object.assign(progress, { fraction: 0, heading: '' });
+      renderProgress();
     },
   };
   return progress;
@@ -496,7 +509,6 @@ async function readFile(file) {
     }
   } finally {
     if (held) releaseDoc(file);
-    showProgress('');
     if (files.includes(file)) refresh();
   }
 }
@@ -717,7 +729,6 @@ function queueLateOcr(file) {
     } finally {
       file.ocrBusy = false;
       for (const page of pages) page.scan = null;
-      showProgress('');
       if (files.includes(file)) refresh();
     }
   });
