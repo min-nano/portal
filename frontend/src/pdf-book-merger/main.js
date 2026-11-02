@@ -439,6 +439,7 @@ async function readFile(file) {
         thumbUrl: '',
         ocr: false,
         scan: null,
+        softMasks: 0, // ソフトマスクの数（頁の画像を調べるときに数える）
       });
       if (index % 16 === 0) await breathe();
     }
@@ -461,7 +462,8 @@ async function readFile(file) {
     // 調べた JPEG は読み終えたら手放す（ファイルと同じだけの大きさがある）。
     showProgress(`「${file.name}」の頁の画像を調べています`, null);
     const imagesStarted = performance.now();
-    const { scans, reasons, example } = await findScanImages(file.bytes);
+    const { scans, softMasks, reasons, example } = await findScanImages(file.bytes);
+    for (const page of file.pages) page.softMasks = softMasks[page.index] ?? 0;
     const jpegPages = scans.filter(Boolean).length;
     if (jpegPages < count) {
       const why = [...reasons].map(([reason, pages]) => `${reason} ${pages} 頁`).join('、');
@@ -611,7 +613,7 @@ async function analyzePages(file, scans, ocrPages) {
     const wantsOcr = ocrPages.has(page.index);
     if (wantsOcr) await ocrSlots.take();
     const { image, thumbUrl, strips } = await withContext(`${page.index + 1} 頁目の画像を描けませんでした`, () =>
-      renderPageImage(file.doc, page.index, scans[page.index] ?? null, { margins: wantsOcr })
+      renderPageImage(file.doc, page.index, scans[page.index] ?? null, { margins: wantsOcr, softMasks: page.softMasks })
     ).catch((error) => {
       if (wantsOcr) ocrSlots.give();
       throw error;
@@ -709,7 +711,7 @@ async function readMarginsWithOcr(file, pages) {
     await ocrSlots.take();
     let strips;
     try {
-      strips = await renderMargins(await pdfOf(file), page.index, page.scan);
+      strips = await renderMargins(await pdfOf(file), page.index, page.scan, { softMasks: page.softMasks });
       // 描いたら JPEG は要らない（書き換えが効かないときは写しなので、早く手放す）。
       page.scan = null;
     } catch {

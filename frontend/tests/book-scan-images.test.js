@@ -21,6 +21,7 @@ import {
   inflate,
   inspectPage,
   operations,
+  softMaskCount,
 } from '../src/pdf-book-merger/scan-images.js';
 
 // 8×6 の白い JPEG（灰色と CMYK）。
@@ -207,7 +208,66 @@ describe('頁から JPEG を取り出す', () => {
 
     const broken = await findScanImages(encode('not a pdf'));
     expect(broken.scans).toEqual([]);
+    expect(broken.softMasks).toEqual([]);
     expect([...broken.reasons.keys()][0]).toMatch(/^PDF を読めない/);
+  });
+});
+
+describe('ソフトマスクを数える', () => {
+  /** ソフトマスク付きの ExtGState を count 個持つ資源。 */
+  const statesWith = (context, count, extra = {}) =>
+    context.obj({
+      ExtGState: Object.fromEntries(
+        Array.from({ length: count }, (_, i) => [`GS${i}`, context.obj({ SMask: context.obj({ S: 'Luminosity' }) })])
+      ),
+      ...extra,
+    });
+  const form = (context, resources) =>
+    context.register(context.stream('q Q', { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 1, 1], Resources: resources }));
+
+  it('頁と、入れ子のフォームの資源にあるソフトマスクを数える（InDesign の影・ぼかし）', async () => {
+    const page = await onePage(async (doc, page) => {
+      const { context } = doc;
+      // 深さ 5 のフォームは数えない（MAX_FORM_DEPTH まで）。
+      let inner = form(context, statesWith(context, 100));
+      for (let depth = 4; depth >= 2; depth--) inner = form(context, statesWith(context, 1, { XObject: { Fm: inner } }));
+      const shared = context.register(statesWith(context, 3));
+      const resources = statesWith(context, 2, {
+        XObject: {
+          // 同じ資源を使い回すフォームは、1 度だけ数える。
+          Fm1: form(context, shared),
+          Fm2: form(context, shared),
+          Fm3: form(context, statesWith(context, 1, { XObject: { Fm: inner } })),
+          Im0: context.register(context.stream('', { Type: 'XObject', Subtype: 'Image', Width: 1, Height: 1 })),
+        },
+      });
+      // SMask が /None の状態は、マスクを外すだけなので数えない。
+      resources.lookup(PDFName.of('ExtGState')).set(PDFName.of('GSNone'), context.obj({ SMask: 'None', ca: 0.5 }));
+      page.node.set(PDFName.of('Resources'), resources);
+    });
+    // 頁 2 + 使い回しの 3 + Fm3 1 + 深さ 2〜4 の 3。
+    expect(softMaskCount(page)).toBe(9);
+    expect(inspectPage(page)).toMatchObject({ softMasks: 9 });
+    expect(inspectPage(page).outline).toContain('ソフトマスク 9');
+  });
+
+  it('ソフトマスクが無ければ 0 で、頁の作りにも出さない。読めない資源は数えない', async () => {
+    const plain = await onePage(async (doc, page) => page.drawRectangle({ x: 0, y: 0, width: 5, height: 5 }));
+    expect(softMaskCount(plain)).toBe(0);
+    expect(inspectPage(plain).outline).not.toContain('ソフトマスク');
+
+    const broken = await onePage(async (doc, page) => {
+      page.node.set(PDFName.of('Resources'), doc.context.obj({ ExtGState: 3 }));
+    });
+    expect(softMaskCount(broken)).toBe(0);
+  });
+
+  it('PDF の全頁を調べると、頁ごとの数を返す', async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([100, 100]);
+    doc.addPage([100, 100]).node.set(PDFName.of('Resources'), statesWith(doc.context, 4));
+    const { softMasks } = await findScanImages(await doc.save());
+    expect(softMasks).toEqual([0, 4]);
   });
 });
 

@@ -227,6 +227,7 @@ beforeEach(async () => {
     const fallback = pages.filter((p) => p.jpeg === false).length;
     return {
       scans: pages.map((p) => (p.jpeg === false ? null : { jpeg: p.id })),
+      softMasks: pages.map((p) => p.softMasks ?? 0),
       reasons: new Map(fallback ? [['画像の上に図形を描いている', fallback]] : []),
       example: fallback ? '2 頁目: 画像 1 枚（DCTDecode 100×140 DeviceGray 8bit）' : '',
     };
@@ -866,16 +867,17 @@ describe('ファイルを足して並べる', () => {
   });
 
   it('JPEG 1 枚の形でない頁は、pdf.js で描いて読む', async () => {
-    const pages = [page('o1', 1), page('o3', 3, { ocr: true, jpeg: false }), page('o5', 5)];
+    const pages = [page('o1', 1), page('o3', 3, { ocr: true, jpeg: false, softMasks: 514 }), page('o5', 5)];
     drop([file('odd.pdf', pdf(pages))]);
     await settled(1);
 
-    // 何頁かを並べて描くので、頼んだ順は前後する。
+    // 何頁かを並べて描くので、頼んだ順は前後する。ソフトマスクの数も渡す
+    // （pdf.js で描くときの描き方を選ぶ）。
     const calls = mocks.renderPageImage.mock.calls.map(([, index, scan, options]) => [index, scan, options]);
     expect(calls.sort((a, b) => a[0] - b[0])).toEqual([
-      [0, { jpeg: 'o1' }, { margins: false }],
-      [1, null, { margins: true }],
-      [2, { jpeg: 'o5' }, { margins: false }],
+      [0, { jpeg: 'o1' }, { margins: false, softMasks: 0 }],
+      [1, null, { margins: true, softMasks: 514 }],
+      [2, { jpeg: 'o5' }, { margins: false, softMasks: 0 }],
     ]);
     expect(document.querySelector('#pageGrid [data-page-key="f1:1"] img').src).toBe('blob:pdfjs-o3');
     $('logBox').open = true;
@@ -887,7 +889,7 @@ describe('ファイルを足して並べる', () => {
   });
 
   it('PDF の中を調べられなければ、すべての頁を pdf.js で描く', async () => {
-    mocks.findScanImages.mockResolvedValue({ scans: [], reasons: new Map([['PDF を読めない（暗号化）', 1]]), example: '' });
+    mocks.findScanImages.mockResolvedValue({ scans: [], softMasks: [], reasons: new Map([['PDF を読めない（暗号化）', 1]]), example: '' });
     drop([file('odd.pdf', pdf(ODD))]);
     await settled(1);
 
@@ -902,7 +904,7 @@ describe('ファイルを足して並べる', () => {
   it('pdf.js で描く PDF は、作ったアプリと、開き直して描き直したかを記録に出す', async () => {
     const pages = [page('o1', 1, { jpeg: false })];
     // 1 つ目は、描けない理由の分からない頁として見つかる。
-    mocks.findScanImages.mockResolvedValueOnce({ scans: [null], reasons: new Map(), example: '' });
+    mocks.findScanImages.mockResolvedValueOnce({ scans: [null], softMasks: [0], reasons: new Map(), example: '' });
     drop([
       file('a.pdf', pdf(pages, { info: { Creator: 'Adobe Illustrator', Producer: 'Adobe PDF library' }, redrawn: true })),
       file('b.pdf', pdf(pages, { info: { Creator: 'Word', Producer: 'Word' } })),
@@ -1067,7 +1069,7 @@ describe('ファイルを足して並べる', () => {
   });
 
   it('番号の無い頁が多くても、あとから本文に変えたときに PDF を調べ直さない', async () => {
-    const many = Array.from({ length: 40 }, (_, i) => page(`o${2 * i + 1}`, 2 * i + 1, { ocr: true }));
+    const many = Array.from({ length: 40 }, (_, i) => page(`o${2 * i + 1}`, 2 * i + 1, { ocr: true, softMasks: i }));
     drop([file('cover.pdf', pdf(many))]);
     await settled(1);
     expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
@@ -1078,6 +1080,9 @@ describe('ファイルを足して並べる', () => {
     // 調べたときの JPEG（ファイルの一部を指すだけ）で描く。
     expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
     expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o1' });
+    // 調べたときに数えたソフトマスクの数も渡す（pdf.js で描くときの描き方を選ぶ）。
+    const softMasks = mocks.renderMargins.mock.calls.map(([, index, , options]) => [index, options.softMasks]);
+    expect(softMasks.sort((a, b) => a[0] - b[0])).toEqual(many.map((_, i) => [i, i]));
   });
 
   it('見出しの「?」は、押すと説明を開き、もう一度押すか外を押すか Esc で閉じる', () => {

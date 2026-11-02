@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 //
-// PDF 結合ツール: WebKit（Safari・iPhone・iPad）で pdf.js が頁を
-// 描けなかったとき、OffscreenCanvas も切った文書で開き直して描き直す
-// （pdf-source.js）。pdf.js は偽物に差し替え、渡した設定と描き直しを確かめる。
+// PDF 結合ツール: pdf.js で頁を描く（pdf-source.js）。pdf.js は偽物に差し替える。
+//
+//   - WebKit（Safari・iPhone・iPad）で描けなかったとき、OffscreenCanvas も
+//     切った文書で開き直して描き直す。渡した設定と描き直しを確かめる
+//   - ソフトマスクの多い頁は、頁全体を細かく描かず、viewport ごとに描く
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +17,7 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
       params,
       destroyed: false,
       rendered: 0,
+      canvases: [],
       loadingTask: {
         destroy: async () => {
           doc.destroyed = true;
@@ -23,9 +26,11 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
       getPage: async (pageNumber) => ({
         pageNumber,
         getViewport: ({ scale }) => ({ width: 100 * scale, height: 140 * scale, transform: [scale, 0, 0, -scale, 0, 140 * scale] }),
-        render: () => ({
+        render: ({ canvas }) => ({
           promise: (async () => {
             doc.rendered++;
+            doc.canvases.push([canvas.width, canvas.height]);
+            if (doc.failAt === doc.rendered) throw new Error('render');
             // OffscreenCanvas を使う設定では描けない、という WebKit の偽物。
             if (params.isOffscreenCanvasSupported && doc.failWithOffscreen) {
               throw new DOMException('The object is in an invalid state.', 'InvalidStateError');
@@ -112,5 +117,75 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
     await expect(source.renderPreview(doc, 0, 200)).rejects.toThrow('invalid state');
     expect(opened).toHaveLength(1);
     expect(source.redrawnSafely(doc)).toBe(false);
+  });
+});
+
+describe('ソフトマスクの多い頁は、viewport ごとに描く', () => {
+  beforeEach(() => {
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+    // jsdom の canvas は描けないので、使う分だけ用意する。
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function getContext() {
+      return {
+        drawImage() {},
+        setTransform() {},
+        getImageData: () => ({ data: new Uint8ClampedArray(this.width * this.height * 4) }),
+      };
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // 偽物の頁は 100×140。測る画像は長辺 1000px、OCR の帯は頁の高さ 2400px の上下 14%。
+  const ANALYSIS = [714, 1000];
+  const STRIP = [1714, 336];
+  const FULL = [1714, 2400];
+
+  it('ソフトマスクの多い頁は、測る画像と余白の帯を、それぞれの大きさで描く（頁全体を細かく描かない）', async () => {
+    const doc = await source.openPdf(new Uint8Array([1]));
+    const { strips } = await source.renderPageImage(doc, 0, null, {
+      margins: true,
+      softMasks: source.SEPARATE_DRAW_SOFT_MASKS + 1,
+    });
+    expect(doc.canvases).toEqual([ANALYSIS, STRIP, STRIP]);
+    expect(strips.map((strip) => [strip.canvas.width, strip.canvas.height])).toEqual([STRIP, STRIP]);
+
+    // あとからの OCR（帯だけ描く）も同じ。
+    doc.canvases.length = 0;
+    await source.renderMargins(doc, 0, null, { softMasks: source.SEPARATE_DRAW_SOFT_MASKS + 1 });
+    expect(doc.canvases).toEqual([STRIP, STRIP]);
+  });
+
+  it('ソフトマスクが少なければ、いちばん細かい大きさで頁を 1 回だけ描いて切り出す', async () => {
+    const doc = await source.openPdf(new Uint8Array([1]));
+    await source.renderPageImage(doc, 0, null, { margins: true, softMasks: source.SEPARATE_DRAW_SOFT_MASKS });
+    expect(doc.canvases).toEqual([FULL]);
+
+    doc.canvases.length = 0;
+    await source.renderMargins(doc, 0, null);
+    expect(doc.canvases).toEqual([FULL]);
+  });
+
+  it('途中で描けなければ、描き終えた canvas を手放して失敗を返す', async () => {
+    const doc = await source.openPdf(new Uint8Array([1]));
+    doc.failAt = 2;
+    const created = [];
+    const create = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((name) => {
+      const element = create(name);
+      if (name === 'canvas') created.push(element);
+      return element;
+    });
+
+    await expect(
+      source.renderPageImage(doc, 0, null, { margins: true, softMasks: source.SEPARATE_DRAW_SOFT_MASKS + 1 })
+    ).rejects.toThrow('render');
+    expect(doc.rendered).toBe(2);
+    // 描き終えた測る画像も、描けなかった帯も、大きさを 0 にして手放してある。
+    expect(created.map((canvas) => [canvas.width, canvas.height])).toEqual([
+      [0, 0],
+      [0, 0],
+    ]);
   });
 });

@@ -289,12 +289,53 @@ function collect(context, content, resources, ctm, found, depth) {
 }
 
 /**
+ * 頁（と、その中のフォーム）が使うソフトマスク（ExtGState の SMask）の数。
+ *
+ * pdf.js はソフトマスク 1 つごとに、描いている canvas と同じ大きさの作業用の
+ * canvas を作り、マスクを合成する（canvas の filter の無い Safari では、
+ * 輝度を 1 画素ずつ JavaScript で透明度に直す）。InDesign の影・ぼかしの
+ * ような効果は数百のソフトマスクになり、頁を細かく描くほど重くなる
+ * （pdf-source.js はこの数で描き方を変える）。数えるのは資源に用意された
+ * 数（頁の中身は読まない）。
+ *
+ * @param {import('pdf-lib').PDFPage} page
+ */
+export function softMaskCount(page) {
+  const { context } = page.node;
+  const seen = new Set();
+  let count = 0;
+  const visit = (resources, depth) => {
+    if (!(resources instanceof PDFDict) || seen.has(resources)) return;
+    seen.add(resources);
+    const states = resources.lookupMaybe(PDFName.of('ExtGState'), PDFDict);
+    for (const [, state] of states?.entries() ?? []) {
+      const smask = context.lookup(state)?.lookup?.(PDFName.of('SMask'));
+      if (smask instanceof PDFDict) count++;
+    }
+    if (depth >= MAX_FORM_DEPTH) return;
+    const xobjects = resources.lookupMaybe(PDFName.of('XObject'), PDFDict);
+    for (const [, ref] of xobjects?.entries() ?? []) {
+      const dict = context.lookup(ref)?.dict;
+      if (nameOf(dict?.lookup(PDFName.of('Subtype'))) !== 'Form') continue;
+      visit(dict.lookup(PDFName.of('Resources')), depth + 1);
+    }
+  };
+  try {
+    visit(page.node.Resources(), 0);
+  } catch {
+    // 読めない資源は数えない（描き方を選ぶ目安にするだけなので）。
+  }
+  return count;
+}
+
+/**
  * 1 頁が、JPEG 画像をブラウザに展開させて描ける形か調べる。
  *
  * @param {import('pdf-lib').PDFPage} page
  * @returns {{scan: {images:{jpeg:Uint8Array, flate:boolean, width:number, height:number, matrix:number[]}[]} | null,
- *            reason: string|null, outline: string}}
+ *            reason: string|null, outline: string, softMasks: number}}
  *   scan は描けるときだけ。reason は描けない理由、outline は頁の作り（記録に出す）。
+ *   softMasks はソフトマスクの数（softMaskCount。pdf.js で描くときの描き方を選ぶ）。
  *   jpeg は PDF の中のバイト列のまま（flate なら Flate で包んだまま。描くときに開く）。
  */
 export function inspectPage(page) {
@@ -313,7 +354,9 @@ export function inspectPage(page) {
   const parts = [`画像 ${found.infos.length} 枚${found.infos.length ? `（${found.infos.slice(0, 4).join('、')}${found.infos.length > 4 ? '、…' : ''}）` : ''}`];
   if (found.paints) parts.push(`下地の塗り ${found.paints}`);
   if (found.forms) parts.push(`フォーム ${found.forms}`);
-  return { scan: reason ? null : { images: found.images }, reason, outline: parts.join('・') };
+  const softMasks = softMaskCount(page);
+  if (softMasks) parts.push(`ソフトマスク ${softMasks}`);
+  return { scan: reason ? null : { images: found.images }, reason, outline: parts.join('・'), softMasks };
 }
 
 /**
@@ -322,9 +365,10 @@ export function inspectPage(page) {
  * 読めない PDF（暗号化など）は、すべての頁を pdf.js で描く。
  *
  * @param {Uint8Array} bytes
- * @returns {Promise<{scans:(object|null)[], reasons:Map<string, number>, example:string}>}
- *   scans は頁ごと（描けない頁は null）。reasons は描けない理由ごとの頁数、
- *   example は描けなかった最初の頁の作り（どちらも記録に出す）。
+ * @returns {Promise<{scans:(object|null)[], softMasks:number[], reasons:Map<string, number>, example:string}>}
+ *   scans は頁ごと（描けない頁は null）。softMasks は頁ごとのソフトマスクの数。
+ *   reasons は描けない理由ごとの頁数、example は描けなかった最初の頁の作り
+ *   （どちらも記録に出す）。
  */
 export async function findScanImages(bytes) {
   let doc;
@@ -332,19 +376,21 @@ export async function findScanImages(bytes) {
     // 数百頁の PDF でも画面を固めないよう、少しずつ読む。
     doc = await PDFDocument.load(bytes, { updateMetadata: false, objectsPerTick: 50 });
   } catch (error) {
-    return { scans: [], reasons: new Map([[`PDF を読めない（${error?.message || error}）`, 1]]), example: '' };
+    return { scans: [], softMasks: [], reasons: new Map([[`PDF を読めない（${error?.message || error}）`, 1]]), example: '' };
   }
   const scans = [];
+  const softMasks = [];
   const reasons = new Map();
   let example = '';
   doc.getPages().forEach((page, index) => {
-    const { scan, reason, outline } = inspectPage(page);
+    const { scan, reason, outline, softMasks: count } = inspectPage(page);
     scans.push(scan);
+    softMasks.push(count);
     if (!reason) return;
     reasons.set(reason, (reasons.get(reason) || 0) + 1);
     example ||= `${index + 1} 頁目: ${outline}`;
   });
-  return { scans, reasons, example };
+  return { scans, softMasks, reasons, example };
 }
 
 // --- 描く ----------------------------------------------------------------------

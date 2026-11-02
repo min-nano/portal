@@ -30,6 +30,11 @@ export const THUMB_WIDTH = 160;
 export const OCR_PAGE_HEIGHT = 2400;
 /** 拡大表示の長辺（px）。 */
 export const PREVIEW_LONG_SIDE = 1600;
+/**
+ * ソフトマスクがこれより多い頁は、pdf.js で viewport ごとに描く（drawViewports）。
+ * スキャナの作る PDF では 0 か数個で、InDesign の影・ぼかしのある頁では数百になる。
+ */
+export const SEPARATE_DRAW_SOFT_MASKS = 8;
 
 /**
  * PDF を開く。
@@ -192,8 +197,15 @@ function inScanTurn(run) {
  * その頁は pdf.js で描く。pdf.js では、細かさの違う何枚か（測る画像と OCR の
  * 帯）を、いちばん細かい大きさで頁を 1 回だけ描いてから切り出す（pdf.js は
  * 描くたびにスキャンの画像を描き直すので、1 回にまとめる）。
+ *
+ * ただしソフトマスクの多い頁（softMasks が SEPARATE_DRAW_SOFT_MASKS を超える）は、
+ * viewport ごとに、その大きさの canvas へ描く。pdf.js はソフトマスク 1 つごとに
+ * canvas と同じ大きさの作業をするので、頁全体を細かく（OCR の大きさで 400 万
+ * 画素ほど）描くと、数百のソフトマスクで何十秒もかかり、iPhone ではメモリが
+ * 尽きて落ちた。測る画像（長辺 1000px）と上下の帯に分けて描けば、描く画素は
+ * 半分ほどになる。
  */
-async function drawViewports(doc, page, viewports, sizes, scan) {
+async function drawViewports(doc, page, viewports, sizes, scan, softMasks = 0) {
   if (scan) {
     try {
       return await inScanTurn(() => drawScan(scan, viewports, sizes));
@@ -203,6 +215,16 @@ async function drawViewports(doc, page, viewports, sizes, scan) {
   }
   return inTurn(async () => {
     if (viewports.length === 1) return [await drawPage(doc, page, viewports[0], sizes[0])];
+    if (softMasks > SEPARATE_DRAW_SOFT_MASKS) {
+      const canvases = [];
+      try {
+        for (const [k, viewport] of viewports.entries()) canvases.push(await drawPage(doc, page, viewport, sizes[k] ?? viewport));
+      } catch (error) {
+        canvases.forEach(releaseCanvas);
+        throw error;
+      }
+      return canvases;
+    }
     const finest = Math.max(...viewports.map((viewport) => Math.hypot(viewport.transform[0], viewport.transform[1])));
     const full = page.getViewport({ scale: finest });
     const source = await drawPage(doc, page, full);
@@ -292,12 +314,13 @@ function stripsOf(margins, canvases) {
  * @param {object} doc openPdf の結果
  * @param {number} index 0 から数えた頁の位置
  * @param {object|null} [scan] その頁の JPEG（scan-images.js）。無ければ pdf.js で描く
- * @param {{margins?: boolean}} [options]
+ * @param {{margins?: boolean, softMasks?: number}} [options] softMasks は頁のソフトマスクの数
+ *   （scan-images.js の findScanImages。pdf.js で描くときの描き方を選ぶ）
  * @returns {Promise<{image:{width:number,height:number,gray:Uint8Array}, thumbUrl:string,
  *                    strips:{zone:'top'|'bottom', canvas:HTMLCanvasElement, top:number, height:number}[]}>}
  *   strips は margins のときだけ（そうでなければ空）。
  */
-export async function renderPageImage(doc, index, scan = null, { margins = false } = {}) {
+export async function renderPageImage(doc, index, scan = null, { margins = false, softMasks = 0 } = {}) {
   const page = await doc.getPage(index + 1);
   try {
     const base = page.getViewport({ scale: 1 });
@@ -308,7 +331,8 @@ export async function renderPageImage(doc, index, scan = null, { margins = false
       page,
       [viewport, ...bands.map((band) => band.viewport)],
       [undefined, ...bands.map((band) => band.size)],
-      scan
+      scan,
+      softMasks
     );
     const context = canvas.getContext('2d', { willReadFrequently: true });
     const image = {
@@ -330,10 +354,14 @@ export async function renderPageImage(doc, index, scan = null, { margins = false
  * 頁全体を細かく描くと 1 頁で数十 MB の画素になるので、頁番号のある帯
  * （上下 MARGIN_ZONE）だけを描く。
  *
+ * @param {object} doc openPdf の結果
+ * @param {number} index 0 から数えた頁の位置
+ * @param {object|null} [scan] その頁の JPEG（scan-images.js）。無ければ pdf.js で描く
+ * @param {{softMasks?: number}} [options] 頁のソフトマスクの数（renderPageImage と同じ）
  * @returns {Promise<{zone:'top'|'bottom', canvas:HTMLCanvasElement, top:number, height:number}[]>}
  *   top と height は、帯の位置を頁の高さに対する割合で表したもの。
  */
-export async function renderMargins(doc, index, scan = null) {
+export async function renderMargins(doc, index, scan = null, { softMasks = 0 } = {}) {
   const page = await doc.getPage(index + 1);
   try {
     const bands = marginViewports(page);
@@ -342,7 +370,8 @@ export async function renderMargins(doc, index, scan = null) {
       page,
       bands.map((band) => band.viewport),
       bands.map((band) => band.size),
-      scan
+      scan,
+      softMasks
     );
     return stripsOf(bands, canvases);
   } finally {
