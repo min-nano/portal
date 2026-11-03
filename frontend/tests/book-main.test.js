@@ -1472,6 +1472,29 @@ describe('結合と検証', () => {
     expect($('logText').textContent).toContain('「猫.pdf」をダウンロードしました');
   });
 
+  it('iPhone では、共有シートに渡せない大きさの PDF は、ダウンロードで保存すると記録に残す', async () => {
+    const userAgent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+    );
+    Object.assign(navigator, { share: vi.fn().mockResolvedValue(undefined), canShare: () => true });
+    // 結合した PDF が 300 MB あったことにする（中身は小さな偽物のまま）。
+    const merge = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementation(async (options) => ({ ...(await merge(options)), size: 300 * 1024 * 1024 }));
+    await addBook();
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('downloadBtn').disabled).toBe(false));
+
+    $('downloadBtn').click();
+    await flush();
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('「猫.pdf」を保存します（300.0 MB）');
+    expect($('logText').textContent).toContain('大きいので、共有シートではなくダウンロードで保存します');
+    userAgent.mockRestore();
+    delete navigator.share;
+    delete navigator.canShare;
+  });
+
   it('保存領域があれば、読み込んだ中身はそこに置いてメモリから手放し、結合した PDF もそこへ書き出す', async () => {
     const stash = await fakeStash();
     await addBook();

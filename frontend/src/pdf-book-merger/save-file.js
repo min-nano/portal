@@ -7,10 +7,19 @@
 // 開くことがあり、そのときは付けた名前が使われない（「Unknown」や「document」
 // などになる）。共有シートなら付けた名前のまま渡り、「"ファイル" に保存」や
 // Google ドライブのアプリへのアップロードもそこから選べる。
+//
+// ただし大きなファイル（SHARE_LIMIT を超えるもの）は、iPhone・iPad でも
+// ダウンロードにする。共有シートに渡すと、Safari はファイルの中身をまるごと
+// ページのメモリに読むので、1 頁のファイル 492 個を結合した 615 MB の PDF では、
+// 共有シートが開く前にページごと落ちた（215 MB は渡せた）。ダウンロードなら、
+// 中身はページの外（ブラウザのダウンロード）が読む。
 
 import { isIOS } from './device.js';
 
 const PDF_MIME = 'application/pdf';
+
+/** 共有シートに渡す大きさの上限（バイト）。これより大きければダウンロードにする。 */
+export const SHARE_LIMIT = 256 * 1024 * 1024;
 
 /**
  * 共有シートで渡す端末か（iPhone・iPad・Android）。
@@ -20,6 +29,17 @@ const PDF_MIME = 'application/pdf';
 export function isMobile(nav) {
   if (!nav) return false;
   return isIOS(nav) || /\bAndroid\b/.test(nav.userAgent || '');
+}
+
+/**
+ * 保存のしかた。共有シートで渡す端末でも、大きなファイルはダウンロードにする。
+ *
+ * @param {number} size バイト数
+ * @param {{userAgent?:string, platform?:string, maxTouchPoints?:number}} [nav]
+ * @returns {'share'|'download'}
+ */
+export function saveMethod(size, nav) {
+  return isMobile(nav) && size <= SHARE_LIMIT ? 'share' : 'download';
 }
 
 function download(file) {
@@ -45,7 +65,11 @@ function download(file) {
  */
 export async function savePdf(data, fileName, nav = globalThis.navigator) {
   const file = new File([data], fileName, { type: PDF_MIME });
-  if (isMobile(nav) && typeof nav.share === 'function' && nav.canShare?.({ files: [file] })) {
+  if (
+    saveMethod(file.size, nav) === 'share' &&
+    typeof nav.share === 'function' &&
+    nav.canShare?.({ files: [file] })
+  ) {
     try {
       // ファイルだけを渡す（title などを添えると、iOS はそれを「テキスト.txt」と
       // して一緒に渡してしまう）。

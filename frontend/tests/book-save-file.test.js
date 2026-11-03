@@ -6,7 +6,7 @@
 // 落とすことがあるため）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isMobile, savePdf } from '../src/pdf-book-merger/save-file.js';
+import { isMobile, saveMethod, savePdf, SHARE_LIMIT } from '../src/pdf-book-merger/save-file.js';
 
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
 const MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15';
@@ -38,6 +38,18 @@ describe('isMobile', () => {
     [undefined, false],
   ])('%j → %s', (nav, expected) => {
     expect(isMobile(nav)).toBe(expected);
+  });
+});
+
+describe('saveMethod', () => {
+  it('iPhone では共有シートに渡すが、大きなファイルはダウンロードにする（共有シートに渡すと、Safari が中身をまるごとページのメモリに読む）', () => {
+    const iphone = { userAgent: IPHONE };
+    expect(saveMethod(SHARE_LIMIT, iphone)).toBe('share');
+    expect(saveMethod(SHARE_LIMIT + 1, iphone)).toBe('download');
+    // 615 MB（1 頁のファイル 492 個を結合した PDF）は、共有シートに渡すとページごと落ちた。
+    expect(saveMethod(615 * 1024 * 1024, iphone)).toBe('download');
+    // パソコンは、大きさに関わらずダウンロード。
+    expect(saveMethod(1, { userAgent: MAC, platform: 'MacIntel', maxTouchPoints: 0 })).toBe('download');
   });
 });
 

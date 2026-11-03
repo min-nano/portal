@@ -31,7 +31,7 @@ import { pickFiles } from '../drive-picker.js';
 import { ensurePdfExtension } from '../pdf-file-ops.js';
 import { downloadDriveFile } from './drive-download.js';
 import { compareScans } from './image-checks.js';
-import { savePdf } from './save-file.js';
+import { isMobile, saveMethod, savePdf } from './save-file.js';
 import { measure } from './measure-client.js';
 import { boxesReadSoFar, prepareOcr, readStrip, releaseOcr } from './ocr.js';
 import { blobStash, openStash } from './stash.js';
@@ -1882,6 +1882,10 @@ async function download() {
   const { data, fileName, size } = merged;
   saving = true;
   log(`「${fileName}」を保存します（${megabytes(size)}）`);
+  // 大きくて共有シートに渡せないとき（save-file.js）は、そう記録しておく。
+  if (isMobile(navigator) && saveMethod(size, navigator) === 'download') {
+    log('大きいので、共有シートではなくダウンロードで保存します');
+  }
   const how = await savePdf(data, fileName).finally(() => {
     saving = false;
     keepLog();
