@@ -413,6 +413,35 @@ describe('ファイルを足して並べる', () => {
     expect(mocks.readStrip).toHaveBeenCalledTimes(2);
   });
 
+  it('一度に何十・何百ファイル足しても、一覧は 1 度だけ描き、経過はそのファイルの行だけ描き直す', async () => {
+    // 1 つ足すたびに一覧をまるごと描き直すと、400 ファイルで折り畳みの節を
+    // 8 万個作っては捨て、iPhone では足している途中でページごと落ちた。
+    const list = $('fileList');
+    const redraws = vi.spyOn(list, 'replaceChildren');
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    const names = Array.from({ length: 40 }, (_, i) => `${String(i + 1).padStart(4, '0')}.pdf`);
+    drop(names.map((name, i) => file(name, pdf([page(`p${i}`, i + 1)]))));
+
+    // 足した直後（読み込みが始まる前）。一覧は 1 度だけ描き、記録も 1 度だけ残す。
+    expect(redraws).toHaveBeenCalledTimes(1);
+    expect(list.children).toHaveLength(40);
+    const kept = setItem.mock.calls.filter(([key]) => key.startsWith('pdf-book-merger:log'));
+    expect(kept).toHaveLength(1);
+    expect(JSON.parse(kept[0][1]).lines.at(-1)).toContain('「0040.pdf」を追加しました（この端末）');
+    setItem.mockRestore();
+
+    // 読み込みの経過は、そのファイルの行だけを描き直す（一覧をまるごと描き直すのは、
+    // 調べ終えて並びが変わるときだけ）。読み込みは調べるのを待たずに先へ進む。
+    await vi.waitFor(() => expect(fileItem('0040.pdf').querySelector('.hint').textContent).toBe('読み込み済み（調べる順番待ち）'));
+    expect(list.children).toHaveLength(40);
+    const ready = [...list.querySelectorAll('.bm-file.ready')].length;
+    // 調べ終えたファイルの数（＋足したとき）しか描き直していない。
+    expect(redraws.mock.calls.length).toBeLessThanOrEqual(ready + 1);
+
+    await vi.waitFor(() => expect(list.querySelectorAll('.bm-file.ready')).toHaveLength(40), { timeout: 20000 });
+    await flush();
+  }, 30000);
+
   it('ファイルは名前と設定の要約の 2 行に畳んでおき、開け閉めは描き直しても保つ', async () => {
     await addBook();
     const meta = (name) => fileItem(name).querySelector('.bm-file-head .hint').textContent;
@@ -1553,7 +1582,9 @@ describe('結合と検証', () => {
       return render(doc, index, ...rest);
     });
     drop([file('猫_奇数.pdf', pdf(ODD))]);
-    await vi.waitFor(() => expect(kept().some((lines) => lines.some((line) => line.includes('猫_奇数.pdf')))).toBe(true));
+    await vi.waitFor(() =>
+      expect(kept().some((lines) => lines.some((line) => line.includes('「猫_奇数.pdf」の文字情報を読みました')))).toBe(true)
+    );
 
     // 落ちた（pagehide が来ないまま、開き直した）。
     vi.resetModules();
