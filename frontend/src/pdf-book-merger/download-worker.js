@@ -13,11 +13,14 @@
 // attachment を付けて返す。応えるのは、この Service Worker の範囲（pdf-download/）
 // の中のアドレスだけで、ほかの読み込みには手を出さない。控えも作らない。
 
-/** ID → { file, done }。開かれたら（か、待ちくたびれたら）忘れる。 */
+/**
+ * ID → File。KEEP_MS たったら忘れる。開かれても、すぐには忘れない（ブラウザは
+ * ダウンロードに切り替えるときなどに、同じアドレスをもう一度読みに来ることがある）。
+ */
 const files = new Map();
 
-/** 渡されてから開かれるまで待つ時間（ミリ秒）。過ぎたら手放す。 */
-const KEEP_MS = 60 * 1000;
+/** 渡されてから覚えておく時間（ミリ秒）。過ぎたら手放す。 */
+const KEEP_MS = 5 * 60 * 1000;
 
 self.addEventListener('install', () => self.skipWaiting());
 
@@ -27,34 +30,35 @@ self.addEventListener('message', (event) => {
   if (event.origin !== self.location.origin) return;
   const { id, file } = event.data ?? {};
   if (!id || !file) return;
-  // 開かれるまで（か KEEP_MS まで）止められないようにする。
+  // KEEP_MS の間は止められないようにする（止められると、覚えた PDF も消える）。
+  files.set(id, file);
   event.waitUntil(
-    new Promise((done) => {
-      files.set(id, { file, done });
+    new Promise((done) =>
       setTimeout(() => {
         files.delete(id);
         done();
-      }, KEEP_MS);
-    })
+      }, KEEP_MS)
+    )
   );
   event.ports[0]?.postMessage('ready');
 });
 
 self.addEventListener('fetch', (event) => {
-  const id = new URL(event.request.url).pathname.split('/').pop();
-  const entry = files.get(id);
-  files.delete(id);
-  entry?.done();
-  // 覚えていない（もう保存した・待ちくたびれた）ときは、何も返さない（204）。
-  // エラーの頁を返すと、ツールのページがそれに置き換わってしまう。
-  event.respondWith(entry ? attachment(entry.file) : new Response(null, { status: 204 }));
+  const file = files.get(new URL(event.request.url).pathname.split('/').pop());
+  // 覚えていない（待ちくたびれた）ときは、何も返さない（204）。エラーの頁を
+  // 返すと、ツールのページがそれに置き換わってしまう。
+  event.respondWith(file ? attachment(file) : new Response(null, { status: 204 }));
 });
 
-/** 付けた名前で保存させる応答。 */
+/**
+ * 付けた名前で保存させる応答。種類は PDF と言わずに octet-stream にする。
+ * iPhone の Safari は、application/pdf だと attachment でも保存せずに PDF として
+ * 開いた（名前は filename* の .pdf のまま保存される）。
+ */
 function attachment(file) {
   return new Response(file, {
     headers: {
-      'Content-Type': file.type || 'application/octet-stream',
+      'Content-Type': 'application/octet-stream',
       'Content-Disposition': contentDisposition(file.name),
     },
   });

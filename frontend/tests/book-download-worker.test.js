@@ -60,37 +60,37 @@ describe('download-worker', () => {
     expect(skipWaiting).toHaveBeenCalled();
   });
 
-  it('渡された PDF を、開かれたら付けた名前で attachment にして返す。2 度目は何も返さない（ページを置き換えない）', async () => {
+  it('渡された PDF を、開かれたら付けた名前で attachment にして返す（種類は octet-stream。Safari が PDF として開かないように）', async () => {
     const file = new File(['%PDF-1.7'], '木造住宅関連資材カタログ5.pdf', { type: 'application/pdf' });
-    const { keep, replies } = hand({ id: 'a1', file });
+    const { replies } = hand({ id: 'a1', file });
     expect(replies).toEqual(['ready']);
 
     const response = open('a1');
     expect(response.status).toBe(200);
-    expect(response.headers.get('Content-Type')).toBe('application/pdf');
+    expect(response.headers.get('Content-Type')).toBe('application/octet-stream');
     expect(response.headers.get('Content-Disposition')).toBe(
       `attachment; filename="____________5.pdf"; filename*=UTF-8''${encodeURIComponent('木造住宅関連資材カタログ5.pdf')}`
     );
     expect(await response.text()).toBe('%PDF-1.7');
-    // 開かれたら、止められてもよい。
-    await keep;
-
-    expect(open('a1').status).toBe(204);
+    // 覚えていない ID には、何も返さない（エラーの頁でツールのページを置き換えない）。
     expect(open('unknown').status).toBe(204);
   });
 
-  it('開かれないまま 1 分たったら手放す', async () => {
+  it('同じアドレスをもう一度読みに来ても返す（Safari はダウンロードに切り替えるときに読み直す）。5 分たったら手放す', async () => {
     vi.useFakeTimers();
     const { keep } = hand({ id: 'b1', file: new File(['x'], 'b.pdf') });
-    await vi.advanceTimersByTimeAsync(60 * 1000);
+    expect(open('b1').status).toBe(200);
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000 - 1);
+    expect(open('b1').status).toBe(200);
+    await vi.advanceTimersByTimeAsync(1);
+    // 手放したら、止められてもよい。
     await keep;
     expect(open('b1').status).toBe(204);
   });
 
-  it('名前の引用符・括弧も崩さない。種類の分からないファイルは octet-stream で返す', () => {
+  it('名前の引用符・括弧も崩さない', () => {
     hand({ id: 'c1', file: new File(['x'], `a"b(1)'c*.pdf`) });
     const response = open('c1');
-    expect(response.headers.get('Content-Type')).toBe('application/octet-stream');
     expect(response.headers.get('Content-Disposition')).toBe(
       `attachment; filename="a_b(1)'c*.pdf"; filename*=UTF-8''a%22b%281%29%27c%2A.pdf`
     );
