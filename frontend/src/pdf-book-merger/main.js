@@ -1187,20 +1187,83 @@ function smallButton(text, title, onClick, className = 'secondary') {
   return button;
 }
 
+/** 描いた行・カードの中身の要約（reconcile が、作り直すかどうかを決めるのに使う）。 */
+const drawnAs = new WeakMap();
+
+/**
+ * 一覧（ファイルの一覧・頁の一覧）を、items の順に描く。中身の要約（sig）が
+ * 前に描いたときと同じ行・カードは、作り直さずにそのまま使い、並びが変わった
+ * ところだけ動かす。
+ *
+ * ファイルを 1 つ調べ終えるたびに一覧をまるごと作り直すと、作っては捨てる要素の
+ * 数がファイルの数の 2 乗になる（424 ファイルで、1 回に約 1 万 9 千個、通しで
+ * 約 400 万個）。iPhone では、調べている途中でページごと落ちた。並びや指摘は
+ * 毎回計算し直すが（軽い）、要素を作るのは中身の変わった行・カードだけにする。
+ * sig には、その行・カードに出すもの（と、操作のときに使うもの）をすべて入れる。
+ *
+ * @param {HTMLElement} list
+ * @param {{key:string, sig:string, build:() => HTMLElement}[]} items key は一覧の中で重ならないこと
+ */
+function reconcile(list, items) {
+  const drawn = new Map([...list.children].map((node) => [node.dataset.key, node]));
+  const nodes = items.map(({ key, sig, build }) => {
+    const node = drawn.get(key);
+    if (node && drawnAs.get(node) === sig) return node;
+    const fresh = build();
+    fresh.dataset.key = key;
+    drawnAs.set(fresh, sig);
+    return fresh;
+  });
+  // もう出さない行（と、作り直した行の古いもの）を先に外す（残すと、その後ろの
+  // 行がみな動くことになる）。
+  const keep = new Set(nodes);
+  for (const node of [...list.children]) if (!keep.has(node)) node.remove();
+  // 残った行は前と同じ順に並んでいるので、並びの違うところだけ入れる・動かす。
+  let cursor = list.firstElementChild;
+  for (const node of nodes) {
+    if (node === cursor) cursor = cursor.nextElementSibling;
+    else list.insertBefore(node, cursor);
+  }
+}
+
 function renderFiles() {
-  const list = $('fileList');
-  list.replaceChildren(...files.map(fileItem));
+  reconcile($('fileList'), files.map(fileEntry));
   showFileFields();
+}
+
+/** ファイルの一覧の 1 行（reconcile に渡す形）。 */
+function fileEntry(file) {
+  const numbering = file.role === 'body' ? view.numberings.get(file.key) : null;
+  const sig = JSON.stringify([
+    file.name,
+    file.status,
+    file.open,
+    file.role,
+    file.manual,
+    file.coverStart,
+    file.coverStep,
+    fileMeta(file),
+    file.status === 'ready' ? fileDetails(file) : '',
+    // 設定の欄（fileControls）の「先頭の頁の番号」の見本と、進み方の既定。
+    numbering?.pages[0]?.number ?? null,
+    numbering?.step ?? null,
+  ]);
+  return { key: file.key, sig, build: () => fileItem(file) };
 }
 
 /**
  * ファイル 1 つの行だけを描き直す（読み込み・調べる途中の経過など、そのファイルの
- * 見出しだけが変わるとき）。一覧をまるごと描き直すと、何百ファイルあるときに
- * 経過のたびに全部の行を作り直すことになる。
+ * 見出しだけが変わるとき）。ほかの行の要約は計算し直さない。
  */
 function renderFile(file) {
-  const item = [...$('fileList').children].find((li) => li.dataset.fileKey === file.key);
-  item?.replaceWith(fileItem(file));
+  const node = [...$('fileList').children].find((li) => li.dataset.key === file.key);
+  if (!node) return;
+  const { sig, build } = fileEntry(file);
+  if (drawnAs.get(node) === sig) return;
+  const fresh = build();
+  fresh.dataset.key = file.key;
+  drawnAs.set(fresh, sig);
+  node.replaceWith(fresh);
   showFileFields();
 }
 
@@ -1217,7 +1280,6 @@ function showFileFields() {
 // 設定の要約の 2 行だけを残す。開け閉めは描き直しても保つ。
 function fileItem(file) {
   const item = el(document, 'li');
-  item.dataset.fileKey = file.key;
   const ready = file.status === 'ready';
   const section = el(
     document,
@@ -1522,22 +1584,39 @@ function scrollToPage(pageKey) {
 
 function renderGrid() {
   const cards = [];
+  const seen = new Map(); // 抜けの札の key が重ならないように（番号が前後と合わないと、同じ抜けが 2 度出る）
   for (const item of gridItems(view.order)) {
     if (item.type === 'missing') {
-      const card = el(document, 'li', 'bm-page missing');
-      card.append(
-        el(document, 'span', 'bm-missing-label', item.from === item.to ? `${item.from} 頁` : `${item.from}〜${item.to} 頁`),
-        el(document, 'span', 'hint', 'ありません')
-      );
-      cards.push(card);
+      const range = `${item.from}-${item.to}`;
+      seen.set(range, (seen.get(range) ?? 0) + 1);
+      cards.push({ key: `missing:${range}:${seen.get(range)}`, sig: range, build: () => missingCard(item) });
       continue;
     }
-    const issues = view.issues.get(item.entry.pageKey) || [];
+    const { entry } = item;
+    const issues = view.issues.get(entry.pageKey) || [];
     const level = worstLevel(issues);
     if (filter === 'issues' && level !== 'error' && level !== 'warn') continue;
-    cards.push(pageCard(item.entry, issues, level));
+    const file = files.find((f) => f.key === entry.fileKey);
+    const sig = JSON.stringify([
+      entry,
+      issues,
+      file.name,
+      file.pages.length,
+      file.pages[entry.pageIndex].thumbUrl,
+      overrides.get(entry.pageKey) ?? null,
+    ]);
+    cards.push({ key: entry.pageKey, sig, build: () => pageCard(entry, issues, level) });
   }
-  $('pageGrid').replaceChildren(...cards);
+  reconcile($('pageGrid'), cards);
+}
+
+function missingCard(item) {
+  const card = el(document, 'li', 'bm-page missing');
+  card.append(
+    el(document, 'span', 'bm-missing-label', item.from === item.to ? `${item.from} 頁` : `${item.from}〜${item.to} 頁`),
+    el(document, 'span', 'hint', 'ありません')
+  );
+  return card;
 }
 
 function pageCard(entry, issues, level) {

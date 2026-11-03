@@ -86,7 +86,7 @@ afterEach(() => {
 });
 
 describe('WebKit での pdf.js の設定と描き直し', () => {
-  it('Mac の Safari では ImageDecoder を切り、OffscreenCanvas は使う。iPhone は両方切る。ほかのブラウザは両方使う', async () => {
+  it('Mac の Safari では ImageDecoder を切り、OffscreenCanvas は使う。iPhone は両方切り、フォントもブラウザに渡さない。ほかのブラウザは両方使う', async () => {
     vi.stubGlobal('navigator', { userAgent: MAC_SAFARI, platform: 'MacIntel', maxTouchPoints: 0 });
     await source.openPdf(new Uint8Array([1]));
     vi.stubGlobal('navigator', { userAgent: IPHONE });
@@ -94,10 +94,12 @@ describe('WebKit での pdf.js の設定と描き直し', () => {
     vi.stubGlobal('navigator', { userAgent: CHROME });
     await source.openPdf(new Uint8Array([1]));
 
-    expect(opened.map(({ params }) => [params.isImageDecoderSupported, params.isOffscreenCanvasSupported])).toEqual([
-      [false, true],
-      [false, false],
-      [true, true],
+    expect(
+      opened.map(({ params }) => [params.isImageDecoderSupported, params.isOffscreenCanvasSupported, params.disableFontFace])
+    ).toEqual([
+      [false, true, false],
+      [false, false, true],
+      [true, true, false],
     ]);
   });
 

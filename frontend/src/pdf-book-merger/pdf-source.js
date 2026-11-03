@@ -127,6 +127,14 @@ export async function openPdf(bytes, { safe = false, transfer = false, reload = 
     // 元だったときに備え、描けなければ両方を切った文書（safe）で描き直す
     // （drawPage）。
     isOffscreenCanvasSupported: !(webkit && safe),
+    // iPhone・iPad では、埋め込みのフォントをブラウザに渡さず（FontFace を作らず）、
+    // pdf.js が字形を線として描く。1 頁のファイルを何百も調べると、ファイルごとに
+    // 別のフォント（InDesign の書き出しなど）をブラウザに渡すことになり、文書を
+    // 閉じてフォントを外しても、400 ファイルを超えるあたりで描くのが遅くなって
+    // ページごと落ちた（Chromium では、ページと worker の JavaScript のメモリは
+    // 増えなかったので、Safari がフォントを抱えていると見ている）。描いたものは
+    // 変わらない（文字情報は別に読むので、こちらも変わらない）。
+    disableFontFace: isIOS(globalThis.navigator),
   });
   let doc;
   try {
