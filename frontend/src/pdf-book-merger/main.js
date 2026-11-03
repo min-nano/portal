@@ -31,7 +31,7 @@ import { pickFiles } from '../drive-picker.js';
 import { ensurePdfExtension } from '../pdf-file-ops.js';
 import { downloadDriveFile } from './drive-download.js';
 import { compareScans } from './image-checks.js';
-import { isMobile, saveMethod, savePdf } from './save-file.js';
+import { saveMethod, savePdf } from './save-file.js';
 import { measure } from './measure-client.js';
 import { boxesReadSoFar, prepareOcr, readStrip, releaseOcr } from './ocr.js';
 import { blobStash, openStash } from './stash.js';
@@ -1962,13 +1962,20 @@ async function download() {
   saving = true;
   log(`「${fileName}」を保存します（${megabytes(size)}）`);
   // 大きくて共有シートに渡せないとき（save-file.js）は、そう記録しておく。
-  if (isMobile(navigator) && saveMethod(size, navigator) === 'download') {
-    log('大きいので、共有シートではなくダウンロードで保存します');
+  const method = saveMethod(size, navigator);
+  if (method === 'worker') {
+    log('大きいので、共有シートではなく、ダウンロード（既定のダウンロードフォルダ）に保存します');
   }
-  const how = await savePdf(data, fileName).finally(() => {
+  let how;
+  try {
+    how = await savePdf(data, fileName, navigator, method);
+  } catch (error) {
+    showMessage(`「${fileName}」を保存できませんでした（${error.message}）。`, 'red');
+    return;
+  } finally {
     saving = false;
     keepLog();
-  });
+  }
   if (how === 'shared') log(`「${fileName}」を共有シートに渡しました`);
   else if (how === 'downloaded') log(`「${fileName}」をダウンロードしました`);
 }
