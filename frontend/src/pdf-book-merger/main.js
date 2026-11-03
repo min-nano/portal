@@ -88,7 +88,7 @@ const OCR_IN_FLIGHT = 3;
 const PAGES_IN_FLIGHT = 3;
 
 let nextKey = 1;
-/** 選んだファイル（画面の並び順）。中身は addFile() を参照。 */
+/** 選んだファイル（画面の並び順）。中身は addFiles() を参照。 */
 const files = [];
 /** 頁ごとに手で直した番号（頁の key → 番号）。 */
 const overrides = new Map();
@@ -304,12 +304,20 @@ function enqueue(task) {
 
 /** ログに 1 行足す（時刻付き）。 */
 function log(text) {
+  logLine(text);
+  renderLog();
+  keepLog();
+}
+
+/**
+ * ログに 1 行足すだけで、描き直しも残しもしない（何百ファイルを一度に足すとき
+ * など、続けて何行も足すときに。足し終えたら renderLog と keepLog を呼ぶ）。
+ */
+function logLine(text) {
   const time = new Date().toLocaleTimeString('ja-JP', { hour12: false });
   logLines.push(`${time} ${text}`);
   if (logLines.length > LOG_LIMIT) logLines.splice(0, logLines.length - LOG_LIMIT);
   $('logBox').hidden = false;
-  renderLog();
-  keepLog();
 }
 
 /** いま実行中のこと（記録の終わりに添える）。 */
@@ -387,45 +395,58 @@ function breathe() {
 /**
  * ファイルを一覧に足し、順番が来たら読む。
  *
- * @param {{name:string, size?:number, driveId?:string, modified?:number|null,
- *          load:(onProgress:Function) => Promise<Uint8Array>}} source
+ * 一度に選んだファイルは、まとめて足してから一覧を 1 度だけ並べて描く。1 つ
+ * 足すたびに一覧をまるごと描き直すと、手間もメモリもファイルの数の 2 乗に
+ * なり（400 ファイルで、折り畳みの節を 8 万個作っては捨てる）、iPhone では
+ * 足している途中でページごと落ちた。処理の記録を残すのも、足し終えてから 1 度。
+ *
+ * @param {Array<{name:string, size?:number, driveId?:string, modified?:number|null,
+ *          load:(onProgress:Function) => Promise<Uint8Array>}>} sources
  */
-function addFile(source) {
-  if (source.driveId && files.some((file) => file.driveId === source.driveId)) {
-    showMessage(`「${source.name}」はすでに追加してあります。`, 'red');
-    return;
+function addFiles(sources) {
+  const added = [];
+  for (const source of sources) {
+    if (source.driveId && files.some((file) => file.driveId === source.driveId)) {
+      showMessage(`「${source.name}」はすでに追加してあります。`, 'red');
+      continue;
+    }
+    const file = {
+      key: `f${nextKey}`,
+      added: nextKey++, // 追加した順（「追加順」に戻すときに使う）
+      name: source.name,
+      modified: Number.isFinite(source.modified) ? source.modified : null, // 更新日時（ミリ秒）
+      driveId: source.driveId || '',
+      status: 'waiting', // waiting → loading → loaded → reading → ocr → ready / error
+      error: '',
+      role: 'body',
+      manual: null,
+      coverStart: null, // 先頭・末尾に置くファイルの並べ順（先頭の頁の番号）
+      coverStep: 1, // 先頭・末尾に置くファイルの進み方（-1 なら最後の頁から）
+      open: false, // 一覧で設定の欄を開いているか（描き直しても保つ）
+      bytes: null,
+      doc: null,
+      pages: [],
+    };
+    files.push(file);
+    added.push({ file, source });
+    logLine(`「${file.name}」を追加しました（${source.driveId ? 'Drive' : 'この端末'}）`);
   }
-  const file = {
-    key: `f${nextKey}`,
-    added: nextKey++, // 追加した順（「追加順」に戻すときに使う）
-    name: source.name,
-    modified: Number.isFinite(source.modified) ? source.modified : null, // 更新日時（ミリ秒）
-    driveId: source.driveId || '',
-    status: 'waiting', // waiting → loading → loaded → reading → ocr → ready / error
-    error: '',
-    role: 'body',
-    manual: null,
-    coverStart: null, // 先頭・末尾に置くファイルの並べ順（先頭の頁の番号）
-    coverStep: 1, // 先頭・末尾に置くファイルの進み方（-1 なら最後の頁から）
-    open: false, // 一覧で設定の欄を開いているか（描き直しても保つ）
-    bytes: null,
-    doc: null,
-    pages: [],
-  };
-  files.push(file);
   sortFiles();
   renderFiles();
-  log(`「${file.name}」を追加しました（${source.driveId ? 'Drive' : 'この端末'}）`);
-  file.loaded = downloads.then(() => loadBytes(file, source));
-  downloads = file.loaded.catch(() => {});
-  file.pending = true; // 調べ終えるまで（見出しの「n / m」に使う）
-  enqueue(async () => {
-    try {
-      await readFile(file);
-    } finally {
-      file.pending = false;
-    }
-  });
+  for (const { file, source } of added) {
+    file.loaded = downloads.then(() => loadBytes(file, source));
+    downloads = file.loaded.catch(() => {});
+    file.pending = true; // 調べ終えるまで（見出しの「n / m」に使う）
+    enqueue(async () => {
+      try {
+        await readFile(file);
+      } finally {
+        file.pending = false;
+      }
+    });
+  }
+  renderLog();
+  keepLog();
 }
 
 /**
@@ -458,7 +479,7 @@ function showWaiting(file) {
 async function loadBytes(file, source) {
   if (!files.includes(file)) return;
   file.status = 'loading';
-  renderFiles();
+  renderFile(file);
   const started = performance.now();
   let bytes;
   try {
@@ -490,7 +511,7 @@ async function loadBytes(file, source) {
   await stashBytes(file);
   if (file.status === 'loading') {
     file.status = 'loaded';
-    renderFiles();
+    renderFile(file);
   }
 }
 
@@ -769,7 +790,7 @@ async function analyzePages(file, scans, ocrPages) {
     const parts = [`頁の画像を調べています ${measured} / ${count}`];
     if (ocrPages.size) parts.push(`余白の読み取り ${read} / ${ocrPages.size}`);
     showProgress(`「${file.name}」の${parts.join('・')}`, (measured + read) / (count + ocrPages.size));
-    if ((measured + read) % 8 === 0) renderFiles();
+    if ((measured + read) % 8 === 0) renderFile(file);
   };
   const ocrSlots = slots(OCR_IN_FLIGHT);
   const reading = [];
@@ -894,7 +915,7 @@ async function readMarginsWithOcr(file, pages) {
         ocrSlots.give();
         done++;
         showProgress(`「${file.name}」の余白を読み取っています（${done} / ${pages.length}）`, done / pages.length);
-        if (done % 8 === 0) renderFiles();
+        if (done % 8 === 0) renderFile(file);
       })
     );
   }
@@ -909,7 +930,7 @@ function queueLateOcr(file) {
   const pages = file.pages.filter((page) => page.candidates.length === 0 && !page.ocr && !manySoftMasks(page.softMasks));
   if (pages.length === 0) return;
   file.ocrBusy = true;
-  renderFiles();
+  renderFile(file);
   enqueue(async () => {
     try {
       // 読む間だけ開いておく（順番を待っている間は開かない）。
@@ -1169,6 +1190,22 @@ function smallButton(text, title, onClick, className = 'secondary') {
 function renderFiles() {
   const list = $('fileList');
   list.replaceChildren(...files.map(fileItem));
+  showFileFields();
+}
+
+/**
+ * ファイル 1 つの行だけを描き直す（読み込み・調べる途中の経過など、そのファイルの
+ * 見出しだけが変わるとき）。一覧をまるごと描き直すと、何百ファイルあるときに
+ * 経過のたびに全部の行を作り直すことになる。
+ */
+function renderFile(file) {
+  const item = [...$('fileList').children].find((li) => li.dataset.fileKey === file.key);
+  item?.replaceWith(fileItem(file));
+  showFileFields();
+}
+
+/** 一覧のまわりの欄（並び順・一括設定・確かめる・保存）を、ファイルの数に合わせて出す。 */
+function showFileFields() {
   $('fileSortField').hidden = files.length < 2;
   $('bulkRoleField').hidden = readyFiles().length < 2;
   $('checkSection').hidden = readyFiles().length === 0;
@@ -1180,6 +1217,7 @@ function renderFiles() {
 // 設定の要約の 2 行だけを残す。開け閉めは描き直しても保つ。
 function fileItem(file) {
   const item = el(document, 'li');
+  item.dataset.fileKey = file.key;
   const ready = file.status === 'ready';
   const section = el(
     document,
@@ -1863,36 +1901,34 @@ async function addFromDrive() {
 
 /** Drive のファイルを、名前の順に足す（束の番号が名前に付いていることが多い）。 */
 function addDriveFiles(picked) {
-  picked
-    .slice()
-    .sort(byName)
-    .forEach((file) =>
-      addFile({
+  addFiles(
+    picked
+      .slice()
+      .sort(byName)
+      .map((file) => ({
         name: file.name,
         driveId: file.id,
         modified: file.modifiedTime ? Date.parse(file.modifiedTime) : null,
         load: (onProgress, onWait) => downloadDriveFile(file, { onProgress, onWait }),
-      })
-    );
+      }))
+  );
 }
 
 function addLocal(fileList) {
   const pdfs = [...fileList].filter((file) => file.type === PDF_MIME || /\.pdf$/i.test(file.name));
   if (pdfs.length < fileList.length) showMessage('PDF 以外のファイルは外しました。', 'red');
   else showMessage('');
-  pdfs
-    .sort(byName)
-    .forEach((file) =>
-      addFile({
-        name: file.name,
-        modified: file.lastModified,
-        load: async (onProgress) => {
-          const bytes = new Uint8Array(await file.arrayBuffer());
-          onProgress(bytes.length, bytes.length);
-          return bytes;
-        },
-      })
-    );
+  addFiles(
+    pdfs.sort(byName).map((file) => ({
+      name: file.name,
+      modified: file.lastModified,
+      load: async (onProgress) => {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        onProgress(bytes.length, bytes.length);
+        return bytes;
+      },
+    }))
+  );
 }
 
 /**
