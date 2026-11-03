@@ -6,7 +6,7 @@
 // 落とすことがあるため）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isMobile, savePdf } from '../src/pdf-book-merger/save-file.js';
+import { isMobile, saveMethod, savePdf, SHARE_LIMIT } from '../src/pdf-book-merger/save-file.js';
 
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
 const MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15';
@@ -41,6 +41,18 @@ describe('isMobile', () => {
   });
 });
 
+describe('saveMethod', () => {
+  it('iPhone では共有シートに渡すが、大きなファイルはダウンロードにする（共有シートに渡すと、Safari が中身をまるごとページのメモリに読む）', () => {
+    const iphone = { userAgent: IPHONE };
+    expect(saveMethod(SHARE_LIMIT, iphone)).toBe('share');
+    expect(saveMethod(SHARE_LIMIT + 1, iphone)).toBe('download');
+    // 615 MB（1 頁のファイル 492 個を結合した PDF）は、共有シートに渡すとページごと落ちた。
+    expect(saveMethod(615 * 1024 * 1024, iphone)).toBe('download');
+    // パソコンは、大きさに関わらずダウンロード。
+    expect(saveMethod(1, { userAgent: MAC, platform: 'MacIntel', maxTouchPoints: 0 })).toBe('download');
+  });
+});
+
 describe('savePdf', () => {
   it('パソコンでは、付けた名前でダウンロードする', async () => {
     const nav = { userAgent: MAC, platform: 'MacIntel', maxTouchPoints: 0, share: vi.fn(), canShare: () => true };
@@ -49,8 +61,9 @@ describe('savePdf', () => {
 
     expect(nav.share).not.toHaveBeenCalled();
     expect(clicked).toEqual([{ href: 'blob:pdf', download: '吾輩は猫である.pdf' }]);
-    const [file] = URL.createObjectURL.mock.calls[0];
-    expect([file.name, file.type, file.size]).toEqual(['吾輩は猫である.pdf', 'application/pdf', 4]);
+    // 中身は octet-stream として渡す（Safari が PDF としてタブで開かないように）。名前は download 属性で付ける。
+    const [blob] = URL.createObjectURL.mock.calls[0];
+    expect([blob.type, blob.size]).toEqual(['application/octet-stream', 4]);
   });
 
   it('iPhone では、付けた名前のファイルを共有シートに渡す', async () => {
@@ -86,5 +99,26 @@ describe('savePdf', () => {
 
     expect(await savePdf(bytes, 'b.pdf', { userAgent: IPHONE })).toBe('downloaded');
     expect(clicked.map((c) => c.download)).toEqual(['a.pdf', 'b.pdf']);
+  });
+});
+
+
+describe('大きな PDF', () => {
+  it('iPhone でも共有シートに渡さず、名前を付けて octet-stream でダウンロードする。blob: の URL は、ダウンロードが中身を読むまで残す', async () => {
+    vi.useFakeTimers();
+    try {
+      const nav = { userAgent: IPHONE, share: vi.fn(), canShare: () => true };
+      expect(await savePdf(bytes, '木造住宅関連資材カタログ5.pdf', nav, 'download')).toBe('downloaded');
+
+      expect(nav.share).not.toHaveBeenCalled();
+      expect(clicked).toEqual([{ href: 'blob:pdf', download: '木造住宅関連資材カタログ5.pdf' }]);
+      expect(URL.createObjectURL.mock.calls[0][0].type).toBe('application/octet-stream');
+      vi.advanceTimersByTime(10 * 60 * 1000 - 1);
+      expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:pdf');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
