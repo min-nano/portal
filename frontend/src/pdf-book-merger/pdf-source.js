@@ -65,10 +65,30 @@ const MIN_BAND_ROWS = 16;
  * 中身だけを手放す。
  */
 let sharedWorker = null;
+/** 開いている（開きかけを含む）文書の数。0 のときだけ worker を止められる。 */
+let activeDocs = 0;
 
 function workerOf() {
   sharedWorker ??= new pdfjs.PDFWorker();
   return sharedWorker;
+}
+
+/**
+ * 開いている文書が無ければ、worker を止める（次に開くときに作り直す）。
+ *
+ * 文書を閉じても、worker が持っていた中身（渡したファイルの写し）は、worker の
+ * 中で片付けられるまでメモリに残る。結合した PDF（数百 MB）を検証したあとに
+ * これが残ったまま共有シートへ渡すと、iPhone では保存のところでページごと
+ * 落ちた（共有シートへ渡すときも、Safari はファイルの中身をページのメモリに
+ * 読む）。worker ごと止めれば、その場で返る。
+ *
+ * @returns {boolean} 止めたか
+ */
+export function releasePdfWorker() {
+  if (activeDocs > 0 || !sharedWorker) return false;
+  sharedWorker.destroy();
+  sharedWorker = null;
+  return true;
 }
 
 /**
@@ -89,7 +109,8 @@ export async function openPdf(bytes, { safe = false, transfer = false, reload = 
   // 大きさの上限（1600 万画素ほど）を超えて「invalid state」になり、描き直す
   // 間にメモリが尽きてページごと落ちた。
   safe ||= isIOS(globalThis.navigator);
-  const doc = await pdfjs.getDocument({
+  activeDocs++;
+  const loading = pdfjs.getDocument({
     data: transfer ? bytes : bytes.slice(),
     worker: workerOf(),
     isEvalSupported: false,
@@ -106,7 +127,14 @@ export async function openPdf(bytes, { safe = false, transfer = false, reload = 
     // 元だったときに備え、描けなければ両方を切った文書（safe）で描き直す
     // （drawPage）。
     isOffscreenCanvasSupported: !(webkit && safe),
-  }).promise;
+  });
+  let doc;
+  try {
+    doc = await loading.promise;
+  } catch (error) {
+    activeDocs--;
+    throw error;
+  }
   // 描き直しで開き直すときの中身（写さずに渡したときは、もう手元に無いので読み直す）。
   if (webkit && !safe) fallbacks.set(doc, { load: reload ?? (() => bytes), safe: null, failed: false });
   return doc;
@@ -150,6 +178,7 @@ export async function closePdf(doc) {
   fallbacks.delete(doc);
   if (safe) await closePdf(await safe.catch(() => null));
   await doc.loadingTask.destroy();
+  activeDocs--;
 }
 
 function canvasOf(width, height) {
