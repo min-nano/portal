@@ -42,12 +42,12 @@ describe('isMobile', () => {
 });
 
 describe('saveMethod', () => {
-  it('iPhone では共有シートに渡すが、大きなファイルは Service Worker を通してダウンロードする（共有シートに渡すと、Safari が中身をまるごとページのメモリに読む）', () => {
+  it('iPhone では共有シートに渡すが、大きなファイルはダウンロードにする（共有シートに渡すと、Safari が中身をまるごとページのメモリに読む）', () => {
     const iphone = { userAgent: IPHONE };
     expect(saveMethod(SHARE_LIMIT, iphone)).toBe('share');
-    expect(saveMethod(SHARE_LIMIT + 1, iphone)).toBe('worker');
+    expect(saveMethod(SHARE_LIMIT + 1, iphone)).toBe('download');
     // 615 MB（1 頁のファイル 492 個を結合した PDF）は、共有シートに渡すとページごと落ちた。
-    expect(saveMethod(615 * 1024 * 1024, iphone)).toBe('worker');
+    expect(saveMethod(615 * 1024 * 1024, iphone)).toBe('download');
     // パソコンは、大きさに関わらずダウンロード。
     expect(saveMethod(1, { userAgent: MAC, platform: 'MacIntel', maxTouchPoints: 0 })).toBe('download');
   });
@@ -61,8 +61,9 @@ describe('savePdf', () => {
 
     expect(nav.share).not.toHaveBeenCalled();
     expect(clicked).toEqual([{ href: 'blob:pdf', download: '吾輩は猫である.pdf' }]);
-    const [file] = URL.createObjectURL.mock.calls[0];
-    expect([file.name, file.type, file.size]).toEqual(['吾輩は猫である.pdf', 'application/pdf', 4]);
+    // 中身は octet-stream として渡す（Safari が PDF としてタブで開かないように）。名前は download 属性で付ける。
+    const [blob] = URL.createObjectURL.mock.calls[0];
+    expect([blob.type, blob.size]).toEqual(['application/octet-stream', 4]);
   });
 
   it('iPhone では、付けた名前のファイルを共有シートに渡す', async () => {
@@ -101,93 +102,23 @@ describe('savePdf', () => {
   });
 });
 
-/**
- * Service Worker の偽物。active なら登録したらすぐ動いている。そうでなければ
- * installing のまま（settle で状態を変える）。reply が false なら PDF を受け取らない。
- */
-function fakeServiceWorker({ active = true, reply = true, slot = 'installing' } = {}) {
-  const listeners = [];
-  const posted = [];
-  const worker = {
-    state: active ? 'activated' : 'installing',
-    addEventListener: (type, listener) => listeners.push(listener),
-    postMessage: (data, [port]) => {
-      posted.push(data);
-      if (reply) port.postMessage('ready');
-    },
-  };
-  const register = vi.fn(async () => (active ? { active: worker } : { [slot]: worker }));
-  return {
-    serviceWorker: { register },
-    register,
-    posted,
-    settle(state) {
-      worker.state = state;
-      listeners.forEach((listener) => listener());
-    },
-  };
-}
 
-describe('大きな PDF を Service Worker を通して保存する', () => {
-  it('PDF を Service Worker に渡し、download を付けずにそのアドレスを開く（Service Worker が attachment で返す）', async () => {
-    const sw = fakeServiceWorker();
-    const nav = { userAgent: IPHONE, share: vi.fn(), canShare: () => true, serviceWorker: sw.serviceWorker };
-
-    expect(await savePdf(bytes, '木造住宅関連資材カタログ5.pdf', nav, 'worker')).toBe('downloaded');
-
-    expect(nav.share).not.toHaveBeenCalled();
-    const [script, { scope }] = sw.register.mock.calls[0];
-    expect(script).toMatch(/\/download-worker\.js/);
-    expect(scope).toBe(new URL('./pdf-download/', script).href);
-    const [{ id, file }] = sw.posted;
-    expect([file.name, file.type, file.size]).toEqual(['木造住宅関連資材カタログ5.pdf', 'application/pdf', 4]);
-    expect(clicked).toEqual([{ href: `${scope}${id}`, download: '' }]);
-    // ページの中に blob: の URL は作らない（作ったページが閉じると消える）。
-    expect(URL.createObjectURL).not.toHaveBeenCalled();
-  });
-
-  it('登録したばかりの Service Worker は、動き出すのを待ってから渡す。動かせなければ失敗にする', async () => {
-    const sw = fakeServiceWorker({ active: false });
-    const nav = { userAgent: IPHONE, serviceWorker: sw.serviceWorker };
-    const saving = savePdf(bytes, 'a.pdf', nav, 'worker');
-    await vi.waitFor(() => expect(sw.register).toHaveBeenCalled());
-    sw.settle('installed'); // まだ動いていない
-    expect(sw.posted).toEqual([]);
-    sw.settle('activated');
-    expect(await saving).toBe('downloaded');
-    expect(sw.posted).toHaveLength(1);
-
-    // 入れ終えて、動き出す直前（waiting）のこともある。
-    const waiting = fakeServiceWorker({ active: false, slot: 'waiting' });
-    const later = savePdf(bytes, 'c.pdf', { userAgent: IPHONE, serviceWorker: waiting.serviceWorker }, 'worker');
-    await vi.waitFor(() => expect(waiting.register).toHaveBeenCalled());
-    waiting.settle('activated');
-    expect(await later).toBe('downloaded');
-
-    const broken = fakeServiceWorker({ active: false });
-    const failing = savePdf(bytes, 'b.pdf', { userAgent: IPHONE, serviceWorker: broken.serviceWorker }, 'worker');
-    await vi.waitFor(() => expect(broken.register).toHaveBeenCalled());
-    broken.settle('redundant');
-    await expect(failing).rejects.toThrow('Service Worker を動かせませんでした');
-  });
-
-  it('Service Worker を使えない・受け取らないときは失敗にする（共有シートにもダウンロードにも替えない）', async () => {
-    const share = vi.fn();
-    await expect(savePdf(bytes, 'a.pdf', { userAgent: IPHONE, share, canShare: () => true }, 'worker')).rejects.toThrow(
-      'このブラウザは Service Worker を使えません'
-    );
-
+describe('大きな PDF', () => {
+  it('iPhone でも共有シートに渡さず、名前を付けて octet-stream でダウンロードする。blob: の URL は、ダウンロードが中身を読むまで残す', async () => {
     vi.useFakeTimers();
     try {
-      const silent = fakeServiceWorker({ reply: false });
-      const saving = savePdf(bytes, 'a.pdf', { userAgent: IPHONE, serviceWorker: silent.serviceWorker }, 'worker');
-      const failed = expect(saving).rejects.toThrow('Service Worker が PDF を受け取りませんでした');
-      await vi.advanceTimersByTimeAsync(10 * 1000);
-      await failed;
+      const nav = { userAgent: IPHONE, share: vi.fn(), canShare: () => true };
+      expect(await savePdf(bytes, '木造住宅関連資材カタログ5.pdf', nav, 'download')).toBe('downloaded');
+
+      expect(nav.share).not.toHaveBeenCalled();
+      expect(clicked).toEqual([{ href: 'blob:pdf', download: '木造住宅関連資材カタログ5.pdf' }]);
+      expect(URL.createObjectURL.mock.calls[0][0].type).toBe('application/octet-stream');
+      vi.advanceTimersByTime(10 * 60 * 1000 - 1);
+      expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:pdf');
     } finally {
       vi.useRealTimers();
     }
-    expect(share).not.toHaveBeenCalled();
-    expect(clicked).toEqual([]);
   });
 });

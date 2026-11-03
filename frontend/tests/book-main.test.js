@@ -1494,7 +1494,7 @@ describe('結合と検証', () => {
     expect($('logText').textContent).toContain('「猫.pdf」をダウンロードしました');
   });
 
-  it('iPhone では、共有シートに渡せない大きさの PDF は、ダウンロードに保存すると記録に残す。保存できなければ知らせる', async () => {
+  it('iPhone では、共有シートに渡せない大きさの PDF は、ダウンロードに保存し、そう記録に残す', async () => {
     const userAgent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
       'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
     );
@@ -1512,9 +1512,8 @@ describe('結合と検証', () => {
     $('logBox').dispatchEvent(new Event('toggle'));
     expect($('logText').textContent).toContain('「猫.pdf」を保存します（300.0 MB）');
     expect($('logText').textContent).toContain('大きいので、共有シートではなく、ダウンロード（既定のダウンロードフォルダ）に保存します');
-    // jsdom には Service Worker が無いので、保存できなかったと知らせる（共有シートには替えない）。
     expect(navigator.share).not.toHaveBeenCalled();
-    expect($('message').textContent).toBe('「猫.pdf」を保存できませんでした（このブラウザは Service Worker を使えません）。');
+    expect($('logText').textContent).toContain('「猫.pdf」をダウンロードしました');
     userAgent.mockRestore();
     delete navigator.share;
     delete navigator.canShare;

@@ -9,20 +9,30 @@
 // Google ドライブのアプリへのアップロードもそこから選べる。
 //
 // ただし大きなファイル（SHARE_LIMIT を超えるもの）は、共有シートに渡さず、
-// Service Worker（download-worker.js）を通して端末のダウンロード（既定の
-// ダウンロードフォルダ）に保存する。共有シートに渡すと、Safari はファイルの
-// 中身をまるごとページのメモリに読むので、1 頁のファイル 492 個を結合した
-// 615 MB の PDF では、共有シートが開く前にページごと落ちた（215 MB は渡せた）。
-// <a download> では、Safari は PDF を保存せずにタブで開いてツールのページを閉じ、
-// 作ったページと一緒に blob: の URL が消えるので、そこから保存できなかった。
+// ダウンロード（既定のダウンロードフォルダ）にする。共有シートに渡すと、Safari は
+// ファイルの中身をまるごとページのメモリに読むので、1 頁のファイル 492 個を
+// 結合した 615 MB の PDF では、共有シートが開く前にページごと落ちた（215 MB は
+// 渡せた）。
+//
+// ダウンロードでは、中身の種類を application/pdf と言わずに
+// application/octet-stream にする。Safari は PDF と分かると、<a download> でも
+// 保存せずにタブで開いてツールのページを閉じ、blob: の URL がページと一緒に
+// 消えるので、開いた PDF を「ファイル」に保存できなかった（WebKitBlobResource
+// エラー 1）。octet-stream なら、iOS の Safari もダウンロードの確認を出す
+// （jsPDF の issue 3059 で報告されたやり方）。名前は download 属性の .pdf のまま。
 
 import { isIOS } from './device.js';
-import downloadWorkerUrl from './download-worker.js?url&no-inline';
 
 const PDF_MIME = 'application/pdf';
 
 /** 共有シートに渡す大きさの上限（バイト）。これより大きければダウンロードにする。 */
 export const SHARE_LIMIT = 256 * 1024 * 1024;
+
+/**
+ * blob: の URL を手放すまでの時間（ミリ秒）。ダウンロードは確かめの表示を待って
+ * から中身を読むので、すぐに手放すと、読む前に無くなる。
+ */
+const REVOKE_MS = 10 * 60 * 1000;
 
 /**
  * 共有シートで渡す端末か（iPhone・iPad・Android）。
@@ -35,78 +45,26 @@ export function isMobile(nav) {
 }
 
 /**
- * Service Worker の場所。ダウンロードのアドレスは、その下の pdf-download/ に作る。
- * 小さなファイルは data: の URL に埋め込まれるが、Service Worker はそこから登録
- * できないので、ファイルとして置かせる（no-inline）。
- */
-const DOWNLOAD_WORKER = new URL(downloadWorkerUrl, globalThis.location.href).href;
-const DOWNLOAD_SCOPE = new URL('./pdf-download/', DOWNLOAD_WORKER).href;
-
-/** Service Worker が PDF を受け取るまで待つ時間（ミリ秒）。 */
-const HANDOFF_MS = 10 * 1000;
-
-/**
- * 保存のしかた。共有シートで渡す端末では、大きなファイルを Service Worker を
- * 通してダウンロードする（worker）。パソコンは <a download>（download）。
+ * 保存のしかた。共有シートで渡す端末でも、大きなファイルはダウンロードにする。
  *
  * @param {number} size バイト数
  * @param {{userAgent?:string, platform?:string, maxTouchPoints?:number}} [nav]
- * @returns {'share'|'worker'|'download'}
+ * @returns {'share'|'download'}
  */
 export function saveMethod(size, nav) {
-  if (!isMobile(nav)) return 'download';
-  return size <= SHARE_LIMIT ? 'share' : 'worker';
+  return isMobile(nav) && size <= SHARE_LIMIT ? 'share' : 'download';
 }
 
-/** 登録した Service Worker が動き出すのを待つ。 */
-function activeWorker(registration) {
-  if (registration.active) return Promise.resolve(registration.active);
-  const worker = registration.installing ?? registration.waiting;
-  return new Promise((resolve, reject) => {
-    worker.addEventListener('statechange', () => {
-      if (worker.state === 'activated') resolve(worker);
-      else if (worker.state === 'redundant') reject(new Error('Service Worker を動かせませんでした'));
-    });
-  });
-}
-
-/**
- * Service Worker に PDF を渡し、それを保存させるアドレスを開く（download-worker.js）。
- * 渡すのは参照で、中身はページのメモリに読まない。
- */
-async function downloadThroughWorker(file, nav) {
-  if (!nav.serviceWorker) throw new Error('このブラウザは Service Worker を使えません');
-  const registration = await nav.serviceWorker.register(DOWNLOAD_WORKER, { scope: DOWNLOAD_SCOPE });
-  const worker = await activeWorker(registration);
-  const id = globalThis.crypto.randomUUID();
-  await new Promise((resolve, reject) => {
-    const channel = new MessageChannel();
-    const timer = setTimeout(() => reject(new Error('Service Worker が PDF を受け取りませんでした')), HANDOFF_MS);
-    channel.port1.onmessage = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    worker.postMessage({ id, file }, [channel.port2]);
-  });
-  // download を付けずに開く（Service Worker が attachment で返すので、ページは
-  // そのまま残り、ブラウザのダウンロードとして保存される）。
-  const link = document.createElement('a');
-  link.href = `${DOWNLOAD_SCOPE}${id}`;
-  document.body.append(link);
-  link.click();
-  link.remove();
-}
-
+/** 名前を付けてダウンロードする。中身は octet-stream として渡す（上の説明）。 */
 function download(file) {
-  const url = URL.createObjectURL(file);
+  const url = URL.createObjectURL(new Blob([file], { type: 'application/octet-stream' }));
   const link = document.createElement('a');
   link.href = url;
   link.download = file.name;
   document.body.append(link);
   link.click();
   link.remove();
-  // すぐに消すと、ダウンロードが始まる前に中身が無くなるブラウザがある。
-  setTimeout(() => URL.revokeObjectURL(url), 60 * 1000);
+  setTimeout(() => URL.revokeObjectURL(url), REVOKE_MS);
 }
 
 /**
@@ -116,19 +74,12 @@ function download(file) {
  * @param {Uint8Array|Blob} data 中身（保存領域のファイルなら、メモリに読まずに渡す）
  * @param {string} fileName
  * @param {Navigator} [nav]
- * @param {'share'|'worker'|'download'} [method] 保存のしかた（saveMethod。決めてあれば渡す）
- * @returns {Promise<'shared'|'cancelled'|'downloaded'>} 大きな PDF を Service Worker に
- *   渡せなければ、失敗を投げる
+ * @param {'share'|'download'} [method] 保存のしかた（saveMethod。決めてあれば渡す）
+ * @returns {Promise<'shared'|'cancelled'|'downloaded'>}
  */
 export async function savePdf(data, fileName, nav = globalThis.navigator, method = undefined) {
   const file = new File([data], fileName, { type: PDF_MIME });
   method ??= saveMethod(file.size, nav);
-  if (method === 'worker') {
-    // 渡せなければ、共有シートにもダウンロードにも替えない（共有シートでは落ち、
-    // <a download> では保存できないため）。呼ぶ側が知らせる。
-    await downloadThroughWorker(file, nav);
-    return 'downloaded';
-  }
   if (
     method === 'share' &&
     typeof nav.share === 'function' &&
