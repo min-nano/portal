@@ -16,6 +16,7 @@ beforeAll(async () => {
       listeners[type] = listener;
     },
     skipWaiting,
+    location: { origin: 'https://portal.example' },
   });
   await import('../src/pdf-book-merger/download-worker.js');
 });
@@ -27,11 +28,12 @@ afterEach(() => {
 const SCOPE = 'https://portal.example/assets/pdf-download/';
 
 /** ページから PDF を渡す。返すのは、Service Worker が止められずに待つ間の約束と、受け取った知らせ。 */
-function hand(data) {
+function hand(data, origin = 'https://portal.example') {
   let keep = null;
   const replies = [];
   listeners.message({
     data,
+    origin,
     waitUntil: (promise) => {
       keep = promise;
     },
@@ -92,6 +94,12 @@ describe('download-worker', () => {
     expect(response.headers.get('Content-Disposition')).toBe(
       `attachment; filename="a_b(1)'c*.pdf"; filename*=UTF-8''a%22b%281%29%27c%2A.pdf`
     );
+  });
+
+  it('ほかのサイトからの知らせは相手にしない', () => {
+    const { keep, replies } = hand({ id: 'e1', file: new File(['x'], 'e.pdf') }, 'https://evil.example');
+    expect([keep, replies]).toEqual([null, []]);
+    expect(open('e1').status).toBe(204);
   });
 
   it('ID か PDF の無い知らせは相手にしない', () => {

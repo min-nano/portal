@@ -22,6 +22,9 @@ const KEEP_MS = 60 * 1000;
 self.addEventListener('install', () => self.skipWaiting());
 
 self.addEventListener('message', (event) => {
+  // 受け取るのは、このサイトのページからだけ（Service Worker にはもともと同じ
+  // サイトのページしか渡せないが、念のため確かめる）。
+  if (event.origin !== self.location.origin) return;
   const { id, file } = event.data ?? {};
   if (!id || !file) return;
   // 開かれるまで（か KEEP_MS まで）止められないようにする。
