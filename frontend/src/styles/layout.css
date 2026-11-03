@@ -320,6 +320,22 @@ body:has(.portal-header .account.open)::after,
   justify-content: center;
 }
 
+/* 狭い画面では外枠を出さない。枠の幅が画面いっぱいになると、角だけ丸い板が
+   画面の端に接して不自然に見えるうえ、中の Clerk のサインイン画面もそれ自体が
+   枠のあるカードなので、枠が二重になる。台紙の上に説明と Clerk のカードだけを
+   置き、左右には余白を残す。 */
+@media (max-width: 640px) {
+  .auth-gate {
+    max-width: none;
+    margin-top: var(--s-6);
+    padding: 0 var(--s-4);
+    background: none;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
+
 /* --- 入力欄の並べ方 ------------------------------------------------------
  * 1 行 1 欄で縦に積むと、デスクトップでは横が余り、縦に長くなって
  * 「どこに入れるのか」が分からなくなる。関係する欄は横に並べ、狭い画面では
