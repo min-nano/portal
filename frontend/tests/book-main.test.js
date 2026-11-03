@@ -413,33 +413,40 @@ describe('ファイルを足して並べる', () => {
     expect(mocks.readStrip).toHaveBeenCalledTimes(2);
   });
 
-  it('一度に何十・何百ファイル足しても、一覧は 1 度だけ描き、経過はそのファイルの行だけ描き直す', async () => {
-    // 1 つ足すたびに一覧をまるごと描き直すと、400 ファイルで折り畳みの節を
-    // 8 万個作っては捨て、iPhone では足している途中でページごと落ちた。
+  it('一度に何十・何百ファイル足しても、一覧は 1 度だけ描き、行やカードは中身が変わったものだけ作り直す', async () => {
+    // 1 つ足すたびに・1 つ調べ終えるたびに一覧をまるごと描き直すと、作っては捨てる
+    // 要素がファイルの数の 2 乗になり（400 ファイルで約 400 万個）、iPhone では
+    // 足している途中・調べている途中でページごと落ちた。
     const list = $('fileList');
-    const redraws = vi.spyOn(list, 'replaceChildren');
+    const created = { files: 0, cards: 0 };
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        const kind = record.target === list ? 'files' : 'cards';
+        // 作り直した行も、動かしただけの行も数える（どちらも描き直しの手間になる）。
+        created[kind] += record.addedNodes.length;
+      }
+    });
     const setItem = vi.spyOn(Storage.prototype, 'setItem');
-    const names = Array.from({ length: 40 }, (_, i) => `${String(i + 1).padStart(4, '0')}.pdf`);
+    const count = 40;
+    const names = Array.from({ length: count }, (_, i) => `${String(i + 1).padStart(4, '0')}.pdf`);
     drop(names.map((name, i) => file(name, pdf([page(`p${i}`, i + 1)]))));
 
     // 足した直後（読み込みが始まる前）。一覧は 1 度だけ描き、記録も 1 度だけ残す。
-    expect(redraws).toHaveBeenCalledTimes(1);
-    expect(list.children).toHaveLength(40);
+    expect(list.children).toHaveLength(count);
     const kept = setItem.mock.calls.filter(([key]) => key.startsWith('pdf-book-merger:log'));
     expect(kept).toHaveLength(1);
-    expect(JSON.parse(kept[0][1]).lines.at(-1)).toContain('「0040.pdf」を追加しました（この端末）');
+    expect(JSON.parse(kept[0][1]).lines.at(-1)).toContain(`「${names.at(-1)}」を追加しました（この端末）`);
     setItem.mockRestore();
 
-    // 読み込みの経過は、そのファイルの行だけを描き直す（一覧をまるごと描き直すのは、
-    // 調べ終えて並びが変わるときだけ）。読み込みは調べるのを待たずに先へ進む。
-    await vi.waitFor(() => expect(fileItem('0040.pdf').querySelector('.hint').textContent).toBe('読み込み済み（調べる順番待ち）'));
-    expect(list.children).toHaveLength(40);
-    const ready = [...list.querySelectorAll('.bm-file.ready')].length;
-    // 調べ終えたファイルの数（＋足したとき）しか描き直していない。
-    expect(redraws.mock.calls.length).toBeLessThanOrEqual(ready + 1);
-
-    await vi.waitFor(() => expect(list.querySelectorAll('.bm-file.ready')).toHaveLength(40), { timeout: 20000 });
+    observer.observe(list, { childList: true });
+    observer.observe($('pageGrid'), { childList: true });
+    await vi.waitFor(() => expect(list.querySelectorAll('.bm-file.ready')).toHaveLength(count), { timeout: 20000 });
     await flush();
+    observer.disconnect();
+    // ファイルの行は、ファイルごとに読み込み中・読み込み済み・調べ終えたときの 3 回
+    // （まるごと描き直すと、調べ終えるたびに全部の行で、約 40 × 40 回）。
+    // 頁のカードは、頁ごとに 1 回（まるごとなら、約 40 × 40 / 2 回）。
+    expect(created).toEqual({ files: count * 3, cards: count });
   }, 30000);
 
   it('ファイルは名前と設定の要約の 2 行に畳んでおき、開け閉めは描き直しても保つ', async () => {
@@ -502,6 +509,21 @@ describe('ファイルを足して並べる', () => {
     expect(gridLabels()).toEqual(['表紙', '表紙', '1 頁', '-2 頁', '3 頁', '-4 頁', '5 頁', '-6 頁', '7 頁']);
     expect($('problems').textContent).toContain('2・4・6 頁が見つかりません');
     expect(mocks.closePdf).toHaveBeenCalled();
+  });
+
+  it('長く抜けているところは 1 枚の札にまとめ、ファイルを外しても残る頁のカードは作り直さない', async () => {
+    drop([
+      file('前.pdf', pdf([page('a1', 1), page('a2', 2), page('a3', 3)])),
+      file('後.pdf', pdf([page('b20', 20), page('b21', 21), page('b22', 22)])),
+    ]);
+    await settled(2);
+    expect(gridLabels()).toEqual(['1 頁', '2 頁', '3 頁', '-4〜19 頁', '20 頁', '21 頁', '22 頁']);
+    const kept = [...document.querySelectorAll('#pageGrid > li')].slice(0, 3);
+
+    fileItem('後.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
+
+    expect(gridLabels()).toEqual(['1 頁', '2 頁', '3 頁']);
+    expect([...document.querySelectorAll('#pageGrid > li')]).toEqual(kept);
   });
 
   it('先頭に置くファイルは、先頭の頁の番号で順番を決められる', async () => {
