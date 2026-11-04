@@ -910,8 +910,48 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   color: var(--text-brand);
 }
 
+/* 未設定・取得できないとき。 */
 .template-chip .unset {
   color: var(--ng-600);
+}
+
+/* 雛形のファイル名はボタンで、押すと雛形の中身をポップアップで見られる
+   （src/template-preview.js）。ボタンの塗りや枠は付けず、文字だけにする。
+   必要壁量ツールの版の表示（<span class="name">）は押せないので、ここから先は
+   ボタンにだけ当てる。display: block は、ボタンの既定の inline-flex を
+   やめさせるため（flex のままだと、長い名前が … で切れない）。 */
+.template-chip button.name,
+.template-chip button.unset {
+  display: block;
+  min-height: 0;
+  padding: 0;
+  font-size: inherit;
+  line-height: inherit;
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+
+/* 押せることが分かるように、下線を添える。 */
+.template-chip button.name:not(:disabled) {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.template-chip button.name:not(:disabled):hover {
+  text-decoration-style: solid;
+}
+
+/* 確認中（設定を読み込んでいる間）。ファイル名ではないので、チップの文字と
+   同じ落ち着いた色にする。 */
+.template-chip button.name:disabled {
+  color: inherit;
+}
+
+/* 確認中・未設定・取得できないときは押せないので、指の形にしない。 */
+.template-chip button.name:disabled,
+.template-chip button.unset {
+  cursor: default;
 }
 
 /* 枠が丸い（pill）ので、中のボタンも丸めて縁をはみ出させない。 */
@@ -1043,7 +1083,8 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
  * 一覧だけがスクロールし、ほかは常に見えている。スマホでは画面いっぱいに
  * 広げ、広い画面では大きめのダイアログにする。 */
 
-.app-dialog.drive-picker {
+.app-dialog.drive-picker,
+.app-dialog.template-preview {
   display: none;
   flex-direction: column;
   gap: var(--s-3);
@@ -1055,12 +1096,14 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   overflow: hidden;
 }
 
-.app-dialog.drive-picker[open] {
+.app-dialog.drive-picker[open],
+.app-dialog.template-preview[open] {
   display: flex;
 }
 
 @media (max-width: 640px) {
-  .app-dialog.drive-picker {
+  .app-dialog.drive-picker,
+  .app-dialog.template-preview {
     width: 100vw;
     max-width: none;
     height: 100dvh;
@@ -1072,13 +1115,15 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   }
 }
 
-.drive-picker-head {
+.drive-picker-head,
+.template-preview-head {
   display: flex;
   align-items: center;
   gap: var(--s-2);
 }
 
-.app-dialog .drive-picker-head h3 {
+.app-dialog .drive-picker-head h3,
+.app-dialog .template-preview-head h3 {
   flex: 1;
   min-width: 0;
   margin: 0;
@@ -1087,7 +1132,8 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   white-space: nowrap;
 }
 
-.drive-picker-close {
+.drive-picker-close,
+.template-preview-close {
   flex: none;
   width: var(--tap);
   padding: 0;
@@ -1483,4 +1529,114 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   margin: var(--s-3) auto 0;
   text-align: center;
   font-size: var(--fs-sm);
+}
+
+/* --- 雛形のプレビュー（src/template-preview.js） ---------------------------
+ * 見出し（ファイル名と閉じるボタン）の下に、雛形の中身を紙のように並べる。
+ * Google ドキュメントは PDF の頁を、Excel はシートを表にしたものを出す。
+ * 中身は「紙」なので、暗いテーマでも明るいまま見せる（color-scheme で
+ * 明るい側の色を使わせる）。Drive のファイル選択と同じく、スマホでは画面
+ * いっぱいに広げる（枠の決めごとは上の .app-dialog.drive-picker と共通）。 */
+
+.app-dialog.template-preview {
+  width: min(64rem, calc(100vw - 2rem));
+  height: calc(100dvh - 2rem);
+}
+
+@media (max-width: 640px) {
+  .app-dialog.template-preview {
+    width: 100vw;
+    height: 100dvh;
+  }
+}
+
+.app-dialog .template-preview-status {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.app-dialog .template-preview-status:empty {
+  display: none;
+}
+
+/* 後ろのページまでスクロールが抜けないようにする（iOS Safari）。 */
+.template-preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--s-3);
+  color-scheme: light;
+  color: var(--text);
+  background: var(--canvas);
+  border-radius: var(--r-md);
+}
+
+.pdf-page {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.pdf-page + .pdf-page {
+  margin-top: var(--s-3);
+}
+
+.sheet-preview + .sheet-preview {
+  margin-top: var(--s-6);
+}
+
+.sheet-preview h4 {
+  margin: 0 0 var(--s-2);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+/* Excel のシート。列の幅・行の高さは画面（JS）が px で入れる。文字の大きさの
+   既定は Excel の既定（11pt）に合わせる。枠線は印刷されない目安の線として
+   点線にし、セルの罫線（data-edges の辺）を実線で重ねる（border-collapse では
+   実線が点線に勝つので、隣のセルの目安の線に負けない）。 */
+.sheet-table {
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 11pt;
+  line-height: 1.2;
+  background: var(--surface);
+}
+
+.sheet-table td {
+  padding: 0 2px;
+  white-space: nowrap;
+  vertical-align: bottom;
+  border: 1px dotted var(--border);
+}
+
+/* Excel と同じく、折り返さない長い文字は右隣の空のセルへはみ出させ、
+   値のあるセルの手前で隠れるようにする（値のあるセルを後ろから重ねる）。 */
+.sheet-table td:not(:empty) {
+  position: relative;
+  background-color: var(--surface);
+}
+
+.sheet-table td[data-wrap] {
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+
+.sheet-table td[data-edges*="t"] {
+  border-top: 1px solid var(--text);
+}
+
+.sheet-table td[data-edges*="r"] {
+  border-right: 1px solid var(--text);
+}
+
+.sheet-table td[data-edges*="b"] {
+  border-bottom: 1px solid var(--text);
+}
+
+.sheet-table td[data-edges*="l"] {
+  border-left: 1px solid var(--text);
 }

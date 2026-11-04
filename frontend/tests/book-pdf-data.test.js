@@ -1,4 +1,4 @@
-// PDF 結合ツール: pdf.js に渡す、PDF の外のデータ（pdf-data.js）。
+// pdf.js に渡す、PDF の外のデータ（src/pdf-data.js。PDF 結合ツールと雛形のプレビューが使う）。
 //
 // Illustrator・InDesign で作ったカタログの PDF は、日本語のフォント（Adobe-Japan1、
 // Identity-H）に ToUnicode を持たず、文字の番号を CMap で Unicode に引く前提に
@@ -11,7 +11,7 @@ import { readFile } from 'node:fs/promises';
 import { PDFDocument, PDFName, PDFString } from 'pdf-lib';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BundledDataFactory, bundledUrl } from '../src/pdf-book-merger/pdf-data.js';
+import { BundledDataFactory, bundledUrl } from '../src/pdf-data.js';
 
 /**
  * Adobe-Japan1 の文字の番号（CID）で書いた 1 頁の PDF。フォントは埋め込まず、

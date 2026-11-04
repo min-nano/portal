@@ -60,6 +60,16 @@ export async function apiGetBytes(path) {
   return resp.arrayBuffer();
 }
 
+/**
+ * 種類が決まっていない応答（PDF か JSON か）を、そのまま Blob で受け取る。
+ * 届いた種類は blob.type（Content-Type）で見分ける。
+ */
+export async function apiGetBlob(path) {
+  const resp = await authorizedFetch(path);
+  await raiseForError(resp);
+  return resp.blob();
+}
+
 export async function apiSendJson(path, method, body) {
   const resp = await authorizedFetch(path, {
     method,

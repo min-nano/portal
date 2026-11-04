@@ -4,7 +4,9 @@
   <h2>傾斜測定 報告フォーム</h2>
   <div class="template-chip">
     <span class="label">Excel 雛形:</span>
-    <span id="templateName" class="name">確認中...</span>
+    <!-- 押すと雛形の中身をポップアップで見られる（../template-preview.js）。
+         確認中・未設定のあいだは押せない。 -->
+    <button type="button" id="templateName" class="name" disabled>確認中...</button>
     <!-- Google Drive のファイル選択（frontend/src/drive-picker.js）。 -->
     <button type="button" id="templateBtn"
             title="Excel 形式 (.xlsx) のファイルだけを選べます（Google スプレッドシート形式は選択できません）。">

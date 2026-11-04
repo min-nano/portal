@@ -1,4 +1,5 @@
 // pdf.js が頁を読むのに使う、PDF の外のデータ（CMap・標準フォント・画像の展開の wasm）。
+// PDF 結合ツール（pdf-book-merger/pdf-source.js）と雛形のプレビュー（pdf-pages.js）が使う。
 //
 // 渡さないと、pdf.js はそれが要る PDF の文字や画像を落とす。とくに Illustrator・
 // InDesign で作ったカタログのような PDF は、日本語のフォントを埋め込んでいても、
