@@ -24,8 +24,9 @@ from dataclasses import dataclass, field
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Header, Request, Response, UploadFile
+from fastapi.responses import JSONResponse
 
-from . import clerk_auth, google_drive, nail_core, settings_store
+from . import clerk_auth, google_drive, nail_core, settings_store, xlsx_preview
 from .clerk_auth import User
 from .errors import PortalError
 
@@ -178,9 +179,10 @@ class Template:
 
       TEMPLATE = Template(tool_id=TOOL_ID, mime_type=…, error=…, …)
 
-      GET  /template  →  TEMPLATE.status()
-      PUT  /template  →  TEMPLATE.save(session, file_id)
-      生成のとき      →  TEMPLATE.require(settings)
+      GET  /template          →  TEMPLATE.status()
+      PUT  /template          →  TEMPLATE.save(session, file_id)
+      GET  /template/preview  →  TEMPLATE.preview(session)
+      生成のとき              →  TEMPLATE.require(settings)
 
     settings を引数で受け取れるのは、1 リクエストの中で共有設定を 2 度読まない
     ため（読んだものをそのまま渡す）。省略すればここで読む。
@@ -246,6 +248,41 @@ class Template:
             {"template_folder_id": parents[0], "template_file_name": name},
         )
         return {"fileName": name, "folderId": parents[0]}
+
+    def preview(self, session) -> Response:
+        """今の雛形の中身を、画面のポップアップで見せる形で返す（GET /template/preview）。
+
+        生成と同じく「フォルダ内の同名ファイルのうち最新のもの」を、実行ユーザー
+        本人の代理で読む（本人が読めない雛形は見られない）。
+
+          Google ドキュメント … Drive が書き出した PDF（application/pdf）
+          Excel（.xlsx）     … シートごとの表（JSON。xlsx_preview.sheets）
+
+        雛形の種類（mime_type）はこの 2 つのどちらか。
+
+        .xlsx は Drive が PDF へ書き出せないので、表にして返す。どちらも
+        雛形が差し替わればすぐ変わるので、キャッシュさせない。
+        """
+        folder_id, file_name = self.require()
+        latest = google_drive.find_latest_file(session, folder_id, file_name)
+        if latest.get("mimeType") != self.mime_type:
+            # 同じフォルダに同じ名前で別の種類のファイルが置かれた（設定のときは
+            # 種類を確かめているので、置き直されたときだけ起こる）。
+            raise self.error(self.wrong_type_message, 409)
+
+        headers = {"Cache-Control": "no-store"}
+        if self.mime_type == google_drive.GOOGLE_DOC_MIME:
+            pdf = google_drive.export_file(session, latest["id"], google_drive.PDF_MIME)
+            return Response(content=pdf, media_type=google_drive.PDF_MIME, headers=headers)
+
+        content = google_drive.download_file(
+            session, latest["id"], context="雛形のダウンロード"
+        )
+        try:
+            sheets = xlsx_preview.sheets(content)
+        except xlsx_preview.PreviewError as error:
+            raise self.error(str(error), 422) from error
+        return JSONResponse({"sheets": sheets}, headers=headers)
 
 
 # --- 代理アクセス（Drive / Docs） --------------------------------------------

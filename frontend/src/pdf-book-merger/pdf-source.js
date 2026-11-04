@@ -16,7 +16,7 @@ import workerSrc from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { toGray } from './image-checks.js';
 import { MARGIN_ZONE } from './page-numbers.js';
 import { isIOS, isWebKit } from './device.js';
-import { BundledDataFactory } from './pdf-data.js';
+import { BundledDataFactory } from '../pdf-data.js';
 import { drawScan } from './scan-images.js';
 import { multiply, textItems, textSignature } from './text-layer.js';
 
@@ -114,7 +114,7 @@ export async function openPdf(bytes, { safe = false, transfer = false, reload = 
     data: transfer ? bytes : bytes.slice(),
     worker: workerOf(),
     isEvalSupported: false,
-    // CMap・標準フォント・画像の展開の wasm（pdf-data.js）。渡さないと、ToUnicode を
+    // CMap・標準フォント・画像の展開の wasm（../pdf-data.js）。渡さないと、ToUnicode を
     // 持たない日本語のフォント（カタログの PDF によくある）の文字が消える。
     BinaryDataFactory: BundledDataFactory,
     // Safari（と、中身が同じ WebKit の iPhone・iPad のブラウザ）では、worker の

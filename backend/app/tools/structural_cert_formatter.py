@@ -70,6 +70,12 @@ async def save_certificate_template(
     return TEMPLATE.save(portal_sdk.delegated_session(user.email), file_id)
 
 
+@router.get("/template/preview")
+async def preview_template(user: User = Depends(require_user)):
+    """今の雛形の中身を返す（画面で雛形のファイル名を押したときのポップアップ）。"""
+    return TEMPLATE.preview(portal_sdk.delegated_session(user.email))
+
+
 def _render(session, data: dict, settings: dict) -> tuple[bytes, list]:
     """雛形からフォーム入力を差し込んだ PDF を作る。
 

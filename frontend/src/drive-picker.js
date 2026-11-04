@@ -192,9 +192,9 @@ export function currentFolder({ location, path, query, origin }) {
  *
  * iOS Safari はモーダルの <dialog> を開いていても、一覧の端まで来たスクロール
  * を後ろのページへ渡してしまう。閉じたときに元居た場所が分からなくなるため、
- * 開いている間は固定する。戻す関数を返す。
+ * 開いている間は固定する。戻す関数を返す（雛形のプレビューも使う）。
  */
-function lockPageScroll(doc) {
+export function lockPageScroll(doc) {
   const { documentElement: html, body } = doc;
   const view = doc.defaultView;
   const previous = { html: html.style.overflow, body: body.style.overflow };
