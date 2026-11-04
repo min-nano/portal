@@ -61,6 +61,12 @@ async def save_template_selection(request: Request, user: User = Depends(require
     return TEMPLATE.save(portal_sdk.delegated_session(user.email), file_id)
 
 
+@router.get("/template/preview")
+async def preview_template(user: User = Depends(require_user)):
+    """今の雛形の中身を返す（画面で雛形のファイル名を押したときのポップアップ）。"""
+    return TEMPLATE.preview(portal_sdk.delegated_session(user.email))
+
+
 @router.post("/reports")
 async def create_report(request: Request, user: User = Depends(require_user)):
     """フォームデータから傾斜測定報告書（xlsx）を生成して返す。

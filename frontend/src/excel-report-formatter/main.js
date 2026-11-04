@@ -12,6 +12,7 @@ import '../components/index.js';
 import { startPage } from '../page-start.js';
 import { apiGet, apiPostForBlob, apiSendJson } from '../api.js';
 import { pickFile } from '../drive-picker.js';
+import { connectTemplatePreview } from '../template-preview.js';
 import { collectWarnings, selectFocusTarget } from './form-logic.js';
 
 const TOOL_API = '/api/tools/excel-report-formatter';
@@ -38,12 +39,14 @@ function updateSubmitState() {
 // --- 雛形設定 ---------------------------------------------------------------
 
 // 表示はタイトル横の狭い場所なので、名前は 1 行に収めて省略する
-// （全体は title 属性でホバー時に読める）。
+// （全体は title 属性でホバー時に読める）。設定済みなら、名前を押すと
+// 雛形の中身をポップアップで見られる。
 function showTemplateName(text, configured) {
   const nameEl = document.getElementById('templateName');
   nameEl.textContent = text;
-  nameEl.title = text;
+  nameEl.title = configured ? `${text}（押すと中身を表示します）` : text;
   nameEl.className = configured ? 'name' : 'unset';
+  nameEl.disabled = !configured;
 }
 
 async function refreshTemplateStatus() {
@@ -366,6 +369,7 @@ function bindStickyHeadWorkarounds() {
 async function prepare() {
 
   document.getElementById('templateBtn').addEventListener('click', chooseTemplate);
+  connectTemplatePreview(document.getElementById('templateName'), `${TOOL_API}/template/preview`);
   document.getElementById('addRoomBtn').addEventListener('click', addRoom);
   document.getElementById('submitBtn').addEventListener('click', submitForm);
   bindRoomEvents();

@@ -20,6 +20,7 @@ import { startPage } from '../page-start.js';
 import { apiGet, apiPostFile, apiSendJson } from '../api.js';
 import { pickFile } from '../drive-picker.js';
 import { askSaveAs, askUnsaved } from '../save-dialogs.js';
+import { connectTemplatePreview } from '../template-preview.js';
 import {
   applyFormData,
   buildForm as buildFormInto,
@@ -94,12 +95,14 @@ function updateSubmitState() {
 // --- 設定（雛形） -----------------------------------------------------------
 
 // 表示はタイトル横の狭い場所なので、名前は 1 行に収めて省略する
-// （全体は title 属性でホバー時に読める）。
+// （全体は title 属性でホバー時に読める）。設定済みなら、名前を押すと
+// 雛形の中身をポップアップで見られる。
 function showTemplateName(text, configured) {
   const el = document.getElementById('templateName');
   el.textContent = text;
-  el.title = text;
+  el.title = configured ? `${text}（押すと中身を表示します）` : text;
   el.className = configured ? 'name' : 'unset';
+  el.disabled = !configured;
 }
 
 async function refreshTemplateStatus() {
@@ -409,6 +412,7 @@ async function sendSaveRequest(data, saveSpec) {
 async function prepare() {
 
   document.getElementById('templateBtn').addEventListener('click', chooseTemplate);
+  connectTemplatePreview(document.getElementById('templateName'), `${TOOL_API}/template/preview`);
   document.getElementById('newBtn').addEventListener('click', newDocument);
   document.getElementById('loadBtn').addEventListener('click', openFromDrive);
   document.getElementById('uploadBtn').addEventListener('click', openUploaded);
