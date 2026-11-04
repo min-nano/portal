@@ -528,6 +528,9 @@ jobs:
         # レビュー中に push されると、レビューしていない commit が「判定済み」になり、
         # 次の実行がその変更を飛ばしてしまう（verdict_sha が再レビューの起点のため）。
         #
+        # GitHub の API が 5xx を返したら、間を空けて出し直す（claude-review-submit.sh。
+        # 5xx でも判定が作られていたときは、出し直さない）。
+        #
         # 出すのは GITHUB_TOKEN（github-actions[bot]）。Approve には Settings →
         # Actions → General の「Allow GitHub Actions to create and approve pull
         # requests」が要る（howtec-worksheet-check.yml の PR 作成と同じ設定）。
@@ -541,11 +544,18 @@ jobs:
           KIND: ${{ steps.plan.outputs.mode == 'rereview' && '再レビュー' || 'レビュー' }}
           MARKER: '<!-- claude-review-verdict -->'
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SINCE: ${{ steps.start.outputs.since }}
         run: |
           set -euo pipefail
+          # 終了コード 2 は 5xx が続いたとき（claude-review-submit.sh）。設定の
+          # 問題ではないので、そう書いて落とす。
           submit() {
-            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --silent \
-              -f commit_id="$HEAD_SHA" -f event="$1" -f body="$2"
+            local status=0
+            .github/scripts/claude-review-submit.sh "$1" "$2" || status=$?
+            if [ "$status" -eq 2 ]; then
+              echo "::error::判定（$1）を出せませんでした（GitHub の API が 5xx を返し続けた）。時間を置いてこのジョブを再実行してください。"
+            fi
+            return "$status"
           }
           if [ "$OUTCOME" != 'success' ] || [ "$REVIEWED" != 'true' ]; then
             submit REQUEST_CHANGES \
@@ -557,8 +567,13 @@ jobs:
             submit REQUEST_CHANGES \
               "$(printf '%s\n\nClaude の%sで指摘が %s 件ありました。インラインコメントを確認してください。' "$MARKER" "$KIND" "$INLINE")"
           elif [ "$CLEAN" -gt 0 ]; then
-            if ! submit APPROVE \
-                "$(printf '%s\n\nClaude の%sで指摘はありませんでした。' "$MARKER" "$KIND")"; then
+            status=0
+            submit APPROVE \
+                "$(printf '%s\n\nClaude の%sで指摘はありませんでした。' "$MARKER" "$KIND")" ||
+              status=$?
+            if [ "$status" -eq 2 ]; then
+              exit 1
+            elif [ "$status" -ne 0 ]; then
               echo "::error::Approve できませんでした。Settings → Actions → General の「Allow GitHub Actions to create and approve pull requests」が有効か確認してください（README「Claude による PR レビュー（PR エージェント）」参照）。"
               exit 1
             fi
