@@ -928,6 +928,14 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   text-decoration-style: solid;
 }
 
+/* 確認中（設定を読み込んでいる間）は、まだ押せないので下線を出さない。 */
+.template-chip .name:disabled {
+  color: var(--text-brand);
+  background: none;
+  text-decoration: none;
+  cursor: default;
+}
+
 .template-chip .unset,
 .template-chip .unset:disabled {
   color: var(--ng-600);
