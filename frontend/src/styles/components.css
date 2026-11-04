@@ -896,50 +896,61 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   color: var(--text-muted);
 }
 
-/* 長いファイル名で見出しの行を押し広げない。全体は title 属性で読める。
-   ファイル名はボタンで、押すと雛形の中身をポップアップで見られる
-   （src/template-preview.js）。ボタンの塗りや枠は付けず、文字だけにする。 */
+/* 長いファイル名で見出しの行を押し広げない。全体は title 属性で読める。 */
 .template-chip .name,
 .template-chip .unset {
-  display: block;
-  min-height: 0;
-  padding: 0;
-  font-size: inherit;
   font-weight: 700;
-  line-height: inherit;
-  background: none;
-  border: none;
-  border-radius: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 18em;
 }
 
-/* 押せることが分かるように、下線を添える。 */
 .template-chip .name {
   color: var(--text-brand);
+}
+
+/* 未設定・取得できないとき。 */
+.template-chip .unset {
+  color: var(--ng-600);
+}
+
+/* 雛形のファイル名はボタンで、押すと雛形の中身をポップアップで見られる
+   （src/template-preview.js）。ボタンの塗りや枠は付けず、文字だけにする。
+   必要壁量ツールの版の表示（<span class="name">）は押せないので、ここから先は
+   ボタンにだけ当てる。display: block は、ボタンの既定の inline-flex を
+   やめさせるため（flex のままだと、長い名前が … で切れない）。 */
+.template-chip button.name,
+.template-chip button.unset {
+  display: block;
+  min-height: 0;
+  padding: 0;
+  font-size: inherit;
+  line-height: inherit;
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+
+/* 押せることが分かるように、下線を添える。 */
+.template-chip button.name:not(:disabled) {
   text-decoration: underline dotted;
   text-underline-offset: 3px;
 }
 
-.template-chip .name:hover {
-  background: none;
+.template-chip button.name:not(:disabled):hover {
   text-decoration-style: solid;
 }
 
-/* 確認中（設定を読み込んでいる間）は、まだ押せないので下線を出さない。 */
-.template-chip .name:disabled {
-  color: var(--text-brand);
-  background: none;
-  text-decoration: none;
-  cursor: default;
+/* 確認中（設定を読み込んでいる間）。ファイル名ではないので、チップの文字と
+   同じ落ち着いた色にする。 */
+.template-chip button.name:disabled {
+  color: inherit;
 }
 
-.template-chip .unset,
-.template-chip .unset:disabled {
-  color: var(--ng-600);
-  background: none;
+/* 確認中・未設定・取得できないときは押せないので、指の形にしない。 */
+.template-chip button.name:disabled,
+.template-chip button.unset {
   cursor: default;
 }
 
