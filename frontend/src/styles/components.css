@@ -914,6 +914,11 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   color: var(--ng-600);
 }
 
+/* 枠が丸い（pill）ので、中のボタンも丸めて縁をはみ出させない。 */
+.template-chip button {
+  border-radius: var(--r-pill);
+}
+
 /* --- ダイアログ ---------------------------------------------------------- */
 
 .app-dialog {
