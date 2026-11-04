@@ -1007,6 +1007,8 @@ Settings → Actions → General → Workflow permissions の **「Allow GitHub 
 
 ## 🧑‍💻 ローカル開発
 
+Node.js は **24**（同梱の npm 11）を使います。CI・プレビュー・デプロイも Node 24 です。Dependabot が npm 11 で `package-lock.json` を書くため、npm 10（Node 22）とは書き方がずれます。たとえば、optional な peer dependency（jsdom の下の `@noble/hashes@2.4.0`）を、npm 11 は書かず、npm 10 の `npm ci` は「足りない」として落ちます。このずれで Dependabot の PR の CI が落ちないよう、npm を 11 に揃えています。
+
 ```bash
 # 計算実装（Rust → wasm）。最初に 1 度、そして core/ を触るたびに実行する。
 # 要 rustup（toolchain は core/rust-toolchain.toml が指定する）。成果物は

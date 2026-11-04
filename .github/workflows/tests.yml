@@ -162,9 +162,13 @@ jobs:
         # バックエンドから受け取るため）。
         run: core/build.sh
       - name: Setup Node.js
+        # Node 24（同梱の npm 11）に揃える。Dependabot は npm 11 で
+        # package-lock.json を書くので、npm 10（Node 22）の npm ci だと
+        # 両者の書き方の違いで落ちることがある（README「ローカル開発」参照）。
+        # Node のバージョンは、このファイル・deploy.yml・preview.yml で揃える。
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
@@ -206,7 +210,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
           cache-dependency-path: firestore/package-lock.json
       - name: Setup Java
@@ -451,7 +455,7 @@ jobs:
         if: steps.plan.outputs.mode != 'none'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '22'
+          node-version: '24'
       - name: Install the Agent SDK and the plugin
         # SDK は固定する（レビューを動かす仕組みなので、他のアクションと同じ扱い）。
         # プラグインも固定する。上流で置き場所が変わると、固定していなければ
