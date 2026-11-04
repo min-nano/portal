@@ -946,6 +946,7 @@ PR のレビューを Claude に任せます。API は Claude Platform を **Wor
 
   - プラグインの手順は、そのままだと最初に「レビュー不要（自明な変更）」「Claude が既にコメントした PR」と判断すると何も書かずに終わります。文書だけの PR が毎回これで止まり、判定の無いまま残ったので、その見極めで止まってよいのは「閉じている・下書き」だけに絞り、手順の本文（`commands/code-review.md`）を渡しています（`claude-review.mjs`）。レビューするかどうかはワークフローが決めている（判定がまだ無い head にだけ走る）ので、重ねて見極めません。
   - 最後まで終わらなかったときは、見ていない変更を Approve しないよう、承認しない側に倒します。指摘が一部だけ付いたところで止まることもあるので、付いたものの数では判定しません。この Request changes には「判定まで済んだ」の目印を付けないので、ジョブを再実行するか次に push すれば、もう一度（PR 全体を）レビューして判定を出し直します。
+  - 判定を出すときに GitHub の API が 5xx（一時的なサーバーエラー）を返したら、10 秒待って、同じ判定が付いていなければ 3 回まで出し直します（`.github/scripts/claude-review-submit.sh`）。5xx でもレビューが作られていることがあるので、出し直す前（最後の 1 回の後も）に同じ判定（同じ commit・種類・本文）がこの実行で付いていないかを確かめ、付いていれば出せたとみなします。4xx（権限が無いなど）は出し直しても変わらないので、すぐに失敗にします。5xx が続いて判定を出せなかったときは、設定ではなく GitHub 側の失敗としてログに出すので、時間を置いてジョブを再実行してください（#228 の Approve は 502 で落ちました）。
 - **1 回のレビューは約 10 分までです。** GitHub の OIDC トークンは起動時に 1 回だけ取り、環境変数（`ANTHROPIC_IDENTITY_TOKEN`）で渡しています（ファイルに書かない）。Anthropic のアクセストークンの寿命は「OIDC トークンの残り寿命の 2 倍」まで（OIDC トークンは約 5 分なので、およそ 10 分）で、環境変数は途中で差し替えられないため、それを過ぎると取り直しが断られて失敗します。大きな PR で失敗が続くようなら、トークンをファイルで渡して 4 分おきに書き換える方式に戻します。
 - bot（Dependabot など）の PR と、フォークからの PR は対象外です（フォークからの実行には OIDC トークンが出ないので、WIF が通りません）。
 - PR のイベントでは PR 側のワークフローが動くので、`review` ジョブを変える PR は、変えた後の内容でレビューされます。
@@ -1015,7 +1016,7 @@ gh variable set ANTHROPIC_SERVICE_ACCOUNT_ID  -R <owner/repo> --body svac_...
 
 **3. GitHub Actions に PR の Approve を許可する**
 
-Settings → Actions → General → Workflow permissions の **「Allow GitHub Actions to create and approve pull requests」** を有効にします（表計算ツールの定期確認が PR を作るのにも使う設定なので、既に有効なら不要）。無効のままだと Approve の段階でジョブが失敗します（Request changes は出せます）。
+Settings → Actions → General → Workflow permissions の **「Allow GitHub Actions to create and approve pull requests」** を有効にします（表計算ツールの定期確認が PR を作るのにも使う設定なので、既に有効なら不要）。無効のままだと Approve の段階でジョブが失敗します（Request changes は出せます）。このときログには、この設定を確かめるよう出します（GitHub の API が 5xx を返し続けたときは、別のメッセージになります）。
 
 **4.（推奨）Console で利用上限を決める**
 
