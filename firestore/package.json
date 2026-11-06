@@ -10,6 +10,6 @@
     "@firebase/rules-unit-testing": "^6.0.0",
     "firebase": "^13.1.0",
     "firebase-tools": "^15.34.2",
-    "vitest": "^5.0.3"
+    "vitest": "^5.1.0"
   }
 }
