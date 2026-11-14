@@ -5,6 +5,10 @@
 // 頁の中身の一部なので、写せばそのまま残る。画像を再圧縮しないので、
 // 画質も落ちない。
 //
+// ただし JPEG の画像は、写す前に符号の表だけを作り直して小さくする
+// （jpeg-optimize.js。係数を 1 つも変えないので、展開した画素は元と同じ。
+// 書き直した JPEG は、その場で読み直して係数が元と同じか確かめる）。
+//
 // 文書の情報（タイトル・作成者など）は、本文の最初のファイルから引き継ぐ。
 // タイトルだけは保存するファイル名にする（1 冊にまとめたものなので）。
 // 頁ラベル（ordering.js の pageLabelRanges）を付けて、ビューアーの頁番号を
@@ -12,8 +16,9 @@
 //
 // 写した頁が元の頁と同じであることは、頁の「描くもの」（中身の命令と、使って
 // いる画像・図形）の指紋（pageDigest）で確かめる。結合の前に元の頁の指紋を
-// 取っておき、結合した PDF の頁の指紋と比べる（verify.js）。頁を描き直して
-// 見比べるより速く、1 バイトの違いも見逃さない。
+// 取っておき（JPEG を書き直した頁は、書き直した後の指紋）、結合した PDF の頁の
+// 指紋と比べる（verify.js）。頁を描き直して見比べるより速く、1 バイトの違いも
+// 見逃さない。
 
 import {
   PDFArray,
@@ -24,8 +29,10 @@ import {
   PDFName,
   PDFNumber,
   PDFRawStream,
+  PDFRef,
   PDFStream,
 } from 'pdf-lib';
+import { optimizeJpeg } from './jpeg-optimize.js';
 import './pdf-lib-views.js';
 
 /** 画面に名乗る、このツールの名前（文書の情報の「作成アプリ」に入れる）。 */
@@ -115,6 +122,65 @@ export async function pageDigests(bytes) {
   const digests = [];
   for (const page of doc.getPages()) digests.push(await pageDigest(page));
   return digests;
+}
+
+/** 画像の圧縮が JPEG（DCTDecode）だけか。ほかの圧縮と重ねたものは書き直さない。 */
+function isJpeg(dict) {
+  const filter = dict.lookup(PDFName.of('Filter'));
+  if (filter instanceof PDFArray) return filter.size() === 1 && filter.lookup(0) === PDFName.of('DCTDecode');
+  return filter === PDFName.of('DCTDecode');
+}
+
+/** 少し待って、画面を動かす（JPEG の書き直しは 1 枚に 0.1〜0.3 秒かかる）。 */
+function yieldToPage() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * 頁が使っている JPEG の画像の、符号の表を作り直す（元の文書の中で置き換える）。
+ *
+ * 頁の画像・図形（XObject）と、図形の中の画像をたどる。同じ画像は 1 度だけ
+ * 書き直す。小さくならなかったもの・扱えないもの（プログレッシブなど）は
+ * そのまま残す。
+ *
+ * @param {PDFDocument} doc
+ * @param {number[]} indices 結合する頁
+ * @param {{images:number, optimized:number, before:number, after:number}} stats 足し込む先
+ * @param {(pages:number) => void} onPage 1 頁終えるたびに、終えた頁の数を渡す
+ *   （書き直しは時間がかかるので、その間も進み具合を出す）
+ */
+async function optimizeJpegs(doc, indices, stats, onPage) {
+  const { context } = doc;
+  const seen = new Set();
+  const visit = async (resources) => {
+    const xobjects = resources?.lookupMaybe(PDFName.of('XObject'), PDFDict);
+    if (!xobjects) return;
+    for (const [, ref] of xobjects.entries()) {
+      if (!(ref instanceof PDFRef) || seen.has(ref.toString())) continue;
+      seen.add(ref.toString());
+      const stream = context.lookup(ref);
+      if (!(stream instanceof PDFRawStream)) continue;
+      const subtype = stream.dict.get(PDFName.of('Subtype'));
+      if (subtype === PDFName.of('Form')) {
+        await visit(stream.dict.lookupMaybe(PDFName.of('Resources'), PDFDict));
+      } else if (subtype === PDFName.of('Image') && isJpeg(stream.dict)) {
+        stats.images++;
+        const optimized = optimizeJpeg(stream.contents);
+        if (optimized) {
+          stats.optimized++;
+          stats.before += stream.contents.length;
+          stats.after += optimized.length;
+          // 辞書はそのまま使う（長さ /Length は、書き出すときに中身から入れ直される）。
+          context.assign(ref, PDFRawStream.of(stream.dict, optimized));
+        }
+        await yieldToPage();
+      }
+    }
+  };
+  for (let i = 0; i < indices.length; i++) {
+    await visit(doc.getPage(indices[i]).node.Resources());
+    onPage(i + 1);
+  }
 }
 
 /** 元の文書の情報のうち、引き継ぐもの。 */
@@ -226,8 +292,10 @@ async function writeTrailer(out, offsets, context) {
  * @param {string} [options.infoFrom] 文書の情報を引き継ぐファイルの key
  * @param {(chunk:Uint8Array) => (void|Promise<void>)} options.write 書き出す先
  * @param {(done:number, total:number) => void} [options.onProgress]
- * @returns {Promise<{size:number, digests:string[]}>}
- *   size は書き出した大きさ、digests は並べた順の元の頁の指紋（pageDigest）
+ * @returns {Promise<{size:number, digests:string[], jpeg:{images:number, optimized:number, before:number, after:number}}>}
+ *   size は書き出した大きさ、digests は並べた順の元の頁の指紋（pageDigest。
+ *   JPEG を書き直した頁は書き直した後のもの）、jpeg は JPEG の画像の数と、
+ *   符号の表を作り直した画像の数・その前後の大きさ
  */
 export async function writeMergedPdf({ sources, order, title, labels = [], infoFrom, write, onProgress }) {
   const merged = await PDFDocument.create();
@@ -249,6 +317,7 @@ export async function writeMergedPdf({ sources, order, title, labels = [], infoF
   // 書体を、頁の数だけ複製しないため）。
   const copied = new Map();
   const digests = new Map();
+  const jpeg = { images: 0, optimized: 0, before: 0, after: 0 };
   let info = null;
   let done = 0;
   for (const [fileKey, indices] of needed) {
@@ -262,6 +331,7 @@ export async function writeMergedPdf({ sources, order, title, labels = [], infoF
         throw new Error(`「${source.name}」に ${index + 1} 頁目がありません。`);
       }
     }
+    await optimizeJpegs(doc, list, jpeg, (pages) => onProgress?.(done + pages, order.length));
     for (const index of list) digests.set(`${fileKey}:${index}`, await pageDigest(doc.getPage(index)));
     const pages = await merged.copyPages(doc, list);
     list.forEach((index, i) => {
@@ -301,6 +371,7 @@ export async function writeMergedPdf({ sources, order, title, labels = [], infoF
   return {
     size: out.offset,
     digests: order.map((item) => digests.get(`${item.fileKey}:${item.pageIndex}`)),
+    jpeg,
   };
 }
 
@@ -309,14 +380,14 @@ export async function writeMergedPdf({ sources, order, title, labels = [], infoF
  *
  * @param {object} options writeMergedPdf と同じ（write は要らない）。sources の
  *   中身は、load の代わりに bytes でも渡せる
- * @returns {Promise<{bytes:Uint8Array, digests:string[]}>}
+ * @returns {Promise<{bytes:Uint8Array, digests:string[], jpeg:object}>}
  */
 export async function mergePdf({ sources, ...options }) {
   const chunks = [];
   const loaders = new Map(
     [...sources].map(([key, source]) => [key, { name: source.name, load: source.load ?? (async () => source.bytes) }])
   );
-  const { size, digests } = await writeMergedPdf({
+  const { size, digests, jpeg } = await writeMergedPdf({
     ...options,
     sources: loaders,
     write: (chunk) => {
@@ -331,7 +402,7 @@ export async function mergePdf({ sources, ...options }) {
     at += chunks[i].length;
     chunks[i] = null;
   }
-  return { bytes, digests };
+  return { bytes, digests, jpeg };
 }
 
 /** 頁ラベル（/PageLabels の数の木）を書き込む。 */

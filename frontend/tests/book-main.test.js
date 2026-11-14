@@ -356,6 +356,7 @@ beforeEach(async () => {
     return {
       bytes: pdf(pages, { title, labels: pageLabelTexts(labels, order.length) }),
       digests: pages.map((p) => `d-${p.id}`),
+      jpeg: { images: 0, optimized: 0, before: 0, after: 0 },
     };
   });
 
@@ -367,7 +368,11 @@ beforeEach(async () => {
     const bytes = pdf(pages, { title, labels: pageLabelTexts(labels, order.length) });
     await write(bytes.slice(0, 10));
     await write(bytes.slice(10));
-    return { size: bytes.length, digests: pages.map((p) => `d-${p.id}`) };
+    return {
+      size: bytes.length,
+      digests: pages.map((p) => `d-${p.id}`),
+      jpeg: { images: 0, optimized: 0, before: 0, after: 0 },
+    };
   });
 
   created = [];
@@ -1494,6 +1499,31 @@ describe('結合と検証', () => {
     expect($('logText').textContent).toContain('「猫.pdf」をダウンロードしました');
   });
 
+  it.each([
+    [{ images: 0, optimized: 0, before: 0, after: 0 }, 'JPEG の画像はありませんでした（符号の表の作り直しはしていません）'],
+    [
+      { images: 2, optimized: 0, before: 0, after: 0 },
+      'JPEG の画像 2 枚は、符号の表を作り直しても小さくならないか、扱えない形でした（そのまま使いました）',
+    ],
+    [
+      { images: 3, optimized: 2, before: 4 * 1024 * 1024, after: 3 * 1024 * 1024 },
+      'JPEG の画像 2 枚の符号の表を作り直しました（画素はそのまま、4.0 MB → 3.0 MB、25 % 減、1 枚はそのまま）',
+    ],
+    [
+      { images: 1, optimized: 1, before: 2 * 1024 * 1024, after: 1024 * 1024 },
+      'JPEG の画像 1 枚の符号の表を作り直しました（画素はそのまま、2.0 MB → 1.0 MB、50 % 減）',
+    ],
+  ])('JPEG の符号の表を作り直した結果を、記録に残す（%o）', async (jpeg, line) => {
+    const merge = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementation(async (options) => ({ ...(await merge(options)), jpeg }));
+    await addBook();
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('downloadBtn').disabled).toBe(false));
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain(line);
+  });
+
   it('iPhone では、共有シートに渡せない大きさの PDF は、ダウンロードに保存し、そう記録に残す', async () => {
     const userAgent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
       'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
@@ -1807,7 +1837,11 @@ describe('結合と検証', () => {
       const source = await sourcePages(sources, order);
       const pages = source.map((p, i) => ({ ...p, noText: true, corrupt: i === 0 }));
       // タイトルも書き込めていない。
-      return { bytes: pdf(pages, { title: '', labels: null }), digests: source.map((p) => `d-${p.id}`) };
+      return {
+        bytes: pdf(pages, { title: '', labels: null }),
+        digests: source.map((p) => `d-${p.id}`),
+        jpeg: { images: 0, optimized: 0, before: 0, after: 0 },
+      };
     });
 
     window.confirm.mockReturnValueOnce(false);

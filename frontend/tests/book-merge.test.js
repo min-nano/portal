@@ -11,9 +11,12 @@
 // ことを縛る。あわせて、文字の位置の読み方（text-layer.js）と、突き合わせ
 // （verify.js）も確かめる。
 
-import { PDFDocument, PDFHexString, PDFName, PDFRawStream, PDFRef, StandardFonts } from 'pdf-lib';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { PDFDocument, PDFHexString, PDFName, PDFNumber, PDFRawStream, PDFRef, StandardFonts } from 'pdf-lib';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { describe, expect, it, vi } from 'vitest';
+import { optimizeJpeg, sameCoefficients } from '../src/pdf-book-merger/jpeg-optimize.js';
 import { loadSource, mergePdf, pageDigest, pageDigests, writeMergedPdf } from '../src/pdf-book-merger/merge.js';
 import { pageLabelRanges, pageLabelTexts } from '../src/pdf-book-merger/ordering.js';
 import { pageNumberCandidates } from '../src/pdf-book-merger/page-numbers.js';
@@ -223,6 +226,89 @@ describe('mergePdf', () => {
     expect(at).toBe(size);
     const merged = await readBack(bytes);
     expect(merged.pages.map((p) => p.text)).toEqual(['Body 400000', 'Body 1572864', 'Body 400000', 'Body 400000']);
+    expect(await pageDigests(bytes)).toEqual(digests);
+  });
+
+  it('JPEG の画像は符号の表を作り直して小さくし（係数は元のまま）、指紋は書き直した後のもので突き合わせる', async () => {
+    const jpegFixture = (name) => new Uint8Array(readFileSync(resolve(import.meta.dirname, 'fixtures/jpeg', name)));
+    const color = jpegFixture('color.jpg');
+    const gray = jpegFixture('gray.jpg');
+    const progressive = jpegFixture('progressive.jpg');
+    const doc = await PDFDocument.create();
+    const { context } = doc;
+    const shared = await doc.embedJpg(color);
+    const prog = await doc.embedJpg(progressive);
+    const image = (bytes, filter, size) =>
+      context.register(
+        PDFRawStream.of(
+          context.obj({ Type: 'XObject', Subtype: 'Image', Width: size[0], Height: size[1], ColorSpace: 'DeviceGray', BitsPerComponent: 8, Filter: filter }),
+          bytes
+        )
+      );
+    // 図形（Form）の中の画像。圧縮は [/DCTDecode] と書いたもの。
+    const inner = image(gray, ['DCTDecode'], [19, 13]);
+    const form = context.register(
+      PDFRawStream.of(
+        context.obj({ Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 10, 10], Resources: { XObject: { Im9: inner } } }),
+        new TextEncoder().encode('/Im9 Do')
+      )
+    );
+    // 中身を持たない図形（Resources が無い）。
+    const empty = context.register(
+      PDFRawStream.of(context.obj({ Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 10, 10] }), new Uint8Array(0))
+    );
+    // Flate と重ねた JPEG は書き直さない（数えない）。
+    const flated = image(new Uint8Array(100).fill(7), ['FlateDecode', 'DCTDecode'], [1, 1]);
+
+    const first = doc.addPage(SIZE);
+    first.drawImage(shared, { x: 0, y: 0, width: 37, height: 21 });
+    const second = doc.addPage(SIZE);
+    second.drawImage(shared, { x: 0, y: 0, width: 37, height: 21 }); // 同じ画像は 1 度だけ書き直す
+    second.drawImage(prog, { x: 0, y: 100, width: 37, height: 21 }); // プログレッシブはそのまま
+    second.node.setXObject(PDFName.of('Fm1'), form);
+    second.node.setXObject(PDFName.of('Fl1'), flated);
+    second.node.setXObject(PDFName.of('Fm2'), empty);
+    // 画像を指していないもの・中身の無い番号は飛ばす。
+    second.node.setXObject(PDFName.of('Bad'), PDFNumber.of(5));
+    second.node.setXObject(PDFName.of('Gone'), PDFRef.of(9999));
+    const source = await doc.save();
+    const progress = [];
+
+    const { bytes, digests, jpeg } = await mergePdf({
+      sources: new Map([['a', { bytes: source, name: 'a.pdf' }]]),
+      order: [{ fileKey: 'a', pageIndex: 1 }, { fileKey: 'a', pageIndex: 0 }],
+      title: 't',
+      onProgress: (done, total) => progress.push([done, total]),
+    });
+
+    // 書き直している間も、1 頁ごとに進み具合を出す。
+    expect(progress).toEqual([
+      [1, 2],
+      [2, 2],
+      [2, 2],
+    ]);
+    const optimizedColor = optimizeJpeg(color);
+    const optimizedGray = optimizeJpeg(gray);
+    expect(jpeg).toEqual({
+      images: 3,
+      optimized: 2,
+      before: color.length + gray.length,
+      after: optimizedColor.length + optimizedGray.length,
+    });
+    // 結合した PDF の画像は書き直したもの（係数は元と同じ）。ほかは元のまま。
+    const merged = await PDFDocument.load(bytes);
+    const images = merged.context
+      .enumerateIndirectObjects()
+      .map(([, object]) => object)
+      .filter((object) => object instanceof PDFRawStream && object.dict.get(PDFName.of('Subtype')) === PDFName.of('Image'));
+    const contents = images.map((object) => Buffer.from(object.contents));
+    expect(contents).toHaveLength(4);
+    expect(contents.some((c) => c.equals(Buffer.from(optimizedColor)))).toBe(true);
+    expect(contents.some((c) => c.equals(Buffer.from(optimizedGray)))).toBe(true);
+    expect(contents.some((c) => c.equals(Buffer.from(progressive)))).toBe(true);
+    expect(sameCoefficients(color, optimizedColor)).toBe(true);
+    expect(sameCoefficients(gray, optimizedGray)).toBe(true);
+    // 指紋は書き直した後のもので、結合した PDF と一致する。
     expect(await pageDigests(bytes)).toEqual(digests);
   });
 

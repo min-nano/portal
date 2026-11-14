@@ -1805,6 +1805,7 @@ async function mergeAndVerify() {
     // 結合した PDF を読み直し、元の頁と突き合わせる（頁を描き直さないので軽い）。
     const where = !output.file ? 'メモリの上で' : stash.kind === 'opfs' ? '保存領域に書き出し' : 'Blob に書き出し';
     log(`結合しました（${order.length} 頁、${megabytes(size)}、${where}、${seconds(started)}）`);
+    log(jpegSummary(output.jpeg));
     if (stale()) {
       abandon();
       return;
@@ -1887,6 +1888,16 @@ async function mergeAndVerify() {
   }
 }
 
+/** JPEG の符号の表を作り直した結果を、処理の記録に残す文にする。 */
+function jpegSummary({ images, optimized, before, after }) {
+  if (!images) return 'JPEG の画像はありませんでした（符号の表の作り直しはしていません）';
+  const kept = images - optimized;
+  const rest = kept ? `、${kept} 枚はそのまま` : '';
+  if (!optimized) return `JPEG の画像 ${images} 枚は、符号の表を作り直しても小さくならないか、扱えない形でした（そのまま使いました）`;
+  const saved = Math.round((1 - after / before) * 100);
+  return `JPEG の画像 ${optimized} 枚の符号の表を作り直しました（画素はそのまま、${megabytes(before)} → ${megabytes(after)}、${saved} % 減${rest}）`;
+}
+
 /**
  * 結合した PDF を、保存領域へ少しずつ書き出す。書けなかったら null（メモリの
  * 上で結合し直す）。結合そのものの失敗（暗号化されたファイルなど）はそのまま投げる。
@@ -1907,11 +1918,14 @@ async function mergeIntoStash(writeMergedPdf, options) {
   let writer = null;
   try {
     writer = await guard(() => stash.writer(name));
-    const { size, digests } = await writeMergedPdf({ ...options, write: (chunk) => guard(() => writer.write(chunk)) });
+    const { size, digests, jpeg } = await writeMergedPdf({
+      ...options,
+      write: (chunk) => guard(() => writer.write(chunk)),
+    });
     const file = await guard(() => writer.close());
     if (mergedName) stash.remove(mergedName);
     mergedName = name;
-    return { file, size, digests };
+    return { file, size, digests, jpeg };
   } catch (error) {
     // 書きかけは閉じて消す（書き口を開いたままにすると、次の結合で開けない）。
     if (writer) await writer.close().catch(() => {});
