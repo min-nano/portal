@@ -112,11 +112,13 @@ function placementScore(line) {
  *
  * @param {{text:string,x0:number,x1:number,y:number,h:number}[]} items
  * @param {string} [source] 'text'（文字情報）か 'ocr'（画像から読み取り）
+ * @param {ReturnType<typeof groupLines>} [lines] items を行にまとめたもの（ほかでも
+ *   使うために、もうまとめてあれば渡す）
  * @returns {{value:number, score:number, source:string, zone:'top'|'bottom'}[]}
  */
-export function pageNumberCandidates(items, source = 'text') {
+export function pageNumberCandidates(items, source = 'text', lines = groupLines(items)) {
   const found = new Map();
-  for (const line of groupLines(items)) {
+  for (const line of lines) {
     const zone = line.y < MARGIN_ZONE ? 'top' : line.y > 1 - MARGIN_ZONE ? 'bottom' : null;
     if (!zone || line.text.length > 80) continue;
 

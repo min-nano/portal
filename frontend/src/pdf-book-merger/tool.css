@@ -466,6 +466,61 @@ input.bm-page-number {
   font-size: var(--fs-xs);
 }
 
+/* --- 分ける ------------------------------------------------------------- */
+
+/* 新しいファイルを始める頁。左の縁を太くして、ファイルの境目と分かるようにする。 */
+.bm-page.split-start {
+  border-left: 4px solid var(--brand-500);
+}
+
+.bm-split-mark {
+  font-weight: 700;
+  color: var(--text-brand);
+}
+
+/* 分ける候補の理由（しおり・見出し・ファイルの境目）と、分ける・分けないの切り替え。 */
+.bm-split-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-1);
+}
+
+.bm-split-reason {
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.bm-split-toggle button {
+  min-height: 28px;
+  font-size: var(--fs-2xs);
+}
+
+/* 分けたファイルの一覧（頁の範囲と大きさ）と、ファイルごとのダウンロード。 */
+.bm-parts {
+  margin: 0;
+  padding-left: var(--s-5);
+  font-size: var(--fs-sm);
+}
+
+.bm-parts:empty {
+  display: none;
+}
+
+.bm-part {
+  padding: var(--s-1) 0;
+  word-break: break-all;
+}
+
+.bm-part > * + * {
+  margin-left: var(--s-2);
+}
+
+.bm-part.warn {
+  color: var(--warn-700);
+}
+
 /* --- 検証の結果 ---------------------------------------------------------- */
 
 .bm-verify {

@@ -16,9 +16,12 @@
 //   4. 余白を OCR       文字情報で番号が見つからない頁だけ（ocr.js）
 //   5. 並べて確かめる   番号の推定・抜け・重なり・スキャンの外れ値
 //                       （ordering.js / review.js）
-//   6. 結合して検証     pdf-lib で頁をそのまま写し（merge.js）、読み直して
-//                       元の頁と突き合わせる（verify.js）
-//   7. 保存             ダウンロード（この端末へ。Drive へは端末のアプリで）
+//   6. 分ける位置を決める 大きすぎるときは、章の区切りで分ける位置を提案し、
+//                       手で足したり外したりできる（split.js）
+//   7. 結合して検証     pdf-lib で頁をそのまま写し（merge.js）、読み直して
+//                       元の頁と突き合わせる（verify.js）。分けたファイルごと
+//   8. 保存             ダウンロード（この端末へ。Drive へは端末のアプリで）。
+//                       分けたときは 1 つずつか、ZIP にまとめて（zip.js）
 //
 // 判断はどれも DOM に触らない部品に置いてあり、ここはそれをつなぐだけにする。
 
@@ -47,13 +50,14 @@ import {
   roleFromName,
   sideOf,
 } from './ordering.js';
-import { numberingSequence, pageNumberCandidates } from './page-numbers.js';
+import { groupLines, normalizeDigits, numberingSequence, pageNumberCandidates } from './page-numbers.js';
 import { findScanImages } from './scan-images.js';
 import { pdfLibViews } from './pdf-lib-views.js';
 import {
   closePdf,
   manySoftMasks,
   openPdf,
+  readOutline,
   readPageText,
   redrawnSafely,
   releaseCanvas,
@@ -72,9 +76,24 @@ import {
   worstLevel,
 } from './review.js';
 import { compareOutput } from './verify.js';
+import {
+  BREAK_KINDS,
+  breakCandidates,
+  chapterHeading,
+  DEFAULT_LIMITS,
+  overLimit,
+  partFileName,
+  sliceLabelRanges,
+  splitRanges,
+  suggestSplits,
+} from './split.js';
+import { crc32, zipBlob } from './zip.js';
 
 const PDF_MIME = 'application/pdf';
+const ZIP_MIME = 'application/zip';
 const DEFAULT_NAME = '結合.pdf';
+/** 分ける上限を覚えておく名前（localStorage。次に開いたときも同じ上限にする）。 */
+const LIMITS_KEY = 'pdf-book-merger:split-limits';
 
 /** 見出しの「?」からマウスを外して、説明を閉じるまでの猶予（説明の文へ動かす間）。 */
 const HELP_LEAVE_MS = 300;
@@ -86,15 +105,26 @@ const OCR_IN_FLIGHT = 3;
  * 0.2 秒ほど）が、展開は画面とは別のところで進むので、端末の芯を並べて使う。
  */
 const PAGES_IN_FLIGHT = 3;
+/**
+ * 分けたファイルを同時に書き出す数。元のファイルを読み直す回数は減るが、書き口と
+ * 組み立て中の PDF を同時にこの数だけ持つ（上限を 1 頁などにしても、何百も開かない）。
+ */
+const PARTS_AT_ONCE = 8;
+/** CRC-32 を一息に求める大きさ（バイト）。これごとに画面へ一息つかせる。 */
+const CRC_CHUNK = 8 * 1024 * 1024;
 
 let nextKey = 1;
 /** 選んだファイル（画面の並び順）。中身は addFiles() を参照。 */
 const files = [];
 /** 頁ごとに手で直した番号（頁の key → 番号）。 */
 const overrides = new Map();
-/** 最後に組み立てた並びと指摘。 */
-let view = { order: [], problems: [], issues: new Map(), numberings: new Map() };
-/** 結合した PDF と検証の結果。並びが変わったら捨てる。 */
+/** 最後に組み立てた並びと指摘、分ける位置（新しいファイルを始める頁の位置）と、その候補。 */
+let view = { order: [], problems: [], issues: new Map(), numberings: new Map(), starts: [], breaks: [] };
+/** 分ける上限（MB・頁。null は上限なし）。 */
+let splitLimits = { ...DEFAULT_LIMITS };
+/** 手で決めた分ける位置（新しいファイルを始める頁の key）。null なら自動の提案に従う。 */
+let manualSplits = null;
+/** 結合した PDF（分けたときは、分けたファイルごと）と検証の結果。並びが変わったら捨てる。 */
 let merged = null;
 /** 結合と検証の途中か（その間は、拡大表示のために PDF を開かない）。 */
 let merging = false;
@@ -118,9 +148,9 @@ let downloads = Promise.resolve();
  */
 let stash = null;
 let stashReady = Promise.resolve(null);
-/** 結合した回数と、保存領域に置いている結合した PDF の名前。 */
+/** 結合した回数（保存領域での名前に使う）と、保存領域に置いている結合した PDF の名前（分けたときは、分けたファイルごと）。 */
 let mergeCount = 0;
-let mergedName = null;
+let mergedNames = [];
 /** 保存領域を使えない理由（処理の記録に出す）。 */
 let stashProblem = '';
 /** 保存領域を使うかどうかを、記録に出したか。 */
@@ -429,6 +459,7 @@ function addFiles(sources) {
     };
     files.push(file);
     added.push({ file, source });
+    resetSplits();
     logLine(`「${file.name}」を追加しました（${source.driveId ? 'Drive' : 'この端末'}）`);
   }
   sortFiles();
@@ -590,6 +621,8 @@ async function readFile(file) {
     held = true;
     await withContext('PDF として開けませんでした', () => pdfOf(file));
     const count = file.doc.numPages;
+    // しおり（目次）は、分ける位置の候補にする（split.js）。
+    const outline = await readOutline(file.doc);
 
     // 文字情報（画像を展開しないので軽い）。
     readProgress.stage(loadEnd, textEnd);
@@ -599,11 +632,16 @@ async function readFile(file) {
       const { items, ...text } = await withContext(`${index + 1} 頁目を読めませんでした`, () =>
         readPageText(file.doc, index)
       );
+      const lines = groupLines(items);
       file.pages.push({
         key: `${file.key}:${index}`,
         index,
         ...text,
-        candidates: pageNumberCandidates(items, 'text'),
+        candidates: pageNumberCandidates(items, 'text', lines),
+        // 分ける位置の候補（しおりの項目・章の見出し）と、頁の大きさの見積もり（バイト）。
+        outline: outline.get(index) ?? null,
+        heading: chapterHeading(lines),
+        bytes: 0,
         measure: null,
         thumbUrl: '',
         ocr: false,
@@ -627,6 +665,7 @@ async function readFile(file) {
     // JPEG だけを描くのでソフトマスクの手間が掛からない）。調べられなかった
     // PDF（暗号化など）は数が無い（描くときは 0 として扱う）。
     for (const page of file.pages) page.softMasks = scans[page.index] ? 0 : softMasks[page.index];
+    estimatePageBytes(file, scans);
 
     // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
     // もののほかは、配置を決める前に番号を読み切る（文字情報の無い束も、画像
@@ -690,6 +729,20 @@ async function readFile(file) {
     if (held) releaseDoc(file);
     if (files.includes(file)) refresh();
   }
+}
+
+/**
+ * 頁ごとの大きさを見積もる（分ける位置の提案に使う。split.js）。スキャンの頁は
+ * JPEG の大きさに、ファイルの残り（文字情報・書体など）を頁の数で割った分を足す。
+ */
+function estimatePageBytes(file, scans) {
+  const jpegs = file.pages.map((page) =>
+    (scans[page.index]?.images ?? []).reduce((total, image) => total + image.jpeg.length, 0)
+  );
+  const rest = Math.max(0, file.bytes.length - jpegs.reduce((a, b) => a + b, 0)) / file.pages.length;
+  file.pages.forEach((page, k) => {
+    page.bytes = jpegs[k] + rest;
+  });
 }
 
 /** OCR を使っていれば手放す（次に要るときは startOcr で用意し直す）。 */
@@ -1031,6 +1084,8 @@ function removeFile(file) {
   if (at < 0) return;
   files.splice(at, 1);
   log(`「${file.name}」を削除しました`);
+  // 本に入っていたファイルを外したときだけ（読めなかったファイルなどは、本を変えない）。
+  if (file.status === 'ready') resetSplits();
   for (const page of file.pages) {
     if (page.thumbUrl) URL.revokeObjectURL(page.thumbUrl);
     overrides.delete(page.key);
@@ -1136,7 +1191,19 @@ function refresh() {
     });
   const issues = pageIssues(order, problems, compareScans(bodyPages), textless);
 
-  view = { order, problems, issues, numberings };
+  // 分ける位置。手で決めていなければ、上限に収まるように提案する。
+  const byKey = new Map(files.map((file) => [file.key, file]));
+  const items = order.map((entry) => {
+    const file = byKey.get(entry.fileKey);
+    const { bytes, outline, heading } = file.pages[entry.pageIndex];
+    return { fileKey: entry.fileKey, role: entry.role, fileName: file.name, bytes, outline, heading };
+  });
+  const breaks = breakCandidates(items);
+  const starts = manualSplits
+    ? order.flatMap((entry, index) => (index > 0 && manualSplits.has(entry.pageKey) ? [index] : []))
+    : suggestSplits(items, breaks, splitLimits);
+
+  view = { order, problems, issues, numberings, starts, breaks };
   if (!$('outputName').value.trim() || $('outputName').dataset.suggested === 'true') {
     const suggested = suggestBookName(files.map((file) => file.name));
     $('outputName').value = suggested;
@@ -1153,17 +1220,22 @@ function refresh() {
 
   renderFiles();
   renderReview();
+  renderSplit();
 }
 
-/** 結合する中身（名前と、並びの頁・配置・頁番号）を 1 つの文字列にしたもの。 */
+/** 結合する中身（名前と分ける位置、並びの頁・配置・頁番号）を 1 つの文字列にしたもの。 */
 function mergeKey() {
-  return [outputName(), ...view.order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}`)].join('\n');
+  return [
+    outputName(),
+    view.starts.join(','),
+    ...view.order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}`),
+  ].join('\n');
 }
 
 function discardMerged() {
   generation++;
   merged = null;
-  $('downloadBtn').disabled = true;
+  renderDownloads();
   $('verifyResult').hidden = true;
 }
 
@@ -1583,6 +1655,9 @@ function scrollToPage(pageKey) {
 }
 
 function renderGrid() {
+  // 分ける位置の印と、分ける・分けないの切り替え（新しいファイルを始める頁 → 何番目のファイルか）。
+  const partOf = new Map(view.starts.map((index, k) => [view.order[index].pageKey, k + 2]));
+  const indexOf = new Map(view.order.map((entry, index) => [entry.pageKey, index]));
   const cards = [];
   const seen = new Map(); // 抜けの札の key が重ならないように（番号が前後と合わないと、同じ抜けが 2 度出る）
   for (const item of gridItems(view.order)) {
@@ -1597,6 +1672,8 @@ function renderGrid() {
     const level = worstLevel(issues);
     if (filter === 'issues' && level !== 'error' && level !== 'warn') continue;
     const file = files.find((f) => f.key === entry.fileKey);
+    const index = indexOf.get(entry.pageKey);
+    const split = { first: index === 0, part: partOf.get(entry.pageKey) ?? null, candidate: view.breaks[index] };
     const sig = JSON.stringify([
       entry,
       issues,
@@ -1604,8 +1681,9 @@ function renderGrid() {
       file.pages.length,
       file.pages[entry.pageIndex].thumbUrl,
       overrides.get(entry.pageKey) ?? null,
+      split,
     ]);
-    cards.push({ key: entry.pageKey, sig, build: () => pageCard(entry, issues, level) });
+    cards.push({ key: entry.pageKey, sig, build: () => pageCard(entry, issues, level, split) });
   }
   reconcile($('pageGrid'), cards);
 }
@@ -1619,11 +1697,12 @@ function missingCard(item) {
   return card;
 }
 
-function pageCard(entry, issues, level) {
+function pageCard(entry, issues, level, split) {
   const file = files.find((f) => f.key === entry.fileKey);
   const page = file.pages[entry.pageIndex];
-  const card = el(document, 'li', `bm-page${level ? ` ${level}` : ''}`);
+  const card = el(document, 'li', `bm-page${level ? ` ${level}` : ''}${split.part ? ' split-start' : ''}`);
   card.dataset.pageKey = entry.pageKey;
+  if (split.part) card.append(el(document, 'div', 'bm-split-mark', `ここから ${split.part} つ目のファイル`));
 
   const thumb = el(document, 'button', 'bm-thumb');
   thumb.type = 'button';
@@ -1671,7 +1750,120 @@ function pageCard(entry, issues, level) {
     });
     card.append(input);
   }
+
+  // 先頭の頁のほかは、その頁の前で分ける・分けないを切り替えられる。候補なら、その理由も出す。
+  if (!split.first) {
+    const row = el(document, 'div', 'bm-split-toggle');
+    if (split.candidate) {
+      const { kind, title } = split.candidate;
+      row.append(el(document, 'span', 'bm-split-reason', `${BREAK_KINDS[kind]}「${title}」`));
+    }
+    row.append(
+      smallButton(
+        split.part ? '分けない' : 'ここから分ける',
+        split.part ? 'この頁の前で分けるのをやめる' : 'この頁から新しいファイルにする',
+        () => toggleSplit(entry.pageKey)
+      )
+    );
+    card.append(row);
+  }
   return card;
+}
+
+// --- 分ける ------------------------------------------------------------------
+
+/** その頁の前で分ける・分けないを切り替える（以後は、手で決めた位置に従う）。 */
+function toggleSplit(pageKey) {
+  manualSplits ??= new Set(view.starts.map((index) => view.order[index].pageKey));
+  const removed = manualSplits.delete(pageKey);
+  if (!removed) manualSplits.add(pageKey);
+  const entry = view.order.find((item) => item.pageKey === pageKey);
+  log(`${displayLabel(entry)}の前で${removed ? '分けるのをやめました' : '分けます'}`);
+  refresh();
+}
+
+/** 自動の提案に戻す。 */
+function autoSplits() {
+  manualSplits = null;
+  log('分ける位置を、自動の提案に戻しました');
+  refresh();
+}
+
+/**
+ * ファイルを足したり外したりして本が変わったら、手で決めた分ける位置は捨てて、
+ * 自動の提案に戻す（前の本で決めた位置に、次の本が黙って従わないように）。
+ */
+function resetSplits() {
+  if (!manualSplits) return;
+  manualSplits = null;
+  log('ファイルが変わったので、分ける位置を自動の提案に戻しました');
+}
+
+/** 分ける上限を覚えておいたものから読む（読めなければ既定のまま）。 */
+function loadLimits() {
+  const positive = (value) => (Number.isFinite(value) && value > 0 ? value : null);
+  try {
+    const saved = JSON.parse(localStorage.getItem(LIMITS_KEY));
+    if (saved) splitLimits = { megabytes: positive(saved.megabytes), pages: positive(saved.pages) };
+  } catch {
+    // 覚えた値を読めなくても（保存を禁じたブラウザ・壊れた値）、既定の上限で使える。
+  }
+  $('splitMegabytes').value = splitLimits.megabytes ?? '';
+  $('splitPages').value = splitLimits.pages ?? '';
+}
+
+/** 上限の欄を変えたら、覚えておき、自動の提案をし直す。 */
+function setLimit(key, input) {
+  // 日本語入力のまま打った全角の数字も受ける。
+  const value = normalizeDigits(input.value).replace(/．/g, '.').trim();
+  const number = Number(value);
+  if (value && (!(number > 0) || (key === 'pages' && !Number.isInteger(number)))) {
+    showMessage(`上限は${key === 'pages' ? '1 以上の整数' : '0 より大きい数'}で入れてください（空なら上限なし）。`, 'red');
+    input.value = splitLimits[key] ?? '';
+    return;
+  }
+  splitLimits = { ...splitLimits, [key]: value ? number : null };
+  try {
+    localStorage.setItem(LIMITS_KEY, JSON.stringify(splitLimits));
+  } catch {
+    // 覚えておけなくても、この画面の間は使える。
+  }
+  manualSplits = null;
+  showMessage('');
+  refresh();
+  // 分ける位置が変わらなければ結合した PDF は残るので、上限を超えたかの知らせを出し直す。
+  if (merged) renderVerify();
+}
+
+/** 分ける位置の説明と、分けたファイルの一覧（頁の範囲・大きさの見積もり）。 */
+function renderSplit() {
+  const { order, starts, breaks } = view;
+  const spans = splitRanges(order.length, starts);
+  $('splitAutoBtn').hidden = !manualSplits;
+  const how = manualSplits ? '手で決めた位置で' : '上限に収まるように提案した位置で';
+  const limited = splitLimits.megabytes || splitLimits.pages;
+  $('splitNote').textContent =
+    spans.length > 1
+      ? `${spans.length} ファイルに分けます（${how}）。頁の一覧の「ここから分ける」「分けない」で直せます。`
+      : `1 ファイルにまとめます（${manualSplits ? '手で分ける位置を外しました' : limited ? '上限に収まります' : '上限がありません'}）。頁の一覧の「ここから分ける」で分けることもできます。`;
+  const name = outputName();
+  const items =
+    spans.length > 1
+      ? spans.map(({ start, end }, k) => {
+          const pages = end - start;
+          const bytes = order.slice(start, end).reduce((sum, entry) => sum + pageOf(entry).bytes, 0);
+          const over = overLimit(pages, bytes, splitLimits);
+          const item = el(document, 'li', `bm-part${over ? ' warn' : ''}`);
+          const range = `${displayLabel(order[start])}〜${displayLabel(order[end - 1])}`;
+          const reason = breaks[start] ? `・${BREAK_KINDS[breaks[start].kind]}「${breaks[start].title}」から` : '';
+          item.append(
+            el(document, 'span', null, `${partFileName(name, k, spans.length)}: ${range}（${pages} 頁・約 ${megabytes(bytes)}${reason}）`)
+          );
+          if (over) item.append(el(document, 'span', 'hint', '上限を超えています'));
+          return item;
+        })
+      : [];
+  $('splitParts').replaceChildren(...items);
 }
 
 // --- 拡大表示 ----------------------------------------------------------------
@@ -1769,107 +1961,93 @@ async function mergeAndVerify() {
     showMessage('結合している間に並びか名前が変わりました。もう一度「結合して検証する」を押してください。', 'red');
   };
   merging = true;
+  // この結合で保存領域に書いたもの（うまくいかなければ消す）。
+  const written = [];
+  let done = false;
   try {
     const fileName = outputName();
     const ranges = pageLabelRanges(order);
+    // 分けたファイルごとに、並び・名前・頁ラベル（本の頁番号のまま）を切り出す。
+    const spans = splitRanges(order.length, view.starts);
+    const parts = spans.map(({ start, end }, k) => ({
+      start,
+      order: order.slice(start, end),
+      fileName: partFileName(fileName, k, spans.length),
+      labels: sliceLabelRanges(ranges, start, end),
+    }));
     // 中身は、結合するときに 1 ファイルずつ読む（保存領域に置いたものは、そこから）。
     const sources = new Map(readyFiles().map((file) => [file.key, { name: file.name, load: () => bytesOf(file) }]));
     const infoFrom = order.find((entry) => entry.role === 'body')?.fileKey;
-    // 結合と検証で、バーの前半と後半を受け持つ。
+    const started = performance.now();
+    const many = parts.length > 1;
+    // 結合と検証で、バーの前半と後半を受け持つ。結合の道具を読み込む間も、
+    // 始めたことが分かるように先に出す。
     mergeProgress.label = () => '結合しています';
     mergeProgress.stage(0, 0.5);
     mergeProgress.show('結合しています…', 0);
-    const started = performance.now();
-    // 結合の道具（pdf-lib）は、結合するときになってから読み込む。
     log(
-      `結合を始めます（${sources.size} ファイル・${order.length} 頁、` +
+      `結合を始めます（${sources.size} ファイル・${order.length} 頁` +
+        `${many ? `を ${parts.length} ファイルに分けて` : ''}、` +
         `${stashDescription(stash, '結合した PDF は')}、` +
         `${navigator.userAgent}）`
     );
-    const { mergePdf, pageDigests, writeMergedPdf } = await import('./merge.js');
+    // 結合の道具（pdf-lib）は、結合するときになってから読み込む。
+    const { mergePdfs, pageDigests, writeMergedPdfs } = await import('./merge.js');
     const options = {
       sources,
-      order,
-      title: fileName.replace(/\.pdf$/i, ''),
-      labels: ranges,
+      parts: parts.map(({ order: partOrder, fileName: name, labels }) => ({
+        order: partOrder,
+        title: name.replace(/\.pdf$/i, ''),
+        labels,
+      })),
       infoFrom,
       onProgress: (done, total) => mergeProgress.show(`結合しています（${done} / ${total} 頁）`, done / total),
     };
     // 保存領域があれば、そこへ少しずつ書き出す（結合した PDF をメモリに持たない）。
-    // 書けなければ（容量の上限など）、メモリの上で結合し直す。
-    let output = null;
-    if (stash) output = await mergeIntoStash(writeMergedPdf, options);
-    output ??= await mergePdf(options);
-    const { digests, size = output.bytes.length } = output;
-
-    // 結合した PDF を読み直し、元の頁と突き合わせる（頁を描き直さないので軽い）。
-    const where = !output.file ? 'メモリの上で' : stash.kind === 'opfs' ? '保存領域に書き出し' : 'Blob に書き出し';
+    // 書けなければ（容量の上限など）、メモリの上で結合し直す。分けたときも、
+    // 元のファイルは 1 度だけ読み、分けたファイルを同時に書き出す（merge.js）。
+    // 何百にも分けたときは、PARTS_AT_ONCE ずつ書き出す。
+    const stashRun = ++mergeCount;
+    const results = [];
+    for (let at = 0; at < parts.length; at += PARTS_AT_ONCE) {
+      const group = { ...options, parts: options.parts.slice(at, at + PARTS_AT_ONCE) };
+      const before = results.reduce((sum, output) => sum + output.digests.length, 0);
+      group.onProgress = (done) => options.onProgress(before + done, order.length);
+      let outputs = null;
+      if (stash) {
+        const names = group.parts.map((_, k) => (many ? `merged-${stashRun}-${at + k + 1}.pdf` : `merged-${stashRun}.pdf`));
+        outputs = await mergeIntoStash(writeMergedPdfs, group, names);
+        if (outputs) written.push(...names);
+      }
+      outputs ??= await mergePdfs(group);
+      results.push(...outputs);
+    }
+    const size = results.reduce((sum, output) => sum + (output.size ?? output.bytes.length), 0);
+    const where = results.every((output) => output.file)
+      ? stash.kind === 'opfs'
+        ? '保存領域に書き出し'
+        : 'Blob に書き出し'
+      : 'メモリの上で';
     log(`結合しました（${order.length} 頁、${megabytes(size)}、${where}、${seconds(started)}）`);
-    if (stale()) {
-      abandon();
-      return;
-    }
-    mergeProgress.label = () => '検証しています';
-    mergeProgress.stage(0.5, 1);
-    mergeProgress.show('結合した PDF を検証しています…', null);
-    // 保存領域に置いたものは、読んだ中身を pdf.js へそのまま渡す（写しを作らない）。
-    // メモリの上のものは、保存するために手元に残す。
-    const bytes = output.bytes ?? new Uint8Array(await output.file.arrayBuffer());
-    log('検証: 結合した PDF を読みました');
-    const mergedDigests = await pageDigests(bytes);
-    log('検証: 頁の指紋を求めました');
-    const doc = await openPdf(bytes, { transfer: !output.bytes });
-    log('検証: pdf.js で開きました');
-    const actual = [];
-    let labels;
-    let info;
-    try {
-      for (let index = 0; index < doc.numPages; index++) {
-        if (stale()) break;
-        mergeProgress.show(`結合した PDF を検証しています（${index + 1} / ${doc.numPages} 頁）`, index / doc.numPages);
-        const page = await withContext(`結合した PDF の ${index + 1} 頁目を検証できませんでした`, () =>
-          readPageText(doc, index)
-        );
-        actual.push({ size: page.size, signature: page.signature, digest: mergedDigests[index] });
-        // 読んだ頁の書体などを、文書に溜めない（pdf.js は文書を閉じるまで抱える。
-        // 1 頁のファイルを何百もつないだ PDF は頁ごとに別の書体を持つので、iPhone
-        // では検証の途中でページごと落ちた）。
-        await doc.cleanup();
-        if (index % 16 === 0) await breathe();
-      }
-      if (!stale()) {
-        labels = await doc.getPageLabels();
-        ({ info } = await doc.getMetadata());
-      }
-    } finally {
-      // 失敗しても閉じる（結合した PDF 全体を worker に残さない）。
-      await closePdf(doc);
-      // ほかに開いている文書が無ければ worker ごと止めて、写しをその場で返す
-      // （保存で共有シートへ渡すときに、メモリを空けておく）。
-      if (releasePdfWorker()) log('検証: pdf.js の worker を止めて、結合した PDF の写しを手放しました');
-    }
-    if (stale()) {
-      abandon();
-      return;
-    }
 
-    const expected = order.map((entry, i) => ({
-      pageKey: entry.pageKey,
-      label: displayLabel(entry),
-      ...originals[i],
-      digest: digests[i],
-    }));
-    const result = compareOutput(expected, actual);
-    const wantLabels = pageLabelTexts(ranges, order.length);
-    const labelsOk = Array.isArray(labels) && labels.every((label, i) => label === wantLabels[i]);
-    merged = { data: output.file ?? output.bytes, size, fileName, result, labelsOk, title: info.Title || '' };
-    log(
-      result.ok && labelsOk
-        ? `検証しました（${result.pageCount.actual} 頁すべて一致）`
-        : `検証で食い違いが見つかりました（${result.mismatches.length} 頁${labelsOk ? '' : '、頁ラベルが違う'}）`
-    );
+    if (stale()) {
+      abandon();
+      return;
+    }
+    const outputs = [];
+    for (const [k, part] of parts.entries()) {
+      const output = await verifyPart(part, results[k], k, parts.length, { originals, stale, pageDigests });
+      if (!output) {
+        abandon();
+        return;
+      }
+      outputs.push(output);
+    }
+    log(`すべて結合して検証しました（${parts.length} ファイル、${seconds(started)}）`);
+    merged = { parts: outputs };
+    done = true;
     renderVerify();
-    $('downloadBtn').disabled = false;
+    renderDownloads();
   } catch (error) {
     // 並びが変わっていれば（外したファイルの中身を読めなかったなど）、捨てたことにする。
     if (stale()) {
@@ -1878,6 +2056,11 @@ async function mergeAndVerify() {
     }
     showMessage(error.message || String(error), 'red');
   } finally {
+    // 書き終えたら前に結合したものを消し、うまくいかなければ書いたものを消す
+    // （保存している最中のものを書き換えないように、前のものは書き終えてから消す）。
+    const unused = done ? mergedNames : written;
+    for (const name of unused) stash.remove(name);
+    if (done) mergedNames = written;
     merging = false;
     keepLog(); // 処理を終えたので、残した記録を消す（調べている途中なら、そちらを残す）
     mergeProgress.show('');
@@ -1888,10 +2071,95 @@ async function mergeAndVerify() {
 }
 
 /**
- * 結合した PDF を、保存領域へ少しずつ書き出す。書けなかったら null（メモリの
- * 上で結合し直す）。結合そのものの失敗（暗号化されたファイルなど）はそのまま投げる。
+ * 結合した PDF（分けたときは、分けたファイル 1 つ）を読み直し、元の頁と突き合わせる
+ * （頁を描き直さないので軽い）。途中で並び・名前が変わったら、読むのをやめる。
  */
-async function mergeIntoStash(writeMergedPdf, options) {
+async function verifyPart(part, output, k, count, { originals, stale, pageDigests }) {
+  const many = count > 1;
+  // 記録・進み具合に出す名前（分けたときは、分けたファイルの名前）。
+  const name = many ? `「${part.fileName}」` : '結合した PDF ';
+  const total = part.order.length;
+  const { digests, size = output.bytes.length } = output;
+  // 分けたファイルごとに、バーの後半を等分する。
+  const counter = many ? `（${k + 1} / ${count} ファイル）` : '';
+  mergeProgress.label = () => `検証しています${counter}`;
+  mergeProgress.stage(0.5 + k / count / 2, 0.5 + (k + 1) / count / 2);
+  mergeProgress.show(`${name}を検証しています…`, null);
+  // 保存領域に置いたものは、読んだ中身を pdf.js へそのまま渡す（写しを作らない）。
+  // メモリの上のものは、保存するために手元に残す。
+  const bytes = output.bytes ?? new Uint8Array(await output.file.arrayBuffer());
+  log(`検証: ${name}を読みました`);
+  // ZIP にまとめるときの CRC は、中身を読んだ今のうちに求めておく（pdf.js へ渡すと読めなくなる）。
+  const crc = many ? await checksum(bytes) : null;
+  const mergedDigests = await pageDigests(bytes);
+  log('検証: 頁の指紋を求めました');
+  const doc = await openPdf(bytes, { transfer: !output.bytes });
+  log('検証: pdf.js で開きました');
+  const actual = [];
+  let labels;
+  let info;
+  let read = false;
+  try {
+    for (let index = 0; index < doc.numPages; index++) {
+      if (stale()) break;
+      mergeProgress.show(`${name}を検証しています（${index + 1} / ${doc.numPages} 頁）`, index / doc.numPages);
+      const page = await withContext(`${name}の ${index + 1} 頁目を検証できませんでした`, () =>
+        readPageText(doc, index)
+      );
+      actual.push({ size: page.size, signature: page.signature, digest: mergedDigests[index] });
+      // 読んだ頁の書体などを、文書に溜めない（pdf.js は文書を閉じるまで抱える。
+      // 1 頁のファイルを何百もつないだ PDF は頁ごとに別の書体を持つので、iPhone
+      // では検証の途中でページごと落ちた）。
+      await doc.cleanup();
+      if (index % 16 === 0) await breathe();
+    }
+    if (!stale()) {
+      labels = await doc.getPageLabels();
+      ({ info } = await doc.getMetadata());
+    }
+    read = true;
+  } finally {
+    // 失敗しても閉じる（結合した PDF 全体を worker に残さない）。
+    await closePdf(doc);
+    // ほかに開いている文書が無ければ worker ごと止めて、写しをその場で返す
+    // （保存で共有シートへ渡すときに、メモリを空けておく）。次の分けたファイルを
+    // 検証するときは止めない（worker を起こし直す手間が、分けた数だけ掛かる）。
+    const more = read && k < count - 1 && !stale();
+    if (!more && releasePdfWorker()) log('検証: pdf.js の worker を止めて、結合した PDF の写しを手放しました');
+  }
+  if (stale()) return null;
+
+  const expected = part.order.map((entry, i) => ({
+    pageKey: entry.pageKey,
+    label: displayLabel(entry),
+    ...originals[part.start + i],
+    digest: digests[i],
+  }));
+  const result = compareOutput(expected, actual);
+  const wantLabels = pageLabelTexts(part.labels, total);
+  const labelsOk = Array.isArray(labels) && labels.every((label, i) => label === wantLabels[i]);
+  log(
+    result.ok && labelsOk
+      ? `${name}を検証しました（${result.pageCount.actual} 頁すべて一致）`
+      : `${name}を検証して、食い違いが見つかりました（${result.mismatches.length} 頁${labelsOk ? '' : '、頁ラベルが違う'}）`
+  );
+  return {
+    data: output.file ?? output.bytes,
+    size,
+    crc,
+    fileName: part.fileName,
+    result,
+    labelsOk,
+    title: info.Title || '',
+  };
+}
+
+/**
+ * 結合した PDF（分けたときは、分けたファイルごと）を、保存領域へ少しずつ書き出す。
+ * 書けなかったら null（メモリの上で結合し直す）。結合そのものの失敗（暗号化された
+ * ファイルなど）はそのまま投げる。
+ */
+async function mergeIntoStash(writeMergedPdfs, options, names) {
   let failed = null;
   const guard = async (run) => {
     try {
@@ -1902,63 +2170,143 @@ async function mergeIntoStash(writeMergedPdf, options) {
     }
   };
   // 結合するたびに別の名前で書く（前に結合した PDF を、保存している最中に
-  // 書き換えないように）。前のものは、書き終えてから消す。
-  const name = `merged-${++mergeCount}.pdf`;
-  let writer = null;
+  // 書き換えないように）。前のものは、すべて書き終えてから消す（mergeAndVerify）。
+  const writers = [];
   try {
-    writer = await guard(() => stash.writer(name));
-    const { size, digests } = await writeMergedPdf({ ...options, write: (chunk) => guard(() => writer.write(chunk)) });
-    const file = await guard(() => writer.close());
-    if (mergedName) stash.remove(mergedName);
-    mergedName = name;
-    return { file, size, digests };
+    for (const name of names) writers.push(await guard(() => stash.writer(name)));
+    const results = await writeMergedPdfs({
+      ...options,
+      parts: options.parts.map((part, k) => ({ ...part, write: (chunk) => guard(() => writers[k].write(chunk)) })),
+    });
+    const outputs = [];
+    for (const [k, writer] of writers.entries()) {
+      outputs.push({ ...results[k], file: await guard(() => writer.close()) });
+    }
+    return outputs;
   } catch (error) {
     // 書きかけは閉じて消す（書き口を開いたままにすると、次の結合で開けない）。
-    if (writer) await writer.close().catch(() => {});
-    await stash.remove(name);
+    for (const writer of writers) await writer.close().catch(() => {});
+    for (const name of names) await stash.remove(name);
     if (error !== failed) throw error;
     log(`結合した PDF を保存領域に書けなかったので、メモリの上で結合し直します（${error.message}）`);
     return null;
   }
 }
 
+/**
+ * CRC-32（ZIP にまとめるときに要る）。数百 MB を一息に求めると画面が固まるので、
+ * 少しずつ求めて、間に一息つく。
+ */
+async function checksum(bytes) {
+  let crc = 0;
+  for (let at = 0; at < bytes.length; at += CRC_CHUNK) {
+    crc = crc32(bytes.subarray(at, at + CRC_CHUNK), crc);
+    await breathe();
+  }
+  return crc;
+}
+
 function renderVerify() {
   const box = $('verifyResult');
-  const { result, labelsOk, size, title } = merged;
-  const ok = result.ok && labelsOk;
+  const { parts } = merged;
+  const many = parts.length > 1;
+  const ok = parts.every((part) => part.result.ok && part.labelsOk);
+  const pages = parts.reduce((sum, part) => sum + part.result.pageCount.actual, 0);
+  const mismatches = parts.flatMap((part) => part.result.mismatches.map((mismatch) => ({ ...mismatch, part })));
   box.className = `bm-verify ${ok ? 'ok' : 'ng'}`;
   const lines = [];
   lines.push(
     ok
-      ? `検証できました。${result.pageCount.actual} 頁すべてが、元の頁と大きさ・文字情報・画像まで一致しています。`
-      : `検証で食い違いが見つかりました（${result.mismatches.length} 頁）。`
+      ? `検証できました。${many ? `${parts.length} ファイル・計 ` : ''}${pages} 頁すべてが、元の頁と大きさ・文字情報・画像まで一致しています。`
+      : `検証で食い違いが見つかりました（${mismatches.length} 頁）。`
   );
-  if (result.pageCount.expected !== result.pageCount.actual) {
-    lines.push(`頁の数が違います（並べた数 ${result.pageCount.expected}、結合した PDF ${result.pageCount.actual}）。`);
+  for (const part of parts) {
+    const { result, labelsOk, size, title } = part;
+    const head = many ? `${part.fileName}: ${result.pageCount.actual} 頁。` : '';
+    if (result.pageCount.expected !== result.pageCount.actual) {
+      lines.push(
+        `${many ? `${part.fileName}: ` : ''}頁の数が違います（並べた数 ${result.pageCount.expected}、結合した PDF ${result.pageCount.actual}）。`
+      );
+    }
+    lines.push(
+      `${head}文字情報（検索できる文字）のある頁: ${result.textPages} / ${result.pageCount.actual} 頁。` +
+        `頁ラベル（ビューアーに出る頁番号）: ${labelsOk ? '本の頁番号と一致' : '書き込みを確かめられませんでした'}。` +
+        `タイトル: ${title || '（なし）'}。大きさ: ${megabytes(size)}。`
+    );
   }
-  lines.push(
-    `文字情報（検索できる文字）のある頁: ${result.textPages} / ${result.pageCount.actual} 頁。` +
-      `頁ラベル（ビューアーに出る頁番号）: ${labelsOk ? '本の頁番号と一致' : '書き込みを確かめられませんでした'}。` +
-      `タイトル: ${title || '（なし）'}。大きさ: ${megabytes(size)}。`
-  );
+  // 分ける位置は大きさの見積もりで決めたので、結合した大きさが上限を超えたら知らせる
+  // （分けたファイルどうしで共有していた書体などは、どのファイルにも入る）。
+  for (const part of parts) {
+    if (overLimit(part.result.pageCount.actual, part.size, splitLimits)) {
+      lines.push(
+        `${part.fileName} は ${part.result.pageCount.actual} 頁・${megabytes(part.size)} で、上限を超えました。` +
+          '頁の一覧の「ここから分ける」で分ける位置を足して、結合し直してください。'
+      );
+    }
+  }
   box.replaceChildren(...lines.map((line) => el(document, 'p', null, line)));
-  if (result.mismatches.length) {
+  if (mismatches.length) {
     const list = el(document, 'ul', 'bm-mismatches');
-    for (const mismatch of result.mismatches.slice(0, 50)) {
-      const item = el(document, 'li', null, `${mismatch.index + 1} 枚目（${mismatch.label}）: ${mismatch.reasons.join('・')}`);
+    for (const mismatch of mismatches.slice(0, 50)) {
+      const where = many ? `${mismatch.part.fileName} の ` : '';
+      const item = el(document, 'li', null, `${where}${mismatch.index + 1} 枚目（${mismatch.label}）: ${mismatch.reasons.join('・')}`);
       list.append(item);
     }
-    if (result.mismatches.length > 50) list.append(el(document, 'li', null, `ほか ${result.mismatches.length - 50} 頁`));
+    if (mismatches.length > 50) list.append(el(document, 'li', null, `ほか ${mismatches.length - 50} 頁`));
     box.append(list);
   }
   box.hidden = false;
 }
 
-async function download() {
-  if (!merged) return;
+/**
+ * 保存のボタン。1 ファイルなら「ダウンロード」、分けたときは「ZIP にまとめて
+ * ダウンロード」と、分けたファイルごとの「ダウンロード」。
+ */
+function renderDownloads() {
+  const parts = merged?.parts ?? [];
+  const many = parts.length > 1;
+  $('downloadBtn').hidden = many;
+  $('downloadBtn').disabled = !merged;
+  $('zipBtn').hidden = !many;
+  $('partDownloads').hidden = !many;
+  $('partDownloads').replaceChildren(
+    ...(many
+      ? parts.map((part, k) => {
+          const item = el(document, 'li', 'bm-part');
+          item.append(
+            el(document, 'span', null, `${part.fileName}（${part.result.pageCount.actual} 頁・${megabytes(part.size)}）`),
+            smallButton('ダウンロード', `「${part.fileName}」をダウンロード`, () => download(k))
+          );
+          return item;
+        })
+      : [])
+  );
+}
+
+/** 結合した PDF（分けたときは k 番目のファイル）を保存する。 */
+async function download(k = 0) {
+  // ボタンは、結合した PDF があるときだけ押せる（捨てたら押せなくする。renderDownloads）。
   // 共有シートを開いている間に、名前を変えるなどして結合した PDF が捨てられる
   // ことがあるので、渡すものは先に取っておく。
-  const { data, fileName, size } = merged;
+  const { data, fileName, size } = merged.parts[k];
+  await save(data, fileName, size, PDF_MIME);
+}
+
+/** 分けたファイルを ZIP にまとめて保存する（中身は読まずに、Blob の部品にする）。 */
+async function downloadZip() {
+  const { parts } = merged;
+  const fileName = outputName().replace(/\.pdf$/i, '.zip');
+  let blob;
+  try {
+    blob = zipBlob(parts.map((part) => ({ name: part.fileName, data: part.data, size: part.size, crc: part.crc })));
+  } catch (error) {
+    showMessage(error.message, 'red');
+    return;
+  }
+  await save(blob, fileName, blob.size, ZIP_MIME);
+}
+
+async function save(data, fileName, size, type) {
   saving = true;
   log(`「${fileName}」を保存します（${megabytes(size)}）`);
   // 大きくて共有シートに渡せないとき（save-file.js）は、そう記録しておく。
@@ -1966,7 +2314,7 @@ async function download() {
   if (isMobile(navigator) && method === 'download') {
     log('大きいので、共有シートではなく、ダウンロード（既定のダウンロードフォルダ）に保存します');
   }
-  const how = await savePdf(data, fileName, navigator, method).finally(() => {
+  const how = await savePdf(data, fileName, navigator, method, type).finally(() => {
     saving = false;
     keepLog();
   });
@@ -2124,11 +2472,17 @@ function wireUp() {
   $('outputName').addEventListener('input', () => {
     $('outputName').dataset.suggested = 'false';
     discardMerged();
+    renderSplit();
     // 入力した名前を覚えておく（このあと裏の処理で並べ直しても、捨て直さない）。
     orderKey = mergeKey();
   });
   $('mergeBtn').addEventListener('click', mergeAndVerify);
-  $('downloadBtn').addEventListener('click', download);
+  $('downloadBtn').addEventListener('click', () => download());
+  $('zipBtn').addEventListener('click', downloadZip);
+  loadLimits();
+  $('splitMegabytes').addEventListener('change', (event) => setLimit('megabytes', event.target));
+  $('splitPages').addEventListener('change', (event) => setLimit('pages', event.target));
+  $('splitAutoBtn').addEventListener('click', autoSplits);
   $('logCopyBtn').addEventListener('click', copyLog);
   $('logBox').addEventListener('toggle', renderLog);
 

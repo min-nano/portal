@@ -14,7 +14,13 @@
 import { PDFDocument, PDFHexString, PDFName, PDFRawStream, PDFRef, StandardFonts } from 'pdf-lib';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { describe, expect, it, vi } from 'vitest';
-import { loadSource, mergePdf, pageDigest, pageDigests, writeMergedPdf } from '../src/pdf-book-merger/merge.js';
+import { loadSource, mergePdfs, pageDigest, pageDigests, writeMergedPdfs } from '../src/pdf-book-merger/merge.js';
+
+/** 1 つの PDF に結合する（分けないとき）。 */
+const mergePdf = async ({ order, title, labels, ...options }) =>
+  (await mergePdfs({ ...options, parts: [{ order, title, labels }] }))[0];
+const writeMergedPdf = async ({ order, title, labels, write, ...options }) =>
+  (await writeMergedPdfs({ ...options, parts: [{ order, title, labels, write }] }))[0];
 import { pageLabelRanges, pageLabelTexts } from '../src/pdf-book-merger/ordering.js';
 import { pageNumberCandidates } from '../src/pdf-book-merger/page-numbers.js';
 import { multiply, textItems, textSignature } from '../src/pdf-book-merger/text-layer.js';
@@ -24,7 +30,7 @@ import { pdfLibViews } from '../src/pdf-book-merger/pdf-lib-views.js';
 const SIZE = [364, 515]; // B6 くらい
 
 /** 頁ごとに「本文の文字」と「下の余白の頁番号」を持つ PDF を作る。 */
-async function makeSource(numbers, { author, lang } = {}) {
+async function makeSource(numbers, { author, lang, subject, keywords, created } = {}) {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
   for (const number of numbers) {
@@ -33,6 +39,9 @@ async function makeSource(numbers, { author, lang } = {}) {
     page.drawText(String(number), { x: 175, y: 20, size: 9, font });
   }
   if (author) doc.setAuthor(author);
+  if (subject) doc.setSubject(subject);
+  if (keywords) doc.setKeywords(keywords);
+  if (created) doc.setCreationDate(created);
   if (lang) doc.catalog.set(PDFName.of('Lang'), PDFHexString.fromText(lang));
   return doc.save();
 }
@@ -149,6 +158,93 @@ describe('mergePdf', () => {
     // 写した頁の「描くもの」の指紋は、元の頁と同じ。
     expect(await pageDigests(bytes)).toEqual(digests);
     expect(new Set(digests).size).toBe(7);
+  });
+
+  it('分けたファイルを同時に書き出し、元のファイルは 1 度だけ読み、どのファイルにも本文の最初のファイルの情報を引き継ぐ', async () => {
+    const created = new Date('1905-01-01T00:00:00Z');
+    const odd = await makeSource([1, 3, 5], {
+      author: '夏目漱石',
+      lang: 'ja',
+      subject: '小説',
+      keywords: ['猫', '明治'],
+      created,
+    });
+    const even = await makeSource([6, 4, 2]);
+    const cover = await makeSource(['Cover']);
+    const loads = [];
+    const sources = new Map(
+      [
+        ['odd', odd, '奇数.pdf'],
+        ['even', even, '偶数.pdf'],
+        ['cover', cover, '表紙.pdf'],
+      ].map(([key, bytes, name]) => [key, { name, load: async () => (loads.push(key), bytes) }])
+    );
+    const order = [
+      { fileKey: 'cover', pageIndex: 0, role: 'front', number: null },
+      { fileKey: 'odd', pageIndex: 0, role: 'body', number: 1 },
+      { fileKey: 'even', pageIndex: 2, role: 'body', number: 2 },
+      { fileKey: 'odd', pageIndex: 1, role: 'body', number: 3 },
+      { fileKey: 'even', pageIndex: 1, role: 'body', number: 4 },
+      { fileKey: 'odd', pageIndex: 2, role: 'body', number: 5 },
+      { fileKey: 'even', pageIndex: 0, role: 'body', number: 6 },
+    ];
+    const ranges = pageLabelRanges(order);
+    const { sliceLabelRanges } = await import('../src/pdf-book-merger/split.js');
+    const progress = [];
+
+    const outputs = await mergePdfs({
+      sources,
+      parts: [
+        { order: order.slice(0, 3), title: '猫_1', labels: sliceLabelRanges(ranges, 0, 3) },
+        // 頁ラベルの無いものも書ける。
+        { order: order.slice(3, 5), title: '猫_2' },
+        { order: order.slice(5), title: '猫_3', labels: sliceLabelRanges(ranges, 5, 7) },
+      ],
+      infoFrom: 'odd',
+      onProgress: (done, total) => progress.push([done, total]),
+    });
+
+    expect(loads).toEqual(['cover', 'odd', 'even']);
+    expect(progress.at(-1)).toEqual([7, 7]);
+    const read = await Promise.all(outputs.map(({ bytes }) => readBack(bytes)));
+    expect(read.map((pdf) => pdf.pages.map((page) => page.text.match(/page (\w+)/)[1]))).toEqual([
+      ['Cover', '1', '2'],
+      ['3', '4'],
+      ['5', '6'],
+    ]);
+    expect(read.map((pdf) => pdf.info.Title)).toEqual(['猫_1', '猫_2', '猫_3']);
+    // 本文の最初のファイルの頁を含まないファイルにも、その情報を引き継ぐ。
+    expect(read.map((pdf) => pdf.info.Author)).toEqual(['夏目漱石', '夏目漱石', '夏目漱石']);
+    for (const { bytes } of outputs) {
+      const doc = await PDFDocument.load(bytes);
+      expect([doc.getSubject(), doc.getKeywords(), doc.getCreationDate()?.toISOString()]).toEqual([
+        '小説',
+        '猫 明治',
+        created.toISOString(),
+      ]);
+      expect(doc.catalog.lookup(PDFName.of('Lang')).decodeText()).toBe('ja');
+    }
+    expect(read[0].labels).toEqual(['表紙', '1', '2']);
+    expect(read[1].labels).toBeNull();
+    expect(read[2].labels).toEqual(['5', '6']);
+    for (const [t, { bytes, digests }] of outputs.entries()) {
+      expect(await pageDigests(bytes)).toEqual(digests);
+      expect(digests).toHaveLength(read[t].pages.length);
+    }
+  });
+
+  it('元に作成日が無ければ、作成日は結合した日にする', async () => {
+    const before = Date.now() - 1000;
+    const doc = await PDFDocument.create({ updateMetadata: false });
+    doc.addPage(SIZE);
+    const source = await doc.save();
+    const { bytes } = await mergePdf({
+      sources: new Map([['a', { bytes: source, name: 'a.pdf' }]]),
+      order: [{ fileKey: 'a', pageIndex: 0 }],
+      title: 't',
+    });
+    expect((await loadSource(source, 'a.pdf')).getCreationDate()).toBeUndefined();
+    expect((await PDFDocument.load(bytes, { updateMetadata: false })).getCreationDate().getTime()).toBeGreaterThanOrEqual(before);
   });
 
   it('元に言語が無ければ、言語は書かない', async () => {

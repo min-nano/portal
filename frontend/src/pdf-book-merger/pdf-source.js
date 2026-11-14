@@ -423,6 +423,33 @@ export async function readPageText(doc, index) {
   }
 }
 
+/**
+ * しおり（目次）の、いちばん上の段の項目が指す頁（頁の位置 → 項目の名前）。
+ *
+ * 分ける位置の候補にする（split.js）。しおりが書名 1 つだけで、その下に章が
+ * 並ぶ形なら、その下の段を使う。指す先の分からない項目と、しおりを読めない
+ * PDF は飛ばす（分ける候補が減るだけなので）。
+ *
+ * @returns {Promise<Map<number, string>>}
+ */
+export async function readOutline(doc) {
+  const titles = new Map();
+  let items = (await doc.getOutline().catch(() => null)) ?? [];
+  if (items.length === 1 && items[0].items?.length) items = items[0].items;
+  for (const item of items) {
+    try {
+      const dest = typeof item.dest === 'string' ? await doc.getDestination(item.dest) : item.dest;
+      const target = dest?.[0];
+      const index = Number.isInteger(target) ? target : await doc.getPageIndex(target);
+      const title = item.title.trim();
+      if (title && !titles.has(index)) titles.set(index, title);
+    } catch {
+      // 指す先の分からない項目は使わない。
+    }
+  }
+  return titles;
+}
+
 /** 余白の帯（上下 MARGIN_ZONE）を、OCR に足りる細かさで描く viewport と canvas の大きさ。 */
 function marginViewports(page) {
   const base = page.getViewport({ scale: 1 });
