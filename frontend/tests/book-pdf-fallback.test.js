@@ -24,6 +24,11 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
       rendered: 0,
       canvases: [],
       offsets: [],
+      log: [],
+      cleanup: async () => {
+        if (globalThis.__cleanupFails) throw new Error('startCleanup: Page 1 is currently rendering.');
+        doc.log.push('cleanup');
+      },
       loadingTask: {
         destroy: async () => {
           doc.destroyed = true;
@@ -42,7 +47,10 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
         },
         render: ({ canvas, viewport }) => ({
           promise: (async () => {
+            doc.log.push('start');
+            await globalThis.__renderGate;
             doc.rendered++;
+            doc.log.push('end');
             doc.canvases.push([canvas.width, canvas.height]);
             doc.offsets.push(viewport.offsetY);
             if (doc.failAt === doc.rendered) throw new Error('render');
@@ -52,6 +60,13 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
             }
           })(),
         }),
+        // 文字情報。書体の名前は __fonts（頁番号 → 名前の並び）で決める。
+        getTextContent: async () => {
+          await globalThis.__textGate;
+          if (globalThis.__textFails) throw new Error('bad page');
+          const fonts = globalThis.__fonts?.(pageNumber) ?? ['g_d0_f1'];
+          return { items: [], styles: Object.fromEntries(fonts.map((name) => [name, {}])) };
+        },
         cleanup: () => {},
       }),
     };
@@ -83,6 +98,11 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  globalThis.__renderGate = null;
+  globalThis.__textGate = null;
+  globalThis.__textFails = false;
+  globalThis.__fonts = null;
+  globalThis.__cleanupFails = false;
 });
 
 describe('WebKit での pdf.js の設定と描き直し', () => {
@@ -309,5 +329,155 @@ describe('ソフトマスクの多い頁は、粗く描く', () => {
     await expect(source.renderPreview(doc, 0, { softMasks: SOFT_MASKS })).rejects.toThrow('render');
     expect(doc.rendered).toBe(3);
     expect(created.every((canvas) => canvas.width === 0 && canvas.height === 0)).toBe(true);
+  });
+});
+
+describe('書体を手放す', () => {
+  const read = async (doc, pages) => {
+    for (const index of pages) await source.readPageText(doc, index);
+  };
+  const cleanups = (doc) => doc.log.filter((entry) => entry === 'cleanup').length;
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('頁ごとに別の書体を持つ PDF は、新しい書体を持ち込んだ頁が 4 つを超えたら手放す', async () => {
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+    globalThis.__fonts = (pageNumber) => [`g_d0_f${pageNumber}`];
+    const doc = await source.openPdf(new Uint8Array([1]));
+    await read(doc, Array.from({ length: 20 }, (_, i) => i));
+    expect(source.NEW_FONT_PAGES).toBe(4);
+    // 5・10・15・20 頁目を読んだところで手放す。
+    expect(await source.fontReleases(doc)).toBe(4);
+    expect(cleanups(doc)).toBe(4);
+  });
+
+  it('結合した PDF の検証では、書体を読み込んだ頁を読むたびに手放す', async () => {
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+    globalThis.__fonts = (pageNumber) => [`g_d0_f${pageNumber}`];
+    const doc = await source.openPdf(new Uint8Array([1]));
+    source.keepFewFonts(doc);
+    await read(doc, [0, 1, 2]);
+    expect(await source.fontReleases(doc)).toBe(3);
+    // 手放した書体は次の頁で読み込み直すので、同じ書体でも手放す。
+    globalThis.__fonts = () => ['g_d0_f99'];
+    await read(doc, [3, 4]);
+    expect(await source.fontReleases(doc)).toBe(5);
+    // 書体を使わない頁（文字の無い頁）では手放さない。
+    globalThis.__fonts = () => [];
+    await read(doc, [5, 6]);
+    expect(await source.fontReleases(doc)).toBe(5);
+  });
+
+  it('同じ頁を読み直しても、書体の名前は最初に読んだときのものを使う（手放したあとの付け直しに惑わされない）', async () => {
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+    globalThis.__fonts = (pageNumber) => [`g_d0_f${pageNumber}`];
+    const doc = await source.openPdf(new Uint8Array([1]));
+    await read(doc, [0, 1, 2, 3]);
+    globalThis.__fonts = () => ['g_d0_f99'];
+    await read(doc, [0, 1, 2, 3]);
+    expect(await source.fontReleases(doc)).toBe(0);
+  });
+
+  it('描き直しのための文書を開けなかったときも、手放した回数を数える', async () => {
+    vi.stubGlobal('navigator', { userAgent: MAC_SAFARI, platform: 'MacIntel', maxTouchPoints: 0 });
+    globalThis.__failWithOffscreen = true;
+    globalThis.__fonts = (pageNumber) => [`g_d0_f${pageNumber}`];
+    const doc = await source.openPdf(new Uint8Array([1, 2, 3]));
+    globalThis.__failToOpen = true;
+    await expect(source.renderPreview(doc, 0, { longSide: 200 })).rejects.toThrow('Invalid PDF structure');
+    await read(doc, [0, 1, 2, 3, 4]);
+    expect(await source.fontReleases(doc)).toBe(1);
+  });
+
+  it('読めなかった頁は、書体を読み込まなかったものとして数えない', async () => {
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+    globalThis.__fonts = (pageNumber) => [`g_d0_f${pageNumber}`];
+    const doc = await source.openPdf(new Uint8Array([1]));
+    await read(doc, [0, 1, 2, 3]);
+    globalThis.__textFails = true;
+    for (const index of [0, 10, 11, 12, 13, 14]) {
+      await expect(source.readPageText(doc, index)).rejects.toThrow('bad page');
+    }
+    expect(await source.fontReleases(doc)).toBe(0);
+  });
+
+  it('同じ書体を使い回す本は、書体が多くても、頁ごとに使う書体が違っても手放さない', async () => {
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+    // 12 の書体のうち、頁ごとに 3 つずつを使う（見出し・本文・注など）。
+    globalThis.__fonts = (pageNumber) => [0, 1, 2].map((k) => `g_d0_f${(pageNumber * 3 + k) % 12}`);
+    const doc = await source.openPdf(new Uint8Array([1]));
+    await read(doc, Array.from({ length: 40 }, (_, i) => i));
+    await flush();
+    expect(cleanups(doc)).toBe(0);
+    expect(await source.fontReleases(doc)).toBe(0);
+    expect(await source.fontReleases({})).toBe(0);
+  });
+
+  it('拡大表示のために開き直した文書（文字情報を読んでいない）でも、頁をめくるたびに溜めない', async () => {
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+    const doc = await source.openPdf(new Uint8Array([1]));
+    for (let index = 0; index < 10; index++) await source.renderPreview(doc, index, { longSide: 200 });
+    // 同じ頁を見直しても、数えない。
+    for (let index = 0; index < 10; index++) await source.renderPreview(doc, 0, { longSide: 200 });
+    expect(await source.fontReleases(doc)).toBe(2);
+  });
+
+  it('文字情報を読み終えてから頁を描くときも、手放したあとに読み込み直す書体を数えて手放す', async () => {
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+    globalThis.__fonts = (pageNumber) => [`g_d0_f${pageNumber}`];
+    const doc = await source.openPdf(new Uint8Array([1]));
+    // 調べるときと同じく、全頁の文字情報を読んでから描く。
+    await read(doc, Array.from({ length: 12 }, (_, i) => i));
+    expect(await source.fontReleases(doc)).toBe(2);
+    for (let index = 0; index < 12; index++) await source.renderPreview(doc, index, { longSide: 200 });
+    expect(await source.fontReleases(doc)).toBe(4);
+  });
+
+  it('同じ文書を描いている・読んでいる途中には手放さず、手放している最中は読むのを待つ', async () => {
+    vi.stubGlobal('navigator', { userAgent: CHROME });
+    globalThis.__fonts = (pageNumber) => [`g_d0_f${pageNumber}`];
+    const doc = await source.openPdf(new Uint8Array([1]));
+    await read(doc, [0, 1, 2, 3]);
+    let draw;
+    globalThis.__renderGate = new Promise((resolve) => (draw = resolve));
+    const drawing = source.renderPreview(doc, 20, { longSide: 200 });
+    await vi.waitFor(() => expect(doc.log).toEqual(['start']));
+    let text;
+    globalThis.__textGate = new Promise((resolve) => (text = resolve));
+    // 5 頁目で手放すことになるが、描いている頁と、読んでいる頁を待つ。
+    const reading = source.readPageText(doc, 4).then(() => source.readPageText(doc, 5));
+    await flush();
+    text();
+    await flush();
+    expect(doc.log).toEqual(['start']);
+    // 手放すのを待っている間に描こうとした頁は、手放し終えてから描く。
+    const next = source.renderPreview(doc, 21, { longSide: 200 });
+    await flush();
+    draw();
+    await Promise.all([drawing, reading, next]);
+    expect(doc.log).toEqual(['start', 'end', 'cleanup', 'start', 'end']);
+    expect(await source.fontReleases(doc)).toBe(1);
+  });
+
+  it('描き直しのために開き直した文書の書体も手放し、手放せなくても読み続ける', async () => {
+    vi.stubGlobal('navigator', { userAgent: MAC_SAFARI, platform: 'MacIntel', maxTouchPoints: 0 });
+    globalThis.__failWithOffscreen = true;
+    globalThis.__fonts = (pageNumber) => [`g_d0_f${pageNumber}`];
+    const doc = await source.openPdf(new Uint8Array([1, 2, 3]));
+    await source.renderPreview(doc, 0, { longSide: 200 });
+    await read(doc, Array.from({ length: 10 }, (_, i) => i + 1));
+    const [, safe] = opened;
+    expect(await source.fontReleases(doc)).toBe(2);
+    expect(safe.log.filter((entry) => entry === 'cleanup')).toHaveLength(2);
+
+    // 手放すのに失敗しても（描いている頁があるなど）、読み続け、手放せなかった回は数えない。
+    globalThis.__cleanupFails = true;
+    await read(doc, Array.from({ length: 10 }, (_, i) => i + 20));
+    expect(await source.fontReleases(doc)).toBe(2);
+
+    // 書体を手放している最中に閉じても、待たずに閉じる（手放すのは pdf.js が済ませる）。
+    globalThis.__cleanupFails = false;
+    await read(doc, Array.from({ length: 5 }, (_, i) => i + 40));
+    await source.closePdf(doc);
+    expect(doc.destroyed).toBe(true);
   });
 });

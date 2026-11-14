@@ -21,6 +21,13 @@ export const ROLES = {
   exclude: '結合しない',
 };
 
+/**
+ * 表紙・裏表紙とみなす頁の数の上限。番号の読めないこれまでの頁数のファイルは
+ * 表紙と裏表紙とし（guessRole）、分けるときは、これより多い先頭・末尾のまとまりを
+ * 目次・付録などとみなす（split.js）。
+ */
+export const COVER_PAGES = 4;
+
 const BOTH_NAME = /表紙.*裏表紙|表裏|表紙.*表[4４]|cover.*back/i;
 const BACK_NAME = /裏表紙|表[4４]|back[\s_-]*cover|ura[\s_-]*byoshi/i;
 const FRONT_NAME = /表紙|表[1１]|cover|カバー|hyoshi/i;
@@ -55,7 +62,7 @@ export function guessRole(name, pages) {
   if (named === 'split') return pages.length >= 2 ? 'split' : 'front';
   if (named) return named;
   const numbered = pages.filter((page) => page.candidates.length > 0).length;
-  if (numbered === 0 && pages.length <= 4) return pages.length >= 2 ? 'split' : 'front';
+  if (numbered === 0 && pages.length <= COVER_PAGES) return pages.length >= 2 ? 'split' : 'front';
   return 'body';
 }
 

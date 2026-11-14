@@ -31,12 +31,16 @@ let prepareOcr;
 let readStrip;
 let boxesReadSoFar;
 let releaseOcr;
+let keepDarkest;
+let hasLightInk;
 
 beforeEach(async () => {
   tesseract.pending = [];
   tesseract.scheduler = { addWorker: vi.fn() };
   vi.resetModules();
-  ({ prepareOcr, readStrip, boxesReadSoFar, releaseOcr } = await import('../src/pdf-book-merger/ocr.js'));
+  ({ prepareOcr, readStrip, boxesReadSoFar, releaseOcr, keepDarkest, hasLightInk } = await import(
+    '../src/pdf-book-merger/ocr.js'
+  ));
 });
 
 afterEach(() => {
@@ -167,17 +171,37 @@ describe('releaseOcr', () => {
   });
 });
 
+/** 切り出しに使う canvas の 2D の偽物（jsdom の canvas は描けないので）。 */
+function cropContextMock() {
+  return {
+    fillRect() {},
+    drawImage() {},
+    getImageData: () => ({ data: new Uint8ClampedArray([0, 0, 0, 255, 170, 170, 170, 255]) }),
+    putImageData: vi.fn(),
+  };
+}
+
+let cropContext;
+
 /**
  * 余白の帯の canvas の代わり。白地に、黒い四角（数字のかたまりの代わり）を
  * 横に並べて置く。
  */
-function stripCanvas(blocks) {
+function stripCanvas(blocks, { dots = false } = {}) {
   const width = 400;
   const height = 60;
   const data = new Uint8ClampedArray(width * height * 4).fill(255);
-  blocks.forEach((x0) => {
+  const paint = (x0, x1, value) => {
     for (let y = 20; y < 40; y++) {
-      for (let x = x0; x < x0 + 12; x++) data.fill(0, (y * width + x) * 4, (y * width + x) * 4 + 3);
+      for (let x = x0; x < x1; x++) data.fill(value, (y * width + x) * 4, (y * width + x) * 4 + 3);
+    }
+  };
+  blocks.forEach((x0) => {
+    paint(x0, x0 + 12, 0);
+    // dots: 両側に灰色の丸（「● 2 ●」の飾り）の代わり。
+    if (dots) {
+      paint(x0 - 16, x0 - 4, 150);
+      paint(x0 + 16, x0 + 28, 150);
     }
   });
   return { width, height, getContext: () => ({ getImageData: () => ({ data }) }) };
@@ -186,7 +210,8 @@ function stripCanvas(blocks) {
 describe('readStrip', () => {
   beforeEach(() => {
     // jsdom の canvas は描けないので、切り出しに使う分だけ用意する。
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ fillRect() {}, drawImage() {} });
+    cropContext = cropContextMock();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(cropContext);
   });
 
   it('読んだかたまりを数える（記録に出す。読み取りの手間はこれに比例する）', async () => {
@@ -203,5 +228,93 @@ describe('readStrip', () => {
 
     await readStrip({ canvas: stripCanvas([]), top: 0, height: 0.14 });
     expect(boxesReadSoFar()).toBe(2);
+  });
+});
+
+describe('灰色の飾りのある頁番号', () => {
+  beforeEach(() => {
+    cropContext = cropContextMock();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(cropContext);
+  });
+
+  it('濃い字の色と白の真ん中より薄い画素を白にする（濃い字だけを残す。ごみの点 1 つには引きずられない）', () => {
+    const pixel = (v) => [v, v, v, 255];
+    // 黒い字（0）が 60 画素・灰色の丸（170）が 60 画素・白地・ごみの点はなし。
+    const data = new Uint8ClampedArray([...Array(60)].flatMap(() => pixel(0)).concat(
+      [...Array(60)].flatMap(() => pixel(170)),
+      pixel(255)
+    ));
+    keepDarkest(data);
+    expect(data[0]).toBe(0);
+    expect(data[60 * 4]).toBe(255);
+    // 灰色の字（120）が 99 画素に、黒いごみの点（0）が 1 つ。字は消さない。
+    const grey = new Uint8ClampedArray(pixel(0).concat([...Array(99)].flatMap(() => pixel(120))));
+    keepDarkest(grey);
+    expect(grey[4]).toBe(120);
+    // 白だけなら何もしない。
+    const white = new Uint8ClampedArray(pixel(255));
+    keepDarkest(white);
+    expect([...white]).toEqual(pixel(255));
+  });
+
+  it('数字と読めたのに自信が足りないかたまりは、濃い字だけを残して読み直す（「● 2 ●」の丸を消す）', async () => {
+    // 丸ごと読ませると、字は読めても自信が 0 になる。丸を消すと読める。
+    let calls = 0;
+    tesseract.scheduler.addJob = vi.fn(async () => {
+      calls++;
+      return { data: calls <= 3 ? { text: '2', confidence: 0 } : { text: '2', confidence: 96 } };
+    });
+    const before = boxesReadSoFar();
+    const reading = readStrip({ canvas: stripCanvas([180], { dots: true }), top: 0.86, height: 0.14 });
+    await workersRequested(2);
+    tesseract.pending.forEach((pending) => pending.resolve());
+    const items = await reading;
+
+    expect(items.map((item) => item.text)).toEqual(['2']);
+    expect(tesseract.scheduler.addJob).toHaveBeenCalledTimes(6);
+    // 読み直しの 3 回だけ、薄いところを白にしてから読ませる。
+    expect(cropContext.putImageData).toHaveBeenCalledTimes(3);
+    const [[whitened]] = cropContext.putImageData.mock.calls;
+    expect([...whitened.data]).toEqual([0, 0, 0, 255, 255, 255, 255, 255]);
+    // 読み直したかたまりは 2 つと数える（読み取りの手間に比例するように）。
+    expect(boxesReadSoFar() - before).toBe(2);
+  });
+
+  it('数字と読めないかたまり（和文・罫線など）は読み直さない', async () => {
+    tesseract.scheduler.addJob = vi.fn().mockResolvedValue({ data: { text: '', confidence: 0 } });
+    const reading = readStrip({ canvas: stripCanvas([180]), top: 0.86, height: 0.14 });
+    await workersRequested(2);
+    tesseract.pending.forEach((pending) => pending.resolve());
+    expect(await reading).toEqual([]);
+    expect(tesseract.scheduler.addJob).toHaveBeenCalledTimes(3);
+    expect(cropContext.putImageData).not.toHaveBeenCalled();
+  });
+
+  it('読み直しても読めなければ、空にする（読み直したかたまりは 2 つと数える）', async () => {
+    tesseract.scheduler.addJob = vi.fn().mockResolvedValue({ data: { text: '7', confidence: 10 } });
+    const before = boxesReadSoFar();
+    const reading = readStrip({ canvas: stripCanvas([180], { dots: true }), top: 0.86, height: 0.14 });
+    await workersRequested(2);
+    tesseract.pending.forEach((pending) => pending.resolve());
+    expect(await reading).toEqual([]);
+    expect(tesseract.scheduler.addJob).toHaveBeenCalledTimes(6);
+    expect(cropContext.putImageData).toHaveBeenCalledTimes(3);
+    expect(boxesReadSoFar() - before).toBe(2);
+  });
+
+  it('一様に濃いかたまり（罫線・ごみ）は、自信の低い数字と読めても読み直さない（「1」と読み違えないように）', async () => {
+    tesseract.scheduler.addJob = vi.fn().mockResolvedValue({ data: { text: '1', confidence: 30 } });
+    const reading = readStrip({ canvas: stripCanvas([180]), top: 0.86, height: 0.14 });
+    await workersRequested(2);
+    tesseract.pending.forEach((pending) => pending.resolve());
+    expect(await reading).toEqual([]);
+    expect(tesseract.scheduler.addJob).toHaveBeenCalledTimes(3);
+  });
+
+  it('灰色のインクがまとまってあるかを、帯の画素で見る', () => {
+    const image = { width: 4, gray: new Uint8Array([0, 0, 170, 255, 0, 0, 170, 255]) };
+    expect(hasLightInk(image, { x0: 0, y0: 0, x1: 4, y1: 2 })).toBe(true);
+    expect(hasLightInk(image, { x0: 0, y0: 0, x1: 2, y1: 2 })).toBe(false);
+    expect(hasLightInk(image, { x0: 3, y0: 0, x1: 4, y1: 2 })).toBe(false);
   });
 });

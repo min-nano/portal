@@ -68,17 +68,18 @@ function download(file) {
 }
 
 /**
- * PDF を保存する。押されたボタンの処理の中から、待たずに呼ぶこと（共有シートは
- * 利用者の操作の直後でないと開けない）。
+ * PDF（分けた PDF をまとめた ZIP も）を保存する。押されたボタンの処理の中から、
+ * 待たずに呼ぶこと（共有シートは利用者の操作の直後でないと開けない）。
  *
  * @param {Uint8Array|Blob} data 中身（保存領域のファイルなら、メモリに読まずに渡す）
  * @param {string} fileName
  * @param {Navigator} [nav]
  * @param {'share'|'download'} [method] 保存のしかた（saveMethod。決めてあれば渡す）
+ * @param {string} [type] 中身の種類（共有シートに渡すときのもの）
  * @returns {Promise<'shared'|'cancelled'|'downloaded'>}
  */
-export async function savePdf(data, fileName, nav = globalThis.navigator, method = undefined) {
-  const file = new File([data], fileName, { type: PDF_MIME });
+export async function savePdf(data, fileName, nav = globalThis.navigator, method = undefined, type = PDF_MIME) {
+  const file = new File([data], fileName, { type });
   method ??= saveMethod(file.size, nav);
   if (
     method === 'share' &&

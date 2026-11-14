@@ -30,6 +30,12 @@ function pdf(pages, extra = {}) {
 }
 const specOf = (bytes) => JSON.parse(decoder.decode(bytes).slice('%PDF-'.length));
 
+/**
+ * JPEG 1 枚の頁として見つかったもの（scan-images.js の findScanImages の形）。
+ * JPEG の大きさは mb（MB）。分ける位置の提案に使う。
+ */
+const scanOf = (id, mb = 0) => ({ jpeg: id, images: [{ jpeg: { length: mb * 1024 * 1024 } }] });
+
 /** 本文の頁。ocr: 文字情報には無く、画像からだけ読める番号。 */
 const page = (id, number, extra = {}) => ({ id, number, ...extra });
 
@@ -64,7 +70,6 @@ const mocks = vi.hoisted(() => ({
   writeMergedPdf: vi.fn(),
   openStash: vi.fn(),
   openOptions: [],
-  cleanups: 0,
   releasePdfWorker: vi.fn(),
 }));
 
@@ -98,15 +103,27 @@ vi.mock('../src/pdf-book-merger/stash.js', async (importOriginal) => ({
   ...(await importOriginal()),
   openStash: (...args) => mocks.openStash(...args),
 }));
-vi.mock('../src/pdf-book-merger/merge.js', () => ({
-  mergePdf: (...args) => mocks.mergePdf(...args),
-  writeMergedPdf: (...args) => mocks.writeMergedPdf(...args),
+// 分けたファイル（parts）を同時に書き出す結合は、偽物では 1 つずつ（mergePdf・
+// writeMergedPdf の偽物を、分けたファイルごとに呼ぶ）。
+vi.mock('../src/pdf-book-merger/merge.js', () => {
+  const each = (merge) => async ({ parts, ...options }) => {
+    const results = [];
+    for (const part of parts) results.push(await merge({ ...options, ...part }));
+    return results;
+  };
+  return {
+  mergePdfs: each((...args) => mocks.mergePdf(...args)),
+  writeMergedPdfs: each((...args) => mocks.writeMergedPdf(...args)),
   // 結合した PDF の頁の「描くもの」の指紋。壊れた頁（corrupt）だけ違う指紋になる。
-  pageDigests: async (bytes) =>
-    JSON.parse(new TextDecoder().decode(bytes).slice('%PDF-'.length)).pages.map((p) =>
+  // pageDigestsGate を置くと、それが済むまで待つ（検証の途中で並びを変えるテスト）。
+  pageDigests: async (bytes) => {
+    await mocks.pageDigestsGate;
+    return JSON.parse(new TextDecoder().decode(bytes).slice('%PDF-'.length)).pages.map((p) =>
       p.corrupt ? 'broken' : `d-${p.id}`
-    ),
-}));
+    );
+  },
+  };
+});
 
 // pdf.js の偽物。頁の仕様から、文字情報・測定用の画像・縮小画像を作る。
 vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
@@ -120,9 +137,6 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
         spec,
         numPages: spec.pages.length,
         getPageLabels: async () => spec.labels ?? null,
-        cleanup: async () => {
-          mocks.cleanups++;
-        },
         getMetadata: async () => {
           if (spec.metadataBroken) throw new Error('metadata');
           return { info: { Title: spec.title ?? '', ...spec.info } };
@@ -130,12 +144,18 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
       };
     },
     redrawnSafely: (doc) => doc.spec.redrawn === true,
+    // しおり（頁の位置 → 項目の名前）。spec.outline に [位置, 名前] を並べる。
+    readOutline: async (doc) => new Map(doc.spec.outline ?? []),
     readPageText: async (doc, index) => {
       const p = doc.spec.pages[index];
       if (p.broken) throw new Error(p.broken);
       return {
         size: p.size ?? { width: 364, height: 515 },
-        items: p.number && !p.ocr ? bottomNumber(p.number) : [],
+        // heading: 章の扉の見出し（上の方の大きな字）。
+        items: [
+          ...(p.number && !p.ocr ? bottomNumber(p.number) : []),
+          ...(p.heading ? [{ text: p.heading, x0: 0.3, x1: 0.7, y: 0.3, h: 0.04 }] : []),
+        ],
         signature: { length: p.noText ? 0 : 12, hash: `h-${p.id}` },
       };
     },
@@ -146,6 +166,15 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
     closePdf: (...args) => mocks.closePdf(...args),
     releaseCanvas: () => {},
     releasePdfWorker: () => mocks.releasePdfWorker(),
+    // 書体を手放した回数。spec.fontReleases に、文字情報を読む前（拡大表示などで先に
+    // 手放した分）・読み終えたとき・頁を描き終えたときの回数を並べる。
+    keepFewFonts: (doc) => {
+      doc.keepFewFonts = true;
+    },
+    fontReleases: async (doc) => {
+      doc.releaseCalls = (doc.releaseCalls ?? 0) + 1;
+      return doc.spec.fontReleases?.[doc.releaseCalls - 1] ?? 0;
+    },
   };
 });
 
@@ -317,7 +346,7 @@ beforeEach(async () => {
   // 保存領域は、はじめは使えない（メモリに持つ）。使うテストは fakeStash に替える。
   mocks.openStash.mockResolvedValue(null);
   mocks.openOptions.length = 0;
-  mocks.cleanups = 0;
+  mocks.pageDigestsGate = null;
   mocks.releasePdfWorker.mockReset();
   mocks.releasePdfWorker.mockReturnValue(true);
   mocks.readStrip.mockImplementation(async (strip) =>
@@ -329,7 +358,8 @@ beforeEach(async () => {
     const pages = specOf(bytes).pages;
     const fallback = pages.filter((p) => p.jpeg === false).length;
     return {
-      scans: pages.map((p) => (p.jpeg === false ? null : { jpeg: p.id })),
+      // JPEG の大きさは、頁の仕様の mb（MB）。分ける位置の提案に使う。
+      scans: pages.map((p) => (p.jpeg === false ? null : scanOf(p.id, p.mb))),
       softMasks: pages.map((p) => p.softMasks ?? 0),
       reasons: new Map(fallback ? [['画像の上に図形を描いている', fallback]] : []),
       example: fallback ? '2 頁目: 画像 1 枚（DCTDecode 100×140 DeviceGray 8bit）' : '',
@@ -426,6 +456,9 @@ describe('ファイルを足して並べる', () => {
         created[kind] += record.addedNodes.length;
       }
     });
+    // 分ける位置が変わると、その頁のカードも作り直すので、ここでは分けない（区切りごとに
+    // 分けると、1 頁のファイルが 20 を超えたところで、細かすぎる境目として印を外す）。
+    change($('splitMode'), 'limit');
     const setItem = vi.spyOn(Storage.prototype, 'setItem');
     const count = 40;
     const names = Array.from({ length: count }, (_, i) => `${String(i + 1).padStart(4, '0')}.pdf`);
@@ -918,7 +951,7 @@ describe('ファイルを足して並べる', () => {
     // 画像から番号を読む頁（5 頁）の余白も、その頁の JPEG から、同じ展開で描く。
     expect(mocks.renderMargins).not.toHaveBeenCalled();
     const marginCalls = mocks.renderPageImage.mock.calls.filter(([, , , options]) => options?.margins);
-    expect(marginCalls.map(([doc, index, scan]) => [doc.spec.pages[index].id, scan])).toEqual([['o5', { jpeg: 'o5' }]]);
+    expect(marginCalls.map(([doc, index, scan]) => [doc.spec.pages[index].id, scan])).toEqual([['o5', scanOf('o5')]]);
     expect(gridLabels()).toContain('5 頁');
 
     // 拡大表示は pdf.js で描く。
@@ -1007,7 +1040,7 @@ describe('ファイルを足して並べる', () => {
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalled());
     // 写しの JPEG は残していないので、1 度だけ調べ直して、その JPEG で描く。
     expect(mocks.findScanImages).toHaveBeenCalledTimes(2);
-    expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o5' });
+    expect(mocks.renderMargins.mock.calls[0][2]).toEqual(scanOf('o5'));
   });
 
   it('あとからの OCR が終わっても、拡大表示で開いている文書は閉じない', async () => {
@@ -1060,9 +1093,9 @@ describe('ファイルを足して並べる', () => {
     // （多い頁は粗く描く）。
     const calls = mocks.renderPageImage.mock.calls.map(([, index, scan, options]) => [index, scan, options]);
     expect(calls.sort((a, b) => a[0] - b[0])).toEqual([
-      [0, { jpeg: 'o1' }, { margins: false, softMasks: 0 }],
+      [0, scanOf('o1'), { margins: false, softMasks: 0 }],
       [1, null, { margins: true, softMasks: 8 }],
-      [2, { jpeg: 'o5' }, { margins: false, softMasks: 0 }],
+      [2, scanOf('o5'), { margins: false, softMasks: 0 }],
     ]);
     expect(document.querySelector('#pageGrid [data-page-key="f1:1"] img').src).toBe('blob:pdfjs-o3');
     $('logBox').open = true;
@@ -1239,7 +1272,7 @@ describe('ファイルを足して並べる', () => {
     );
     expect(mocks.renderMargins).toHaveBeenCalledTimes(1);
     // 調べたときの JPEG を使う（PDF 全体を読み直さない）。
-    expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o5' });
+    expect(mocks.renderMargins.mock.calls[0][2]).toEqual(scanOf('o5'));
     expect(mocks.findScanImages).toHaveBeenCalledTimes(2);
     await vi.waitFor(() => expect(fileItem('猫_表紙.pdf').textContent).not.toContain('余白を読み取り中'));
   });
@@ -1282,7 +1315,19 @@ describe('ファイルを足して並べる', () => {
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalledTimes(40));
     // 調べたときの JPEG（ファイルの一部を指すだけ）で描く。
     expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
-    expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o1' });
+    expect(mocks.renderMargins.mock.calls[0][2]).toEqual(scanOf('o1'));
+  });
+
+  it('頁ごとに別の書体を持つ PDF で書体を手放したら、その回数を記録に出す', async () => {
+    // 手放す頃合いは pdf-source.js が決める（book-pdf-fallback.test.js）。
+    drop([file('頁ごとの書体.pdf', pdf([page('q1', 1), page('q2', 2)], { fontReleases: [1, 3, 6] })), file('猫_奇数.pdf', pdf(ODD))]);
+    await settled(2);
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    // 文字情報を読むときと、頁を描くときに手放した回数を分けて出す（読む前の 1 回は除く）。
+    expect($('logText').textContent).toContain('番号が見つかった頁 2、頁ごとに書体が違うので、読んだ書体を 2 回手放しました）');
+    expect($('logText').textContent).toContain('頁ごとに書体が違うので、描いた頁の書体を 3 回手放しました');
+    expect($('logText').textContent.match(/書体を \d+ 回手放しました/g)).toHaveLength(2);
   });
 
   it('ソフトマスクの多い頁は、粗く描き、余白を OCR しない（あとから本文に変えても）', async () => {
@@ -1583,8 +1628,9 @@ describe('結合と検証', () => {
     expect(text).toContain('結合を始めます（2 ファイル・8 頁、結合した PDF は Blob にしてページの外に置きます（保存領域を使えない: Context not access storage）、');
     expect(text).toContain('Blob に書き出し');
     expect(text).toContain('検証: pdf.js で開きました');
-    // 検証では、1 頁読むたびに pdf.js の文書に溜めたもの（書体など）を捨てる。
-    expect(mocks.cleanups).toBe(8);
+    // 検証では、新しい書体を持ち込んだ頁を読むたびに書体を手放す（book-pdf-fallback.test.js）。
+    const closed = mocks.closePdf.mock.calls.map(([doc]) => doc).filter(Boolean);
+    expect(closed.filter((doc) => doc.keepFewFonts).map((doc) => doc.spec.pages.length)).toEqual([8]);
     // 検証を終えたら、pdf.js の worker ごと止めて、結合した PDF の写しを返す。
     expect(mocks.releasePdfWorker).toHaveBeenCalledTimes(1);
     expect(text).toContain('検証: pdf.js の worker を止めて、結合した PDF の写しを手放しました');
@@ -1947,5 +1993,621 @@ describe('結合と検証', () => {
   it('結合した PDF はダウンロードするだけで、Drive へ保存するボタンは無い', () => {
     expect($('saveDriveBtn')).toBeNull();
     expect(document.querySelector('portal-save-dialogs')).toBeNull();
+  });
+});
+
+// --- 分ける ----------------------------------------------------------------------
+
+/** 章の見出しのある両面の本（頁ごとに 10 MB）。表紙は別のファイル。 */
+const CHAPTERS = [
+  page('p1', 1, { mb: 10 }),
+  page('p2', 2, { mb: 10 }),
+  page('p3', 3, { mb: 10, heading: '第2章 壁' }),
+  page('p4', 4, { mb: 10 }),
+  page('p5', 5, { mb: 10, heading: '第3章 床' }),
+  page('p6', 6, { mb: 10 }),
+];
+
+async function addChapters() {
+  drop([file('本_本文.pdf', pdf(CHAPTERS)), file('本_表紙.pdf', pdf(COVER))]);
+  await settled(2);
+}
+
+/** 頁の一覧の札のうち、新しいファイルを始める頁の印。 */
+function splitMarks() {
+  return [...document.querySelectorAll('#pageGrid .bm-split-mark')].map(
+    (mark) => `${mark.closest('li').querySelector('.bm-page-label strong').textContent}:${mark.textContent}`
+  );
+}
+
+/** 頁の札の「ここから分ける」「分けない」。 */
+function splitButton(pageKey) {
+  return document.querySelector(`#pageGrid [data-page-key="${pageKey}"] .bm-split-toggle button`);
+}
+
+function logText() {
+  $('logBox').open = true;
+  $('logBox').dispatchEvent(new Event('toggle'));
+  return $('logText').textContent;
+}
+
+/** ZIP の中のファイルの名前（目録から読む）。 */
+async function zipNames(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const view = new DataView(bytes.buffer);
+  const end = bytes.length - 22;
+  let at = view.getUint32(end + 16, true);
+  const names = [];
+  for (let k = 0; k < view.getUint16(end + 10, true); k++) {
+    const length = view.getUint16(at + 28, true);
+    names.push(decoder.decode(bytes.subarray(at + 46, at + 46 + length)));
+    at += 46 + length;
+  }
+  return names;
+}
+
+describe('分ける', () => {
+  it('上限に収まれば分けず、上限を超えたら章の見出しで分ける位置を提案する（表紙は最初のファイルに）', async () => {
+    // 上限を超えるときだけ分ける。
+    change($('splitMode'), 'limit');
+    // 上限の既定は 100 MB・頁数は上限なし。
+    expect($('splitMegabytes').value).toBe('100');
+    expect($('splitPages').value).toBe('');
+    await addChapters();
+    expect(splitMarks()).toEqual([]);
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（上限に収まります）');
+    expect($('splitParts').children).toHaveLength(0);
+    // 候補には理由を添える。
+    expect(document.querySelector('[data-page-key="f2:2"] .bm-split-reason').textContent).toBe('見出し「第2章 壁」');
+    // 先頭の頁では分けられない。
+    expect(splitButton('f1:0')).toBeNull();
+
+    change($('splitMegabytes'), '25');
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル', '5 頁:ここから 3 つ目のファイル']);
+    expect($('splitNote').textContent).toContain('3 ファイルに分けます（上限に収まるように提案した位置で）');
+    expect([...$('splitParts').children].map((item) => item.textContent)).toEqual([
+      '本_1.pdf: 表紙〜2 頁（4 頁・約 20.0 MB）',
+      '本_2_第2章 壁.pdf: 3 頁〜4 頁（2 頁・約 20.0 MB・見出し「第2章 壁」から）',
+      '本_3_第3章 床.pdf: 5 頁〜6 頁（2 頁・約 20.0 MB・見出し「第3章 床」から）',
+    ]);
+    // 上限は覚えておく（次に開いたときも同じ上限）。
+    expect(JSON.parse(localStorage.getItem('pdf-book-merger:split-limits'))).toEqual({ megabytes: 25, pages: null, mode: 'limit' });
+
+    // 頁数の上限も守る（表紙の後ろでは分けない）。
+    change($('splitPages'), '3');
+    expect(splitMarks()).toEqual(['2 頁:ここから 2 つ目のファイル', '3 頁:ここから 3 つ目のファイル', '5 頁:ここから 4 つ目のファイル']);
+
+    // 名前を変えると、分けたファイルの名前も変わる。
+    $('outputName').value = '犬.pdf';
+    $('outputName').dispatchEvent(new Event('input'));
+    expect($('splitParts').textContent).toContain('犬_4_第3章 床.pdf: 5 頁〜6 頁');
+
+    // 上限を空にすると分けない。
+    change($('splitMegabytes'), '');
+    change($('splitPages'), '');
+    expect(splitMarks()).toEqual([]);
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（上限がありません）');
+  });
+
+  it('既定では区切りごとに分け、分けたファイルの名前に区切りの名前を添える', async () => {
+    expect($('splitMode').value).toBe('breaks');
+    await addChapters();
+    // 上限（100 MB）に収まっても、章の見出しで分ける。
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル', '5 頁:ここから 3 つ目のファイル']);
+    expect($('splitNote').textContent).toContain('3 ファイルに分けます（区切りごとに。上限を超えるところは、さらに分けて）');
+    expect([...$('splitParts').children].map((item) => item.textContent.replace(/:.*$/, ''))).toEqual([
+      '本_1.pdf',
+      '本_2_第2章 壁.pdf',
+      '本_3_第3章 床.pdf',
+    ]);
+    // 区切りのまとまりが上限を超えれば、さらに分ける。
+    change($('splitMegabytes'), '15');
+    expect(splitMarks()).toHaveLength(5);
+    // 分け方は覚えておく。
+    change($('splitMode'), 'limit');
+    expect(JSON.parse(localStorage.getItem('pdf-book-merger:split-limits')).mode).toBe('limit');
+    expect(logText()).toContain('分け方を「上限を超えるときだけ分ける」にしました');
+    change($('splitMode'), 'breaks');
+    expect(logText()).toContain('分け方を「区切りごとに分ける」にしました');
+  });
+
+  it('最初の頁が章の扉なら、最初のファイルの名前にもその見出しを添える', async () => {
+    drop([
+      file('本.pdf', pdf([page('h1', 1, { heading: '第1章 基礎' }), page('h2', 2), page('h3', 3, { heading: '第2章 壁' }), page('h4', 4)])),
+    ]);
+    await settled(1);
+    expect([...$('splitParts').children].map((item) => item.textContent.replace(/:.*$/, ''))).toEqual([
+      '本_1_第1章 基礎.pdf',
+      '本_2_第2章 壁.pdf',
+    ]);
+  });
+
+  it('区切りで分けると 1 頁だけのファイルになるときは分けず、そう知らせる', async () => {
+    drop([file('本.pdf', pdf([page('h1', 1), page('h2', 2, { heading: '第9章 付録' })]))]);
+    await settled(1);
+    expect(splitMarks()).toEqual([]);
+    expect($('splitNote').textContent).toContain('1 頁だけのファイルになる区切り');
+  });
+
+  it('区切りが無ければ 1 ファイルにまとめ、そう知らせる', async () => {
+    drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（区切りが見つかりません。上限にも収まります）');
+    change($('splitMegabytes'), '');
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（区切りが見つかりません）');
+  });
+
+  it('分けて取り込んだ本（頁番号が通っているファイル）は、ファイルの境目ごとに分け、括弧の中の名前を添える', async () => {
+    // 施工ガイドブックのように、本の目次のまとまりごとに分けてあるファイル。
+    const range = (prefix, from, to) =>
+      Array.from({ length: to - from + 1 }, (_, i) => page(`${prefix}${from + i}`, from + i, { mb: 1 }));
+    drop([
+      file('ガイドブック14（表紙・目次）.pdf', pdf(range('a', -1, 3))),
+      file('ガイドブック14(告示1460号第1号ハ).pdf', pdf(range('b', 4, 6))),
+      file('ガイドブック14（柱脚金物）.pdf', pdf(range('c', 7, 8))),
+      file('ガイドブック14（根太受け）.pdf', pdf(range('d', 9, 9))),
+    ]);
+    await settled(4);
+    // 「表紙・目次」は名前から先頭に置く。表紙だけでなく目次もまとまっているので
+    // （4 頁より多ければ）、本文とは別のファイルにする。
+    expect(gridLabels()).toEqual(['表紙', '表紙', '表紙', '表紙', '表紙', '4 頁', '5 頁', '6 頁', '7 頁', '8 頁', '9 頁']);
+    expect(splitMarks()).toEqual([
+      '4 頁:ここから 2 つ目のファイル',
+      '7 頁:ここから 3 つ目のファイル',
+      '9 頁:ここから 4 つ目のファイル',
+    ]);
+    expect([...$('splitParts').children].map((item) => item.textContent.replace(/:.*$/, ''))).toEqual([
+      'ガイドブック_1_表紙・目次.pdf',
+      'ガイドブック_2_告示1460号第1号ハ.pdf',
+      'ガイドブック_3_柱脚金物.pdf',
+      'ガイドブック_4_根太受け.pdf',
+    ]);
+  });
+
+  it('上限の欄に数でないものを入れたら、知らせて元に戻す', async () => {
+    // 上限を超えるときだけ分ける。
+    change($('splitMode'), 'limit');
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    change($('splitMegabytes'), 'たくさん');
+    expect($('message').textContent).toBe('上限は0 より大きい数で入れてください（空なら上限なし）。');
+    expect($('splitMegabytes').value).toBe('25');
+    change($('splitPages'), '2.5');
+    expect($('message').textContent).toBe('上限は1 以上の整数で入れてください（空なら上限なし）。');
+    expect($('splitPages').value).toBe('');
+    change($('splitPages'), '-1');
+    expect($('message').textContent).toContain('1 以上の整数');
+    expect(splitMarks()).toHaveLength(2);
+    // 日本語入力のまま打った全角の数字も受ける。
+    change($('splitMegabytes'), '４５');
+    expect($('message').textContent).toBe('');
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル']);
+  });
+
+  it('覚えておいた上限で開き、覚えた値が壊れていれば既定の上限にする', async () => {
+    const reopen = async () => {
+      vi.resetModules();
+      installPage();
+      await import('../src/pdf-book-merger/main.js');
+      await mocks.prepare();
+    };
+    localStorage.setItem('pdf-book-merger:split-limits', JSON.stringify({ megabytes: 30, pages: -1, mode: 'limit' }));
+    await reopen();
+    expect([$('splitMegabytes').value, $('splitPages').value, $('splitMode').value]).toEqual(['30', '', 'limit']);
+    localStorage.setItem('pdf-book-merger:split-limits', JSON.stringify({ megabytes: 30, mode: 'すべて' }));
+    await reopen();
+    expect($('splitMode').value).toBe('breaks');
+
+    localStorage.setItem('pdf-book-merger:split-limits', JSON.stringify({ megabytes: null, pages: 300 }));
+    await reopen();
+    expect([$('splitMegabytes').value, $('splitPages').value]).toEqual(['', '300']);
+
+    localStorage.setItem('pdf-book-merger:split-limits', '{');
+    await reopen();
+    expect([$('splitMegabytes').value, $('splitPages').value]).toEqual(['100', '']);
+
+    // 保存を禁じたブラウザでも、既定の上限で使え、変えた上限もこの画面の間は効く。
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    await reopen();
+    expect($('splitMegabytes').value).toBe('100');
+    get.mockRestore();
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    expect(splitMarks()).toHaveLength(2);
+    set.mockRestore();
+  });
+
+  it('分ける位置を頁ごとに足したり外したりでき、自動の提案に戻せる', async () => {
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    expect($('splitAutoBtn').hidden).toBe(true);
+
+    splitButton('f2:2').click();
+    expect(splitMarks()).toEqual(['5 頁:ここから 2 つ目のファイル']);
+    expect($('splitAutoBtn').hidden).toBe(false);
+    expect($('splitNote').textContent).toContain('2 ファイルに分けます（手で決めた位置で）');
+    // 上限を超えるファイルは知らせる。
+    expect($('splitParts').firstElementChild.className).toBe('bm-part warn');
+    expect($('splitParts').firstElementChild.textContent).toContain('上限を超えています');
+
+    splitButton('f2:1').click();
+    expect(splitMarks()).toEqual(['2 頁:ここから 2 つ目のファイル', '5 頁:ここから 3 つ目のファイル']);
+    expect(splitButton('f2:1').textContent).toBe('分けない');
+    // 番号を直して並びが変わっても、手で決めた位置は頁に付いていく。
+    change(document.querySelector('[data-page-key="f2:1"] .bm-page-number'), '5.5');
+    expect(gridLabels()).toEqual(['表紙', '表紙', '1 頁', '-2 頁', '3 頁', '4 頁', '5 頁', '5と6の間 頁', '6 頁']);
+    expect(splitMarks()).toEqual(['5 頁:ここから 2 つ目のファイル', '5と6の間 頁:ここから 3 つ目のファイル']);
+
+    splitButton('f2:1').click();
+    splitButton('f2:4').click();
+    expect(splitMarks()).toEqual([]);
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（手で分ける位置を外しました）');
+    expect(logText()).toContain('3 頁の前で分けるのをやめました');
+    expect(logText()).toContain('2 頁の前で分けます');
+    expect(logText()).toContain('5と6の間 頁の前で分けるのをやめました');
+
+    // 自動の提案は、いまの並び（直した番号で 2 頁が 5 頁の後ろに来た）で考え直す。
+    $('splitAutoBtn').click();
+    expect(splitMarks()).toEqual([
+      '3 頁:ここから 2 つ目のファイル',
+      '5 頁:ここから 3 つ目のファイル',
+      '6 頁:ここから 4 つ目のファイル',
+    ]);
+    expect($('splitAutoBtn').hidden).toBe(true);
+    expect(logText()).toContain('分ける位置を、自動の提案に戻しました');
+  });
+
+  it('ファイルを足したり外したりしたら、手で決めた分ける位置を捨てて、自動の提案に戻す', async () => {
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    splitButton('f2:2').click();
+    expect($('splitAutoBtn').hidden).toBe(false);
+
+    drop([file('本_付録.pdf', pdf([page('x7', 7, { mb: 10 })]))]);
+    await settled(3);
+    expect($('splitAutoBtn').hidden).toBe(true);
+    expect(logText()).toContain('ファイルが変わったので、分ける位置を自動の提案に戻しました');
+
+    splitButton('f2:2').click();
+    fileItem('本_付録.pdf').querySelector('.danger').click();
+    expect($('splitAutoBtn').hidden).toBe(true);
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル', '5 頁:ここから 3 つ目のファイル']);
+
+    // 読めなかったファイル（本に入っていない）を外しても、手で決めた位置は残す。
+    splitButton('f2:2').click();
+    drop([file('壊れた.pdf', encoder.encode('not a pdf'))]);
+    await settled(3);
+    splitButton('f2:2').click();
+    fileItem('壊れた.pdf').querySelector('.danger').click();
+    expect($('splitAutoBtn').hidden).toBe(false);
+  });
+
+  it('結合した大きさが上限を超えたファイルは、検証の結果で知らせる', async () => {
+    // 分ける位置は見積もりで決めるので、結合したら大きくなることがある（共有していた書体など）。
+    const merge = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementation(async (options) => ({
+      ...(await merge(options)),
+      size: (options.title === '本_1' ? 30 : 20) * 1024 * 1024,
+    }));
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    expect($('verifyResult').textContent).toContain('本_1.pdf は 4 頁・30.0 MB で、上限を超えました。');
+    expect($('verifyResult').textContent).not.toContain('本_2_第2章 壁.pdf は');
+    // 分け方を変えても分ける位置が変わらなければ、結合した PDF は残し、知らせを出し直す。
+    change($('splitMode'), 'limit');
+    expect($('zipBtn').hidden).toBe(false);
+    expect($('verifyResult').textContent).toContain('上限を超えました');
+    // 上限を変えても分ける位置が変わらなければ、結合した PDF は残し、知らせを出し直す。
+    change($('splitMegabytes'), '３０．５');
+    expect(splitMarks()).toHaveLength(2);
+    expect($('zipBtn').hidden).toBe(false);
+    expect($('verifyResult').textContent).not.toContain('上限を超えました');
+  });
+
+  it('何百にも分けても、同時に書き出すのは 8 ファイルずつにする', async () => {
+    const stash = await fakeStash();
+    const long = Array.from({ length: 10 }, (_, i) => page(`l${i + 1}`, i + 1));
+    drop([file('長い本.pdf', pdf(long))]);
+    await settled(1);
+    change($('splitPages'), '1');
+    expect(splitMarks()).toHaveLength(9);
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    // 8 ファイルぶんの書き口を開いて書き終えてから、残りの 2 ファイルを書く。
+    const groups = mocks.writeMergedPdf.mock.calls.map(([options]) => options.title);
+    expect(groups).toEqual(Array.from({ length: 10 }, (_, i) => `長い本_${String(i + 1).padStart(2, '0')}`));
+    expect([...stash.files.keys()].filter((name) => name.startsWith('merged')).sort()).toEqual(
+      Array.from({ length: 10 }, (_, i) => `merged-1-${i + 1}.pdf`).sort()
+    );
+    expect($('verifyResult').textContent).toContain('10 ファイル・計 10 頁すべてが');
+    // pdf.js の worker は、最後のファイルを検証してから止める。
+    expect(mocks.releasePdfWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it('すべて「先頭に置く」にしてつなぐときも、ファイルの境目で分ける', async () => {
+    // 上限を超えるときだけ分ける。
+    change($('splitMode'), 'limit');
+    const chapter = (prefix) => [1, 2, 3, 4].map((n) => page(`${prefix}${n}`, null, { mb: 30 }));
+    drop([file('1章.pdf', pdf(chapter('a'))), file('2章.pdf', pdf(chapter('b'))), file('3章.pdf', pdf(chapter('c')))]);
+    await settled(3);
+    change($('bulkRole'), 'front');
+    change($('splitMegabytes'), '250');
+    expect(splitMarks()).toEqual(['表紙:ここから 2 つ目のファイル']);
+    expect(document.querySelector('[data-page-key="f3:0"]').classList.contains('split-start')).toBe(true);
+    // 区切りごとに分けるときも、ファイルの並びのままつなぐなら、ファイルの境目では
+    // 分けない（上限を超えるところだけ分ける）。
+    change($('splitMode'), 'breaks');
+    expect(splitMarks()).toEqual(['表紙:ここから 2 つ目のファイル']);
+    expect(document.querySelector('[data-page-key="f3:0"]').classList.contains('split-start')).toBe(true);
+    change($('splitMegabytes'), '');
+    expect(splitMarks()).toEqual([]);
+    expect($('splitNote').textContent).toContain('ファイルの並びのままつなぐときのファイルの境目');
+  });
+
+  it('しおりの項目と、続けてつないだファイルの境目も、分ける位置の候補にする', async () => {
+    // 上限を超えるときだけ分ける。
+    change($('splitMode'), 'limit');
+    const first = [page('a1', 1, { mb: 10 }), page('a2', 2, { mb: 10 }), page('a3', 3, { mb: 10 })];
+    const second = [page('b4', 4, { mb: 10 }), page('b5', 5, { mb: 10 }), page('b6', 6, { mb: 10 })];
+    drop([file('上巻.pdf', pdf(first, { outline: [[0, '序章'], [1, '第1章 基礎']] })), file('下巻.pdf', pdf(second))]);
+    await settled(2);
+    expect([...document.querySelectorAll('#pageGrid .bm-split-reason')].map((r) => r.textContent)).toEqual([
+      'しおり「第1章 基礎」',
+      'ファイルの境目「下巻.pdf」',
+    ]);
+    change($('splitMegabytes'), '40');
+    expect(splitMarks()).toEqual(['4 頁:ここから 2 つ目のファイル']);
+    // 最初のファイルの名前には、最初の頁のしおりの名前を添える。
+    expect([...$('splitParts').children].map((item) => item.textContent.replace(/:.*$/, ''))).toEqual([
+      '結合_1_序章.pdf',
+      '結合_2_下巻.pdf',
+    ]);
+    change($('splitMegabytes'), '20');
+    expect(splitMarks()).toEqual(['2 頁:ここから 2 つ目のファイル', '4 頁:ここから 3 つ目のファイル', '6 頁:ここから 4 つ目のファイル']);
+  });
+
+  it('分けたファイルごとに結合して検証し、1 つずつか ZIP にまとめてダウンロードできる', async () => {
+    await addChapters();
+    change($('splitMegabytes'), '25');
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+
+    const calls = mocks.mergePdf.mock.calls.map(([options]) => options);
+    expect(calls.map((options) => options.order.map((entry) => entry.pageKey))).toEqual([
+      ['f1:0', 'f1:1', 'f2:0', 'f2:1'],
+      ['f2:2', 'f2:3'],
+      ['f2:4', 'f2:5'],
+    ]);
+    expect(calls.map((options) => options.title)).toEqual(['本_1', '本_2_第2章 壁', '本_3_第3章 床']);
+    // 分けたファイルにも、本の頁番号の頁ラベルを付ける。
+    const { pageLabelTexts } = await import('../src/pdf-book-merger/ordering.js');
+    expect(calls.map((options) => pageLabelTexts(options.labels, options.order.length))).toEqual([
+      ['表紙1', '表紙2', '1', '2'],
+      ['3', '4'],
+      ['5', '6'],
+    ]);
+    expect(calls.every((options) => options.infoFrom === 'f2')).toBe(true);
+
+    expect($('verifyResult').className).toBe('bm-verify ok');
+    expect($('verifyResult').textContent).toContain('検証できました。3 ファイル・計 8 頁すべてが、元の頁と大きさ・文字情報・画像まで一致しています。');
+    expect($('verifyResult').textContent).toContain('本_2_第2章 壁.pdf: 2 頁。文字情報（検索できる文字）のある頁: 2 / 2 頁。');
+    expect($('verifyResult').textContent).toContain('タイトル: 本_3_第3章 床');
+    expect(logText()).toContain('8 頁を 3 ファイルに分けて');
+    expect(logText()).toContain('「本_2_第2章 壁.pdf」を検証しました（2 頁すべて一致）');
+    expect(logText()).toContain('すべて結合して検証しました（3 ファイル');
+
+    // 1 冊ぶんのダウンロードの代わりに、ZIP と、ファイルごとのダウンロードを出す。
+    expect($('downloadBtn').hidden).toBe(true);
+    expect($('zipBtn').hidden).toBe(false);
+    const rows = [...$('partDownloads').children];
+    expect(rows.map((row) => row.querySelector('span').textContent.replace(/・.*$/, ''))).toEqual([
+      '本_1.pdf（4 頁',
+      '本_2_第2章 壁.pdf（2 頁',
+      '本_3_第3章 床.pdf（2 頁',
+    ]);
+
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    rows[1].querySelector('button').click();
+    await flush();
+    const single = URL.createObjectURL.mock.calls.at(-1)[0];
+    expect(specOf(new Uint8Array(await single.arrayBuffer())).title).toBe('本_2_第2章 壁');
+    expect(logText()).toContain('「本_2_第2章 壁.pdf」をダウンロードしました');
+
+    $('zipBtn').click();
+    await flush();
+    const zip = URL.createObjectURL.mock.calls.at(-1)[0];
+    expect(await zipNames(zip)).toEqual(['本_1.pdf', '本_2_第2章 壁.pdf', '本_3_第3章 床.pdf']);
+    expect(logText()).toContain('「本.zip」をダウンロードしました');
+    expect(click).toHaveBeenCalledTimes(2);
+
+    // 分ける位置を変えたら、結合した PDF は捨てる。
+    splitButton('f2:2').click();
+    expect($('downloadBtn').hidden).toBe(false);
+    expect($('downloadBtn').disabled).toBe(true);
+    expect($('zipBtn').hidden).toBe(true);
+    expect($('partDownloads').hidden).toBe(true);
+  });
+
+  it('iPhone では、ZIP も共有シートに渡す', async () => {
+    const userAgent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+    );
+    Object.assign(navigator, { share: vi.fn().mockResolvedValue(undefined), canShare: () => true });
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('zipBtn').hidden).toBe(false));
+
+    $('zipBtn').click();
+    await flush();
+    const [shared] = navigator.share.mock.calls[0][0].files;
+    expect([shared.name, shared.type]).toEqual(['本.zip', 'application/zip']);
+    expect(await zipNames(shared)).toEqual(['本_1.pdf', '本_2_第2章 壁.pdf', '本_3_第3章 床.pdf']);
+    expect(logText()).toContain('「本.zip」を共有シートに渡しました');
+    // 共有シートを閉じただけなら、何も記録しない。
+    navigator.share.mockRejectedValueOnce(Object.assign(new Error('cancel'), { name: 'AbortError' }));
+    $('zipBtn').click();
+    await flush();
+    expect(logText().match(/「本\.zip」を/g)).toHaveLength(3);
+    userAgent.mockRestore();
+    delete navigator.share;
+    delete navigator.canShare;
+  });
+
+  it('合計が 4 GB を超えるときは ZIP にまとめず、1 つずつのダウンロードを案内する', async () => {
+    const merge = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementation(async (options) => ({ ...(await merge(options)), size: 2 * 1024 ** 3 }));
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('zipBtn').hidden).toBe(false));
+
+    $('zipBtn').click();
+    await flush();
+    expect($('message').textContent).toContain('4 GB を超えるため、ZIP にまとめられません');
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('分けたファイルの食い違いは、どのファイルの何枚目かを挙げる', async () => {
+    const merge = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementation(async (options) => {
+      const result = await merge(options);
+      if (options.title !== '本_2_第2章 壁') return result;
+      const spec = specOf(result.bytes);
+      spec.pages[0].corrupt = true;
+      spec.pages.pop();
+      return { ...result, bytes: pdf(spec.pages, { title: spec.title, labels: spec.labels }) };
+    });
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+
+    expect($('verifyResult').className).toBe('bm-verify ng');
+    expect($('verifyResult').textContent).toContain('本_2_第2章 壁.pdf: 頁の数が違います（並べた数 2、結合した PDF 1）。');
+    expect($('verifyResult').textContent).toContain('本_2_第2章 壁.pdf の 1 枚目（3 頁）: 画像・描く中身が元の頁と違います');
+    expect(logText()).toContain('「本_2_第2章 壁.pdf」を検証して、食い違いが見つかりました');
+  });
+
+  it('分けたファイルの頁を読めなければ、どのファイルの何頁目かを出す', async () => {
+    const merge = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementation(async (options) => {
+      const result = await merge(options);
+      if (options.title !== '本_2_第2章 壁') return result;
+      const spec = specOf(result.bytes);
+      spec.pages[1].broken = '読めない頁';
+      return { ...result, bytes: pdf(spec.pages, { title: spec.title, labels: spec.labels }) };
+    });
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('message').textContent).toContain('「本_2_第2章 壁.pdf」の 2 頁目を検証できませんでした'));
+    expect($('zipBtn').hidden).toBe(true);
+    // 途中で失敗しても、pdf.js の worker は止める。
+    expect(mocks.releasePdfWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it('保存領域には分けたファイルごとに書き、結合し直したら前のものを、失敗したら書いたものを消す', async () => {
+    const stash = await fakeStash();
+    await addChapters();
+    change($('splitMegabytes'), '25');
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    const merged = () => [...stash.files.keys()].filter((name) => name.startsWith('merged')).sort();
+    expect(merged()).toEqual(['merged-1-1.pdf', 'merged-1-2.pdf', 'merged-1-3.pdf']);
+    // ZIP は、保存領域のファイルを読まずに並べる。
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    $('zipBtn').click();
+    await flush();
+    expect(await zipNames(URL.createObjectURL.mock.calls.at(-1)[0])).toEqual(['本_1.pdf', '本_2_第2章 壁.pdf', '本_3_第3章 床.pdf']);
+    expect(click).toHaveBeenCalled();
+
+    // 結合し直したら、書き終えてから前のものを消す。
+    splitButton('f2:4').click();
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    expect(merged()).toEqual(['merged-2-1.pdf', 'merged-2-2.pdf']);
+
+    // 2 つ目で失敗したら、1 つ目に書いたものも消し、前のものは残す。
+    const write = mocks.writeMergedPdf.getMockImplementation();
+    mocks.writeMergedPdf.mockImplementation(async (options) => {
+      if (options.title === '本_2_第2章 壁') throw new Error('「本_本文.pdf」は暗号化（パスワード保護）されているため結合できません。');
+      return write(options);
+    });
+    splitButton('f2:4').click();
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('message').textContent).toContain('暗号化'));
+    expect(stash.removed).toContain('merged-3-1.pdf');
+    expect(merged()).toEqual(['merged-2-1.pdf', 'merged-2-2.pdf']);
+  });
+
+  it('分けたファイルを結合している間に並びが変わったら、書いたものを消して捨てる', async () => {
+    const stash = await fakeStash();
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    const write = mocks.writeMergedPdf.getMockImplementation();
+    mocks.writeMergedPdf.mockImplementation(async (options) => {
+      if (options.title === '本_2_第2章 壁') await gate;
+      return write(options);
+    });
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect(mocks.writeMergedPdf).toHaveBeenCalledTimes(2));
+    splitButton('f2:4').click();
+    release();
+
+    await vi.waitFor(() => expect($('message').textContent).toContain('結合している間に並びか名前が変わりました'));
+    expect([...stash.files.keys()].filter((name) => name.startsWith('merged'))).toEqual([]);
+    expect(mocks.writeMergedPdf).toHaveBeenCalledTimes(3);
+  });
+
+  it('1 ファイルのときの頁の数の食い違いと、51 頁以上の食い違いをまとめて出す', async () => {
+    const many = Array.from({ length: 52 }, (_, i) => page(`m${i + 1}`, i + 1));
+    drop([file('長い本.pdf', pdf(many))]);
+    await settled(1);
+    const merge = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementation(async (options) => {
+      const result = await merge(options);
+      const spec = specOf(result.bytes);
+      spec.pages.pop();
+      spec.pages.forEach((p) => (p.corrupt = true));
+      return { ...result, bytes: pdf(spec.pages, { title: spec.title, labels: spec.labels }) };
+    });
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    expect($('verifyResult').textContent).toContain('頁の数が違います（並べた数 52、結合した PDF 51）。');
+    expect($('verifyResult').textContent).toContain('1 枚目（1 頁）: 画像・描く中身が元の頁と違います');
+    expect($('verifyResult').textContent).toContain('ほか 1 頁');
+  });
+
+  it('検証している間に分ける位置が変わったら、検証をやめて捨てる', async () => {
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    mocks.pageDigestsGate = gate;
+
+    mocks.closePdf.mockClear();
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect(logText()).toContain('検証: 「本_1.pdf」を読みました'));
+    splitButton('f2:4').click();
+    release();
+
+    await vi.waitFor(() => expect($('message').textContent).toContain('結合している間に並びか名前が変わりました'));
+    // 頁は読まずに閉じ、残りのファイルは検証しない。
+    expect(mocks.closePdf).toHaveBeenCalledTimes(1);
+    expect(logText()).not.toContain('「本_2_第2章 壁.pdf」を読みました');
   });
 });

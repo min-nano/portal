@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { isIOS, isWebKit } from '../src/pdf-book-merger/device.js';
-import { cropTransform, releaseCanvas } from '../src/pdf-book-merger/pdf-source.js';
+import { cropTransform, readOutline, releaseCanvas } from '../src/pdf-book-merger/pdf-source.js';
 
 const UA = {
   iphoneSafari:
@@ -79,5 +79,58 @@ describe('cropTransform', () => {
     const t = cropTransform(bottom, full);
     expect(apply(t, 0, 0.86 * 2060)).toEqual([0, 0]);
     expect(apply(t, 1456, 2060)).toEqual([1456, 288.4]);
+  });
+});
+
+describe('readOutline', () => {
+  /** pdf.js の文書の、しおりに関わるところだけの偽物。 */
+  const doc = (outline, named = {}, numPages = 100) => ({
+    numPages,
+    getOutline: async () => outline,
+    getDestination: async (name) => named[name] ?? null,
+    getPageIndex: async (ref) => {
+      if (ref?.num === undefined) throw new Error('Invalid pageIndex request.');
+      return ref.num - 100;
+    },
+  });
+
+  it('いちばん上の段の項目が指す頁を、頁の位置ごとに返す（名前付きの行き先・頁の参照・頁の番号）', async () => {
+    const titles = await readOutline(
+      doc(
+        [
+          { title: ' はじめに　序 ', dest: [{ num: 100, gen: 0 }, { name: 'XYZ' }], items: [{ title: '1.1', dest: [5] }] },
+          { title: '第1章', dest: 'chapter1' },
+          { title: '第2章\r構造', dest: [12, { name: 'Fit' }] },
+          { title: '同じ頁の 2 つ目', dest: [12] },
+          { title: '', dest: [20] },
+          { title: '行き先の無い項目', dest: null },
+          { title: '名前の分からない行き先', dest: 'missing' },
+          { title: '壊れた参照', dest: [{}] },
+        ],
+        { chapter1: [{ num: 104, gen: 0 }] }
+      )
+    );
+    expect([...titles]).toEqual([
+      [0, 'はじめに　序'],
+      [4, '第1章'],
+      [12, '第2章 構造'],
+    ]);
+  });
+
+  it('書名 1 つの下に章が並ぶしおりは、その下の段を使う', async () => {
+    const titles = await readOutline(
+      doc([{ title: '吾輩は猫である', dest: [0], items: [{ title: '一', dest: [0] }, { title: '二', dest: [9] }] }])
+    );
+    expect([...titles]).toEqual([
+      [0, '一'],
+      [9, '二'],
+    ]);
+  });
+
+  it('しおりが無い・読めない PDF は、空にする', async () => {
+    expect((await readOutline(doc(null))).size).toBe(0);
+    expect((await readOutline(doc([{ title: '書名だけ', dest: [0] }]))).size).toBe(1);
+    const broken = { numPages: 10, getOutline: () => Promise.reject(new Error('broken')) };
+    expect((await readOutline(broken)).size).toBe(0);
   });
 });

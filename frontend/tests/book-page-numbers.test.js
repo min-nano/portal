@@ -49,6 +49,22 @@ describe('normalizeDigits / groupLines', () => {
 
     expect(line.text).toBe('第3章 運動の法則 57');
   });
+
+  it('同じ位置に重ねて書いた同じ字は 1 つにする（InDesign の飾りで 2 度描いた字）', () => {
+    // プレセッターマニュアルの章の扉と欄外の頁番号。
+    const section = { text: 'Section', x0: 0.0952, x1: 0.2099, y: 0.1387, h: 0.0238 };
+    const number = { text: '２', x0: 0.2303, x1: 0.2639, y: 0.1387, h: 0.0238 };
+    const folio = { text: '011', x0: 0.8658, x1: 0.919, y: 0.9437, h: 0.0202 };
+    const lines = groupLines([section, number, section, number, folio, { ...folio }]);
+    expect(lines.map((line) => line.text)).toEqual(['Section 2', '011']);
+    // 位置が違えば、同じ字でも残す（隣り合う「1」と「1」も）。
+    const [row] = groupLines([folio, { ...folio, x0: 0.7, x1: 0.75 }]);
+    expect(row.text).toBe('011 011');
+    const one = { text: '1', x0: 0.5, x1: 0.507, y: 0.95, h: 0.02 };
+    expect(groupLines([one, { ...one, x0: 0.507, x1: 0.514 }])[0].text).toBe('11');
+    // 高さの違う同じ字（脚注の番号と大きな数字）も残す。
+    expect(groupLines([one, { ...one, h: 0.04 }])[0].text).toBe('11');
+  });
 });
 
 describe('pageNumberCandidates', () => {

@@ -6,7 +6,7 @@
     <span class="bm-help">
       <button type="button" class="bm-help-btn" aria-label="このツールの説明" aria-expanded="false" aria-controls="helpIntro">?</button>
       <span class="bm-help-body" id="helpIntro">
-        選んだ PDF を 1 つの PDF にまとめます。ファイルの並び（追加順・名前順・更新日時順）のままつなぐことも（配置を「先頭に置く」にそろえる）、裁断した本を分けてスキャンした PDF（奇数頁の束・偶数頁の束・表紙・裏表紙など）を、頁番号を読み取って 1 冊ぶんの順に並べることもできます。頁の抜け・重なりと、スキャンの傾き・ずれ・すじを確かめてから結合し、結合した PDF も元の頁と突き合わせて検証します。頁番号の読み取り・検査・結合はすべてこの端末の中で行い、Drive のファイルもこの端末が Drive から直接読みます。サーチャブル PDF の文字情報はそのまま残ります。
+        選んだ PDF を 1 つの PDF にまとめます。ファイルの並び（追加順・名前順・更新日時順）のままつなぐことも（配置を「先頭に置く」にそろえる）、裁断した本を分けてスキャンした PDF（奇数頁の束・偶数頁の束・表紙・裏表紙など）を、頁番号を読み取って 1 冊ぶんの順に並べることもできます。頁の抜け・重なりと、スキャンの傾き・ずれ・すじを確かめてから結合し、結合した PDF も元の頁と突き合わせて検証します。大きすぎる PDF は、章の区切りなどでいくつかのファイルに分けられます（1 つずつか、ZIP にまとめて保存）。頁番号の読み取り・検査・結合はすべてこの端末の中で行い、Drive のファイルもこの端末が Drive から直接読みます。サーチャブル PDF の文字情報はそのまま残ります。
       </span>
     </span>
   </h2>
@@ -84,7 +84,36 @@
 </portal-section>
 
 <portal-section class="card bm-step" id="outputSection" hidden>
-  <h3 slot="title">3. 結合と検証</h3>
+  <h3 slot="title" class="bm-help-host">
+    3. 分割・結合と検証
+    <span class="bm-help">
+      <button type="button" class="bm-help-btn" aria-label="ファイルの分け方" aria-expanded="false" aria-controls="helpSplit">?</button>
+      <span class="bm-help-body" id="helpSplit">
+        大きすぎる PDF は、スマートフォンで開くのが重くなったり、取り込んだサービスで後ろの方の中身が検索の対象に入らなかったりします。しおり（目次）・章の見出し（「第 3 章」「Section 2」など）・ファイルの境目を区切りとして、区切りごとに分けます（1 ファイルの上限を超えるところは、さらに分けます）。分け方を「上限を超えるときだけ分ける」にすると、上限を超えるときだけ、区切りを選んで分けます。分けたファイルの名前には、区切りの名前（しおり・見出し・ファイルの名前の括弧の中）を添えます。表紙は最初のファイルに、裏表紙は最後のファイルに付けます。分ける位置は、上の頁の一覧の「ここから分ける」で足したり外したりできます。分けたファイルにも、本の頁番号の頁ラベルが付きます。
+      </span>
+    </span>
+  </h3>
+  <div class="bm-list-tools">
+    <label class="bm-inline">
+      分け方
+      <select id="splitMode">
+        <option value="breaks">区切りごとに分ける</option>
+        <option value="limit">上限を超えるときだけ分ける</option>
+      </select>
+    </label>
+    <label class="bm-inline">
+      1 ファイルの上限
+      <input type="text" id="splitMegabytes" inputmode="decimal" size="5" placeholder="なし" aria-label="1 ファイルの上限（MB）">
+      MB
+    </label>
+    <label class="bm-inline">
+      <input type="text" id="splitPages" inputmode="numeric" size="5" placeholder="なし" aria-label="1 ファイルの上限（頁）">
+      頁
+    </label>
+    <button type="button" id="splitAutoBtn" class="secondary" hidden>自動の提案に戻す</button>
+  </div>
+  <p id="splitNote" class="hint"></p>
+  <ol id="splitParts" class="bm-parts"></ol>
   <div class="field">
     <label for="outputName">ファイル名</label>
     <div class="field-row">
@@ -97,12 +126,15 @@
   <div id="verifyResult" class="bm-verify" hidden></div>
   <div class="bm-actions">
     <button type="button" id="downloadBtn" disabled>ダウンロード</button>
+    <button type="button" id="zipBtn" hidden>ZIP にまとめてダウンロード</button>
   </div>
+  <ol id="partDownloads" class="bm-parts" hidden></ol>
   <p class="hint">
     結合した PDF は、この端末に保存します。iPhone・iPad では共有シートが開くので、
     「"ファイル" に保存」を選ぶか、Google ドライブのアプリを選んでアップロードしてください。
     256 MB を超える PDF は、共有シートでは渡せないので、ダウンロードの確認が出たら
     「ダウンロード」を押してください（「ファイル」アプリの「ダウンロード」フォルダに保存されます）。
+    いくつかに分けたときは、1 つずつ保存するか、ZIP にまとめて保存できます。
   </p>
 </portal-section>
 
