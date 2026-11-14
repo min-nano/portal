@@ -26,7 +26,10 @@ const MIN_CONFIDENCE = 60;
 
 let schedulerPromise = null;
 
-/** これまでに読んだかたまりの数（記録に出す。読み取りの手間はこれに比例する）。 */
+/**
+ * これまでに読んだかたまりの数（記録に出す。読み取りの手間はこれに比例する）。
+ * 濃い字だけを残して読み直したかたまりは、2 つと数える。
+ */
 let boxesRead = 0;
 
 /** これまでに読んだかたまりの数。 */
@@ -145,16 +148,63 @@ const READ_HEIGHTS = [34, 20, 54];
 /** 頁番号として意味のある読み（数字を含み、数字と飾りだけ）。 */
 const NUMERIC = /^[-()]*\d[-()\d]*$/;
 
+/** 濃い字の色とみなす、白でない画素の濃い方からの割合（ごみの点 1 つに引きずられない）。 */
+const DARK_SHARE = 0.02;
+
+/**
+ * 画素（RGBA）のうち、濃い字の色と白の真ん中より薄いものを白にする（濃い字だけを
+ * 残す）。濃い字の色は、白でない画素を濃い順に並べて DARK_SHARE のところの色。
+ * 頁番号の両側に灰色の飾り（「● 2 ●」の丸）があると、Tesseract は字を読めても
+ * 自信を 0 にする（防水施工マニュアルの 1 章の「● 2 ●」〜「● 6 ●」を読み落とした）。
+ * 飾りを消して読み直すと、自信 95 ほどで読める。
+ *
+ * @param {Uint8ClampedArray} data getImageData の data（書き換える）
+ */
+export function keepDarkest(data) {
+  const gray = toGray(data);
+  const cut = darkCut(gray);
+  gray.forEach((value, j) => {
+    if (value > cut) data.fill(255, j * 4, j * 4 + 3);
+  });
+}
+
+/** 濃い字だけを残すときの境目（これより薄い画素を白にする）。白しか無ければ 255。 */
+function darkCut(gray) {
+  const ink = gray.filter((value) => value < 250).sort();
+  if (!ink.length) return 255;
+  return (ink[Math.floor((ink.length - 1) * DARK_SHARE)] + 255) / 2;
+}
+
+/** 読み直すのは、薄いインクがこれだけを占めるかたまり（灰色の飾りのあるもの）だけ。 */
+const LIGHT_SHARE = 0.2;
+
+/**
+ * かたまりに、濃い字より薄いインク（灰色の飾り）がまとまってあるか（帯の画素で）。
+ * 罫線・ごみのように一様に濃いかたまりは読み直さない（読み直すと、罫線が濃い
+ * 縦棒だけになって「1」と読めてしまう）。
+ */
+export function hasLightInk({ width, gray }, box) {
+  const values = [];
+  for (let y = box.y0; y < box.y1; y++) {
+    for (let x = box.x0; x < box.x1; x++) values.push(gray[y * width + x]);
+  }
+  const cut = darkCut(values);
+  const ink = values.filter((value) => value < 250);
+  return ink.length > 0 && ink.filter((value) => value > cut).length >= ink.length * LIGHT_SHARE;
+}
+
 /**
  * かたまりを、周りに字の高さぶんの白い余白を付けて、指定の字の高さで描き出す。
+ * dark なら、濃い字だけを残す（keepDarkest）。
  */
-function cropOf(canvas, box, height) {
+function cropOf(canvas, box, height, dark) {
   const h = box.y1 - box.y0;
   const scale = height / h;
   const crop = document.createElement('canvas');
   crop.width = Math.max(1, Math.round((box.x1 - box.x0 + 2 * h) * scale));
   crop.height = Math.max(1, Math.round(3 * h * scale));
-  const context = crop.getContext('2d');
+  // 濃い字だけを残すときは画素を読み出すので、そのつもりで用意させる。
+  const context = crop.getContext('2d', { willReadFrequently: dark });
   context.fillStyle = '#fff';
   context.fillRect(0, 0, crop.width, crop.height);
   context.drawImage(
@@ -168,18 +218,39 @@ function cropOf(canvas, box, height) {
     (box.x1 - box.x0) * scale,
     h * scale
   );
+  if (dark) {
+    const pixels = context.getImageData(0, 0, crop.width, crop.height);
+    keepDarkest(pixels.data);
+    context.putImageData(pixels, 0, 0);
+  }
   return crop;
 }
 
 /**
  * 1 つのかたまりを 3 通りの大きさで読み、いちばん票（自信の合計）の多い読みを返す。
+ * 数字と読めたのに自信が足りず、灰色のインクがあるかたまり（hasLightInk）は、濃い
+ * 字だけを残して読み直す（頁番号の両側の灰色の飾りなど。keepDarkest）。手間が
+ * 増えるのは、そうしたかたまりだけ。
  *
  * @returns {Promise<string>} 読めなければ空
  */
-async function readBox(scheduler, canvas, box) {
+async function readBox(scheduler, canvas, strip, box) {
+  const { best, unsure } = await voteBox(scheduler, canvas, box, false);
+  if (best || !unsure || !hasLightInk(strip, box)) return best;
+  boxesRead++;
+  return (await voteBox(scheduler, canvas, box, true)).best;
+}
+
+/**
+ * 3 通りの大きさで読んで、票を数える。best は読み（読めなければ空）、unsure は数字と
+ * して読めたのに自信が足りなかった読みがあったか（濃い字だけを残して読み直す）。
+ * 数字として読めないかたまり（和文・罫線・ごみ）は読み直さない（手間が増え、
+ * 罫線を「1」と読み違えることもあるので）。
+ */
+async function voteBox(scheduler, canvas, box, dark) {
   const results = await Promise.all(
     READ_HEIGHTS.map(async (height) => {
-      const crop = cropOf(canvas, box, height);
+      const crop = cropOf(canvas, box, height, dark);
       try {
         return await scheduler.addJob('recognize', crop);
       } finally {
@@ -188,14 +259,19 @@ async function readBox(scheduler, canvas, box) {
     })
   );
   const votes = new Map();
+  let unsure = false;
   for (const { data } of results) {
     const text = (data.text || '').replace(/\s+/g, '');
-    if (!NUMERIC.test(text) || data.confidence < MIN_CONFIDENCE) continue;
+    if (!NUMERIC.test(text)) continue;
+    if (data.confidence < MIN_CONFIDENCE) {
+      unsure = true;
+      continue;
+    }
     votes.set(text, (votes.get(text) || 0) + data.confidence);
   }
   let best = '';
   for (const [text, score] of votes) if (!best || score > votes.get(best)) best = text;
-  return best;
+  return { best, unsure };
 }
 
 /**
@@ -214,10 +290,11 @@ export async function readStrip(strip) {
   const width = canvas.width;
   const height = canvas.height;
   const pixels = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, width, height);
-  const boxes = shortTextBoxes({ width, height, gray: toGray(pixels.data) });
+  const image = { width, height, gray: toGray(pixels.data) };
+  const boxes = shortTextBoxes(image);
   boxesRead += boxes.length;
 
-  const texts = await Promise.all(boxes.map((box) => readBox(scheduler, canvas, box)));
+  const texts = await Promise.all(boxes.map((box) => readBox(scheduler, canvas, image, box)));
   const items = [];
   texts.forEach((text, i) => {
     if (!text) return;
