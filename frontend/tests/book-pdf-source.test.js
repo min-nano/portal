@@ -84,7 +84,8 @@ describe('cropTransform', () => {
 
 describe('readOutline', () => {
   /** pdf.js の文書の、しおりに関わるところだけの偽物。 */
-  const doc = (outline, named = {}) => ({
+  const doc = (outline, named = {}, numPages = 100) => ({
+    numPages,
     getOutline: async () => outline,
     getDestination: async (name) => named[name] ?? null,
     getPageIndex: async (ref) => {
@@ -129,7 +130,7 @@ describe('readOutline', () => {
   it('しおりが無い・読めない PDF は、空にする', async () => {
     expect((await readOutline(doc(null))).size).toBe(0);
     expect((await readOutline(doc([{ title: '書名だけ', dest: [0] }]))).size).toBe(1);
-    const broken = { getOutline: () => Promise.reject(new Error('broken')) };
+    const broken = { numPages: 10, getOutline: () => Promise.reject(new Error('broken')) };
     expect((await readOutline(broken)).size).toBe(0);
   });
 });

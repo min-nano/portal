@@ -452,6 +452,9 @@ describe('ファイルを足して並べる', () => {
         created[kind] += record.addedNodes.length;
       }
     });
+    // 分ける位置が変わると、その頁のカードも作り直すので、ここでは分けない（区切りごとに
+    // 分けると、1 頁のファイルが 20 を超えたところで、細かすぎる境目として印を外す）。
+    change($('splitMode'), 'limit');
     const setItem = vi.spyOn(Storage.prototype, 'setItem');
     const count = 40;
     const names = Array.from({ length: count }, (_, i) => `${String(i + 1).padStart(4, '0')}.pdf`);
@@ -2028,6 +2031,8 @@ async function zipNames(blob) {
 
 describe('分ける', () => {
   it('上限に収まれば分けず、上限を超えたら章の見出しで分ける位置を提案する（表紙は最初のファイルに）', async () => {
+    // 上限を超えるときだけ分ける。
+    change($('splitMode'), 'limit');
     // 上限の既定は 100 MB・頁数は上限なし。
     expect($('splitMegabytes').value).toBe('100');
     expect($('splitPages').value).toBe('');
@@ -2045,11 +2050,11 @@ describe('分ける', () => {
     expect($('splitNote').textContent).toContain('3 ファイルに分けます（上限に収まるように提案した位置で）');
     expect([...$('splitParts').children].map((item) => item.textContent)).toEqual([
       '本_1.pdf: 表紙〜2 頁（4 頁・約 20.0 MB）',
-      '本_2.pdf: 3 頁〜4 頁（2 頁・約 20.0 MB・見出し「第2章 壁」から）',
-      '本_3.pdf: 5 頁〜6 頁（2 頁・約 20.0 MB・見出し「第3章 床」から）',
+      '本_2_第2章 壁.pdf: 3 頁〜4 頁（2 頁・約 20.0 MB・見出し「第2章 壁」から）',
+      '本_3_第3章 床.pdf: 5 頁〜6 頁（2 頁・約 20.0 MB・見出し「第3章 床」から）',
     ]);
     // 上限は覚えておく（次に開いたときも同じ上限）。
-    expect(JSON.parse(localStorage.getItem('pdf-book-merger:split-limits'))).toEqual({ megabytes: 25, pages: null });
+    expect(JSON.parse(localStorage.getItem('pdf-book-merger:split-limits'))).toEqual({ megabytes: 25, pages: null, mode: 'limit' });
 
     // 頁数の上限も守る（表紙の後ろでは分けない）。
     change($('splitPages'), '3');
@@ -2058,7 +2063,7 @@ describe('分ける', () => {
     // 名前を変えると、分けたファイルの名前も変わる。
     $('outputName').value = '犬.pdf';
     $('outputName').dispatchEvent(new Event('input'));
-    expect($('splitParts').textContent).toContain('犬_4.pdf: 5 頁〜6 頁');
+    expect($('splitParts').textContent).toContain('犬_4_第3章 床.pdf: 5 頁〜6 頁');
 
     // 上限を空にすると分けない。
     change($('splitMegabytes'), '');
@@ -2067,7 +2072,84 @@ describe('分ける', () => {
     expect($('splitNote').textContent).toContain('1 ファイルにまとめます（上限がありません）');
   });
 
+  it('既定では区切りごとに分け、分けたファイルの名前に区切りの名前を添える', async () => {
+    expect($('splitMode').value).toBe('breaks');
+    await addChapters();
+    // 上限（100 MB）に収まっても、章の見出しで分ける。
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル', '5 頁:ここから 3 つ目のファイル']);
+    expect($('splitNote').textContent).toContain('3 ファイルに分けます（区切りごとに。上限を超えるところは、さらに分けて）');
+    expect([...$('splitParts').children].map((item) => item.textContent.replace(/:.*$/, ''))).toEqual([
+      '本_1.pdf',
+      '本_2_第2章 壁.pdf',
+      '本_3_第3章 床.pdf',
+    ]);
+    // 区切りのまとまりが上限を超えれば、さらに分ける。
+    change($('splitMegabytes'), '15');
+    expect(splitMarks()).toHaveLength(5);
+    // 分け方は覚えておく。
+    change($('splitMode'), 'limit');
+    expect(JSON.parse(localStorage.getItem('pdf-book-merger:split-limits')).mode).toBe('limit');
+    expect(logText()).toContain('分け方を「上限を超えるときだけ分ける」にしました');
+    change($('splitMode'), 'breaks');
+    expect(logText()).toContain('分け方を「区切りごとに分ける」にしました');
+  });
+
+  it('最初の頁が章の扉なら、最初のファイルの名前にもその見出しを添える', async () => {
+    drop([
+      file('本.pdf', pdf([page('h1', 1, { heading: '第1章 基礎' }), page('h2', 2), page('h3', 3, { heading: '第2章 壁' }), page('h4', 4)])),
+    ]);
+    await settled(1);
+    expect([...$('splitParts').children].map((item) => item.textContent.replace(/:.*$/, ''))).toEqual([
+      '本_1_第1章 基礎.pdf',
+      '本_2_第2章 壁.pdf',
+    ]);
+  });
+
+  it('区切りで分けると 1 頁だけのファイルになるときは分けず、そう知らせる', async () => {
+    drop([file('本.pdf', pdf([page('h1', 1), page('h2', 2, { heading: '第9章 付録' })]))]);
+    await settled(1);
+    expect(splitMarks()).toEqual([]);
+    expect($('splitNote').textContent).toContain('1 頁だけのファイルになる区切り');
+  });
+
+  it('区切りが無ければ 1 ファイルにまとめ、そう知らせる', async () => {
+    drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（区切りが見つかりません。上限にも収まります）');
+    change($('splitMegabytes'), '');
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（区切りが見つかりません）');
+  });
+
+  it('分けて取り込んだ本（頁番号が通っているファイル）は、ファイルの境目ごとに分け、括弧の中の名前を添える', async () => {
+    // 施工ガイドブックのように、本の目次のまとまりごとに分けてあるファイル。
+    const range = (prefix, from, to) =>
+      Array.from({ length: to - from + 1 }, (_, i) => page(`${prefix}${from + i}`, from + i, { mb: 1 }));
+    drop([
+      file('ガイドブック14（表紙・目次）.pdf', pdf(range('a', -1, 3))),
+      file('ガイドブック14(告示1460号第1号ハ).pdf', pdf(range('b', 4, 6))),
+      file('ガイドブック14（柱脚金物）.pdf', pdf(range('c', 7, 8))),
+      file('ガイドブック14（根太受け）.pdf', pdf(range('d', 9, 9))),
+    ]);
+    await settled(4);
+    // 「表紙・目次」は名前から先頭に置く。表紙だけでなく目次もまとまっているので
+    // （4 頁より多ければ）、本文とは別のファイルにする。
+    expect(gridLabels()).toEqual(['表紙', '表紙', '表紙', '表紙', '表紙', '4 頁', '5 頁', '6 頁', '7 頁', '8 頁', '9 頁']);
+    expect(splitMarks()).toEqual([
+      '4 頁:ここから 2 つ目のファイル',
+      '7 頁:ここから 3 つ目のファイル',
+      '9 頁:ここから 4 つ目のファイル',
+    ]);
+    expect([...$('splitParts').children].map((item) => item.textContent.replace(/:.*$/, ''))).toEqual([
+      'ガイドブック_1_表紙・目次.pdf',
+      'ガイドブック_2_告示1460号第1号ハ.pdf',
+      'ガイドブック_3_柱脚金物.pdf',
+      'ガイドブック_4_根太受け.pdf',
+    ]);
+  });
+
   it('上限の欄に数でないものを入れたら、知らせて元に戻す', async () => {
+    // 上限を超えるときだけ分ける。
+    change($('splitMode'), 'limit');
     await addChapters();
     change($('splitMegabytes'), '25');
     change($('splitMegabytes'), 'たくさん');
@@ -2092,9 +2174,12 @@ describe('分ける', () => {
       await import('../src/pdf-book-merger/main.js');
       await mocks.prepare();
     };
-    localStorage.setItem('pdf-book-merger:split-limits', JSON.stringify({ megabytes: 30, pages: -1 }));
+    localStorage.setItem('pdf-book-merger:split-limits', JSON.stringify({ megabytes: 30, pages: -1, mode: 'limit' }));
     await reopen();
-    expect([$('splitMegabytes').value, $('splitPages').value]).toEqual(['30', '']);
+    expect([$('splitMegabytes').value, $('splitPages').value, $('splitMode').value]).toEqual(['30', '', 'limit']);
+    localStorage.setItem('pdf-book-merger:split-limits', JSON.stringify({ megabytes: 30, mode: 'すべて' }));
+    await reopen();
+    expect($('splitMode').value).toBe('breaks');
 
     localStorage.setItem('pdf-book-merger:split-limits', JSON.stringify({ megabytes: null, pages: 300 }));
     await reopen();
@@ -2197,7 +2282,11 @@ describe('分ける', () => {
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
     expect($('verifyResult').textContent).toContain('本_1.pdf は 4 頁・30.0 MB で、上限を超えました。');
-    expect($('verifyResult').textContent).not.toContain('本_2.pdf は');
+    expect($('verifyResult').textContent).not.toContain('本_2_第2章 壁.pdf は');
+    // 分け方を変えても分ける位置が変わらなければ、結合した PDF は残し、知らせを出し直す。
+    change($('splitMode'), 'limit');
+    expect($('zipBtn').hidden).toBe(false);
+    expect($('verifyResult').textContent).toContain('上限を超えました');
     // 上限を変えても分ける位置が変わらなければ、結合した PDF は残し、知らせを出し直す。
     change($('splitMegabytes'), '３０．５');
     expect(splitMarks()).toHaveLength(2);
@@ -2227,6 +2316,8 @@ describe('分ける', () => {
   });
 
   it('すべて「先頭に置く」にしてつなぐときも、ファイルの境目で分ける', async () => {
+    // 上限を超えるときだけ分ける。
+    change($('splitMode'), 'limit');
     const chapter = (prefix) => [1, 2, 3, 4].map((n) => page(`${prefix}${n}`, null, { mb: 30 }));
     drop([file('1章.pdf', pdf(chapter('a'))), file('2章.pdf', pdf(chapter('b'))), file('3章.pdf', pdf(chapter('c')))]);
     await settled(3);
@@ -2234,12 +2325,22 @@ describe('分ける', () => {
     change($('splitMegabytes'), '250');
     expect(splitMarks()).toEqual(['表紙:ここから 2 つ目のファイル']);
     expect(document.querySelector('[data-page-key="f3:0"]').classList.contains('split-start')).toBe(true);
+    // 区切りごとに分けるときも、ファイルの並びのままつなぐなら、ファイルの境目では
+    // 分けない（上限を超えるところだけ分ける）。
+    change($('splitMode'), 'breaks');
+    expect(splitMarks()).toEqual(['表紙:ここから 2 つ目のファイル']);
+    expect(document.querySelector('[data-page-key="f3:0"]').classList.contains('split-start')).toBe(true);
+    change($('splitMegabytes'), '');
+    expect(splitMarks()).toEqual([]);
+    expect($('splitNote').textContent).toContain('ファイルの並びのままつなぐときのファイルの境目');
   });
 
   it('しおりの項目と、続けてつないだファイルの境目も、分ける位置の候補にする', async () => {
+    // 上限を超えるときだけ分ける。
+    change($('splitMode'), 'limit');
     const first = [page('a1', 1, { mb: 10 }), page('a2', 2, { mb: 10 }), page('a3', 3, { mb: 10 })];
     const second = [page('b4', 4, { mb: 10 }), page('b5', 5, { mb: 10 }), page('b6', 6, { mb: 10 })];
-    drop([file('上巻.pdf', pdf(first, { outline: [[1, '第1章 基礎']] })), file('下巻.pdf', pdf(second))]);
+    drop([file('上巻.pdf', pdf(first, { outline: [[0, '序章'], [1, '第1章 基礎']] })), file('下巻.pdf', pdf(second))]);
     await settled(2);
     expect([...document.querySelectorAll('#pageGrid .bm-split-reason')].map((r) => r.textContent)).toEqual([
       'しおり「第1章 基礎」',
@@ -2247,6 +2348,11 @@ describe('分ける', () => {
     ]);
     change($('splitMegabytes'), '40');
     expect(splitMarks()).toEqual(['4 頁:ここから 2 つ目のファイル']);
+    // 最初のファイルの名前には、最初の頁のしおりの名前を添える。
+    expect([...$('splitParts').children].map((item) => item.textContent.replace(/:.*$/, ''))).toEqual([
+      '結合_1_序章.pdf',
+      '結合_2_下巻.pdf',
+    ]);
     change($('splitMegabytes'), '20');
     expect(splitMarks()).toEqual(['2 頁:ここから 2 つ目のファイル', '4 頁:ここから 3 つ目のファイル', '6 頁:ここから 4 つ目のファイル']);
   });
@@ -2264,7 +2370,7 @@ describe('分ける', () => {
       ['f2:2', 'f2:3'],
       ['f2:4', 'f2:5'],
     ]);
-    expect(calls.map((options) => options.title)).toEqual(['本_1', '本_2', '本_3']);
+    expect(calls.map((options) => options.title)).toEqual(['本_1', '本_2_第2章 壁', '本_3_第3章 床']);
     // 分けたファイルにも、本の頁番号の頁ラベルを付ける。
     const { pageLabelTexts } = await import('../src/pdf-book-merger/ordering.js');
     expect(calls.map((options) => pageLabelTexts(options.labels, options.order.length))).toEqual([
@@ -2276,10 +2382,10 @@ describe('分ける', () => {
 
     expect($('verifyResult').className).toBe('bm-verify ok');
     expect($('verifyResult').textContent).toContain('検証できました。3 ファイル・計 8 頁すべてが、元の頁と大きさ・文字情報・画像まで一致しています。');
-    expect($('verifyResult').textContent).toContain('本_2.pdf: 2 頁。文字情報（検索できる文字）のある頁: 2 / 2 頁。');
-    expect($('verifyResult').textContent).toContain('タイトル: 本_3');
+    expect($('verifyResult').textContent).toContain('本_2_第2章 壁.pdf: 2 頁。文字情報（検索できる文字）のある頁: 2 / 2 頁。');
+    expect($('verifyResult').textContent).toContain('タイトル: 本_3_第3章 床');
     expect(logText()).toContain('8 頁を 3 ファイルに分けて');
-    expect(logText()).toContain('「本_2.pdf」を検証しました（2 頁すべて一致）');
+    expect(logText()).toContain('「本_2_第2章 壁.pdf」を検証しました（2 頁すべて一致）');
     expect(logText()).toContain('すべて結合して検証しました（3 ファイル');
 
     // 1 冊ぶんのダウンロードの代わりに、ZIP と、ファイルごとのダウンロードを出す。
@@ -2288,21 +2394,21 @@ describe('分ける', () => {
     const rows = [...$('partDownloads').children];
     expect(rows.map((row) => row.querySelector('span').textContent.replace(/・.*$/, ''))).toEqual([
       '本_1.pdf（4 頁',
-      '本_2.pdf（2 頁',
-      '本_3.pdf（2 頁',
+      '本_2_第2章 壁.pdf（2 頁',
+      '本_3_第3章 床.pdf（2 頁',
     ]);
 
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     rows[1].querySelector('button').click();
     await flush();
     const single = URL.createObjectURL.mock.calls.at(-1)[0];
-    expect(specOf(new Uint8Array(await single.arrayBuffer())).title).toBe('本_2');
-    expect(logText()).toContain('「本_2.pdf」をダウンロードしました');
+    expect(specOf(new Uint8Array(await single.arrayBuffer())).title).toBe('本_2_第2章 壁');
+    expect(logText()).toContain('「本_2_第2章 壁.pdf」をダウンロードしました');
 
     $('zipBtn').click();
     await flush();
     const zip = URL.createObjectURL.mock.calls.at(-1)[0];
-    expect(await zipNames(zip)).toEqual(['本_1.pdf', '本_2.pdf', '本_3.pdf']);
+    expect(await zipNames(zip)).toEqual(['本_1.pdf', '本_2_第2章 壁.pdf', '本_3_第3章 床.pdf']);
     expect(logText()).toContain('「本.zip」をダウンロードしました');
     expect(click).toHaveBeenCalledTimes(2);
 
@@ -2328,7 +2434,7 @@ describe('分ける', () => {
     await flush();
     const [shared] = navigator.share.mock.calls[0][0].files;
     expect([shared.name, shared.type]).toEqual(['本.zip', 'application/zip']);
-    expect(await zipNames(shared)).toEqual(['本_1.pdf', '本_2.pdf', '本_3.pdf']);
+    expect(await zipNames(shared)).toEqual(['本_1.pdf', '本_2_第2章 壁.pdf', '本_3_第3章 床.pdf']);
     expect(logText()).toContain('「本.zip」を共有シートに渡しました');
     // 共有シートを閉じただけなら、何も記録しない。
     navigator.share.mockRejectedValueOnce(Object.assign(new Error('cancel'), { name: 'AbortError' }));
@@ -2358,7 +2464,7 @@ describe('分ける', () => {
     const merge = mocks.mergePdf.getMockImplementation();
     mocks.mergePdf.mockImplementation(async (options) => {
       const result = await merge(options);
-      if (options.title !== '本_2') return result;
+      if (options.title !== '本_2_第2章 壁') return result;
       const spec = specOf(result.bytes);
       spec.pages[0].corrupt = true;
       spec.pages.pop();
@@ -2370,16 +2476,16 @@ describe('分ける', () => {
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
 
     expect($('verifyResult').className).toBe('bm-verify ng');
-    expect($('verifyResult').textContent).toContain('本_2.pdf: 頁の数が違います（並べた数 2、結合した PDF 1）。');
-    expect($('verifyResult').textContent).toContain('本_2.pdf の 1 枚目（3 頁）: 画像・描く中身が元の頁と違います');
-    expect(logText()).toContain('「本_2.pdf」を検証して、食い違いが見つかりました');
+    expect($('verifyResult').textContent).toContain('本_2_第2章 壁.pdf: 頁の数が違います（並べた数 2、結合した PDF 1）。');
+    expect($('verifyResult').textContent).toContain('本_2_第2章 壁.pdf の 1 枚目（3 頁）: 画像・描く中身が元の頁と違います');
+    expect(logText()).toContain('「本_2_第2章 壁.pdf」を検証して、食い違いが見つかりました');
   });
 
   it('分けたファイルの頁を読めなければ、どのファイルの何頁目かを出す', async () => {
     const merge = mocks.mergePdf.getMockImplementation();
     mocks.mergePdf.mockImplementation(async (options) => {
       const result = await merge(options);
-      if (options.title !== '本_2') return result;
+      if (options.title !== '本_2_第2章 壁') return result;
       const spec = specOf(result.bytes);
       spec.pages[1].broken = '読めない頁';
       return { ...result, bytes: pdf(spec.pages, { title: spec.title, labels: spec.labels }) };
@@ -2387,7 +2493,7 @@ describe('分ける', () => {
     await addChapters();
     change($('splitMegabytes'), '25');
     $('mergeBtn').click();
-    await vi.waitFor(() => expect($('message').textContent).toContain('「本_2.pdf」の 2 頁目を検証できませんでした'));
+    await vi.waitFor(() => expect($('message').textContent).toContain('「本_2_第2章 壁.pdf」の 2 頁目を検証できませんでした'));
     expect($('zipBtn').hidden).toBe(true);
     // 途中で失敗しても、pdf.js の worker は止める。
     expect(mocks.releasePdfWorker).toHaveBeenCalledTimes(1);
@@ -2406,7 +2512,7 @@ describe('分ける', () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     $('zipBtn').click();
     await flush();
-    expect(await zipNames(URL.createObjectURL.mock.calls.at(-1)[0])).toEqual(['本_1.pdf', '本_2.pdf', '本_3.pdf']);
+    expect(await zipNames(URL.createObjectURL.mock.calls.at(-1)[0])).toEqual(['本_1.pdf', '本_2_第2章 壁.pdf', '本_3_第3章 床.pdf']);
     expect(click).toHaveBeenCalled();
 
     // 結合し直したら、書き終えてから前のものを消す。
@@ -2418,7 +2524,7 @@ describe('分ける', () => {
     // 2 つ目で失敗したら、1 つ目に書いたものも消し、前のものは残す。
     const write = mocks.writeMergedPdf.getMockImplementation();
     mocks.writeMergedPdf.mockImplementation(async (options) => {
-      if (options.title === '本_2') throw new Error('「本_本文.pdf」は暗号化（パスワード保護）されているため結合できません。');
+      if (options.title === '本_2_第2章 壁') throw new Error('「本_本文.pdf」は暗号化（パスワード保護）されているため結合できません。');
       return write(options);
     });
     splitButton('f2:4').click();
@@ -2436,7 +2542,7 @@ describe('分ける', () => {
     const gate = new Promise((resolve) => (release = resolve));
     const write = mocks.writeMergedPdf.getMockImplementation();
     mocks.writeMergedPdf.mockImplementation(async (options) => {
-      if (options.title === '本_2') await gate;
+      if (options.title === '本_2_第2章 壁') await gate;
       return write(options);
     });
 
@@ -2485,6 +2591,6 @@ describe('分ける', () => {
     await vi.waitFor(() => expect($('message').textContent).toContain('結合している間に並びか名前が変わりました'));
     // 頁は読まずに閉じ、残りのファイルは検証しない。
     expect(mocks.closePdf).toHaveBeenCalledTimes(1);
-    expect(logText()).not.toContain('「本_2.pdf」を読みました');
+    expect(logText()).not.toContain('「本_2_第2章 壁.pdf」を読みました');
   });
 });

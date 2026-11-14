@@ -77,12 +77,15 @@ import {
 } from './review.js';
 import { compareOutput } from './verify.js';
 import {
-  BREAK_KINDS,
+  breakReason,
   breakCandidates,
   chapterHeading,
   DEFAULT_LIMITS,
   overLimit,
   partFileName,
+  partLabels,
+  SPLIT_MODES,
+  splitAtBreaks,
   sliceLabelRanges,
   splitRanges,
   suggestSplits,
@@ -119,7 +122,7 @@ const files = [];
 /** 頁ごとに手で直した番号（頁の key → 番号）。 */
 const overrides = new Map();
 /** 最後に組み立てた並びと指摘、分ける位置（新しいファイルを始める頁の位置）と、その候補。 */
-let view = { order: [], problems: [], issues: new Map(), numberings: new Map(), starts: [], breaks: [] };
+let view = { order: [], problems: [], issues: new Map(), numberings: new Map(), starts: [], breaks: [], labels: [] };
 /** 分ける上限（MB・頁。null は上限なし）。 */
 let splitLimits = { ...DEFAULT_LIMITS };
 /** 手で決めた分ける位置（新しいファイルを始める頁の key）。null なら自動の提案に従う。 */
@@ -1199,11 +1202,14 @@ function refresh() {
     return { fileKey: entry.fileKey, role: entry.role, fileName: file.name, bytes, outline, heading };
   });
   const breaks = breakCandidates(items);
+  const auto = splitLimits.mode === 'breaks' ? splitAtBreaks : suggestSplits;
   const starts = manualSplits
     ? order.flatMap((entry, index) => (index > 0 && manualSplits.has(entry.pageKey) ? [index] : []))
-    : suggestSplits(items, breaks, splitLimits);
+    : auto(items, breaks, splitLimits);
+  // 分けたファイルの名前に添える、区切りの名前。
+  const labels = partLabels(items, breaks, starts, { joinNext: !manualSplits && splitLimits.mode === 'breaks' });
 
-  view = { order, problems, issues, numberings, starts, breaks };
+  view = { order, problems, issues, numberings, starts, breaks, labels };
   if (!$('outputName').value.trim() || $('outputName').dataset.suggested === 'true') {
     const suggested = suggestBookName(files.map((file) => file.name));
     $('outputName').value = suggested;
@@ -1228,6 +1234,8 @@ function mergeKey() {
   return [
     outputName(),
     view.starts.join(','),
+    // 分けたファイルの名前（区切りの名前）も、結合した PDF に書き込むので。
+    view.labels.join('\n'),
     ...view.order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}`),
   ].join('\n');
 }
@@ -1754,10 +1762,7 @@ function pageCard(entry, issues, level, split) {
   // 先頭の頁のほかは、その頁の前で分ける・分けないを切り替えられる。候補なら、その理由も出す。
   if (!split.first) {
     const row = el(document, 'div', 'bm-split-toggle');
-    if (split.candidate) {
-      const { kind, title } = split.candidate;
-      row.append(el(document, 'span', 'bm-split-reason', `${BREAK_KINDS[kind]}「${title}」`));
-    }
+    if (split.candidate) row.append(el(document, 'span', 'bm-split-reason', breakReason(split.candidate)));
     row.append(
       smallButton(
         split.part ? '分けない' : 'ここから分ける',
@@ -1804,12 +1809,38 @@ function loadLimits() {
   const positive = (value) => (Number.isFinite(value) && value > 0 ? value : null);
   try {
     const saved = JSON.parse(localStorage.getItem(LIMITS_KEY));
-    if (saved) splitLimits = { megabytes: positive(saved.megabytes), pages: positive(saved.pages) };
+    if (saved) {
+      splitLimits = {
+        megabytes: positive(saved.megabytes),
+        pages: positive(saved.pages),
+        mode: SPLIT_MODES.includes(saved.mode) ? saved.mode : DEFAULT_LIMITS.mode,
+      };
+    }
   } catch {
     // 覚えた値を読めなくても（保存を禁じたブラウザ・壊れた値）、既定の上限で使える。
   }
   $('splitMegabytes').value = splitLimits.megabytes ?? '';
   $('splitPages').value = splitLimits.pages ?? '';
+  $('splitMode').value = splitLimits.mode;
+}
+
+/** 分ける上限・分け方を覚えておく（覚えておけなくても、この画面の間は使える）。 */
+function saveLimits() {
+  try {
+    localStorage.setItem(LIMITS_KEY, JSON.stringify(splitLimits));
+  } catch {
+    // 保存を禁じたブラウザなど。
+  }
+}
+
+/** 分け方を変えたら、覚えておき、自動の提案をし直す。 */
+function setMode(mode) {
+  splitLimits = { ...splitLimits, mode };
+  saveLimits();
+  manualSplits = null;
+  showMessage('');
+  log(`分け方を「${$('splitMode').selectedOptions[0].textContent}」にしました`);
+  refresh();
 }
 
 /** 上限の欄を変えたら、覚えておき、自動の提案をし直す。 */
@@ -1823,11 +1854,7 @@ function setLimit(key, input) {
     return;
   }
   splitLimits = { ...splitLimits, [key]: value ? number : null };
-  try {
-    localStorage.setItem(LIMITS_KEY, JSON.stringify(splitLimits));
-  } catch {
-    // 覚えておけなくても、この画面の間は使える。
-  }
+  saveLimits();
   manualSplits = null;
   showMessage('');
   refresh();
@@ -1837,15 +1864,31 @@ function setLimit(key, input) {
 
 /** 分ける位置の説明と、分けたファイルの一覧（頁の範囲・大きさの見積もり）。 */
 function renderSplit() {
-  const { order, starts, breaks } = view;
+  const { order, starts, breaks, labels } = view;
   const spans = splitRanges(order.length, starts);
   $('splitAutoBtn').hidden = !manualSplits;
-  const how = manualSplits ? '手で決めた位置で' : '上限に収まるように提案した位置で';
+  // 分けるとき（how）と、1 ファイルにまとめるとき（why）の、そうした訳。
   const limited = splitLimits.megabytes || splitLimits.pages;
+  let how;
+  let why;
+  if (manualSplits) {
+    how = '手で決めた位置で';
+    why = '手で分ける位置を外しました';
+  } else if (splitLimits.mode === 'breaks') {
+    how = '区切りごとに。上限を超えるところは、さらに分けて';
+    // 区切りの候補があるのに分けないのは、ファイルの並びのままつなぐときのファイルの
+    // 境目か、分けると 1 頁だけのファイルになる区切りしか無いとき（splitAtBreaks）。
+    why = breaks.some(Boolean)
+      ? `分けられる区切りがありません。ファイルの並びのままつなぐときのファイルの境目・1 頁だけのファイルになる区切り・細かすぎるしおりや見出しやファイルの境目では分けません${limited ? '。上限には収まります' : ''}`
+      : `区切りが見つかりません${limited ? '。上限にも収まります' : ''}`;
+  } else {
+    how = '上限に収まるように提案した位置で';
+    why = limited ? '上限に収まります' : '上限がありません';
+  }
   $('splitNote').textContent =
     spans.length > 1
       ? `${spans.length} ファイルに分けます（${how}）。頁の一覧の「ここから分ける」「分けない」で直せます。`
-      : `1 ファイルにまとめます（${manualSplits ? '手で分ける位置を外しました' : limited ? '上限に収まります' : '上限がありません'}）。頁の一覧の「ここから分ける」で分けることもできます。`;
+      : `1 ファイルにまとめます（${why}）。頁の一覧の「ここから分ける」で分けることもできます。`;
   const name = outputName();
   const items =
     spans.length > 1
@@ -1855,9 +1898,9 @@ function renderSplit() {
           const over = overLimit(pages, bytes, splitLimits);
           const item = el(document, 'li', `bm-part${over ? ' warn' : ''}`);
           const range = `${displayLabel(order[start])}〜${displayLabel(order[end - 1])}`;
-          const reason = breaks[start] ? `・${BREAK_KINDS[breaks[start].kind]}「${breaks[start].title}」から` : '';
+          const reason = breaks[start] ? `・${breakReason(breaks[start])}から` : '';
           item.append(
-            el(document, 'span', null, `${partFileName(name, k, spans.length)}: ${range}（${pages} 頁・約 ${megabytes(bytes)}${reason}）`)
+            el(document, 'span', null, `${partFileName(name, k, spans.length, labels[k])}: ${range}（${pages} 頁・約 ${megabytes(bytes)}${reason}）`)
           );
           if (over) item.append(el(document, 'span', 'hint', '上限を超えています'));
           return item;
@@ -1972,7 +2015,7 @@ async function mergeAndVerify() {
     const parts = spans.map(({ start, end }, k) => ({
       start,
       order: order.slice(start, end),
-      fileName: partFileName(fileName, k, spans.length),
+      fileName: partFileName(fileName, k, spans.length, view.labels[k]),
       labels: sliceLabelRanges(ranges, start, end),
     }));
     // 中身は、結合するときに 1 ファイルずつ読む（保存領域に置いたものは、そこから）。
@@ -2483,6 +2526,7 @@ function wireUp() {
   $('splitMegabytes').addEventListener('change', (event) => setLimit('megabytes', event.target));
   $('splitPages').addEventListener('change', (event) => setLimit('pages', event.target));
   $('splitAutoBtn').addEventListener('click', autoSplits);
+  $('splitMode').addEventListener('change', (event) => setMode(event.target.value));
   $('logCopyBtn').addEventListener('click', copyLog);
   $('logBox').addEventListener('toggle', renderLog);
 

@@ -89,11 +89,18 @@
     <span class="bm-help">
       <button type="button" class="bm-help-btn" aria-label="ファイルの分け方" aria-expanded="false" aria-controls="helpSplit">?</button>
       <span class="bm-help-body" id="helpSplit">
-        大きすぎる PDF は、スマートフォンで開くのが重くなったり、取り込んだサービスで後ろの方の中身が検索の対象に入らなかったりします。1 ファイルの上限を超えるときは、しおり（目次）・章の見出し（「第 3 章」など）・ファイルの境目で分ける位置を提案します。表紙は最初のファイルに、裏表紙は最後のファイルに付けます。分ける位置は、上の頁の一覧の「ここから分ける」で足したり外したりできます。分けたファイルにも、本の頁番号の頁ラベルが付きます。
+        大きすぎる PDF は、スマートフォンで開くのが重くなったり、取り込んだサービスで後ろの方の中身が検索の対象に入らなかったりします。しおり（目次）・章の見出し（「第 3 章」「Section 2」など）・ファイルの境目を区切りとして、区切りごとに分けます（1 ファイルの上限を超えるところは、さらに分けます）。分け方を「上限を超えるときだけ分ける」にすると、上限を超えるときだけ、区切りを選んで分けます。分けたファイルの名前には、区切りの名前（しおり・見出し・ファイルの名前の括弧の中）を添えます。表紙は最初のファイルに、裏表紙は最後のファイルに付けます。分ける位置は、上の頁の一覧の「ここから分ける」で足したり外したりできます。分けたファイルにも、本の頁番号の頁ラベルが付きます。
       </span>
     </span>
   </h3>
   <div class="bm-list-tools">
+    <label class="bm-inline">
+      分け方
+      <select id="splitMode">
+        <option value="breaks">区切りごとに分ける</option>
+        <option value="limit">上限を超えるときだけ分ける</option>
+      </select>
+    </label>
     <label class="bm-inline">
       1 ファイルの上限
       <input type="text" id="splitMegabytes" inputmode="decimal" size="5" placeholder="なし" aria-label="1 ファイルの上限（MB）">
