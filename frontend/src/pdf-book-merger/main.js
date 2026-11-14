@@ -55,6 +55,8 @@ import { findScanImages } from './scan-images.js';
 import { pdfLibViews } from './pdf-lib-views.js';
 import {
   closePdf,
+  fontReleases,
+  keepFewFonts,
   manySoftMasks,
   openPdf,
   readOutline,
@@ -626,6 +628,7 @@ async function readFile(file) {
     const count = file.doc.numPages;
     // しおり（目次）は、分ける位置の候補にする（split.js）。
     const outline = await readOutline(file.doc);
+    const releasesBefore = await fontReleases(file.doc);
 
     // 文字情報（画像を展開しないので軽い）。
     readProgress.stage(loadEnd, textEnd);
@@ -655,7 +658,14 @@ async function readFile(file) {
     }
     const textPages = file.pages.filter((page) => page.signature.length > 0).length;
     const textNumbers = file.pages.filter((page) => page.candidates.length > 0).length;
-    log(`「${file.name}」の文字情報を読みました（${count} 頁、文字情報のある頁 ${textPages}、番号が見つかった頁 ${textNumbers}）`);
+    // 頁ごとに別の書体を持つ PDF で、読んだ書体を手放した回数（pdf-source.js の noteFonts。
+    // 拡大表示などで同じ文書を先に使っていれば、その分は除く）。
+    const afterText = await fontReleases(file.doc);
+    const textReleases = afterText - releasesBefore;
+    log(
+      `「${file.name}」の文字情報を読みました（${count} 頁、文字情報のある頁 ${textPages}、番号が見つかった頁 ${textNumbers}` +
+        `${textReleases ? `、頁ごとに書体が違うので、読んだ書体を ${textReleases} 回手放しました` : ''}）`
+    );
 
     readProgress.stage(textEnd, 1);
 
@@ -699,13 +709,15 @@ async function readFile(file) {
       }
     }
     const byOcr = file.pages.filter((page) => page.ocr && page.candidates.some((c) => c.source === 'ocr')).length;
+    const releases = (await fontReleases(file.doc)) - afterText;
     log(
       `「${file.name}」の頁の画像を調べました（JPEG のまま展開 ${jpegPages} / ${count} 頁、` +
         `余白を OCR ${ocrPages.size} 頁・うち番号が読めた頁 ${byOcr}、${seconds(imagesStarted)}。` +
         `うち頁を描き終えるまで ${seconds(imagesStarted, drawnAt)}、読んだ文字のかたまり ${boxesReadSoFar() - boxesBefore}）` +
         (coarse ? `。ソフトマスクの多い ${coarse} 頁は粗く描きました` : '') +
         (skippedOcr ? `（うち番号の見つからない ${skippedOcr} 頁は、余白を OCR しませんでした）` : '') +
-        (redrawnSafely(file.doc) ? '。pdf.js で描けなかった頁があり、安全な設定で開き直して描き直しました' : '')
+        (redrawnSafely(file.doc) ? '。pdf.js で描けなかった頁があり、安全な設定で開き直して描き直しました' : '') +
+        (releases ? `。頁ごとに書体が違うので、描いた頁の書体を ${releases} 回手放しました` : '')
     );
 
     file.role = guessRole(file.name, file.pages);
@@ -2137,6 +2149,10 @@ async function verifyPart(part, output, k, count, { originals, stale, pageDigest
   const mergedDigests = await pageDigests(bytes);
   log('検証: 頁の指紋を求めました');
   const doc = await openPdf(bytes, { transfer: !output.bytes });
+  // 結合と検証はいちばんメモリを使うので、新しい書体を持ち込んだ頁を読むたびに
+  // 書体を手放す（1 頁のファイルを何百もつないだ PDF は頁ごとに別の書体を持つので、
+  // iPhone では検証の途中でページごと落ちた）。
+  keepFewFonts(doc);
   log('検証: pdf.js で開きました');
   const actual = [];
   let labels;
@@ -2150,18 +2166,18 @@ async function verifyPart(part, output, k, count, { originals, stale, pageDigest
         readPageText(doc, index)
       );
       actual.push({ size: page.size, signature: page.signature, digest: mergedDigests[index] });
-      // 読んだ頁の書体などを、文書に溜めない（pdf.js は文書を閉じるまで抱える。
-      // 1 頁のファイルを何百もつないだ PDF は頁ごとに別の書体を持つので、iPhone
-      // では検証の途中でページごと落ちた）。
-      await doc.cleanup();
       if (index % 16 === 0) await breathe();
     }
+    // 最後の頁の書体の手放しを終えてから、頁ラベル・文書の情報を読む（重ねない）。
+    await fontReleases(doc);
     if (!stale()) {
       labels = await doc.getPageLabels();
       ({ info } = await doc.getMetadata());
     }
     read = true;
   } finally {
+    // 最後に始めた書体の手放しを、終えてから閉じる（失敗したときも。閉じるのと重ねない）。
+    await fontReleases(doc);
     // 失敗しても閉じる（結合した PDF 全体を worker に残さない）。
     await closePdf(doc);
     // ほかに開いている文書が無ければ worker ごと止めて、写しをその場で返す

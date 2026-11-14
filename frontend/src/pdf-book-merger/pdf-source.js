@@ -260,6 +260,17 @@ async function renderTo(page, viewport, size) {
  * 分けて描いてつなぐ（bandRows）。
  */
 async function drawPage(doc, page, viewport, size = viewport, rows = Infinity) {
+  // 書体を手放さないように「この文書を描いている」とするのは、呼ぶ側（drawInTurn）。
+  try {
+    return await drawBands(doc, page, viewport, size, rows);
+  } finally {
+    // 描いた頁の書体を数える（文字情報を読んだ頁なら、その書体の名前で。描けなかった
+    // ときも、途中まで読み込んだ書体があるので数える）。
+    noteFonts(doc, page.pageNumber - 1);
+  }
+}
+
+async function drawBands(doc, page, viewport, size, rows) {
   const height = Math.max(1, Math.round(size.height));
   if (rows >= height) return drawWhole(doc, page, viewport, size);
   const canvas = canvasOf(size.width, height);
@@ -317,6 +328,142 @@ export function cropTransform(viewport, full) {
   return multiply(viewport.transform, inverse(full.transform));
 }
 
+// --- 書体を手放す --------------------------------------------------------------
+//
+// pdf.js は、読んだ頁・描いた頁の書体を、文書を閉じるまで抱える（doc.cleanup で
+// 手放せる）。頁ごとに別の書体を持つ PDF（1 頁ずつ書き出した PDF をつないだもの。
+// 施工ガイドブックの各ファイルなど）では、頁を読むたびにメモリが増え、iPhone では
+// 47 MB・25 頁のファイルの文字情報を読む途中でページごと落ちた（Node で同じ作りの
+// 40 MB・12 頁を読むと、1 頁ごとに 9 MB ほど増えた）。毎頁手放すと、全頁で同じ
+// 書体を使う本では書体を読み直すので、文字情報を読むのが 6 倍ほど遅くなる。
+//
+// そこで文書ごとに、新しい書体を持ち込んだ頁（文字情報が使う書体の名前
+// ——getTextContent の styles——に、手放してからまだ見ていない名前がある頁。手放した
+// 書体は、次に読む・描くときに読み込み直すので、また新しく数える）を数え、手放して
+// から NEW_FONT_PAGES を超えたら手放す。同じ書体を使い回す本では、新しい書体を持ち
+// 込む頁はすぐに無くなるので、まず手放さない。頁の書体の名前は、文字情報を読んだ
+// ときのものを使い続ける（pdf.js は手放すと名前を付け直すが、それに惑わされない）。文字情報を
+// 読むとき（readPageText。結合した PDF の検証も）と、pdf.js で頁を描いたとき
+// （drawPage。調べる・拡大表示・あとからの OCR のどれでも）に数える。文字情報を
+// 読んでいない頁（拡大表示などのために開き直した文書）は、頁を書体 1 つとして数える。
+//
+// 読んでいる・描いている途中に手放すと読めなく・描けなくなるので、同じ文書の読み・
+// 描きが済むのを待ってから手放し、手放している間は、同じ文書の読み・描きを待たせる
+// （pdf.js で描く順番には並べない。並べると、ほかの文書を描く間に書体がまた溜まる。
+// 描くときは、描く順番に並ぶ前から「描いている」とするので、手放し終えるのを順番の
+// 先頭で待って、ほかの文書の描画を止めることはない）。描き直しのために開き直した
+// 文書（safe）も手放す。手放すのはメモリのためだけなので、失敗しても読み・描きは
+// 続ける（手放せた回数だけを数える）。文書を閉じるときは、手放し終えるのを待たない
+// （閉じた文書を手放しても何も起きない。待つと、描くのに何十秒もかかる頁を描いて
+// いる間、閉じられない）。
+
+/** 新しい書体を持ち込んだ頁が、手放してからこれだけを超えたら手放す。 */
+export const NEW_FONT_PAGES = 4;
+
+/**
+ * 文書 → 書体の数え。seen: 手放してから見た書体の名前、fresh: 手放してから新しい
+ * 書体を持ち込んだ頁の数、limit: fresh がこれを超えたら手放す、pages: 頁ごとの書体、
+ * busy: 読んでいる・描いている途中の約束、cleaning: 手放している最中なら、その約束、
+ * releases: 手放せた回数。
+ */
+const budgets = new WeakMap();
+
+function budgetOf(doc) {
+  let budget = budgets.get(doc);
+  if (!budget) {
+    budget = {
+      seen: new Set(),
+      fresh: 0,
+      limit: NEW_FONT_PAGES,
+      pages: new Map(),
+      busy: new Set(),
+      cleaning: null,
+      releases: 0,
+    };
+    budgets.set(doc, budget);
+  }
+  return budget;
+}
+
+/**
+ * 文書を読む・描く（手放している最中なら待ってから。途中は手放さない）。
+ *
+ * @template T
+ * @param {() => Promise<T>} run
+ * @returns {Promise<T>}
+ */
+async function usingDoc(doc, run) {
+  const budget = budgetOf(doc);
+  await fontsSettled(doc);
+  const running = run();
+  const done = running.catch(() => {});
+  budget.busy.add(done);
+  try {
+    return await running;
+  } finally {
+    budget.busy.delete(done);
+  }
+}
+
+/**
+ * 頁が使った書体を数え、新しい書体を持ち込んだ頁が多くなったら手放す（待たない）。
+ * 文字情報を読んでいない頁（拡大表示などのために開き直した文書）は、書体の名前が
+ * 分からないので、その頁を書体 1 つとして数える（文字の無い頁は、文字情報を読んで
+ * いれば書体 0 として数えない。文字の無いスキャンを pdf.js で描くたびに手放さない
+ * ように）。
+ */
+function noteFonts(doc, index) {
+  const budget = budgetOf(doc);
+  const names = budget.pages.get(index) ?? [`page:${index}`];
+  const fresh = names.filter((name) => !budget.seen.has(name));
+  for (const name of fresh) budget.seen.add(name);
+  if (fresh.length) budget.fresh++;
+  if (budget.fresh <= budget.limit || budget.cleaning) return;
+  budget.cleaning = (async () => {
+    // すぐに済んでも、cleaning を入れてから片付けるように、いったん待つ。
+    await null;
+    while (budget.busy.size) await Promise.all(budget.busy);
+    // 元の文書と、描き直しのための文書を、それぞれ手放す（片方で失敗しても、もう
+    // 片方は手放す。描き直しの文書を開けなかったときは、手放すものが無い）。
+    const done = await Promise.all([
+      cleanupOf(doc),
+      Promise.resolve(fallbacks.get(doc)?.safe)
+        .catch(() => null)
+        .then((safe) => (safe ? cleanupOf(safe) : true)),
+    ]);
+    if (done.every(Boolean)) budget.releases++;
+    // 数え直しは、手放し終えてから（それまでに読み・描きした頁の書体も手放したので）。
+    budget.fresh = 0;
+    budget.seen.clear();
+    budget.cleaning = null;
+  })();
+}
+
+/** 文書の書体を手放す。手放せたか（失敗しても、読み・描きは続ける）。 */
+async function cleanupOf(doc) {
+  try {
+    await doc.cleanup();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 書体を読み込んだ頁を読むたびに手放すようにする（結合した PDF の検証。結合と
+ * 検証はいちばんメモリを使うので、書体を溜めない。手放した書体は次の頁で読み込み
+ * 直すので、全頁で同じ書体を使う本でも毎頁手放す。前からの検証と同じ）。
+ */
+export function keepFewFonts(doc) {
+  budgetOf(doc).limit = 0;
+}
+
+/** その文書で書体を手放せた回数（記録に出す。手放している最中なら、終えるのを待つ）。 */
+export async function fontReleases(doc) {
+  await fontsSettled(doc);
+  return budgets.get(doc)?.releases ?? 0;
+}
+
 // pdf.js で描く頁は、1 頁ずつ描く。WebKit では大きなスキャンの画像を画面の
 // スレッドで描くので、何頁も並べて描くと画面が長く固まり、メモリも足りなくなる。
 let pdfjsTurn = Promise.resolve();
@@ -358,7 +505,7 @@ async function drawViewports(doc, page, viewports, sizes, scan, softMasks = 0) {
       // pdf.js で描き直す。
     }
   }
-  return inTurn(async () => {
+  return drawInTurn(doc, async () => {
     if (viewports.length === 1) {
       const size = sizes[0] ?? viewports[0];
       return [await drawPage(doc, page, viewports[0], size, bandRows(size.width, softMasks))];
@@ -380,6 +527,15 @@ async function drawViewports(doc, page, viewports, sizes, scan, softMasks = 0) {
       releaseCanvas(source);
     }
   });
+}
+
+/**
+ * pdf.js で描く順番に並べて描く。並ぶ前から「この文書を描いている」とする（並んで
+ * いる間に書体を手放し始めると、順番が来ても手放し終えるのを待つことになり、ほかの
+ * 文書の描画も止まる）。描いた頁の書体は drawPage が数える。
+ */
+function drawInTurn(doc, run) {
+  return usingDoc(doc, () => inTurn(run));
 }
 
 function thumbnailUrl(source) {
@@ -409,10 +565,36 @@ function thumbnailUrl(source) {
  *                    signature:{length:number,hash:string}}>}
  */
 export async function readPageText(doc, index) {
+  return usingDoc(doc, async () => {
+    try {
+      return await readText(doc, index);
+    } catch (error) {
+      // 読めなかった頁は、書体を読み込まなかったものとする（頁を書体 1 つと数えない）。
+      const { pages } = budgetOf(doc);
+      if (!pages.has(index)) pages.set(index, []);
+      throw error;
+    } finally {
+      // 「読んでいる」を外す前に数える（手放すのと数えるのが食い違わないように）。
+      noteFonts(doc, index);
+    }
+  });
+}
+
+/** 文書の書体を手放している最中なら、終えるのを待つ（続けて手放し始めたら、それも）。 */
+async function fontsSettled(doc) {
+  const budget = budgets.get(doc);
+  while (budget?.cleaning) await budget.cleaning;
+}
+
+async function readText(doc, index) {
   const page = await doc.getPage(index + 1);
   try {
     const base = page.getViewport({ scale: 1 });
     const content = await page.getTextContent();
+    // 書体の名前は、最初に読んだときのものを使い続ける（手放すと pdf.js は名前を
+    // 付け直すので、読み直すたびに入れ替えると、同じ書体を別の書体と数えてしまう）。
+    const { pages } = budgetOf(doc);
+    if (!pages.has(index)) pages.set(index, Object.keys(content.styles));
     return {
       size: { width: base.width, height: base.height },
       items: textItems(content, base),
@@ -561,7 +743,7 @@ export async function renderPreview(doc, index, { longSide = PREVIEW_LONG_SIDE, 
     const base = page.getViewport({ scale: 1 });
     const scale = cappedScale(base, longSide, softMasks, SOFT_MASK_WORK * PREVIEW_SOFT_MASK_WORK);
     const viewport = page.getViewport({ scale });
-    const canvas = await inTurn(() => drawPage(doc, page, viewport, viewport, bandRows(viewport.width, softMasks)));
+    const canvas = await drawInTurn(doc, () => drawPage(doc, page, viewport, viewport, bandRows(viewport.width, softMasks)));
     return await new Promise((resolve) => {
       canvas.toBlob(
         (blob) => {

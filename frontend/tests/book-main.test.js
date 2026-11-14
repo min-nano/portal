@@ -70,7 +70,6 @@ const mocks = vi.hoisted(() => ({
   writeMergedPdf: vi.fn(),
   openStash: vi.fn(),
   openOptions: [],
-  cleanups: 0,
   releasePdfWorker: vi.fn(),
 }));
 
@@ -138,9 +137,6 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
         spec,
         numPages: spec.pages.length,
         getPageLabels: async () => spec.labels ?? null,
-        cleanup: async () => {
-          mocks.cleanups++;
-        },
         getMetadata: async () => {
           if (spec.metadataBroken) throw new Error('metadata');
           return { info: { Title: spec.title ?? '', ...spec.info } };
@@ -170,6 +166,15 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
     closePdf: (...args) => mocks.closePdf(...args),
     releaseCanvas: () => {},
     releasePdfWorker: () => mocks.releasePdfWorker(),
+    // 書体を手放した回数。spec.fontReleases に、文字情報を読む前（拡大表示などで先に
+    // 手放した分）・読み終えたとき・頁を描き終えたときの回数を並べる。
+    keepFewFonts: (doc) => {
+      doc.keepFewFonts = true;
+    },
+    fontReleases: async (doc) => {
+      doc.releaseCalls = (doc.releaseCalls ?? 0) + 1;
+      return doc.spec.fontReleases?.[doc.releaseCalls - 1] ?? 0;
+    },
   };
 });
 
@@ -341,7 +346,6 @@ beforeEach(async () => {
   // 保存領域は、はじめは使えない（メモリに持つ）。使うテストは fakeStash に替える。
   mocks.openStash.mockResolvedValue(null);
   mocks.openOptions.length = 0;
-  mocks.cleanups = 0;
   mocks.pageDigestsGate = null;
   mocks.releasePdfWorker.mockReset();
   mocks.releasePdfWorker.mockReturnValue(true);
@@ -1314,6 +1318,18 @@ describe('ファイルを足して並べる', () => {
     expect(mocks.renderMargins.mock.calls[0][2]).toEqual(scanOf('o1'));
   });
 
+  it('頁ごとに別の書体を持つ PDF で書体を手放したら、その回数を記録に出す', async () => {
+    // 手放す頃合いは pdf-source.js が決める（book-pdf-fallback.test.js）。
+    drop([file('頁ごとの書体.pdf', pdf([page('q1', 1), page('q2', 2)], { fontReleases: [1, 3, 6] })), file('猫_奇数.pdf', pdf(ODD))]);
+    await settled(2);
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    // 文字情報を読むときと、頁を描くときに手放した回数を分けて出す（読む前の 1 回は除く）。
+    expect($('logText').textContent).toContain('番号が見つかった頁 2、頁ごとに書体が違うので、読んだ書体を 2 回手放しました）');
+    expect($('logText').textContent).toContain('頁ごとに書体が違うので、描いた頁の書体を 3 回手放しました');
+    expect($('logText').textContent.match(/書体を \d+ 回手放しました/g)).toHaveLength(2);
+  });
+
   it('ソフトマスクの多い頁は、粗く描き、余白を OCR しない（あとから本文に変えても）', async () => {
     const pages = [
       page('o1', 1, { jpeg: false, softMasks: 516 }),
@@ -1612,8 +1628,9 @@ describe('結合と検証', () => {
     expect(text).toContain('結合を始めます（2 ファイル・8 頁、結合した PDF は Blob にしてページの外に置きます（保存領域を使えない: Context not access storage）、');
     expect(text).toContain('Blob に書き出し');
     expect(text).toContain('検証: pdf.js で開きました');
-    // 検証では、1 頁読むたびに pdf.js の文書に溜めたもの（書体など）を捨てる。
-    expect(mocks.cleanups).toBe(8);
+    // 検証では、新しい書体を持ち込んだ頁を読むたびに書体を手放す（book-pdf-fallback.test.js）。
+    const closed = mocks.closePdf.mock.calls.map(([doc]) => doc).filter(Boolean);
+    expect(closed.filter((doc) => doc.keepFewFonts).map((doc) => doc.spec.pages.length)).toEqual([8]);
     // 検証を終えたら、pdf.js の worker ごと止めて、結合した PDF の写しを返す。
     expect(mocks.releasePdfWorker).toHaveBeenCalledTimes(1);
     expect(text).toContain('検証: pdf.js の worker を止めて、結合した PDF の写しを手放しました');
