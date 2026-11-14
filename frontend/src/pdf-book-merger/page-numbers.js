@@ -66,6 +66,19 @@ export function groupLines(items) {
       (candidate) => Math.abs(candidate.y - item.y) <= Math.max(tolerance, candidate.h * 0.5)
     );
     if (line) {
+      // 同じ位置に重ねて書いた同じ字（InDesign の書き出しで、飾りのために同じ字を
+      // 2 度描いたもの）は 1 つにする。重ねたままつなぐと「SectionSection 22」
+      // 「011011」になり、見出しも頁番号も読めない。
+      // 重なりは字の幅・高さで見る（隣り合う同じ字——「11」の 2 つの「1」——は残す）。
+      const near = Math.max(item.x1 - item.x0, 0.001) * 0.2;
+      const twice = line.items.some(
+        (other) =>
+          other.text === item.text &&
+          Math.abs(other.x0 - item.x0) <= near &&
+          Math.abs(other.x1 - item.x1) <= near &&
+          Math.abs(other.h - item.h) <= item.h * 0.2
+      );
+      if (twice) continue;
       line.items.push(item);
       line.h = Math.max(line.h, item.h);
     } else {

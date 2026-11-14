@@ -126,6 +126,27 @@ describe('chapterHeading', () => {
     expect(chapterHeading([line('Section C', 0.3, 0.04)])).toBeNull();
   });
 
+  it('項目の行が少ない扉でも、見出しの字の 6 割ある題は続け、本文の字は続けない', () => {
+    // プレセッターマニュアルの Section 6 の扉（柱・見出し・題・項目 3 行・欄外）。
+    const lines = [
+      line('6 プレセッターの施工上の注意事項', 0.093, 0.0285),
+      line('Section 6', 0.139, 0.0238),
+      line('プレセッターの施工上の注意事項', 0.161, 0.0166),
+      line('6−1 施工上の注意事項', 0.214, 0.0166),
+      line('▼6−1—1 金物取付け時の注意事項 ・・207', 0.235, 0.0119),
+      line('▼6−1—2 建て方時の注意事項 ・・208', 0.26, 0.0119),
+      line('206 PRESETOR MANUAL 2025 年度版', 0.935, 0.0202),
+    ];
+    expect(chapterHeading(lines)).toBe('Section 6 プレセッターの施工上の注意事項');
+    const body = [line('Section 6', 0.139, 0.0238), line('本文の行です。', 0.161, 0.0119), ...lines.slice(3)];
+    expect(chapterHeading(body)).toBe('Section 6');
+    // 見出しが本文の 1.4 倍ほどしかない頁でも、本文の行は題にしない。
+    const plain = [0.2, 0.25, 0.3, 0.35, 0.4, 0.45].map((y) => line('本文の行です。', y, 0.017));
+    expect(chapterHeading([line('Section 3', 0.1, 0.024), line('この章では施工手順を説明する。', 0.13, 0.017), ...plain])).toBe(
+      'Section 3'
+    );
+  });
+
   it('行の少ない扉でも、番号だけの見出しには題を続ける', () => {
     expect(chapterHeading([line('Section 2', 0.3, 0.04), line('プレセッターの解説', 0.36, 0.03), line('011', 0.95)])).toBe(
       'Section 2 プレセッターの解説'

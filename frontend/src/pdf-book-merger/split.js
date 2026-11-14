@@ -83,6 +83,9 @@ const PARTICLE = /^\s*(?:[でのをにがとも](?![ぁ-ゖ])|では|には|と�
 /** 見出しとみなす、行の文字の高さ（頁の中の行の高さの中央値に対する倍率）。 */
 const HEADING_SCALE = 1.3;
 
+/** 番号だけの見出しに続ける題の字の大きさ（本文の字に対する倍率）。 */
+const TITLE_SCALE = 1.2;
+
 /** 見出しの行の長さの上限（本文の行の頭に「第 3 章で…」とあるのを拾わない）。 */
 const HEADING_LENGTH = 40;
 
@@ -113,6 +116,7 @@ export function chapterHeading(lines) {
     .map((line) => line.h)
     .sort((a, b) => a - b);
   const large = heights[Math.floor((heights.length - 1) / 2)] * HEADING_SCALE;
+  const body = heights[Math.floor((heights.length - 1) / 4)];
   const few = lines.length <= 3;
   for (const [k, line] of lines.entries()) {
     if (!heads[k] || line.y > 0.6 || line.text.length > HEADING_LENGTH || TOC_ENTRY.test(line.text)) continue;
@@ -125,7 +129,10 @@ export function chapterHeading(lines) {
       !rest &&
       next &&
       next.y - line.y <= line.h * 2.5 &&
-      (few || next.h >= large) &&
+      // 題の字は、本文の字より 2 割以上大きい（本文の字は、見出しの形でない行の高さの
+      // 小さい方から 4 分の 1 のところ。Section 6 の扉のように項目の行が少ないと、題の
+      // 字は真ん中の行と比べて大きく見えないので、本文の字と比べる）。
+      (few || next.h >= body * TITLE_SCALE) &&
       next.y <= 1 - MARGIN_ZONE &&
       !HEADING.test(next.text) &&
       !PARTICLE.test(next.text) &&
