@@ -97,9 +97,9 @@ describe('readOutline', () => {
     const titles = await readOutline(
       doc(
         [
-          { title: ' はじめに ', dest: [{ num: 100, gen: 0 }, { name: 'XYZ' }], items: [{ title: '1.1', dest: [5] }] },
+          { title: ' はじめに　序 ', dest: [{ num: 100, gen: 0 }, { name: 'XYZ' }], items: [{ title: '1.1', dest: [5] }] },
           { title: '第1章', dest: 'chapter1' },
-          { title: '第2章', dest: [12, { name: 'Fit' }] },
+          { title: '第2章\r構造', dest: [12, { name: 'Fit' }] },
           { title: '同じ頁の 2 つ目', dest: [12] },
           { title: '', dest: [20] },
           { title: '行き先の無い項目', dest: null },
@@ -110,9 +110,9 @@ describe('readOutline', () => {
       )
     );
     expect([...titles]).toEqual([
-      [0, 'はじめに'],
+      [0, 'はじめに　序'],
       [4, '第1章'],
-      [12, '第2章'],
+      [12, '第2章 構造'],
     ]);
   });
 

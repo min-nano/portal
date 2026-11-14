@@ -428,7 +428,8 @@ export async function readPageText(doc, index) {
  *
  * 分ける位置の候補にする（split.js）。しおりが書名 1 つだけで、その下に章が
  * 並ぶ形なら、その下の段を使う。指す先の分からない項目と、しおりを読めない
- * PDF は飛ばす（分ける候補が減るだけなので）。
+ * PDF は飛ばす（分ける候補が減るだけなので）。名前の中の改行・タブは空白 1 つに
+ * する（画面に候補の理由として出すため）。
  *
  * @returns {Promise<Map<number, string>>}
  */
@@ -436,13 +437,13 @@ export async function readOutline(doc) {
   const titles = new Map();
   let items = (await doc.getOutline().catch(() => null)) ?? [];
   if (items.length === 1 && items[0].items?.length) items = items[0].items;
-  for (const item of items) {
-    // 指す先の分からない項目と、名前の無い項目、同じ頁を指す 2 つ目からの項目は使わない。
-    const index = await outlinePage(doc, item.dest).catch(() => null);
-    const title = item.title.trim();
-    if (index === null || !title || titles.has(index)) continue;
-    titles.set(index, title);
-  }
+  // 行き先は並べて引き、項目の順に、頁ごとに最初の項目の名前を使う。名前の無い
+  // 項目と、指す先の分からない項目は使わない（名前の中の改行・タブは空白 1 つにする）。
+  const pages = await Promise.all(items.map((item) => outlinePage(doc, item.dest).catch(() => null)));
+  items.forEach((item, k) => {
+    const title = item.title.replace(/[\r\n\t]+/g, ' ').trim();
+    if (title && pages[k] !== null && !titles.has(pages[k])) titles.set(pages[k], title);
+  });
   return titles;
 }
 
