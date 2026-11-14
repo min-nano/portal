@@ -437,17 +437,19 @@ export async function readOutline(doc) {
   let items = (await doc.getOutline().catch(() => null)) ?? [];
   if (items.length === 1 && items[0].items?.length) items = items[0].items;
   for (const item of items) {
-    try {
-      const dest = typeof item.dest === 'string' ? await doc.getDestination(item.dest) : item.dest;
-      const target = dest?.[0];
-      const index = Number.isInteger(target) ? target : await doc.getPageIndex(target);
-      const title = item.title.trim();
-      if (title && !titles.has(index)) titles.set(index, title);
-    } catch {
-      // 指す先の分からない項目は使わない。
-    }
+    // 指す先の分からない項目と、名前の無い項目、同じ頁を指す 2 つ目からの項目は使わない。
+    const index = await outlinePage(doc, item.dest).catch(() => null);
+    const title = item.title.trim();
+    if (index === null || !title || titles.has(index)) continue;
+    titles.set(index, title);
   }
   return titles;
+}
+
+/** しおりの項目の行き先（名前か、頁の参照か頁の番号の並び）が指す頁の位置。 */
+async function outlinePage(doc, dest) {
+  const target = (typeof dest === 'string' ? await doc.getDestination(dest) : dest)?.[0];
+  return Number.isInteger(target) ? target : doc.getPageIndex(target);
 }
 
 /** 余白の帯（上下 MARGIN_ZONE）を、OCR に足りる細かさで描く viewport と canvas の大きさ。 */
