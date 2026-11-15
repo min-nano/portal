@@ -458,12 +458,13 @@ function showWaiting(file) {
   clearTimeout(file.waitTimer);
   if (!file.waiting || !file.waitUntil || !files.includes(file)) return;
   const ms = file.waitUntil - Date.now();
+  // 待っている間も、バーは済んだところで止めておく（戻さない）。
   if (ms <= 0) {
-    showProgress(`「${file.name}」を読み直しています`, null);
+    showProgress(`「${file.name}」を読み直しています`, readProgress.fraction);
     return;
   }
   const heading = `「${file.name}」の読み込みを待っています（${file.waitReason}・あと ${Math.ceil(ms / 1000)} 秒ほど）`;
-  showProgress(heading, null, heading);
+  showProgress(heading, readProgress.fraction, heading);
   file.waitTimer = setTimeout(() => showWaiting(file), ms % 1000 || 1000);
 }
 
@@ -481,16 +482,16 @@ async function loadBytes(file, source) {
   file.status = 'loading';
   renderFile(file);
   const started = performance.now();
+  file.loadStarted = started;
   let bytes;
   try {
     bytes = await source.load(
       (received, total) => {
         file.waitUntil = 0; // 届き始めた（待ち終えた）
         clearTimeout(file.waitTimer);
+        file.transfer = { received, total };
         // 調べる順番が来て、読み込みを待っているときだけ、進み具合に出す。
-        if (!file.waiting) return;
-        const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
-        showProgress(`「${file.name}」を読み込んでいます（${amount}）`, total ? received / total : null);
+        if (file.waiting) showLoading(file);
       },
       // 読み直す前に待つときは、記録に残し、待っていることを画面に出す（先読みの
       // 途中なら、調べる順番が来たときに出す。readFile）。
@@ -558,6 +559,59 @@ async function bytesOf(file) {
   return file.stashed ? stash.read(stashName(file)) : null;
 }
 
+// --- Drive の読み込みが、仕事の中で受け持つ区間 -----------------------------------
+//
+// 大きなファイルは、読み込みに調べるのと同じかそれ以上の時間がかかる（205 MB・198 頁
+// のスキャンで、読み込み 36 秒・調べる 31 秒）。区間を決め打ちにすると（以前は 3 割）、
+// 読み込みの間はバーがほとんど進まず、読み終えると一気に進む。そこで、かかる時間の
+// 見積もりで分ける。読み込みの残りは届いた速さから、調べる時間は大きさから見積もる
+// （スキャンの PDF では、時間のほとんどは頁の JPEG の展開で、大きさにほぼ比例する）。
+// 1 バイトあたりの時間は、調べ終えたスキャンのファイルから数え直す（端末の速さで
+// 何倍も違う）。
+
+/** 読み込みの区間の、はじめの見当（届き始めて速さが分かるまで）。 */
+const LOAD_SHARE_GUESS = 0.3;
+/** 調べるのにかかる時間の、はじめの見当（1 MB あたりのミリ秒。Mac の Safari で測った値）。 */
+const ANALYSIS_MS_PER_MB = 150;
+/** 調べ終えたスキャンのファイルの、調べるのにかかった時間と大きさの合計。 */
+const analysisSpent = { ms: 0, bytes: 0 };
+
+/** 大きさ bytes のファイルを調べるのにかかる時間（ミリ秒）の見積もり。 */
+function analysisMs(bytes) {
+  if (analysisSpent.bytes) return (bytes * analysisSpent.ms) / analysisSpent.bytes;
+  return (bytes / 1e6) * ANALYSIS_MS_PER_MB;
+}
+
+/**
+ * Drive の読み込みを待っている間の進み具合を出す。仕事を始めてから経った時間と、
+ * 読み込みの残り・調べるのにかかる時間の見積もりから、いまの位置と読み込みの区間の
+ * 終わりを決める。
+ *
+ * 位置は 経った時間 ÷（経った時間＋読み込みの残り＋調べる時間）。読み込みの残りは
+ * 届いた速さ（読み込みを始めてから）で見積もるので、届いた量を r、全体を T、経った
+ * 時間を w とすると、位置は 1 ÷（T / r ＋ 調べる時間 / w）（先読みで、仕事より先に
+ * 読み始めていても同じ形で、w の分母が少し大きくなるだけ）。r も w も減らないので、
+ * 速さが落ちても位置は戻らない（止まって見えるだけ）。
+ */
+function showLoading(file) {
+  const { received = 0, total = 0 } = file.transfer ?? {};
+  const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
+  const text = `「${file.name}」を読み込んでいます${file.transfer ? `（${amount}）` : ''}`;
+  if (!file.fetching || !received || !total) {
+    showProgress(text, readProgress.fraction);
+    return;
+  }
+  const now = performance.now();
+  const waited = now - file.jobStarted;
+  const remaining = ((total - received) * (now - file.loadStarted)) / received;
+  const whole = waited + remaining + analysisMs(total);
+  const at = waited / whole;
+  const end = (waited + remaining) / whole;
+  readProgress.stage(0, end);
+  // 読み終えていて、時計の刻みが粗く経った時間も 0 のときは、区間の幅が無い。
+  showProgress(text, end > 0 ? at / end : 0);
+}
+
 async function readFile(file) {
   if (!files.includes(file)) return; // 読む前に外された。
   const started = performance.now();
@@ -567,14 +621,15 @@ async function readFile(file) {
     readProgress.label = () =>
       `ファイルを調べています（${files.filter((f) => !f.pending).length + 1} / ${files.length}）`;
     // 段ごとの区間。Drive の読み込みを待つ（先読みが済んでいない）ときは、
-    // 読み込みにも区間を分ける（大きなファイルは読み込みに数分かかる。この端末の
-    // ファイルはすぐ読み終えるので分けない）。
-    const loadEnd = file.driveId && file.status !== 'loaded' ? 0.3 : 0;
-    const textEnd = loadEnd + (1 - loadEnd) * 0.1;
-    readProgress.stage(0, loadEnd);
+    // 読み込みにも区間を分ける（大きなファイルは読み込みに数分かかる。区間はかかる
+    // 時間の見積もりで決める。showLoading）。この端末のファイルはすぐ読み終えるので
+    // 分けない。
+    file.fetching = Boolean(file.driveId) && file.status !== 'loaded';
+    file.jobStarted = started;
+    readProgress.stage(0, file.fetching ? LOAD_SHARE_GUESS : 0);
     file.waiting = true;
+    if (file.status !== 'loaded') showLoading(file);
     if (file.waitUntil > Date.now()) showWaiting(file);
-    else if (file.status !== 'loaded') showProgress(`「${file.name}」を読み込んでいます`, null);
     await file.loaded;
     file.waiting = false;
     clearTimeout(file.waitTimer);
@@ -584,6 +639,11 @@ async function readFile(file) {
     if (!files.includes(file)) return; // 読んでいる間に外された（中身は持たない）。
     file.bytes = bytes;
     if (!isPdf(file.bytes)) throw new Error('PDF ファイルではありません。');
+    // 読み込みの区間は、読み終えたいまの位置まで（残りを調べる時間の見積もりで分ける）。
+    const analysisStarted = performance.now();
+    const waited = analysisStarted - started;
+    const loadEnd = file.fetching ? waited / (waited + analysisMs(bytes.length)) : 0;
+    const textEnd = loadEnd + (1 - loadEnd) * 0.1;
 
     file.status = 'reading';
     holdDoc(file);
@@ -666,6 +726,14 @@ async function readFile(file) {
         (redrawnSafely(file.doc) ? '。pdf.js で描けなかった頁があり、安全な設定で開き直して描き直しました' : '')
     );
 
+    // 見積もりに使うのは、すべての頁を JPEG のまま描いたファイル（スキャン）だけ。
+    // pdf.js で描く PDF（InDesign の書き出しなど）は、小さくても描くのに時間が
+    // かかるので、1 バイトあたりにすると何十倍にもなり、次の大きなスキャンの
+    // 読み込みの区間がほとんど無くなる。
+    if (jpegPages === count) {
+      analysisSpent.ms += performance.now() - analysisStarted;
+      analysisSpent.bytes += bytes.length;
+    }
     file.role = guessRole(file.name, file.pages);
     file.status = 'ready';
     if (file.stashed) file.bytes = null;

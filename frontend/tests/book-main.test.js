@@ -755,6 +755,14 @@ describe('ファイルを足して並べる', () => {
     return seen;
   }
 
+  /**
+   * ファイルを調べる仕事が始まるまで待つ（Drive の読み込みは仕事より先に始まるので、
+   * 仕事を始めてからの経過として届いた量を数えたいときに）。
+   */
+  function started(count = '1 / 1') {
+    return vi.waitFor(() => expect($('progressText').textContent).toBe(`ファイルを調べています（${count}）`));
+  }
+
   /** 記録したバーの値が、一度も戻っていないこと。 */
   function expectNeverBack(seen) {
     const values = seen.map((s) => s.value);
@@ -842,7 +850,7 @@ describe('ファイルを足して並べる', () => {
     $('driveBtn').click();
     await vi.waitFor(() => expect(release).toBeTypeOf('function'));
     expect($('progress').hidden).toBe(false);
-    // 読み込みの段（仕事の 3 割）は、済んだところ 0 から、段の終わりまでのストライプ。
+    // 大きさの分からない読み込みの段（仕事の 3 割）は、済んだところ 0 から、段の終わりまでのストライプ。
     const bar = $('progressBar');
     expect(bar.getAttribute('aria-valuenow')).toBe('0');
     expect(Number(bar.dataset.busyEnd)).toBeCloseTo(0.3);
@@ -850,6 +858,158 @@ describe('ファイルを足して並べる', () => {
     expect($('progressBusy').style.left).toBe('0%');
     expect(parseFloat($('progressBusy').style.width)).toBeCloseTo(30);
     release();
+    await settled(1);
+  });
+
+  describe('Drive の読み込みの区間は、かかる時間の見積もりで決める', () => {
+    let clock;
+    beforeEach(() => {
+      clock = 0;
+      vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    const MB = 1e6;
+
+    it('読み込みの残りは届いた速さから、調べる時間は大きさ（はじめは 1 MB あたり 150 ミリ秒）から見積もる', async () => {
+      let release;
+      const bytes = pdf(ODD);
+      const total = bytes.length;
+      // 時間は、調べる時間の見積もり（total バイト × 150 ミリ秒 / MB）の 1/15 を単位にする。
+      const unit = (total * 150) / MB / 15;
+      mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
+      mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress }) => {
+        await started();
+        // 1/4 が 10 単位で届いた: 読み込みの残り 30 単位、調べる時間 15 単位。
+        clock = 10 * unit;
+        onProgress(total / 4, total);
+        await new Promise((done) => (release = done));
+        // 速さが落ちても（20 単位で 1/20）、バーは戻らない。
+        clock = 30 * unit;
+        onProgress(total * 0.3, total);
+        clock = 60 * unit;
+        onProgress(total, total);
+        return bytes;
+      });
+      const seen = watchBar({ withEnd: true });
+      $('driveBtn').click();
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+      // 10 / (10 + 30 + 15) まで済み、読み込みの終わり (10 + 30) / 55 までがストライプ。
+      expect(seen.at(-1).value).toBeCloseTo(10 / 55);
+      expect(seen.at(-1).end).toBeCloseTo(40 / 55);
+      expect($('progressText').textContent).toBe('ファイルを調べています（1 / 1）');
+
+      release();
+      await settled(1);
+      seen.stop();
+      expectNeverBack(seen);
+      // 読み終えたところは 60 / (60 + 15)。調べる段はそこから始める（時計が進まないので、
+      // 文字情報の段の始まりもそこ）。
+      expect(seen.find((s) => s.value > 0.5).value).toBeCloseTo(60 / 75);
+      expect(seen.filter((s) => Math.abs(s.value - 60 / 75) < 1e-9).length).toBeGreaterThan(1);
+    });
+
+    it('調べる時間は、調べ終えたファイルにかかった時間から見積もり直す', async () => {
+      // 手元のファイルを調べるのに、時計が進まない（0 ミリ秒）とする。
+      drop([file('猫_表紙.pdf', pdf(COVER))]);
+      await settled(1);
+
+      let release;
+      mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
+      mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress }) => {
+        await started('2 / 2');
+        clock = 10000;
+        onProgress(50 * MB, 100 * MB);
+        await new Promise((done) => (release = done));
+        return pdf(ODD);
+      });
+      $('driveBtn').click();
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+      // 調べる時間は 0 と見て、読み込みが仕事のすべて（半分届いたので半分）。
+      const bar = $('progressBar');
+      expect(Number(bar.getAttribute('aria-valuenow'))).toBeCloseTo(0.5);
+      expect(Number(bar.dataset.busyEnd)).toBeCloseTo(1);
+      release();
+      await settled(2);
+    });
+
+    it('pdf.js で描いた頁のあるファイルは、見積もり直すのに使わない', async () => {
+      // 小さくても描くのに時間のかかる PDF（ここでは 1000 秒）。
+      const render = mocks.findScanImages.getMockImplementation();
+      mocks.findScanImages.mockImplementation(async (...args) => {
+        clock += 1e6;
+        return render(...args);
+      });
+      drop([file('猫_表紙.pdf', pdf([page('c1', null, { jpeg: false })]))]);
+      await settled(1);
+
+      let release;
+      mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
+      mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress }) => {
+        await started('2 / 2');
+        clock += 10000;
+        onProgress(50 * MB, 100 * MB);
+        await new Promise((done) => (release = done));
+        return pdf(ODD);
+      });
+      $('driveBtn').click();
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+      // 調べる時間は、はじめの見当のまま（100 MB で 15 秒）: 10 / (10 + 10 + 15)。
+      expect(Number($('progressBar').getAttribute('aria-valuenow'))).toBeCloseTo(10 / 35);
+      release();
+      await settled(2);
+    });
+
+    it('読み終えていて、時計も進んでいなければ、区間は幅が無い（割合は 0 にする）', async () => {
+      let release;
+      mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
+      mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress }) => {
+        await new Promise((done) => (release = done));
+        onProgress(10 * MB, 10 * MB);
+        return pdf(ODD);
+      });
+      const seen = watchBar({ withEnd: true });
+      $('driveBtn').click();
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+      release();
+      await settled(1);
+      seen.stop();
+      // 幅の無い区間で割っても NaN にならない。
+      expect(seen.length).toBeGreaterThan(0);
+      for (const s of seen) expect(Number.isFinite(s.value)).toBe(true);
+    });
+  });
+
+  it('読み込みを待っている間は、バーを済んだところで止めておく', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    let clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    let resume;
+    mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
+    mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress, onWait }) => {
+      await started();
+      clock = 10000;
+      onProgress(50e6, 100e6);
+      onWait(2000, '流量の制限');
+      await new Promise((done) => (resume = done));
+      return pdf(ODD);
+    });
+    try {
+      $('driveBtn').click();
+      await vi.waitFor(() => expect(resume).toBeTypeOf('function'));
+      const bar = $('progressBar');
+      const before = Number(bar.getAttribute('aria-valuenow'));
+      expect(before).toBeGreaterThan(0.1);
+      expect($('progressText').textContent).toContain('の読み込みを待っています');
+      await vi.advanceTimersByTimeAsync(2500);
+      expect($('progressText').textContent).toBe('ファイルを調べています（1 / 1）');
+      expect(Number(bar.getAttribute('aria-valuenow'))).toBe(before);
+      resume();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
     await settled(1);
   });
 
