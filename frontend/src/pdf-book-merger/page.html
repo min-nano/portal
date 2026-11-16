@@ -29,10 +29,9 @@
     <input type="file" id="localInput" accept="application/pdf,.pdf" multiple hidden>
   </div>
   <div id="progress" class="bm-progress" hidden>
-    <!-- 済んだところ（ベタ塗り）と、いま進めている区間（ストライプ）を重ねて描く。 -->
+    <!-- 済んだところをベタ塗りで描く。 -->
     <div id="progressBar" class="bm-bar" role="progressbar" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0">
       <div id="progressDone" class="bm-bar-done"></div>
-      <div id="progressBusy" class="bm-bar-busy"></div>
     </div>
     <span id="progressText"></span>
   </div>

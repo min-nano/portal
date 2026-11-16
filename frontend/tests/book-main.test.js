@@ -735,19 +735,14 @@ describe('ファイルを足して並べる', () => {
     expect(window.getSelection().toString()).toContain('を読み込みました');
   });
 
-  /**
-   * バーに出した値（済んだところ）と、そのときの見出しを記録する。返す関数で記録をやめる。
-   * withEnd なら、いま進めている区間の終わり（ストライプの右端）も記録する。
-   */
-  function watchBar({ withEnd = false } = {}) {
+  /** バーに出した値（済んだところ）と、そのときの見出しを記録する。返す関数で記録をやめる。 */
+  function watchBar() {
     const seen = [];
     const bar = $('progressBar');
     const setAttribute = bar.setAttribute.bind(bar);
     bar.setAttribute = (name, value) => {
       if (name === 'aria-valuenow') {
-        const entry = { value: Number(value), label: $('progressText').textContent };
-        if (withEnd) entry.end = Number(bar.dataset.busyEnd);
-        seen.push(entry);
+        seen.push({ value: Number(value), label: $('progressText').textContent });
       }
       setAttribute(name, value);
     };
@@ -805,7 +800,7 @@ describe('ファイルを足して並べる', () => {
     const hidden = [];
     const observer = new MutationObserver(() => hidden.push($('progress').hidden));
     observer.observe($('progress'), { attributes: true, attributeFilter: ['hidden'] });
-    const seen = watchBar({ withEnd: true });
+    const seen = watchBar();
     drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
     await settled(2);
     await flush();
@@ -815,8 +810,7 @@ describe('ファイルを足して並べる', () => {
     // 出したら、隠すのは最後の 1 度だけ。
     expect(hidden).toEqual([false, true]);
     // 替わり目では、1 つめを済ませた位置（半分）で止め、2 つめの見出しに替える。
-    // ストライプは 2 つめの仕事の終わりまで。
-    expect(seen).toContainEqual({ value: 0.5, end: 1, label: 'ファイルを調べています（2 / 2）' });
+    expect(seen).toContainEqual({ value: 0.5, label: 'ファイルを調べています（2 / 2）' });
     expectNeverBack(seen);
   });
 
@@ -839,26 +833,29 @@ describe('ファイルを足して並べる', () => {
     expect(seen.map((s) => s.label)).toContain('ファイルを調べています（3 / 3）');
   });
 
-  it('進み具合が分からないあいだも、済んだところは出したまま、進めている区間をストライプで出す', async () => {
+  it('進み具合が分からないあいだは、バーを段の始まりで止めておく', async () => {
     let release;
+    const seen = watchBar();
     mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
     mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress }) => {
-      onProgress(5, 0); // 大きさの分からない読み込み
+      // 調べる順番が来てから、大きさの分からない読み込みが届く。
+      await started();
+      onProgress(5, 0);
+      onProgress(10, 0);
       await new Promise((done) => (release = done));
       return pdf(ODD);
     });
     $('driveBtn').click();
     await vi.waitFor(() => expect(release).toBeTypeOf('function'));
     expect($('progress').hidden).toBe(false);
-    // 大きさの分からない読み込みの段（仕事の 3 割）は、済んだところ 0 から、段の終わりまでのストライプ。
-    const bar = $('progressBar');
-    expect(bar.getAttribute('aria-valuenow')).toBe('0');
-    expect(Number(bar.dataset.busyEnd)).toBeCloseTo(0.3);
+    // 大きさの分からない読み込みでは、届いてもバーは 0 のまま。
+    expect(seen.map((s) => s.value)).toEqual(seen.map(() => 0));
+    expect(seen.length).toBeGreaterThan(2);
+    expect($('progressBar').getAttribute('aria-valuenow')).toBe('0');
     expect($('progressDone').style.width).toBe('0%');
-    expect($('progressBusy').style.left).toBe('0%');
-    expect(parseFloat($('progressBusy').style.width)).toBeCloseTo(30);
     release();
     await settled(1);
+    seen.stop();
   });
 
   describe('Drive の読み込みの区間は、かかる時間の見積もりで決める', () => {
@@ -886,7 +883,7 @@ describe('ファイルを足して並べる', () => {
     }
     const bar = () => Number($('progressBar').getAttribute('aria-valuenow'));
 
-    it('読み込みの残りは近ごろの速さで、調べる時間は大きさで見積もる。ストライプは戻さない', async () => {
+    it('読み込みの残りは近ごろの速さで、調べる時間は大きさで見積もる', async () => {
       // 手元のスキャンを調べるのに 15 秒かかったとして、同じ大きさの Drive のファイルを
       // 調べる時間を 15 秒と見積もらせる。
       const render = mocks.findScanImages.getMockImplementation();
@@ -900,13 +897,13 @@ describe('ファイルを足して並べる', () => {
 
       const T = bytes.length;
       let base;
-      const seen = watchBar({ withEnd: true });
+      const seen = watchBar();
       const release = await pickDrive(
         async ({ onProgress }) => {
           await started('2 / 2');
           base = clock;
           // 届き始めるまでに 3 秒（トークンを取る・つなぐ）。最初のデータだけでは
-          // 速さが分からないので、はじめの見当（3 割）のまま。
+          // 速さが分からないので、バーは止めたまま。
           clock = base + 3000;
           onProgress(T / 20, T);
           // 1/5 が 7 秒で届いた: 読み込みの残り 26.25 秒、調べる時間 15 秒。
@@ -914,7 +911,7 @@ describe('ファイルを足して並べる', () => {
           onProgress(T / 4, T);
         },
         ({ onProgress }) => {
-          // 速さが上がって読み込みの区間の見積もりが縮んでも（残り 10 秒）、ストライプは戻さない。
+          // 速さが上がった（残り 10 秒）。
           clock = base + 12000;
           onProgress(T / 2, T);
           clock = base + 40000;
@@ -922,20 +919,17 @@ describe('ファイルを足して並べる', () => {
           return bytes;
         }
       );
-      expect(seen).toContainEqual({ value: 0, end: expect.closeTo(0.3, 5), label: 'ファイルを調べています（2 / 2）' });
+      expect(seen).toContainEqual({ value: 0, label: 'ファイルを調べています（2 / 2）' });
+      // 10 / (10 + 26.25 + 15)。
       expect(seen.at(-1).value).toBeCloseTo(10 / 51.25);
-      expect(seen.at(-1).end).toBeCloseTo(36.25 / 51.25);
       expect($('progressText').textContent).toBe('ファイルを調べています（2 / 2）');
 
       release();
       await settled(2);
       seen.stop();
-      // 見積もりでは (12 + 10) / 37 までだが、出したところより戻さない。
-      const faster = seen.find((s) => Math.abs(s.value - 12 / 37) < 1e-9);
-      expect(faster).toBeDefined();
-      expect(faster.end).toBeCloseTo(36.25 / 51.25);
+      // 12 / (12 + 10 + 15)。
+      expect(seen.some((s) => Math.abs(s.value - 12 / 37) < 1e-9)).toBe(true);
       expectNeverBack(seen);
-      seen.forEach((s, i) => expect(s.end).toBeGreaterThanOrEqual(seen[i - 1]?.end ?? 0));
       // 読み終えたところは 40 / (40 + 15)。文字情報の段はそこから始める。
       expect(seen.find((s) => s.value >= 40 / 55 - 1e-9)?.value).toBeCloseTo(40 / 55);
     });
@@ -964,7 +958,6 @@ describe('ファイルを足して並べる', () => {
         onProgress(50 * MB, 100 * MB);
       });
       expect(bar()).toBe(0);
-      expect(Number($('progressBar').dataset.busyEnd)).toBeCloseTo(0.3);
       release();
       await settled(1);
     });
@@ -981,7 +974,6 @@ describe('ファイルを足して並べる', () => {
       });
       // 調べる時間は 0 と見て、読み込みが仕事のすべて（残り 9.8 秒）。
       expect(bar()).toBeCloseTo(10 / 19.8);
-      expect(Number($('progressBar').dataset.busyEnd)).toBeCloseTo(1);
       release();
       await settled(2);
     });
@@ -1008,7 +1000,7 @@ describe('ファイルを足して並べる', () => {
     });
 
     it('届くのが止まっても、バーは戻さない', async () => {
-      const seen = watchBar({ withEnd: true });
+      const seen = watchBar();
       const release = await pickDrive(async ({ onProgress }) => {
         await started();
         // 届き始めるまで 3 秒。5 MB が 7 秒で届いた: 読み込みの残り 131.6 秒。
@@ -1023,7 +1015,6 @@ describe('ファイルを足して並べる', () => {
       const [before, after] = seen.slice(-2);
       expect(before.value).toBeCloseTo(10 / 156.6);
       expect(after.value).toBe(before.value);
-      expect(after.end).toBeGreaterThan(before.end); // 読み込みの区間は延びる（先へ動くのは構わない）
       release();
       await settled(1);
       seen.stop();
@@ -1093,14 +1084,13 @@ describe('ファイルを足して並べる', () => {
       // 届き終えて保存領域に置いている間に、調べる順番が来た。
       drop([file('猫_表紙.pdf', pdf(COVER))]);
       await settled(1);
-      const seen = watchBar({ withEnd: true });
+      const seen = watchBar();
       const release = await pickDrive(({ onProgress }) => {
         onProgress(1 * MB, 10 * MB);
         clock = 2000;
         onProgress(10 * MB, 10 * MB);
       });
-      // 割合は 0。ストライプは、はじめの見当（3 割）のまま（仕事の終わりまで伸ばさない）。
-      expect(seen.at(-1)).toMatchObject({ value: 0, end: expect.closeTo(0.3, 5) });
+      expect(seen.at(-1).value).toBe(0);
       release();
       await settled(2);
       seen.stop();
