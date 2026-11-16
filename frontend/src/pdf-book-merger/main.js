@@ -174,6 +174,9 @@ const crashLog = createCrashLog();
  *
  * jobs を持つ流れでは、仕事を足しても（addJob）バーが戻らないように、足した
  * ときの位置から残りを数え直す。
+ *
+ * stage の 3 つめ（busy）を渡すと、ストライプは段の終わりではなくそこまで描く
+ * （見積もりで決めた段の終わりが縮んでも、出したストライプを戻さないときに）。
  */
 function createProgress({ jobs = false } = {}) {
   const progress = {
@@ -185,9 +188,10 @@ function createProgress({ jobs = false } = {}) {
     heading: '',
     // 仕事の数・済んだ数と、数え直したときのバーの位置（base）と仕事の位置（start）。
     jobs: jobs ? { total: 0, done: 0, base: 0, start: 0 } : null,
-    stage(from, to) {
-      progress.from = from;
-      progress.to = to;
+    // ストライプの終わり（仕事の中の位置。段の終わりより先なら、そこまで描く）。
+    busy: 1,
+    stage(from, to, busy = to) {
+      Object.assign(progress, { from, to, busy });
     },
     show(text, fraction, heading = '') {
       Object.assign(progress, { text, fraction, heading });
@@ -216,10 +220,11 @@ function createProgress({ jobs = false } = {}) {
     /**
      * いま進めている区間の終わり（流れ全体の位置）。いまの段の終わりで、幅の無い段
      * （読み込みを分けない手元のファイルや、仕事の替わり目）なら、仕事の終わり。
+     * stage で段の終わりより先を渡されていれば、そこ。
      */
     busyEnd() {
-      const to = progress.to > progress.from ? progress.to : 1;
-      return progress.place((progress.jobs?.done ?? 0) + to);
+      const to = Math.max(progress.to, progress.busy);
+      return progress.place((progress.jobs?.done ?? 0) + (to > progress.from ? to : 1));
     },
     addJob() {
       const { jobs } = progress;
@@ -482,13 +487,21 @@ async function loadBytes(file, source) {
   file.status = 'loading';
   renderFile(file);
   const started = performance.now();
-  file.loadStarted = started;
   let bytes;
   try {
     bytes = await source.load(
       (received, total) => {
         file.waitUntil = 0; // 届き始めた（待ち終えた）
         clearTimeout(file.waitTimer);
+        // 速さを測るため、届いた時刻と量を、近ごろの分だけ RATE_STEP_MS おきに残す
+        // （showLoading）。はじめから読み直したとき（続きから読めなかった・版が
+        // 差し替えられた）は、そこから測り直す。
+        const now = performance.now();
+        const { transfer } = file;
+        if (!file.samples || received < transfer.received || total !== transfer.total) file.samples = [];
+        const { samples } = file;
+        while (samples.length && now - samples[0].at > RATE_WINDOW_MS) samples.shift();
+        if (!samples.length || now - samples.at(-1).at >= RATE_STEP_MS) samples.push({ received, at: now });
         file.transfer = { received, total };
         // 調べる順番が来て、読み込みを待っているときだけ、進み具合に出す。
         if (file.waiting) showLoading(file);
@@ -497,6 +510,7 @@ async function loadBytes(file, source) {
       // 途中なら、調べる順番が来たときに出す。readFile）。
       (ms, reason) => {
         log(`「${file.name}」の読み込みを ${Math.round(ms / 1000)} 秒待ってから読み直します（${reason}）`);
+        file.samples = null; // 待つ間は届かないので、速さは読み直してから測る
         file.waitUntil = Date.now() + ms;
         file.waitReason = reason;
         if (file.waiting) showWaiting(file);
@@ -505,6 +519,8 @@ async function loadBytes(file, source) {
   } catch (error) {
     log(`「${file.name}」を読み込めませんでした（${error?.message || error}）`);
     throw error;
+  } finally {
+    file.samples = null; // 読み終えたら要らない
   }
   log(`「${file.name}」を読み込みました（${megabytes(bytes.length)}、${seconds(started)}）`);
   if (!files.includes(file)) return; // 読んでいる間に外された。
@@ -571,10 +587,21 @@ async function bytesOf(file) {
 
 /** 読み込みの区間の、はじめの見当（届き始めて速さが分かるまで）。 */
 const LOAD_SHARE_GUESS = 0.3;
+/** 読み込みの速さを測る、近ごろの長さ（ミリ秒）。 */
+const RATE_WINDOW_MS = 10000;
+/** 読み込みの速さを測るために、届いた時刻と量を残す間隔（ミリ秒）。 */
+const RATE_STEP_MS = 250;
+/** 速さを見積もるのに要る、測れた間の長さ（ミリ秒）。 */
+const RATE_SPAN_MS = 1000;
 /** 調べるのにかかる時間の、はじめの見当（1 MB あたりのミリ秒。Mac の Safari で測った値）。 */
 const ANALYSIS_MS_PER_MB = 150;
 /** 調べ終えたスキャンのファイルの、調べるのにかかった時間と大きさの合計。 */
 const analysisSpent = { ms: 0, bytes: 0 };
+
+/** part ÷ whole（whole が 0 なら 0。時計の刻みが粗く、経った時間も見積もりも 0 のとき）。 */
+function ratio(part, whole) {
+  return whole > 0 ? part / whole : 0;
+}
 
 /** 大きさ bytes のファイルを調べるのにかかる時間（ミリ秒）の見積もり。 */
 function analysisMs(bytes) {
@@ -587,29 +614,35 @@ function analysisMs(bytes) {
  * 読み込みの残り・調べるのにかかる時間の見積もりから、いまの位置と読み込みの区間の
  * 終わりを決める。
  *
- * 位置は 経った時間 ÷（経った時間＋読み込みの残り＋調べる時間）。読み込みの残りは
- * 届いた速さ（読み込みを始めてから）で見積もるので、届いた量を r、全体を T、経った
- * 時間を w とすると、位置は 1 ÷（T / r ＋ 調べる時間 / w）（先読みで、仕事より先に
- * 読み始めていても同じ形で、w の分母が少し大きくなるだけ）。r も w も減らないので、
- * 速さが落ちても位置は戻らない（止まって見えるだけ）。
+ * 位置は 経った時間 ÷（経った時間＋読み込みの残り＋調べる時間）。読み込みの残りは、
+ * 近ごろ（RATE_WINDOW_MS）届いた速さで見積もり、RATE_SPAN_MS より短い間しか測れて
+ * いなければ、見積もらずに位置を止めておく（はじめは見当の 3 割の区間）。読み込みを
+ * 始めてからの速さにすると、届き始めるまでの数秒（トークンを取る・つなぐ）や、途中で
+ * 待った時間（流量の制限など。待つときは測り直す）が入って、速さを小さく見積もる。同じ
+ * 時計の刻みに届いたデータや、まとめて届いた出だしだけで測ると、逆に大きく見る。
+ *
+ * 届くのが止まると残りの見積もりが延びて位置が手前になり、速さが上がると読み込みの
+ * 区間が縮むが、どちらも出したところより戻さない（縮めると、バーが戻ったように見える）。
  */
 function showLoading(file) {
   const { received = 0, total = 0 } = file.transfer ?? {};
   const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
   const text = `「${file.name}」を読み込んでいます${file.transfer ? `（${amount}）` : ''}`;
-  if (!file.fetching || !received || !total) {
+  const now = performance.now();
+  const oldest = file.samples?.[0]; // 読み終えたあと（先読み）は無い
+  const measured = oldest && now - oldest.at >= RATE_SPAN_MS && received > oldest.received;
+  if (!file.fetching || !total || (received < total && !measured)) {
     showProgress(text, readProgress.fraction);
     return;
   }
-  const now = performance.now();
   const waited = now - file.jobStarted;
-  const remaining = ((total - received) * (now - file.loadStarted)) / received;
+  const remaining = received < total ? ((total - received) * (now - oldest.at)) / (received - oldest.received) : 0;
   const whole = waited + remaining + analysisMs(total);
-  const at = waited / whole;
-  const end = (waited + remaining) / whole;
-  readProgress.stage(0, end);
-  // 読み終えていて、時計の刻みが粗く経った時間も 0 のときは、区間の幅が無い。
-  showProgress(text, end > 0 ? at / end : 0);
+  const at = Math.max(readProgress.inJob(), ratio(waited, whole));
+  const end = Math.max(at, ratio(waited + remaining, whole));
+  // busy に持つのは、出したストライプのうちいちばん先（次の段でも、そこより戻さない）。
+  readProgress.stage(0, end, Math.max(end, readProgress.busy));
+  showProgress(text, ratio(at, end));
 }
 
 async function readFile(file) {
@@ -639,10 +672,13 @@ async function readFile(file) {
     if (!files.includes(file)) return; // 読んでいる間に外された（中身は持たない）。
     file.bytes = bytes;
     if (!isPdf(file.bytes)) throw new Error('PDF ファイルではありません。');
-    // 読み込みの区間は、読み終えたいまの位置まで（残りを調べる時間の見積もりで分ける）。
+    // 読み込みの区間は、読み終えたいまの位置まで（残りを調べる時間の見積もりで分ける。
+    // 読み込みの間に出した位置より戻さない）。
     const analysisStarted = performance.now();
     const waited = analysisStarted - started;
-    const loadEnd = file.fetching ? waited / (waited + analysisMs(bytes.length)) : 0;
+    const loadEnd = file.fetching
+      ? Math.max(readProgress.inJob(), ratio(waited, waited + analysisMs(bytes.length)))
+      : 0;
     const textEnd = loadEnd + (1 - loadEnd) * 0.1;
 
     file.status = 'reading';
@@ -652,7 +688,8 @@ async function readFile(file) {
     const count = file.doc.numPages;
 
     // 文字情報（画像を展開しないので軽い）。
-    readProgress.stage(loadEnd, textEnd);
+    // ストライプは、読み込みの段で出したところより戻さない。
+    readProgress.stage(loadEnd, textEnd, Math.max(textEnd, readProgress.busy));
     for (let index = 0; index < count; index++) {
       if (!files.includes(file)) return;
       showProgress(`「${file.name}」の文字情報を読んでいます（${index + 1} / ${count}）`, index / count);
