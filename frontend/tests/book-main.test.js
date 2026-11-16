@@ -856,6 +856,7 @@ describe('ファイルを足して並べる', () => {
     release();
     await settled(1);
     seen.stop();
+    expectNeverBack(seen);
   });
 
   describe('Drive の読み込みの区間は、かかる時間の見積もりで決める', () => {

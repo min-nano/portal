@@ -591,8 +591,7 @@ function analysisMs(bytes) {
 
 /**
  * Drive の読み込みを待っている間の進み具合を出す。仕事を始めてから経った時間と、
- * 読み込みの残り・調べるのにかかる時間の見積もりから、いまの位置と読み込みの区間の
- * 終わりを決める。
+ * 読み込みの残り・調べるのにかかる時間の見積もりから、仕事の中の位置を決める。
  *
  * 位置は 経った時間 ÷（経った時間＋読み込みの残り＋調べる時間）。読み込みの残りは、
  * 近ごろ（RATE_WINDOW_MS）届いた速さで見積もり、RATE_SPAN_MS より短い間しか測れて
@@ -617,10 +616,9 @@ function showLoading(file) {
   const waited = now - file.jobStarted;
   const remaining = received < total ? ((total - received) * (now - oldest.at)) / (received - oldest.received) : 0;
   const whole = waited + remaining + analysisMs(total);
-  const at = Math.max(readProgress.inJob(), ratio(waited, whole));
-  const end = Math.max(at, ratio(waited + remaining, whole));
-  readProgress.stage(0, end);
-  showProgress(text, ratio(at, end));
+  // 段は仕事のすべてとし、割合をそのまま仕事の中の位置にする。
+  readProgress.stage(0, 1);
+  showProgress(text, Math.max(readProgress.inJob(), ratio(waited, whole)));
 }
 
 async function readFile(file) {
@@ -631,13 +629,12 @@ async function readFile(file) {
     // 何番目かは、調べ終えたファイルの数から数える（あとからの OCR は数えない）。
     readProgress.label = () =>
       `ファイルを調べています（${files.filter((f) => !f.pending).length + 1} / ${files.length}）`;
-    // 段ごとの区間。Drive の読み込みを待つ（先読みが済んでいない）ときは、
-    // 読み込みにも区間を分ける（大きなファイルは読み込みに数分かかる。区間はかかる
-    // 時間の見積もりで決める。showLoading）。この端末のファイルはすぐ読み終えるので
-    // 分けない。
+    // Drive の読み込みを待つ（先読みが済んでいない）ときは、読み込みの間もバーを
+    // 進める（大きなファイルは読み込みに数分かかる。位置はかかる時間の見積もりで
+    // 決める。showLoading）。この端末のファイルはすぐ読み終えるので、バーは止めておく。
     file.fetching = Boolean(file.driveId) && file.status !== 'loaded';
     file.jobStarted = started;
-    readProgress.stage(0, 0); // 読み込みの区間は、速さが分かってから決める（showLoading）
+    readProgress.stage(0, 0);
     file.waiting = true;
     if (file.status !== 'loaded') showLoading(file);
     if (file.waitUntil > Date.now()) showWaiting(file);
