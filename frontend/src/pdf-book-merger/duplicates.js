@@ -55,13 +55,14 @@ const COARSE_GATE = 0.3;
 const COARSE_CELL = 4;
 
 /**
- * 1 つと数えるもの: 語を空白で区切る文字（ラテン文字・ギリシャ文字・キリル文字。
- * 重ねたアクセントも含む）と数字のつながり（語）か、それ以外の 1 字（漢字・かな・
- * タイ文字のように語を区切らない文字は 1 字ずつ）。
+ * 1 つと数えるもの: 語を空白で区切る文字（ラテン文字・キリル文字・アラビア文字・
+ * ハングルなど。重ねたアクセントも含む）と数字のつながり（語）か、それ以外の 1 字。
+ * 漢字・かな・タイ文字のように語を区切らない文字と、記号（長音符「ー」も）は 1 字ずつ。
  */
-const UNITS = /(?:[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}0-9]\p{M}*)+|\S/gu;
+const UNITS =
+  /(?:(?:(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}\p{Script=Common}])[\p{L}\p{N}]|[0-9])\p{M}*)+|\S/gu;
 /** 異体字セレクタ（読み直しで付いたり付かなかったりする）。 */
-const VARIATION_SELECTORS = /[\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]/gu;
+const VARIATION_SELECTORS = /[\u{180B}-\u{180D}\u{180F}\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]/gu;
 
 /** 32 bit の値をかき混ぜる（MurmurHash3 の仕上げ）。 */
 function mix(value) {
@@ -167,7 +168,7 @@ export function samePage(a, b) {
   // 指紋が無い（インクのごく少ない頁）なら同じとみなし、片方にだけあれば違う。
   const sameText =
     a.text && b.text
-      ? a.text.hash === b.text.hash && a.text.length === b.text.length && a.text.size === b.text.size
+      ? a.text.hash === b.text.hash && a.text.length === b.text.length
       : a.text === b.text;
   const sameImage = image === null ? a.image === b.image : image >= IDENTICAL_IMAGE;
   return { exact: sameText && sameImage };
@@ -217,21 +218,20 @@ function listed(names, separator) {
 /**
  * 同じ頁らしい組から、頁ごとの指摘と、本全体の指摘を作る。
  *
- * 頁番号を読み取れた（か、その頁に手で入れた）本文の頁どうしで番号が違えば、別の
- * 頁とする（同じ形の頁が何度も刷られている本——罫線だけのメモの頁など——で、
- * 指摘しないため）。前後から補った番号と、ファイルごとに入れた先頭の番号から振った
- * 番号は当てにしない（同じ束を 2 度スキャンしたファイルにも別の番号を振る）。
+ * 頁番号を読み取れた本文の頁どうしで番号が違えば、別の頁とする（同じ形の頁が
+ * 何度も刷られている本——罫線だけのメモの頁など——で、指摘しないため）。前後から
+ * 補った番号と、手で入れた番号は当てにしない（ファイルごとに入れた先頭の番号は、
+ * 同じ束を 2 度スキャンしたファイルにも別の番号を振る。頁ごとに入れた番号も、
+ * 指摘を消すために 2 度目のスキャンへ入れたものかもしれない）。
  *
  * @param {ReturnType<import('./ordering.js').buildBookOrder>} order
  * @param {{a:string, b:string, exact:boolean}[]} pairs
  * @param {(entry:object) => string} describe 頁の呼び方（「「猫.pdf」の 3 頁目」など）
- * @param {Set<string>} [typed] 頁ごとに手で番号を入れた頁の key
  * @returns {{issues:Map<string, {kind:string, level:'error'|'warn', message:string}[]>, problem:object|null}}
  */
-export function duplicateIssues(order, pairs, describe, typed = new Set()) {
+export function duplicateIssues(order, pairs, describe) {
   const entries = new Map(order.map((entry, position) => [entry.pageKey, { entry, position }]));
-  const trusted = (entry) => entry.status === 'detected' || typed.has(entry.pageKey);
-  const readNumber = ({ entry }) => (entry.role === 'body' && trusted(entry) ? entry.number : null);
+  const readNumber = ({ entry }) => (entry.role === 'body' && entry.status === 'detected' ? entry.number : null);
   const issues = new Map();
   const groups = new Map(); // 頁 → 同じ頁らしい頁の集まり（並びの順）
   let exactPairs = 0;

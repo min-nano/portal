@@ -69,19 +69,23 @@ describe('textPrint / textSimilarity', () => {
     expect(textSimilarity(textPrint(PAGES[2]), textPrint(misread))).toBeGreaterThan(0.5);
   });
 
-  it('アクセントの付いた文字・ギリシャ文字・キリル文字も、語の中の字として数える', () => {
+  it('語を空白で区切る文字は、アクセントも含めて語の中の字として数える', () => {
     expect(textPrint('café crème brûlée').size).toBe(1);
     expect(textPrint('Über naïve façade').size).toBe(1);
     // 合成済みの形の無い、アクセントを重ねた字。
     expect(textPrint('n\u0308oo bar baz').size).toBe(1);
     expect(textPrint('Καλημέρα κόσμε σήμερα').size).toBe(1);
     expect(textPrint('Привет мир сегодня').size).toBe(1);
+    expect(textPrint('안녕하세요 오늘 날씨').size).toBe(1);
+    expect(textPrint('مرحبا بالعالم اليوم').size).toBe(1);
+    expect(textPrint('नमस्ते दुनिया आज').size).toBe(1);
+    expect(textPrint('42 ＡＢＣ 7').size).toBe(1);
     // 漢字・かな・タイ文字（語を空白で区切らない）は 1 字ずつ。長音符は英字とつなげない。
     expect(textPrint('吾輩は猫').size).toBe(2);
-    expect(textPrint('สวัสดีครับ').size).toBeGreaterThan(3);
+    expect(textPrint('สวัสดีครับ').size).toBe([...'สวัสดีครับ'].length - 2);
     expect(textPrint('ーabc def').size).toBe(1);
     // 異体字セレクタは、付いていてもいなくても同じ。
-    expect(textPrint('葛\uFE00飾区の\u{E0100}本')).toEqual(textPrint('葛飾区の本'));
+    expect(textPrint('葛\uFE00飾区の\u{E0100}本\u180B')).toEqual(textPrint('葛飾区の本'));
   });
 
   it('3 つ並びが作れなければ、指紋は無い', () => {
@@ -249,21 +253,13 @@ describe('duplicateIssues', () => {
     expect([...issues.keys()].sort()).toEqual(['a:0', 'a:1', 'a:2', 'b:0']);
     expect(issues.get('a:0')[0].message).toBe('「b.pdf」の 1 頁目と同じ内容のようです（同じ頁を 2 度スキャンした？）');
     // 手で入れた番号は当てにしない（ファイルごとに入れた先頭の番号は、同じ束を 2 度
-    // スキャンしたファイルにも別の番号を振る）。
+    // スキャンしたファイルにも別の番号を振る。頁ごとの番号も、指摘を消すために入れたのかもしれない）。
     const manual = duplicateIssues(
       [entry('a:0', { number: 3, status: 'manual' }), entry('b:0', { number: 4, status: 'detected' })],
       [{ a: 'a:0', b: 'b:0', exact: true }],
       describe_
     );
     expect(manual.problem).not.toBeNull();
-    // 頁ごとに手で入れた番号は当てにする。
-    const typed = duplicateIssues(
-      [entry('a:0', { number: 3, status: 'manual' }), entry('b:0', { number: 4, status: 'detected' })],
-      [{ a: 'a:0', b: 'b:0', exact: true }],
-      describe_,
-      new Set(['a:0'])
-    );
-    expect(typed.problem).toBeNull();
     // 同じ番号を読み取った頁（同じ頁を 2 度スキャンした）は、同じ頁とする。
     const same = duplicateIssues(
       [entry('a:0', { number: 5, status: 'detected' }), entry('b:0', { number: 5, status: 'detected' })],
