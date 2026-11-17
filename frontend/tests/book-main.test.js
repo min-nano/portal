@@ -1613,14 +1613,13 @@ describe('確かめる', () => {
   });
 
   it('該当する頁が多い項目は、少しずつ並べる', async () => {
-    const pages = Array.from({ length: 140 }, (_, i) =>
-      page(`p${i + 1}`, i + 1, i % 2 ? { size: { width: 515, height: 364 } } : {})
-    );
+    // 文字情報が 1 頁にだけある本（残りの 70 頁に「文字情報の無い頁」が付く）。
+    const pages = Array.from({ length: 71 }, (_, i) => page(`p${i + 1}`, i + 1, i ? { noText: true } : {}));
     drop([file('猫.pdf', pdf(pages))]);
     await settled(1);
 
     const details = [...document.querySelectorAll('#problems details')].find((d) =>
-      d.querySelector('summary').textContent.startsWith('向き')
+      d.querySelector('summary').textContent.startsWith('文字情報')
     );
     details.open = true;
     await flush();
