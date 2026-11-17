@@ -35,14 +35,26 @@ const page = (id, number, extra = {}) => ({ id, number, ...extra });
 
 const mocks = vi.hoisted(() => ({
   // 真っすぐな文字の行が並んだ白黒画像（白紙・傾きの指摘を出さないため）。
-  image() {
+  // 行の長さは頁ごとに変える（同じ頁が 2 度入っていると見なさないように）。
+  // 最初と最後の行は端まで描き、中身の範囲はどの頁でも同じにする。
+  image(seed = '') {
     const width = 200;
     const height = 280;
     const gray = new Uint8Array(width * height).fill(245);
-    for (let y = 30; y < 250; y += 14) {
-      for (let x = 30; x < 170; x++) {
+    let hash = 7;
+    for (const c of String(seed)) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
+    for (let y = 30; y < 250; y += 8) {
+      // 行ごとの乱数（MurmurHash3 の仕上げ）。
+      let r = (hash ^ Math.imul(y, 0x9e3779b9)) >>> 0;
+      r = Math.imul(r ^ (r >>> 16), 0x85ebca6b);
+      r = Math.imul(r ^ (r >>> 13), 0xc2b2ae35);
+      r = (r ^ (r >>> 16)) >>> 0;
+      const full = y === 30 || y + 8 >= 250;
+      const start = full ? 30 : 30 + (r % 3) * 15;
+      const end = full ? 170 : 50 + ((r >>> 4) % 120);
+      for (let x = start; x < end; x++) {
         if (x % 9 === 0) continue;
-        for (let k = 0; k < 4; k++) gray[(y + k) * width + x] = 20;
+        for (let k = 0; k < 3; k++) gray[(y + k) * width + x] = 20;
       }
     }
     return { width, height, gray };
@@ -137,6 +149,8 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
         size: p.size ?? { width: 364, height: 515 },
         items: p.number && !p.ocr ? bottomNumber(p.number) : [],
         signature: { length: p.noText ? 0 : 12, hash: `h-${p.id}` },
+        // 頁の文字情報（文字情報の確かめと、同じ頁の見比べに使う）。
+        text: p.text ?? '',
       };
     },
     renderPageImage: (...args) => mocks.renderPageImage(...args),
@@ -341,8 +355,9 @@ beforeEach(async () => {
     { zone: 'bottom', canvas: {}, top: 0.86, height: 0.14, page: doc.spec.pages[index] },
   ];
   // OCR する頁は、同じ展開から余白の帯も描く（margins）。
+  // 頁の仕様の image に別の頁の id を書くと、その頁と同じ画像になる（同じ頁を 2 度スキャンした）。
   mocks.renderPageImage.mockImplementation(async (doc, index, scan, { margins = false } = {}) => ({
-    image: mocks.image(),
+    image: mocks.image(doc.spec.pages[index].image ?? doc.spec.pages[index].id),
     thumbUrl: `blob:${scan ? 'scan' : 'pdfjs'}-${doc.spec.pages[index].id}`,
     strips: margins ? strips(doc, index) : [],
   }));
@@ -1521,6 +1536,72 @@ describe('確かめる', () => {
     jump.querySelector('button').click();
     expect(scroll).toHaveBeenCalled();
     expect(document.querySelector('[data-page-key="f1:1"]').classList.contains('focus')).toBe(true);
+  });
+
+  it('同じ頁が 2 度入っていれば、中身で見つけて互いを挙げる（番号の無い表紙も）', async () => {
+    // 表紙のファイルを 2 度足した（番号が無いので、番号の重なりでは分からない）。
+    drop([
+      file('猫_奇数.pdf', pdf(ODD)),
+      file('猫_偶数.pdf', pdf(EVEN)),
+      file('猫_表紙.pdf', pdf(COVER)),
+      file('猫_表紙のコピー.pdf', pdf(COVER)),
+    ]);
+    await settled(4);
+
+    expect($('problems').textContent).toContain(
+      '同じ内容の頁が 2 組あります（「猫_表紙.pdf」の 1 頁目と「猫_表紙のコピー.pdf」の 1 頁目、' +
+        '「猫_表紙.pdf」の 2 頁目と「猫_表紙のコピー.pdf」の 2 頁目）。'
+    );
+    const card = document.querySelector('[data-page-key="f4:0"]');
+    expect(card.classList.contains('error')).toBe(true);
+    expect(card.querySelector('.bm-page-issues').textContent).toBe('「猫_表紙.pdf」の 1 頁目と同じ頁です');
+
+    // 結合する前に確かめる。
+    window.confirm.mockReturnValueOnce(false);
+    $('mergeBtn').click();
+    expect(window.confirm.mock.calls[0][0]).toContain('同じ内容の頁が 2 組あります');
+    expect(mocks.writeMergedPdf).not.toHaveBeenCalled();
+
+    // 片方を結合しないことにすれば、指摘は消える。
+    change(fileItem('猫_表紙のコピー.pdf').querySelector('select'), 'exclude');
+    expect($('problems').textContent).not.toContain('同じ内容の頁');
+    expect($('problems').textContent).toContain('見つかりませんでした');
+  });
+
+  it('同じ頁をスキャンし直したもの（文字情報が少し違う）は、注意として挙げる', async () => {
+    const text = 'It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief.';
+    const misread = text.replace('wisdom', 'wisd0m');
+    const odd = [ODD[0], { ...ODD[1], text }, ODD[2], ODD[3]];
+    // 3 頁を、もう一度スキャンして別のファイルにした（番号は文字情報に無く、画像も同じ）。
+    const again = [page('r3', null, { image: 'o3', text: misread, noText: false })];
+    drop([file('猫_奇数.pdf', pdf(odd)), file('猫_偶数.pdf', pdf(EVEN)), file('猫_差し替え.pdf', pdf(again))]);
+    await settled(3);
+
+    // 番号の無い 1 頁のファイルは表紙と見て、先頭に並ぶ。
+    expect($('problems').textContent).toContain(
+      '同じ内容の頁が 1 組あります（「猫_差し替え.pdf」の 1 頁目と「猫_奇数.pdf」の 2 頁目）。'
+    );
+    const card = document.querySelector('[data-page-key="f1:1"]');
+    expect(card.classList.contains('warn')).toBe(true);
+    expect(card.querySelector('.bm-page-issues').textContent).toBe(
+      '「猫_差し替え.pdf」の 1 頁目と同じ内容のようです（同じ頁を 2 度スキャンした？）'
+    );
+  });
+
+  it('文字情報が文字化けしている・文として読めない頁を挙げる', async () => {
+    const mojibake = new TextDecoder('shift_jis').decode(
+      new TextEncoder().encode('吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。')
+    );
+    const odd = [ODD[0], { ...ODD[1], text: mojibake }, ODD[2], ODD[3]];
+    drop([file('猫_奇数.pdf', pdf(odd)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+
+    expect($('problems').textContent).toContain(
+      '文字情報（OCR の結果）が文字化けしている・文として読めない頁が 1 頁あります。'
+    );
+    const card = document.querySelector('[data-page-key="f1:1"]');
+    expect(card.classList.contains('warn')).toBe(true);
+    expect(card.querySelector('.bm-page-issues').textContent).toMatch(/^文字情報が文字化けしているようです（「.+」）$/);
   });
 
   it('頁を押すと拡大し、前後の頁へ送れる', async () => {

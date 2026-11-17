@@ -7,9 +7,13 @@ import { describe, expect, it } from 'vitest';
 import {
   compareScans,
   estimateSkew,
+  imagePrint,
   measurePage,
   median,
   otsuThreshold,
+  PRINT_COLUMNS,
+  PRINT_ROWS,
+  printSimilarity,
   shortTextBoxes,
   toGray,
 } from '../src/pdf-book-merger/image-checks.js';
@@ -250,5 +254,69 @@ describe('shortTextBoxes', () => {
     const boxes = shortTextBoxes(strip(glyphs), { maxBoxes: 3 });
 
     expect(boxes.map((box) => box.x0).sort((a, b) => a - b)).toEqual([20, 296, 560]);
+  });
+});
+
+/**
+ * 段落のある本文の頁。行の長さ・字下げは seed で決まる（同じ seed なら同じ頁）。
+ * dx・dy・paper で、置き方のずれと紙の明るさを変える（スキャンし直したもの）。
+ */
+function paragraphPage(seed, { dx = 0, dy = 0, paper = 245, ink = 20 } = {}) {
+  const image = blankImage(W, H, paper);
+  let state = seed * 2654435761;
+  const random = () => {
+    state = (Math.imul(state ^ (state >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) >>> 0;
+    return state / 2 ** 32;
+  };
+  for (let y = 70; y <= 490; y += 14) {
+    const full = y === 70 || y + 14 > 490;
+    const start = full || random() < 0.7 ? 60 : 80;
+    const end = full ? 340 : 120 + Math.floor(random() * 220);
+    for (let x = start; x <= end; x++) {
+      if (x % 9 === 0) continue;
+      for (let k = 0; k < 4; k++) dot(image, x + dx, y + k + dy, ink);
+    }
+  }
+  return image;
+}
+
+describe('imagePrint / printSimilarity', () => {
+  it('同じ頁は、置き方・明るさが違っても似ていて、違う頁は似ていない', () => {
+    const page = measurePage(paragraphPage(1)).print;
+    expect(page).toBeInstanceOf(Int8Array);
+    expect(page).toHaveLength(PRINT_COLUMNS * PRINT_ROWS);
+    expect(printSimilarity(page, measurePage(paragraphPage(1)).print)).toBe(1);
+    const rescanned = measurePage(paragraphPage(1, { dx: 9, dy: -7, paper: 232, ink: 50 })).print;
+    expect(printSimilarity(page, rescanned)).toBeGreaterThan(0.6);
+    for (const seed of [2, 3, 4, 5]) {
+      // 同じ頁とみなすのは 0.5 以上（duplicates.js）。
+      expect(printSimilarity(page, measurePage(paragraphPage(seed)).print)).toBeLessThan(0.5);
+    }
+  });
+
+  it('一面に塗った頁のように、形の無い頁は、どの頁とも似ていないとする', () => {
+    const solid = blankImage();
+    for (let y = 100; y < 400; y++) for (let x = 100; x < 300; x++) dot(solid, x, y);
+    const print = measurePage(solid).print;
+    expect([...print].every((value) => value === 0)).toBe(true);
+    expect(printSimilarity(print, print)).toBe(0);
+    expect(printSimilarity(print, measurePage(paragraphPage(1)).print)).toBe(0);
+  });
+
+  it('白紙・インクの少ない頁（番号だけ）は、指紋を作らない', () => {
+    expect(measurePage(blankImage()).print).toBeNull();
+    const numberOnly = blankImage();
+    for (let x = 195; x < 205; x++) for (let y = 520; y < 532; y++) dot(numberOnly, x, y);
+    for (let x = 60; x < 340; x++) for (let k = 0; k < 2; k++) dot(numberOnly, x, 70 + k);
+    const measured = measurePage(numberOnly);
+    expect(measured.blank).toBe(false);
+    expect(measured.print).toBeNull();
+  });
+
+  it('どちらかが無い・大きさが違うなら、決めない', () => {
+    const a = imagePrint(paragraphPage(1), 128, { left: 0.1, top: 0.1, right: 0.9, bottom: 0.9 });
+    expect(printSimilarity(a, null)).toBeNull();
+    expect(printSimilarity(null, a)).toBeNull();
+    expect(printSimilarity(a, a.subarray(1))).toBeNull();
   });
 });

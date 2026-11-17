@@ -72,3 +72,14 @@ export function textSignature(items) {
   }
   return { length: text.length, hash: hash.toString(16).padStart(8, '0') };
 }
+
+/**
+ * 頁の文字情報を 1 つの文字列にする（断片をそのままつなげ、行の終わりで改行する）。
+ *
+ * @param {{str?:string, hasEOL?:boolean}[]} items getTextContent().items
+ */
+export function textOf(items) {
+  return (items || [])
+    .map((item) => (typeof item.str === 'string' ? item.str : '') + (item.hasEOL ? '\n' : ''))
+    .join('');
+}

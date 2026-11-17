@@ -17,7 +17,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { loadSource, mergePdf, pageDigest, pageDigests, writeMergedPdf } from '../src/pdf-book-merger/merge.js';
 import { pageLabelRanges, pageLabelTexts } from '../src/pdf-book-merger/ordering.js';
 import { pageNumberCandidates } from '../src/pdf-book-merger/page-numbers.js';
-import { multiply, textItems, textSignature } from '../src/pdf-book-merger/text-layer.js';
+import { multiply, textItems, textOf, textSignature } from '../src/pdf-book-merger/text-layer.js';
 import { compareOutput } from '../src/pdf-book-merger/verify.js';
 import { pdfLibViews } from '../src/pdf-book-merger/pdf-lib-views.js';
 
@@ -56,6 +56,16 @@ async function readBack(bytes) {
   await doc.loadingTask.destroy();
   return { pages, labels, info };
 }
+
+describe('textOf', () => {
+  it('断片をそのままつなげ、行の終わりで改行する（文字の無い断片は飛ばす）', () => {
+    expect(textOf([{ str: '吾輩は', hasEOL: false }, { str: '猫である', hasEOL: true }, { str: 'Name' }, {}])).toBe(
+      '吾輩は猫である\nName'
+    );
+    expect(textOf([{ hasEOL: true }])).toBe('\n');
+    expect(textOf(undefined)).toBe('');
+  });
+});
 
 describe('textItems / textSignature', () => {
   it('pdf.js の行列の積', () => {

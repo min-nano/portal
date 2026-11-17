@@ -65,13 +65,17 @@ import {
 import {
   displayLabel,
   gridItems,
+  mergeIssues,
   pageIssues,
   STATUS_LABEL,
   suggestBookName,
   textCoverage,
+  textIssues,
   worstLevel,
 } from './review.js';
 import { compareOutput } from './verify.js';
+import { textQuality } from './text-quality.js';
+import { createDuplicateFinder, duplicateIssues, textPrint } from './duplicates.js';
 
 const PDF_MIME = 'application/pdf';
 const DEFAULT_NAME = '結合.pdf';
@@ -92,6 +96,8 @@ let nextKey = 1;
 const files = [];
 /** 頁ごとに手で直した番号（頁の key → 番号）。 */
 const overrides = new Map();
+/** 同じ頁らしい組を探す（前に見比べた頁どうしは見比べ直さない）。 */
+const findDuplicates = createDuplicateFinder();
 /** 最後に組み立てた並びと指摘。 */
 let view = { order: [], problems: [], issues: new Map(), numberings: new Map() };
 /** 結合した PDF と検証の結果。並びが変わったら捨てる。 */
@@ -615,13 +621,17 @@ async function readFile(file) {
     for (let index = 0; index < count; index++) {
       if (!files.includes(file)) return;
       showProgress(`「${file.name}」の文字情報を読んでいます（${index + 1} / ${count}）`, index / count);
-      const { items, ...text } = await withContext(`${index + 1} 頁目を読めませんでした`, () =>
+      const { items, text, ...rest } = await withContext(`${index + 1} 頁目を読めませんでした`, () =>
         readPageText(file.doc, index)
       );
+      // 文字情報そのものは持たない（数百頁ぶん抱えないように）。確かめた結果と、
+      // 同じ頁を見比べるための指紋だけを残す。
       file.pages.push({
         key: `${file.key}:${index}`,
         index,
-        ...text,
+        ...rest,
+        textCheck: textQuality(text),
+        textPrint: textPrint(text),
         candidates: pageNumberCandidates(items, 'text'),
         measure: null,
         thumbUrl: '',
@@ -1135,6 +1145,12 @@ function pageOf(entry) {
   return file.pages[entry.pageIndex];
 }
 
+/** 指摘の中での頁の呼び方（「「猫_奇数.pdf」の 2 頁目」）。 */
+function describePage(entry) {
+  const file = files.find((f) => f.key === entry.fileKey);
+  return `「${file.name}」の ${entry.pageIndex + 1} 頁目`;
+}
+
 /** 並びと指摘を組み立て直し、画面を描き直す。結合した PDF は捨てる。 */
 function refresh() {
   const ready = readyFiles();
@@ -1153,7 +1169,22 @@ function refresh() {
       const page = pageOf(entry);
       return { key: entry.pageKey, side: sideOf(entry.number), size: page.size, measure: page.measure };
     });
-  const issues = pageIssues(order, problems, compareScans(bodyPages), textless);
+  const duplicates = duplicateIssues(
+    order,
+    findDuplicates(
+      ready.flatMap((file) =>
+        file.pages.map((page) => ({ key: page.key, text: page.textPrint, image: page.measure.print }))
+      )
+    ),
+    describePage
+  );
+  if (duplicates.problem) problems.push(duplicates.problem);
+  const issues = pageIssues(
+    order,
+    problems,
+    mergeIssues(compareScans(bodyPages), duplicates.issues, textIssues(order, pageOf)),
+    textless
+  );
 
   view = { order, problems, issues, numberings };
   if (!$('outputName').value.trim() || $('outputName').dataset.suggested === 'true') {
@@ -1558,7 +1589,7 @@ function renderProblems() {
   const counts = new Map();
   for (const list of view.issues.values()) {
     for (const issue of list) {
-      if (!['skew', 'shift', 'size', 'orientation', 'streak', 'blank', 'textless'].includes(issue.kind)) continue;
+      if (!['skew', 'shift', 'size', 'orientation', 'streak', 'blank', 'text', 'textless'].includes(issue.kind)) continue;
       counts.set(issue.kind, (counts.get(issue.kind) || 0) + 1);
     }
   }
@@ -1569,6 +1600,7 @@ function renderProblems() {
     orientation: ['warn', '向きが他と違う頁'],
     streak: ['warn', 'すじが入っている頁'],
     blank: ['info', '白紙の頁'],
+    text: ['warn', '文字情報（OCR の結果）が文字化けしている・文として読めない頁'],
     textless: ['info', '文字情報の無い頁'],
   };
   for (const [kind, count] of counts) {
