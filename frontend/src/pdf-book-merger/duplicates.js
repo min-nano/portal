@@ -21,6 +21,7 @@
 // pdf.js にも DOM にも触らない（テストで縛るため）。
 
 import { PRINT_COLUMNS, PRINT_ROWS, printSimilarity } from './image-checks.js';
+import { fnv1a } from './text-layer.js';
 
 /** MinHash の数。多いほど見積もりが確かになる（64 で誤差はおよそ ±0.06）。 */
 const HASHES = 64;
@@ -31,7 +32,7 @@ const TEXT_ENOUGH = 30;
  * 読み直したもの（英字の 2% を読み違えた）は 0.5 以上だった。
  */
 const SAME_TEXT = 0.4;
-/** 文字情報が少ないとき、これより重なりが小さければ別の頁とする。 */
+/** 文字情報がどちらも少ないとき、これより重なりが小さければ別の頁とする。 */
 const DIFFERENT_TEXT = 0.25;
 /**
  * 同じ頁とみなす画像の指紋の相関。違う頁どうしは多くて 0.2、同じ頁を置き直して
@@ -61,22 +62,13 @@ function mix(value) {
   return h >>> 0;
 }
 
-/** 文字列の FNV-1a。 */
-function fnv(text) {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
 /**
  * 文字情報の指紋（文字の 3 つ並びの集まりの MinHash）。
  *
  * 全角・半角や大文字・小文字の違いは読み直しで変わりうるので、そろえてから
- * 数える。和文は 1 字、英数字は 1 語を 1 つと数える（英文を字で数えると、
- * 「the」「ing」のような並びがどの頁にもあり、違う頁でも重なりが大きくなる）。
+ * 数える。和文は 1 字、ラテン文字（アクセントの付いたものも）と数字は 1 語を
+ * 1 つと数える（英文を字で数えると、「the」「ing」のような並びがどの頁にも
+ * あり、違う頁でも重なりが大きくなる）。
  *
  * @param {string} text
  * @returns {{size:number, mins:Uint32Array}|null} 3 つ並びが 1 つも無ければ null
@@ -85,10 +77,10 @@ export function textPrint(text) {
   const units = String(text ?? '')
     .normalize('NFKC')
     .toLowerCase()
-    .match(/[a-z0-9]+|[^\sa-z0-9]/g);
+    .match(/[\p{Script=Latin}0-9]+|[^\s\p{Script=Latin}0-9]/gu);
   if (!units || units.length < 3) return null;
   const shingles = new Set();
-  for (let i = 0; i + 3 <= units.length; i++) shingles.add(fnv(`${units[i]}\u0001${units[i + 1]}\u0001${units[i + 2]}`));
+  for (let i = 0; i + 3 <= units.length; i++) shingles.add(fnv1a(`${units[i]}\u0001${units[i + 1]}\u0001${units[i + 2]}`));
   const mins = new Uint32Array(HASHES).fill(0xffffffff);
   for (const shingle of shingles) {
     for (let k = 0; k < HASHES; k++) {
@@ -132,7 +124,7 @@ function coarsePrint(print) {
  * @param {{text:ReturnType<typeof textPrint>, image:Int8Array|null}} a
  * @param {{text:ReturnType<typeof textPrint>, image:Int8Array|null}} b
  * @returns {{exact:boolean}|null} 同じ頁らしくなければ null。exact は中身まで同じもの
- *   （同じ頁を含むファイルを 2 度足した）
+ *   （同じ頁を含むファイルを 2 度足した。画像の指紋が無ければ、そうとは言わない）
  */
 export function samePage(a, b) {
   // 画像の見比べは重い（1 組で 1,536 のます目）ので、要るときだけ行う。
@@ -143,12 +135,17 @@ export function samePage(a, b) {
     image = printSimilarity(a.image, b.image);
     if (image !== null && image < DIFFERENT_IMAGE) return null;
   } else {
-    if (text !== null && text < DIFFERENT_TEXT) return null;
+    // 片方だけ文字情報が多いとき（もう片方は OCR がほとんど読めなかった）は、
+    // 大きさの違う集まりの重なりは小さく出るので、文字情報では決めない。
+    const weak = text !== null && Math.max(a.text.size, b.text.size) < TEXT_ENOUGH;
+    if (weak && text < DIFFERENT_TEXT) return null;
     if (!a.image || !b.image || printSimilarity(coarsePrint(a.image), coarsePrint(b.image)) < COARSE_GATE) return null;
     image = printSimilarity(a.image, b.image);
     if (image < SAME_IMAGE) return null;
   }
-  return { exact: (text === null || text === 1) && (image === null || image >= IDENTICAL_IMAGE) };
+  // 中身まで同じと言うのは、画像が同じときだけ（文字情報の MinHash は、9 割 8 分
+  // 重なる読み直しでも 4 回に 1 回ほど 64 個すべてがそろう）。
+  return { exact: image !== null && image >= IDENTICAL_IMAGE && (text === null || text === 1) };
 }
 
 /**
@@ -195,8 +192,9 @@ function listed(names, separator) {
 /**
  * 同じ頁らしい組から、頁ごとの指摘と、本全体の指摘を作る。
  *
- * 頁番号を読み取れた本文の頁どうしで番号が違えば、別の頁とする（同じ形の
- * 頁が何度も刷られている本——罫線だけのメモの頁など——で、指摘しないため）。
+ * 頁番号を読み取れた（または手で入れた）本文の頁どうしで番号が違えば、別の
+ * 頁とする（同じ形の頁が何度も刷られている本——罫線だけのメモの頁など——で、
+ * 指摘しないため）。前後から補った番号は当てにしない。
  *
  * @param {ReturnType<import('./ordering.js').buildBookOrder>} order
  * @param {{a:string, b:string, exact:boolean}[]} pairs
@@ -205,7 +203,8 @@ function listed(names, separator) {
  */
 export function duplicateIssues(order, pairs, describe) {
   const entries = new Map(order.map((entry, position) => [entry.pageKey, { entry, position }]));
-  const readNumber = ({ entry }) => (entry.role === 'body' && entry.status === 'detected' ? entry.number : null);
+  const TRUSTED = new Set(['detected', 'manual']);
+  const readNumber = ({ entry }) => (entry.role === 'body' && TRUSTED.has(entry.status) ? entry.number : null);
   const issues = new Map();
   const groups = new Map(); // 頁 → 同じ頁らしい頁の集まり（並びの順）
   let exactPairs = 0;

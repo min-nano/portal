@@ -1140,15 +1140,17 @@ function readyFiles() {
   return files.filter((file) => file.status === 'ready');
 }
 
+function fileOf(entry) {
+  return files.find((f) => f.key === entry.fileKey);
+}
+
 function pageOf(entry) {
-  const file = files.find((f) => f.key === entry.fileKey);
-  return file.pages[entry.pageIndex];
+  return fileOf(entry).pages[entry.pageIndex];
 }
 
 /** 指摘の中での頁の呼び方（「「猫_奇数.pdf」の 2 頁目」）。 */
 function describePage(entry) {
-  const file = files.find((f) => f.key === entry.fileKey);
-  return `「${file.name}」の ${entry.pageIndex + 1} 頁目`;
+  return `「${fileOf(entry).name}」の ${entry.pageIndex + 1} 頁目`;
 }
 
 /** 並びと指摘を組み立て直し、画面を描き直す。結合した PDF は捨てる。 */
