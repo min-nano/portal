@@ -69,9 +69,15 @@ describe('textPrint / textSimilarity', () => {
     expect(textSimilarity(textPrint(PAGES[2]), textPrint(misread))).toBeGreaterThan(0.5);
   });
 
-  it('アクセントの付いたラテン文字も、語の中の字として数える', () => {
+  it('アクセントの付いた文字・ギリシャ文字・キリル文字も、語の中の字として数える', () => {
     expect(textPrint('café crème brûlée').size).toBe(1);
     expect(textPrint('Über naïve façade').size).toBe(1);
+    // 合成済みの形の無い、アクセントを重ねた字。
+    expect(textPrint('n\u0308oo bar baz').size).toBe(1);
+    expect(textPrint('Καλημέρα κόσμε σήμερα').size).toBe(1);
+    expect(textPrint('Привет мир сегодня').size).toBe(1);
+    // 漢字・かなは 1 字ずつ。
+    expect(textPrint('吾輩は猫').size).toBe(2);
   });
 
   it('3 つ並びが作れなければ、指紋は無い', () => {
@@ -90,8 +96,12 @@ describe('samePage', () => {
 
   it('文字情報が十分にあれば、文字情報で決め、画像が大きく違えば別の頁とする', () => {
     expect(samePage({ text: text[0], image: A }, { text: text[0], image: A2 })).toEqual({ exact: false });
-    // 画像の指紋が無ければ、中身まで同じとは言わない（MinHash がそろっただけかもしれない）。
-    expect(samePage({ text: text[0], image: null }, { text: text[0], image: null })).toEqual({ exact: false });
+    expect(samePage({ text: text[0], image: null }, { text: text[0], image: null })).toEqual({ exact: true });
+    // 中身まで同じかは、MinHash ではなく文字情報そのもので決める（3 つ並びの集まりは同じでも、文は違う）。
+    const twice = textPrint(PAGES[0] + PAGES[0]);
+    const thrice = textPrint(PAGES[0] + PAGES[0] + PAGES[0]);
+    expect(textSimilarity(twice, thrice)).toBe(1);
+    expect(samePage({ text: twice, image: null }, { text: thrice, image: null })).toEqual({ exact: false });
     expect(samePage({ text: text[0], image: A }, { text: text[0], image: A })).toEqual({ exact: true });
     expect(samePage({ text: text[0], image: A }, { text: text[1], image: A })).toBeNull();
     expect(samePage({ text: text[0], image: A }, { text: text[0], image: B })).toBeNull();
@@ -101,8 +111,8 @@ describe('samePage', () => {
     expect(samePage({ text: null, image: A }, { text: null, image: A })).toEqual({ exact: true });
     expect(samePage({ text: null, image: A }, { text: null, image: A2 })).toEqual({ exact: false });
     expect(samePage({ text: short, image: A }, { text: short, image: A2 })).toEqual({ exact: false });
-    // 片方だけ OCR してあるもの。
-    expect(samePage({ text: text[0], image: A }, { text: null, image: A })).toEqual({ exact: true });
+    // 片方だけ OCR してあるもの（中身まで同じではない）。
+    expect(samePage({ text: text[0], image: A }, { text: null, image: A })).toEqual({ exact: false });
     expect(samePage({ text: null, image: A }, { text: null, image: B })).toBeNull();
     expect(samePage({ text: null, image: A }, { text: null, image: null })).toBeNull();
     expect(samePage({ text: null, image: null }, { text: null, image: A })).toBeNull();
@@ -125,17 +135,17 @@ describe('createDuplicateFinder', () => {
     const a2 = page('b:0', 0);
     const a3 = page('c:0', 0);
     expect(find([page('a:0', 0), page('a:1', 1), a2, a3])).toEqual([
-      { a: 'a:0', b: 'b:0', exact: false },
-      { a: 'c:0', b: 'b:0', exact: false },
-      { a: 'a:0', b: 'c:0', exact: false },
+      { a: 'a:0', b: 'b:0', exact: true },
+      { a: 'c:0', b: 'b:0', exact: true },
+      { a: 'a:0', b: 'c:0', exact: true },
     ]);
     // 何も加わらなければ、前の結果をそのまま返す（指紋の同じ頁は見比べ直さない）。
     const again = find([page('a:0', 0), page('a:1', 1), a2, a3]);
     expect(again).toHaveLength(3);
     // 外した頁の組は落とす。
-    expect(find([page('a:0', 0), page('a:1', 1), a2])).toEqual([{ a: 'a:0', b: 'b:0', exact: false }]);
+    expect(find([page('a:0', 0), page('a:1', 1), a2])).toEqual([{ a: 'a:0', b: 'b:0', exact: true }]);
     // 指紋が変わった頁（調べ直した）は、見比べ直す。
-    expect(find([page('a:0', 0), page('a:1', 1), page('b:0', 1)])).toEqual([{ a: 'a:1', b: 'b:0', exact: false }]);
+    expect(find([page('a:0', 0), page('a:1', 1), page('b:0', 1)])).toEqual([{ a: 'a:1', b: 'b:0', exact: true }]);
   });
 });
 
@@ -232,13 +242,14 @@ describe('duplicateIssues', () => {
     const { issues } = duplicateIssues(order, pairs, describe_);
     expect([...issues.keys()].sort()).toEqual(['a:0', 'a:1', 'a:2', 'b:0']);
     expect(issues.get('a:0')[0].message).toBe('「b.pdf」の 1 頁目と同じ内容のようです（同じ頁を 2 度スキャンした？）');
-    // 手で入れた番号も当てにする。
+    // 手で入れた番号は当てにしない（ファイルごとに入れた先頭の番号は、同じ束を 2 度
+    // スキャンしたファイルにも別の番号を振る）。
     const manual = duplicateIssues(
       [entry('a:0', { number: 3, status: 'manual' }), entry('b:0', { number: 4, status: 'detected' })],
-      [{ a: 'a:0', b: 'b:0', exact: false }],
+      [{ a: 'a:0', b: 'b:0', exact: true }],
       describe_
     );
-    expect(manual.problem).toBeNull();
+    expect(manual.problem).not.toBeNull();
     // 同じ番号を読み取った頁（同じ頁を 2 度スキャンした）は、同じ頁とする。
     const same = duplicateIssues(
       [entry('a:0', { number: 5, status: 'detected' }), entry('b:0', { number: 5, status: 'detected' })],

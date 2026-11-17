@@ -5,7 +5,7 @@
 // といった失敗を、表紙や番号の無い頁、並び順のままつなぐとき（配置を一括で
 // 「先頭に置く」）にも見つけるため、頁の中身どうしを見比べる。
 //
-//   文字情報 … 文字の 3 つ並び（和文は 1 字、英文は 1 語を 1 つと数える）の
+//   文字情報 … 文字の 3 つ並び（和文は 1 字、英文などは 1 語を 1 つと数える）の
 //              集まりの重なり（Jaccard 係数）を、MinHash で見積もる
 //   画像     … 中身の範囲をます目に分けたインクの量の指紋の相関
 //              （image-checks.js の imagePrint）
@@ -51,6 +51,9 @@ const IDENTICAL_IMAGE = 0.995;
 const COARSE_GATE = 0.3;
 const COARSE_CELL = 4;
 
+/** 1 つと数えるもの: 漢字・かな以外の文字と数字のつながり（語）か、それ以外の 1 字。 */
+const UNITS = /(?:(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}])[\p{L}\p{M}\p{N}])+|\S/gu;
+
 /** 32 bit の値をかき混ぜる（MurmurHash3 の仕上げ）。 */
 function mix(value) {
   let h = value >>> 0;
@@ -66,18 +69,20 @@ function mix(value) {
  * 文字情報の指紋（文字の 3 つ並びの集まりの MinHash）。
  *
  * 全角・半角や大文字・小文字の違いは読み直しで変わりうるので、そろえてから
- * 数える。和文は 1 字、ラテン文字（アクセントの付いたものも）と数字は 1 語を
- * 1 つと数える（英文を字で数えると、「the」「ing」のような並びがどの頁にも
- * あり、違う頁でも重なりが大きくなる）。
+ * 数える。漢字・かなは 1 字、ほかの文字（ラテン文字・ギリシャ文字・キリル
+ * 文字など。アクセントも含む）と数字は、つながった 1 語を 1 つと数える（英文を
+ * 字で数えると、「the」「ing」のような並びがどの頁にもあり、違う頁でも重なりが
+ * 大きくなる）。
  *
  * @param {string} text
- * @returns {{size:number, mins:Uint32Array}|null} 3 つ並びが 1 つも無ければ null
+ * @returns {{size:number, mins:Uint32Array, hash:number}|null} 3 つ並びが 1 つも無ければ null。
+ *   hash は、そろえた文字情報そのものの FNV-1a（中身まで同じかを決める）
  */
 export function textPrint(text) {
   const units = String(text ?? '')
     .normalize('NFKC')
     .toLowerCase()
-    .match(/[\p{Script=Latin}0-9]+|[^\s\p{Script=Latin}0-9]/gu);
+    .match(UNITS);
   if (!units || units.length < 3) return null;
   const shingles = new Set();
   for (let i = 0; i + 3 <= units.length; i++) shingles.add(fnv1a(`${units[i]}\u0001${units[i + 1]}\u0001${units[i + 2]}`));
@@ -88,7 +93,7 @@ export function textPrint(text) {
       if (h < mins[k]) mins[k] = h;
     }
   }
-  return { size: shingles.size, mins };
+  return { size: shingles.size, mins, hash: fnv1a(units.join('\u0001')) };
 }
 
 /** 2 つの文字情報の指紋の重なりの見積もり（0〜1）。どちらかが無ければ null。 */
@@ -124,7 +129,7 @@ function coarsePrint(print) {
  * @param {{text:ReturnType<typeof textPrint>, image:Int8Array|null}} a
  * @param {{text:ReturnType<typeof textPrint>, image:Int8Array|null}} b
  * @returns {{exact:boolean}|null} 同じ頁らしくなければ null。exact は中身まで同じもの
- *   （同じ頁を含むファイルを 2 度足した。画像の指紋が無ければ、そうとは言わない）
+ *   （同じ頁を含むファイルを 2 度足した。文字情報がそのまま同じで、画像も同じ）
  */
 export function samePage(a, b) {
   // 画像の見比べは重い（1 組で 1,536 のます目）ので、要るときだけ行う。
@@ -135,17 +140,19 @@ export function samePage(a, b) {
     image = printSimilarity(a.image, b.image);
     if (image !== null && image < DIFFERENT_IMAGE) return null;
   } else {
-    // 片方だけ文字情報が多いとき（もう片方は OCR がほとんど読めなかった）は、
+    // 文字情報の量が 2 倍以上違うとき（片方の OCR がほとんど読めなかった）は、
     // 大きさの違う集まりの重なりは小さく出るので、文字情報では決めない。
-    const weak = text !== null && Math.max(a.text.size, b.text.size) < TEXT_ENOUGH;
-    if (weak && text < DIFFERENT_TEXT) return null;
+    const comparable = text !== null && Math.min(a.text.size, b.text.size) * 2 >= Math.max(a.text.size, b.text.size);
+    if (comparable && text < DIFFERENT_TEXT) return null;
     if (!a.image || !b.image || printSimilarity(coarsePrint(a.image), coarsePrint(b.image)) < COARSE_GATE) return null;
     image = printSimilarity(a.image, b.image);
     if (image < SAME_IMAGE) return null;
   }
-  // 中身まで同じと言うのは、画像が同じときだけ（文字情報の MinHash は、9 割 8 分
-  // 重なる読み直しでも 4 回に 1 回ほど 64 個すべてがそろう）。
-  return { exact: image !== null && image >= IDENTICAL_IMAGE && (text === null || text === 1) };
+  // 中身まで同じかは、MinHash ではなく文字情報そのもので決める（MinHash は、
+  // 9 割 8 分重なる読み直しでも 4 回に 1 回ほど 64 個すべてがそろう）。どちらにも
+  // 文字情報が無ければ同じとみなし、片方にだけあれば違う。
+  const sameText = a.text && b.text ? a.text.hash === b.text.hash : a.text === b.text;
+  return { exact: sameText && (image === null || image >= IDENTICAL_IMAGE) };
 }
 
 /**
@@ -192,9 +199,10 @@ function listed(names, separator) {
 /**
  * 同じ頁らしい組から、頁ごとの指摘と、本全体の指摘を作る。
  *
- * 頁番号を読み取れた（または手で入れた）本文の頁どうしで番号が違えば、別の
- * 頁とする（同じ形の頁が何度も刷られている本——罫線だけのメモの頁など——で、
- * 指摘しないため）。前後から補った番号は当てにしない。
+ * 頁番号を読み取れた本文の頁どうしで番号が違えば、別の頁とする（同じ形の頁が
+ * 何度も刷られている本——罫線だけのメモの頁など——で、指摘しないため）。前後から
+ * 補った番号や手で入れた番号は当てにしない（ファイルごとに入れた先頭の番号は、
+ * 同じ束を 2 度スキャンしたファイルにも別の番号を振る）。
  *
  * @param {ReturnType<import('./ordering.js').buildBookOrder>} order
  * @param {{a:string, b:string, exact:boolean}[]} pairs
@@ -203,8 +211,7 @@ function listed(names, separator) {
  */
 export function duplicateIssues(order, pairs, describe) {
   const entries = new Map(order.map((entry, position) => [entry.pageKey, { entry, position }]));
-  const TRUSTED = new Set(['detected', 'manual']);
-  const readNumber = ({ entry }) => (entry.role === 'body' && TRUSTED.has(entry.status) ? entry.number : null);
+  const readNumber = ({ entry }) => (entry.role === 'body' && entry.status === 'detected' ? entry.number : null);
   const issues = new Map();
   const groups = new Map(); // 頁 → 同じ頁らしい頁の集まり（並びの順）
   let exactPairs = 0;
