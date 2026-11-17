@@ -76,8 +76,12 @@ describe('textPrint / textSimilarity', () => {
     expect(textPrint('n\u0308oo bar baz').size).toBe(1);
     expect(textPrint('Καλημέρα κόσμε σήμερα').size).toBe(1);
     expect(textPrint('Привет мир сегодня').size).toBe(1);
-    // 漢字・かなは 1 字ずつ。
+    // 漢字・かな・タイ文字（語を空白で区切らない）は 1 字ずつ。長音符は英字とつなげない。
     expect(textPrint('吾輩は猫').size).toBe(2);
+    expect(textPrint('สวัสดีครับ').size).toBeGreaterThan(3);
+    expect(textPrint('ーabc def').size).toBe(1);
+    // 異体字セレクタは、付いていてもいなくても同じ。
+    expect(textPrint('葛\uFE00飾区の\u{E0100}本')).toEqual(textPrint('葛飾区の本'));
   });
 
   it('3 つ並びが作れなければ、指紋は無い', () => {
@@ -97,6 +101,8 @@ describe('samePage', () => {
   it('文字情報が十分にあれば、文字情報で決め、画像が大きく違えば別の頁とする', () => {
     expect(samePage({ text: text[0], image: A }, { text: text[0], image: A2 })).toEqual({ exact: false });
     expect(samePage({ text: text[0], image: null }, { text: text[0], image: null })).toEqual({ exact: true });
+    // 片方にだけ画像の指紋があれば、中身まで同じとは言わない。
+    expect(samePage({ text: text[0], image: A }, { text: text[0], image: null })).toEqual({ exact: false });
     // 中身まで同じかは、MinHash ではなく文字情報そのもので決める（3 つ並びの集まりは同じでも、文は違う）。
     const twice = textPrint(PAGES[0] + PAGES[0]);
     const thrice = textPrint(PAGES[0] + PAGES[0] + PAGES[0]);
@@ -250,6 +256,14 @@ describe('duplicateIssues', () => {
       describe_
     );
     expect(manual.problem).not.toBeNull();
+    // 頁ごとに手で入れた番号は当てにする。
+    const typed = duplicateIssues(
+      [entry('a:0', { number: 3, status: 'manual' }), entry('b:0', { number: 4, status: 'detected' })],
+      [{ a: 'a:0', b: 'b:0', exact: true }],
+      describe_,
+      new Set(['a:0'])
+    );
+    expect(typed.problem).toBeNull();
     // 同じ番号を読み取った頁（同じ頁を 2 度スキャンした）は、同じ頁とする。
     const same = duplicateIssues(
       [entry('a:0', { number: 5, status: 'detected' }), entry('b:0', { number: 5, status: 'detected' })],

@@ -32,7 +32,10 @@ const TEXT_ENOUGH = 30;
  * 読み直したもの（英字の 2% を読み違えた）は 0.5 以上だった。
  */
 const SAME_TEXT = 0.4;
-/** 文字情報がどちらも少ないとき、これより重なりが小さければ別の頁とする。 */
+/**
+ * 文字情報が少ない（画像で決める）とき、2 つの文字情報の量が 2 倍以内なのに、
+ * 重なりがこれより小さければ別の頁とする（読み直しでも 0.5 はある）。
+ */
 const DIFFERENT_TEXT = 0.25;
 /**
  * 同じ頁とみなす画像の指紋の相関。違う頁どうしは多くて 0.2、同じ頁を置き直して
@@ -51,8 +54,14 @@ const IDENTICAL_IMAGE = 0.995;
 const COARSE_GATE = 0.3;
 const COARSE_CELL = 4;
 
-/** 1 つと数えるもの: 漢字・かな以外の文字と数字のつながり（語）か、それ以外の 1 字。 */
-const UNITS = /(?:(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}])[\p{L}\p{M}\p{N}])+|\S/gu;
+/**
+ * 1 つと数えるもの: 語を空白で区切る文字（ラテン文字・ギリシャ文字・キリル文字。
+ * 重ねたアクセントも含む）と数字のつながり（語）か、それ以外の 1 字（漢字・かな・
+ * タイ文字のように語を区切らない文字は 1 字ずつ）。
+ */
+const UNITS = /(?:[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}0-9]\p{M}*)+|\S/gu;
+/** 異体字セレクタ（読み直しで付いたり付かなかったりする）。 */
+const VARIATION_SELECTORS = /[\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]/gu;
 
 /** 32 bit の値をかき混ぜる（MurmurHash3 の仕上げ）。 */
 function mix(value) {
@@ -75,12 +84,14 @@ function mix(value) {
  * 大きくなる）。
  *
  * @param {string} text
- * @returns {{size:number, mins:Uint32Array, hash:number}|null} 3 つ並びが 1 つも無ければ null。
- *   hash は、そろえた文字情報そのものの FNV-1a（中身まで同じかを決める）
+ * @returns {{size:number, mins:Uint32Array, hash:number, length:number}|null} 3 つ並びが 1 つも
+ *   無ければ null。hash と length は、そろえた文字情報そのものの FNV-1a と長さ（中身まで
+ *   同じかを決める）
  */
 export function textPrint(text) {
   const units = String(text ?? '')
     .normalize('NFKC')
+    .replace(VARIATION_SELECTORS, '')
     .toLowerCase()
     .match(UNITS);
   if (!units || units.length < 3) return null;
@@ -93,7 +104,8 @@ export function textPrint(text) {
       if (h < mins[k]) mins[k] = h;
     }
   }
-  return { size: shingles.size, mins, hash: fnv1a(units.join('\u0001')) };
+  const joined = units.join('\u0001');
+  return { size: shingles.size, mins, hash: fnv1a(joined), length: joined.length };
 }
 
 /** 2 つの文字情報の指紋の重なりの見積もり（0〜1）。どちらかが無ければ null。 */
@@ -129,7 +141,8 @@ function coarsePrint(print) {
  * @param {{text:ReturnType<typeof textPrint>, image:Int8Array|null}} a
  * @param {{text:ReturnType<typeof textPrint>, image:Int8Array|null}} b
  * @returns {{exact:boolean}|null} 同じ頁らしくなければ null。exact は中身まで同じもの
- *   （同じ頁を含むファイルを 2 度足した。文字情報がそのまま同じで、画像も同じ）
+ *   （同じ頁を含むファイルを 2 度足した。文字情報がそのまま同じで、画像の指紋も
+ *   同じ。片方にだけ画像の指紋があれば、そうとは言わない）
  */
 export function samePage(a, b) {
   // 画像の見比べは重い（1 組で 1,536 のます目）ので、要るときだけ行う。
@@ -150,9 +163,14 @@ export function samePage(a, b) {
   }
   // 中身まで同じかは、MinHash ではなく文字情報そのもので決める（MinHash は、
   // 9 割 8 分重なる読み直しでも 4 回に 1 回ほど 64 個すべてがそろう）。どちらにも
-  // 文字情報が無ければ同じとみなし、片方にだけあれば違う。
-  const sameText = a.text && b.text ? a.text.hash === b.text.hash : a.text === b.text;
-  return { exact: sameText && (image === null || image >= IDENTICAL_IMAGE) };
+  // 文字情報が無ければ同じとみなし、片方にだけあれば違う。画像も同じで、どちらにも
+  // 指紋が無い（インクのごく少ない頁）なら同じとみなし、片方にだけあれば違う。
+  const sameText =
+    a.text && b.text
+      ? a.text.hash === b.text.hash && a.text.length === b.text.length && a.text.size === b.text.size
+      : a.text === b.text;
+  const sameImage = image === null ? a.image === b.image : image >= IDENTICAL_IMAGE;
+  return { exact: sameText && sameImage };
 }
 
 /**
@@ -199,19 +217,21 @@ function listed(names, separator) {
 /**
  * 同じ頁らしい組から、頁ごとの指摘と、本全体の指摘を作る。
  *
- * 頁番号を読み取れた本文の頁どうしで番号が違えば、別の頁とする（同じ形の頁が
- * 何度も刷られている本——罫線だけのメモの頁など——で、指摘しないため）。前後から
- * 補った番号や手で入れた番号は当てにしない（ファイルごとに入れた先頭の番号は、
- * 同じ束を 2 度スキャンしたファイルにも別の番号を振る）。
+ * 頁番号を読み取れた（か、その頁に手で入れた）本文の頁どうしで番号が違えば、別の
+ * 頁とする（同じ形の頁が何度も刷られている本——罫線だけのメモの頁など——で、
+ * 指摘しないため）。前後から補った番号と、ファイルごとに入れた先頭の番号から振った
+ * 番号は当てにしない（同じ束を 2 度スキャンしたファイルにも別の番号を振る）。
  *
  * @param {ReturnType<import('./ordering.js').buildBookOrder>} order
  * @param {{a:string, b:string, exact:boolean}[]} pairs
  * @param {(entry:object) => string} describe 頁の呼び方（「「猫.pdf」の 3 頁目」など）
+ * @param {Set<string>} [typed] 頁ごとに手で番号を入れた頁の key
  * @returns {{issues:Map<string, {kind:string, level:'error'|'warn', message:string}[]>, problem:object|null}}
  */
-export function duplicateIssues(order, pairs, describe) {
+export function duplicateIssues(order, pairs, describe, typed = new Set()) {
   const entries = new Map(order.map((entry, position) => [entry.pageKey, { entry, position }]));
-  const readNumber = ({ entry }) => (entry.role === 'body' && entry.status === 'detected' ? entry.number : null);
+  const trusted = (entry) => entry.status === 'detected' || typed.has(entry.pageKey);
+  const readNumber = ({ entry }) => (entry.role === 'body' && trusted(entry) ? entry.number : null);
   const issues = new Map();
   const groups = new Map(); // 頁 → 同じ頁らしい頁の集まり（並びの順）
   let exactPairs = 0;

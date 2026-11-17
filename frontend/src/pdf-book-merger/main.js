@@ -1178,7 +1178,8 @@ function refresh() {
         file.pages.map((page) => ({ key: page.key, text: page.textPrint, image: page.measure.print }))
       )
     ),
-    describePage
+    describePage,
+    new Set(overrides.keys())
   );
   if (duplicates.problem) problems.push(duplicates.problem);
   const issues = pageIssues(
