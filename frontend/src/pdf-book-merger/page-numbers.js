@@ -110,11 +110,58 @@ function placementScore(line) {
 }
 
 /**
+ * 1 行の中の番号（頁番号か行番号らしいもの）。番号だけの行、行の先頭・末尾に
+ * 付いた番号。left / right は番号の左端・右端（行の中の位置が分かる側だけ）。
+ */
+function numbersInLine(line) {
+  const standalone = line.text.match(STANDALONE);
+  if (standalone) {
+    return [
+      { value: Number(standalone[1]), branch: standalone[2], score: 3, y: line.y, left: line.x0, right: line.x1 },
+    ];
+  }
+  const leading = line.text.match(LEADING);
+  const trailing = line.text.match(TRAILING);
+  return [
+    ...(leading ? [{ value: Number(leading[1]), score: 1.5, y: line.y, left: line.x0, right: null }] : []),
+    ...(trailing ? [{ value: Number(trailing[1]), score: 1.5, y: line.y, left: null, right: line.x1 }] : []),
+  ];
+}
+
+/** 行番号の列とみなす、番号の端の位置のずれ（頁の幅に対する割合）。 */
+const LINE_COLUMN = 0.02;
+
+/**
+ * 行番号らしいか。
+ *
+ * 法令の解説書などは、本文の脇に 5 行おきの行番号（5, 10, 15, …）を刷る。
+ * 行番号は頁の下の帯にも来るので、番号だけの行として頁番号と取り違えやすい。
+ * 行番号は同じ列（番号の端が揃う）に、上から 5 ずつ増えて並ぶ。そこで、
+ * 5 の倍数で、同じ列のすぐ上に 5 小さい番号か、すぐ下に 5 大きい番号が
+ * あるものを行番号とみなす（頁番号は、上の行番号から 5 増えたものには
+ * まずならない）。
+ */
+function isLineNumber(number, numbers) {
+  // 枝番の付いた番号（57-1）は行番号ではない。
+  if (number.branch || number.value % 5 !== 0) return false;
+  const sameColumn = (other) =>
+    (number.left !== null && other.left !== null && Math.abs(number.left - other.left) <= LINE_COLUMN) ||
+    (number.right !== null && other.right !== null && Math.abs(number.right - other.right) <= LINE_COLUMN);
+  return numbers.some(
+    (other) =>
+      sameColumn(other) &&
+      ((other.value === number.value - 5 && other.y < number.y) ||
+        (other.value === number.value + 5 && other.y > number.y))
+  );
+}
+
+/**
  * 1 頁ぶんの文字から、頁番号の候補を挙げる。
  *
  * 見るのは上下の余白の帯だけ。本文の中の数字（「第 3 章」「図 12」）は
  * 拾わない。番号だけが置かれた行は強い候補、柱の先頭・末尾に付いた番号は
- * 弱い候補とする（柱には章番号や年号が混ざることがあるので）。
+ * 弱い候補とする（柱には章番号や年号が混ざることがあるので）。本文の脇の
+ * 行番号（isLineNumber）は、帯の中にあっても候補にしない。
  *
  * @param {{text:string,x0:number,x1:number,y:number,h:number}[]} items
  * @param {string} [source] 'text'（文字情報）か 'ocr'（画像から読み取り）
@@ -122,23 +169,19 @@ function placementScore(line) {
  *   branch は枝番（57-1 の 1）。枝番の無い候補には付けない。
  */
 export function pageNumberCandidates(items, source = 'text') {
+  const lines = groupLines(items).map((line) => ({ line, numbers: numbersInLine(line) }));
+  // 行番号の列は頁全体から見る（帯の中だけでは、続きの行番号が見えない）。
+  const fives = lines.flatMap(({ numbers }) => numbers).filter((number) => number.value % 5 === 0);
   const found = new Map();
-  for (const line of groupLines(items)) {
+  for (const { line, numbers } of lines) {
     const zone = line.y < MARGIN_ZONE ? 'top' : line.y > 1 - MARGIN_ZONE ? 'bottom' : null;
     if (!zone || line.text.length > 80) continue;
 
-    const standalone = line.text.match(STANDALONE);
-    const matches = standalone
-      ? [{ value: standalone[1], branch: standalone[2], score: 3 }]
-      : [line.text.match(LEADING), line.text.match(TRAILING)]
-          .filter(Boolean)
-          .map((match) => ({ value: match[1], score: 1.5 }));
-
-    for (const match of matches) {
-      const value = Number(match.value);
-      if (!Number.isInteger(value) || value < 1 || value > MAX_PAGE_NUMBER) continue;
-      const branch = match.branch ? Number(match.branch) : null;
-      const score = match.score + placementScore(line);
+    for (const number of numbers) {
+      const { value } = number;
+      if (value < 1 || value > MAX_PAGE_NUMBER || isLineNumber(number, fives)) continue;
+      const branch = number.branch ? Number(number.branch) : null;
+      const score = number.score + placementScore(line);
       // 同じ番号でも、枝番が違えば別の候補。
       const key = `${value}-${branch ?? ''}`;
       const previous = found.get(key);

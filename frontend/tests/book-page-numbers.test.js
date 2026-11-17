@@ -315,3 +315,55 @@ describe('枝番の頁（加除式の差し替え）', () => {
     expect(pageNumberText({ number: 12.5 })).toBe('12.5');
   });
 });
+
+describe('本文の脇の行番号（5 行おき）', () => {
+  /** 左の余白に右端を揃えて刷った行番号と、それに続く本文の行。 */
+  const left = (number, y, text = '') =>
+    text
+      ? { text: `${number} ${text}`, x0: 0.08, x1: 0.89, y, h: 0.011 }
+      : { text: String(number), x0: 0.1 - 0.006 * String(number).length, x1: 0.1, y, h: 0.011 };
+  const pageNumber = (value, x = 0.88) => item(String(value), { x, y: 0.95 });
+
+  it('下の帯に来た行番号を、頁番号と取り違えない', () => {
+    const items = [
+      left(5, 0.2),
+      left(10, 0.31, '本文の行'),
+      left(35, 0.79, '本文の行'),
+      left(40, 0.9, 'されており,当該調査を的確に実施するためには'), // 行の先頭に付いた行番号
+      left(45, 0.93), // 番号だけの行
+      pageNumber(91),
+    ];
+
+    expect(pageNumberCandidates(items).map((c) => c.value)).toEqual([91]);
+  });
+
+  it('図で間が空いても、すぐ上の行番号から 5 増えていれば行番号', () => {
+    const items = [left(15, 0.4, '本文の行'), left(20, 0.51, '本文の行'), left(25, 0.89), pageNumber(79)];
+
+    expect(pageNumberCandidates(items).map((c) => c.value)).toEqual([79]);
+  });
+
+  it('すぐ下に 5 大きい番号がある行番号も外す（右の余白の、行の末尾に付いた行番号）', () => {
+    const right = (number, y) => ({ text: `本文の行 ${number}`, x0: 0.1, x1: 0.92, y, h: 0.011 });
+    const items = [right(35, 0.87), right(40, 0.9), pageNumber(64, 0.1)];
+
+    expect(pageNumberCandidates(items).map((c) => c.value)).toEqual([64]);
+  });
+
+  it('行番号の列にあっても、5 ずつ続かない番号は頁番号として残す', () => {
+    // 偶数頁の頁番号が、左の行番号の列の真下に来ることがある。
+    const items = [left(35, 0.79, '本文の行'), left(40, 0.86, '本文の行'), left(80, 0.95)];
+
+    expect(pageNumberCandidates(items).map((c) => c.value)).toEqual([80]);
+  });
+
+  it('5 の倍数でない番号、別の列の番号、上下の向きが逆のものは行番号とみなさない', () => {
+    expect(pageNumberCandidates([left(40, 0.86, '本文の行'), left(41, 0.95)]).map((c) => c.value)).toEqual([41]);
+    // 枝番の付いた番号は、行番号の列の真下にあっても頁番号。
+    const branchPage = { ...left(45, 0.95), text: '45-1' };
+    expect(pageNumberCandidates([left(40, 0.86, '本文の行'), branchPage])).toMatchObject([{ value: 45, branch: 1 }]);
+    expect(pageNumberCandidates([left(40, 0.86, '本文の行'), pageNumber(45)]).map((c) => c.value)).toEqual([45]);
+    // 5 大きい番号が上にある（行番号は上から増える）。
+    expect(pageNumberCandidates([left(50, 0.5, '本文の行'), left(45, 0.95)]).map((c) => c.value)).toEqual([45]);
+  });
+});
