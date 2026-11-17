@@ -152,10 +152,15 @@ function showMessage(text, color = '') {
 // 間は結合を出し、済んだら調べる流れに戻す。バーは待っている仕事が無くなった
 // ときにだけ隠す（仕事の替わり目で隠すと、行が消えて画面がちらつく）。
 //
-// バーは、済んだところをベタ塗りにし、いま進めている区間（いまの段の終わりまで）を
-// 動くストライプで描く。段の中の割合が分からないとき（大きさの分からない読み込み
-// など）も、ブラウザの「分からない表示」（バー全体を往復する帯）にはしない。それだと
-// 済んだところと重なって、どこまで済んだかが読めなくなるため。
+// バーは、調べ終えたところ（頁の数で数える）をベタ塗りにし、中身が手元に届いた
+// ところ（Drive から読み込んだバイトの数で数える）を動くストライプで重ねる。調べる
+// のは届いてからなので、ベタ塗りがストライプを追い越すことはない。読み込みと調べる
+// のにかかる時間の割合はファイルによって何倍も違う（スキャンは大きさに、InDesign の
+// PDF は頁の数に比例する）ので、1 本の進み具合にまとめて見積もらず、それぞれの数え方
+// のまま 2 つ重ねて出す。この端末のファイルは、はじめから届いているものとする。
+// 段の中の割合が分からないとき（大きさの分からない読み込みなど）も、ブラウザの
+// 「分からない表示」（バー全体を往復する帯）にはしない。それだと、どこまで済んだかが
+// 読めなくなるため。
 
 const logLines = [];
 const LOG_LIMIT = 2000;
@@ -168,12 +173,15 @@ const crashLog = createCrashLog();
  * label は見出しを返す関数（バーの横に出す。出すたびに呼ぶ）。stage(from, to)
  * でいまの段の区間を決め、show(text, fraction, heading) で経過を出す。text は
  * 細かい経過（記録に出す）で、空なら済んだとして隠す。fraction は段の中の割合
- * （分からなければ null。バーは済んだところで止め、ストライプだけ動かす）。heading を
+ * （分からなければ null。ベタ塗りは段の始まりで止める）。heading を
  * 渡すと、見出しの代わりにそれを出す（Drive を待っているときなど、見出しより
  * 先に知らせたいこと）。
  *
  * jobs を持つ流れでは、仕事を足しても（addJob）バーが戻らないように、足した
  * ときの位置から残りを数え直す。
+ *
+ * loaded は、いまの仕事で中身が届いた割合（0〜1。ストライプに描く）。たいていの
+ * 仕事は中身が手元にあるので 1 とし、Drive から読み込む間だけ下げる（showLoading）。
  */
 function createProgress({ jobs = false } = {}) {
   const progress = {
@@ -185,6 +193,7 @@ function createProgress({ jobs = false } = {}) {
     heading: '',
     // 仕事の数・済んだ数と、数え直したときのバーの位置（base）と仕事の位置（start）。
     jobs: jobs ? { total: 0, done: 0, base: 0, start: 0 } : null,
+    loaded: 1,
     stage(from, to) {
       progress.from = from;
       progress.to = to;
@@ -195,6 +204,7 @@ function createProgress({ jobs = false } = {}) {
         progress.label = () => '';
         progress.stage(0, 1);
         progress.fraction = null;
+        progress.loaded = 1;
       }
       renderProgress();
     },
@@ -213,13 +223,9 @@ function createProgress({ jobs = false } = {}) {
     overall() {
       return progress.place((progress.jobs?.done ?? 0) + progress.inJob());
     },
-    /**
-     * いま進めている区間の終わり（流れ全体の位置）。いまの段の終わりで、幅の無い段
-     * （読み込みを分けない手元のファイルや、仕事の替わり目）なら、仕事の終わり。
-     */
-    busyEnd() {
-      const to = progress.to > progress.from ? progress.to : 1;
-      return progress.place((progress.jobs?.done ?? 0) + to);
+    /** 中身が届いたところ（流れ全体の位置）。 */
+    loadedEnd() {
+      return progress.place((progress.jobs?.done ?? 0) + progress.loaded);
     },
     addJob() {
       const { jobs } = progress;
@@ -244,7 +250,7 @@ function createProgress({ jobs = false } = {}) {
         return;
       }
       progress.stage(0, 0);
-      Object.assign(progress, { fraction: 0, heading: '' });
+      Object.assign(progress, { fraction: 0, heading: '', loaded: 1 });
       renderProgress();
     },
   };
@@ -262,16 +268,16 @@ function renderProgress() {
   $('progress').hidden = !progress.text;
   $('progressText').textContent = progress.text ? progress.heading || progress.label() || progress.text : '';
   if (progress.text) {
-    // 済んだところはベタ塗り、いま進めている区間（段の終わりまで）はストライプで描く。
-    // 段の中の割合が分からないときも、済んだところは出したまま、区間だけを動かす。
+    // 調べ終えたところはベタ塗り、その先の中身が届いたところはストライプで描く。
     const done = progress.overall();
-    const end = Math.max(done, progress.busyEnd());
+    const loaded = Math.max(done, progress.loadedEnd());
     const bar = $('progressBar');
-    bar.dataset.busyEnd = String(end);
+    bar.dataset.loaded = String(loaded);
     bar.setAttribute('aria-valuenow', String(done));
     $('progressDone').style.width = `${done * 100}%`;
-    $('progressBusy').style.left = `${done * 100}%`;
-    $('progressBusy').style.width = `${(end - done) * 100}%`;
+    $('progressLoaded').hidden = loaded <= done;
+    $('progressLoaded').style.left = `${done * 100}%`;
+    $('progressLoaded').style.width = `${(loaded - done) * 100}%`;
   }
   renderLog();
   // 進み具合は頁ごとに変わるので、残すのは間を空けて（localStorage への書き込みは
@@ -487,10 +493,10 @@ async function loadBytes(file, source) {
       (received, total) => {
         file.waitUntil = 0; // 届き始めた（待ち終えた）
         clearTimeout(file.waitTimer);
-        // 調べる順番が来て、読み込みを待っているときだけ、進み具合に出す。
-        if (!file.waiting) return;
-        const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
-        showProgress(`「${file.name}」を読み込んでいます（${amount}）`, total ? received / total : null);
+        file.transfer = { received, total };
+        // 調べる順番が来て、読み込みを待っているときだけ、進み具合に出す（外した
+        // ファイルの読み込みは止まらないので、出さない）。
+        if (file.waiting && files.includes(file)) showLoading(file);
       },
       // 読み直す前に待つときは、記録に残し、待っていることを画面に出す（先読みの
       // 途中なら、調べる順番が来たときに出す。readFile）。
@@ -558,6 +564,20 @@ async function bytesOf(file) {
   return file.stashed ? stash.read(stashName(file)) : null;
 }
 
+/**
+ * 読み込みを待っている間の進み具合を出す。Drive のファイルは、届いた割合を
+ * ストライプに描く（大きさが分からなければ描かない）。この端末のファイルは、
+ * はじめから届いているものとする。
+ */
+function showLoading(file) {
+  const { received = 0, total = 0 } = file.transfer ?? {};
+  const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
+  // はじめから読み直したとき（続きから読めなかった）も、ストライプは戻さない。
+  file.loadedShown = Math.max(file.loadedShown ?? 0, total ? received / total : 0);
+  readProgress.loaded = file.driveId ? file.loadedShown : 1;
+  showProgress(`「${file.name}」を読み込んでいます${file.transfer ? `（${amount}）` : ''}`, null);
+}
+
 async function readFile(file) {
   if (!files.includes(file)) return; // 読む前に外された。
   const started = performance.now();
@@ -566,17 +586,17 @@ async function readFile(file) {
     // 何番目かは、調べ終えたファイルの数から数える（あとからの OCR は数えない）。
     readProgress.label = () =>
       `ファイルを調べています（${files.filter((f) => !f.pending).length + 1} / ${files.length}）`;
-    // 段ごとの区間。Drive の読み込みを待つ（先読みが済んでいない）ときは、
-    // 読み込みにも区間を分ける（大きなファイルは読み込みに数分かかる。この端末の
-    // ファイルはすぐ読み終えるので分けない）。
-    const loadEnd = file.driveId && file.status !== 'loaded' ? 0.3 : 0;
-    const textEnd = loadEnd + (1 - loadEnd) * 0.1;
-    readProgress.stage(0, loadEnd);
+    // 段ごとの区間（調べる手間の割合。ベタ塗りに描く）。読み込みは段に数えず、
+    // 届いた割合をストライプに描く（この端末のファイルは、はじめから届いている）。
+    const textEnd = 0.1;
+    readProgress.stage(0, textEnd);
     file.waiting = true;
+    if (file.status !== 'loaded') showLoading(file);
     if (file.waitUntil > Date.now()) showWaiting(file);
-    else if (file.status !== 'loaded') showProgress(`「${file.name}」を読み込んでいます`, null);
     await file.loaded;
     file.waiting = false;
+    readProgress.loaded = 1;
+    renderProgress(); // 保存領域から読み直して開く間も、届いたことを出しておく
     clearTimeout(file.waitTimer);
     if (!files.includes(file)) return;
     // 調べている間は、中身をメモリに持つ（調べ終えたら、保存領域に置いたものは手放す）。
@@ -592,7 +612,6 @@ async function readFile(file) {
     const count = file.doc.numPages;
 
     // 文字情報（画像を展開しないので軽い）。
-    readProgress.stage(loadEnd, textEnd);
     for (let index = 0; index < count; index++) {
       if (!files.includes(file)) return;
       showProgress(`「${file.name}」の文字情報を読んでいます（${index + 1} / ${count}）`, index / count);
