@@ -232,7 +232,8 @@ portal-section.bm-file.error {
 }
 
 .bm-file > button[slot='actions'],
-.bm-problem button {
+.bm-problem-more,
+.bm-page-jump {
   min-height: 32px;
   padding: 0 var(--s-3);
   font-size: var(--fs-xs);
@@ -307,6 +308,8 @@ portal-section.bm-file.error {
   border-left-width: 3px;
   border-radius: var(--r-md);
   background: var(--surface);
+  /* 開いた項目は頁を並べるので、文の幅（li の既定）で狭めない。 */
+  max-width: none;
 }
 
 .bm-problem.error {
@@ -335,10 +338,31 @@ portal-section.bm-file.error {
   border-left-color: var(--ok-500);
 }
 
-.bm-filter {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-2);
+/* 該当する頁のある指摘は、押すと開いてその頁だけを並べる。 */
+.bm-problem-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.bm-problem-details > summary {
+  cursor: pointer;
+}
+
+.bm-problem-details[open] > summary {
+  margin-bottom: var(--s-2);
+}
+
+/* 開いた項目では、狭い画面でも頁を 2 列は並べる。 */
+.bm-grid.bm-problem-pages {
+  grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+}
+
+.bm-problem-pages .bm-page {
+  color: var(--text);
+}
+
+.bm-problem-more {
+  margin-top: var(--s-2);
 }
 
 /* --- 頁の一覧 ------------------------------------------------------------ */

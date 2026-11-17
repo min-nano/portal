@@ -65,6 +65,7 @@ import {
 import {
   displayLabel,
   gridItems,
+  issueGroups,
   pageIssues,
   STATUS_LABEL,
   suggestBookName,
@@ -104,7 +105,8 @@ let saving = false;
 let generation = 0;
 /** いまの並びのうち、結合する PDF を決める部分（頁・配置・頁番号）。変わったときだけ結合した PDF を捨てる。 */
 let orderKey = '';
-let filter = 'all';
+/** 指摘の項目のうち、開いているものと、そこに並べる頁の数（描き直しても開いたままにする）。 */
+const openGroups = new Map();
 /** ファイルの一覧の並び順（added: 追加した順 / name: 名前の順 / time: 更新日時の古い順。-desc を付けると降順（新しい順））。 */
 let fileSort = 'added';
 // ファイルは 1 つずつ調べる（pdf.js も OCR も、同時に動かすと遅くなるだけなので）。
@@ -1514,6 +1516,7 @@ function coverControls(file, controls) {
 
 function renderReview() {
   renderSummary();
+  contextNow = cardContext();
   renderProblems();
   renderGrid();
 }
@@ -1541,61 +1544,104 @@ function renderSummary() {
   );
 }
 
+/** いま出している指摘の項目（key ごと）と、頁のカードを作るときに引く表。項目の中のボタンは、押したときにここから最新のものを引く。 */
+let groupsNow = new Map();
+let contextNow = null;
+
 function renderProblems() {
-  const list = $('problems');
-  const items = view.problems.map((problem) => {
-    const item = el(document, 'li', `bm-problem ${problem.level}`);
-    item.append(el(document, 'span', null, problem.message));
-    if (problem.pageKeys?.length) {
-      item.append(
-        smallButton('見る', '該当する頁へ移動', () => scrollToPage(problem.pageKeys[0]))
-      );
-    }
-    return item;
-  });
-
-  // スキャンの外れ値は頁ごとに付いているので、種類ごとの数にまとめて出す。
-  const counts = new Map();
-  for (const list of view.issues.values()) {
-    for (const issue of list) {
-      if (!['skew', 'shift', 'size', 'orientation', 'streak', 'blank', 'textless'].includes(issue.kind)) continue;
-      counts.set(issue.kind, (counts.get(issue.kind) || 0) + 1);
-    }
-  }
-  const SCAN_TEXT = {
-    skew: ['warn', '傾いている頁'],
-    shift: ['warn', '中身の位置がずれている頁'],
-    size: ['warn', '大きさが他と違う頁'],
-    orientation: ['warn', '向きが他と違う頁'],
-    streak: ['warn', 'すじが入っている頁'],
-    blank: ['info', '白紙の頁'],
-    textless: ['info', '文字情報の無い頁'],
-  };
-  for (const [kind, count] of counts) {
-    const [level, text] = SCAN_TEXT[kind];
-    const item = el(document, 'li', `bm-problem ${level}`);
-    item.append(el(document, 'span', null, `${text}が ${count} 頁あります。`));
-    const first = view.order.find((entry) =>
-      (view.issues.get(entry.pageKey) || []).some((issue) => issue.kind === kind)
-    );
-    if (first) item.append(smallButton('見る', '該当する頁へ移動', () => scrollToPage(first.pageKey)));
-    items.push(item);
-  }
-
+  const groups = issueGroups(view.order, view.problems, view.issues);
+  groupsNow = new Map(groups.map((group) => [group.key, group]));
+  // もう無い（開けない）項目の開閉と出す数は忘れる（同じ項目がまた出たときに、勝手に開かないように）。
+  for (const key of openGroups.keys()) if (!groupsNow.get(key)?.pageKeys.length) openGroups.delete(key);
+  // 項目は、数や頁が変わっても作り直さない（開いた項目の中で番号を直したときに、
+  // 入力欄や並べた頁を作り直して、どこまで見たかを見失わないように）。文と頁だけ差し替える。
+  const items = groups.map((group) => ({
+    key: group.key,
+    sig: `${group.level}:${group.pageKeys.length > 0}`,
+    build: () => problemItem(group),
+  }));
   if (items.length === 0 && view.order.length) {
-    items.push(el(document, 'li', 'bm-problem ok', '頁の抜け・重なり・スキャンの乱れは見つかりませんでした。'));
+    items.push({
+      key: 'ok',
+      sig: 'ok',
+      build: () => el(document, 'li', 'bm-problem ok', '頁の抜け・重なり・スキャンの乱れは見つかりませんでした。'),
+    });
   }
-  list.replaceChildren(...items);
+  reconcile($('problems'), items);
+  for (const item of $('problems').children) {
+    const group = groupsNow.get(item.dataset.key);
+    if (!group) continue;
+    const details = item.querySelector(':scope > details');
+    (details?.querySelector('summary') ?? item.firstElementChild).textContent = group.message;
+    // 開いた直後で toggle がまだ届いていない項目は、toggle の側で並べる。
+    if (details?.open && openGroups.has(group.key)) renderGroupPages(details, group);
+  }
 }
 
-function scrollToPage(pageKey) {
-  if (filter !== 'all' && !document.querySelector(`[data-page-key="${pageKey}"]`)) {
-    filter = 'all';
-    document.querySelector('input[name="pageFilter"][value="all"]').checked = true;
-    renderGrid();
+/** 開いた項目に一度に並べる頁の数（数百頁が該当しても、カードを一度に作りすぎない）。 */
+const GROUP_PAGE_STEP = 60;
+
+/**
+ * 指摘の項目 1 つ。該当する頁があれば、押すと開いてその頁だけを並べる（すべての
+ * 頁の一覧から探さずに済むように）。頁のカードは開いたときに作る（数百頁の本で、
+ * 開かない項目の縮小画像まで並べないように）。文は renderProblems が入れる。
+ */
+function problemItem(group) {
+  const { key } = group;
+  const item = el(document, 'li', `bm-problem ${group.level}`);
+  if (group.pageKeys.length === 0) {
+    item.append(el(document, 'span'));
+    return item;
   }
-  const card = document.querySelector(`[data-page-key="${pageKey}"]`);
-  if (!card) return;
+  const details = el(document, 'details', 'bm-problem-details');
+  const more = el(document, 'button', 'secondary bm-problem-more');
+  more.type = 'button';
+  more.addEventListener('click', () => {
+    openGroups.set(key, openGroups.get(key) + GROUP_PAGE_STEP);
+    renderGroupPages(details, groupsNow.get(key));
+  });
+  details.append(el(document, 'summary'), el(document, 'ol', 'bm-grid bm-problem-pages'), more);
+  // 開いたまま作り直すときは、すぐ頁を並べる（renderProblems）。open を変えると
+  // toggle が後から届くが、そのときは開閉の記録がもう合っているので何もしない。
+  details.open = openGroups.has(key);
+  details.addEventListener('toggle', () => {
+    // 作り直して外した項目に後から届いた toggle と、開閉の記録がもう合っているものは、何もしない。
+    if (!details.isConnected || details.open === openGroups.has(key)) return;
+    if (details.open) {
+      openGroups.set(key, GROUP_PAGE_STEP);
+      renderGroupPages(details, groupsNow.get(key));
+    } else {
+      openGroups.delete(key);
+      details.querySelector('.bm-problem-pages').replaceChildren();
+    }
+  });
+  item.append(details);
+  return item;
+}
+
+function renderGroupPages(details, group) {
+  const limit = openGroups.get(group.key);
+  const cards = group.pageKeys
+    .slice(0, limit)
+    .map((pageKey) => pageCardItem(contextNow.entries.get(pageKey), { jump: true }));
+  reconcile(details.querySelector('.bm-problem-pages'), cards);
+  const rest = group.pageKeys.length - limit;
+  const more = details.querySelector('.bm-problem-more');
+  more.hidden = rest <= 0;
+  more.textContent = `さらに ${Math.min(rest, GROUP_PAGE_STEP)} 頁並べる（残り ${rest} 頁）`;
+}
+
+/** 頁のカードを作るときに引くもの（ファイルと頁の並びを key から引く表）。描き直すたびに作る。 */
+function cardContext() {
+  return {
+    files: new Map(files.map((file) => [file.key, file])),
+    entries: new Map(view.order.map((entry) => [entry.pageKey, entry])),
+  };
+}
+
+/** すべての頁の一覧で、その頁の前後を見せる（項目の中の頁から飛ぶ）。 */
+function jumpToPage(pageKey) {
+  const card = $('pageGrid').querySelector(`[data-page-key="${pageKey}"]`);
   card.scrollIntoView({ behavior: 'smooth', block: 'center' });
   card.classList.add('focus');
   setTimeout(() => card.classList.remove('focus'), 1600);
@@ -1611,22 +1657,27 @@ function renderGrid() {
       cards.push({ key: `missing:${range}:${seen.get(range)}`, sig: range, build: () => missingCard(item) });
       continue;
     }
-    const { entry } = item;
-    const issues = view.issues.get(entry.pageKey) || [];
-    const level = worstLevel(issues);
-    if (filter === 'issues' && level !== 'error' && level !== 'warn') continue;
-    const file = files.find((f) => f.key === entry.fileKey);
-    const sig = JSON.stringify([
-      entry,
-      issues,
-      file.name,
-      file.pages.length,
-      file.pages[entry.pageIndex].thumbUrl,
-      overrides.get(entry.pageKey) ?? null,
-    ]);
-    cards.push({ key: entry.pageKey, sig, build: () => pageCard(entry, issues, level) });
+    cards.push(pageCardItem(item.entry));
   }
   reconcile($('pageGrid'), cards);
+}
+
+/**
+ * 頁のカードを reconcile に渡す形にする（すべての頁の一覧と、指摘の項目の中で使う）。
+ * jump: すべての頁の一覧のその頁へ飛ぶボタンを付ける（項目の中の頁）。
+ */
+function pageCardItem(entry, { jump = false } = {}) {
+  const issues = view.issues.get(entry.pageKey) || [];
+  const file = contextNow.files.get(entry.fileKey);
+  const sig = JSON.stringify([
+    entry,
+    issues,
+    file.name,
+    file.pages.length,
+    file.pages[entry.pageIndex].thumbUrl,
+    overrides.get(entry.pageKey) ?? null,
+  ]);
+  return { key: entry.pageKey, sig, build: () => pageCard(entry, file, issues, { jump }) };
 }
 
 function missingCard(item) {
@@ -1638,8 +1689,8 @@ function missingCard(item) {
   return card;
 }
 
-function pageCard(entry, issues, level) {
-  const file = files.find((f) => f.key === entry.fileKey);
+function pageCard(entry, file, issues, { jump }) {
+  const level = worstLevel(issues);
   const page = file.pages[entry.pageIndex];
   const card = el(document, 'li', `bm-page${level ? ` ${level}` : ''}`);
   card.dataset.pageKey = entry.pageKey;
@@ -1673,7 +1724,8 @@ function pageCard(entry, issues, level) {
     input.type = 'text';
     input.inputMode = 'decimal';
     input.placeholder = '番号を直す';
-    input.setAttribute('aria-label', `${displayLabel(entry)} の番号を直す`);
+    // 指摘の項目の中にも同じ頁が並ぶので、読み上げでどちらの欄か分かるようにする。
+    input.setAttribute('aria-label', `${displayLabel(entry)} の番号を直す${jump ? '（指摘の項目の中）' : ''}`);
     input.value = overrides.has(entry.pageKey) ? String(overrides.get(entry.pageKey)) : '';
     input.addEventListener('change', () => {
       const value = input.value.trim();
@@ -1689,6 +1741,10 @@ function pageCard(entry, issues, level) {
       refresh();
     });
     card.append(input);
+  }
+  if (jump) {
+    const title = 'すべての頁の一覧で、この頁の前後を見る';
+    card.append(smallButton('前後を見る', title, () => jumpToPage(entry.pageKey), 'secondary bm-page-jump'));
   }
   return card;
 }
@@ -2125,12 +2181,6 @@ function wireUp() {
 
   wireHelp();
 
-  document.querySelectorAll('input[name="pageFilter"]').forEach((radio) =>
-    radio.addEventListener('change', () => {
-      filter = radio.value;
-      renderGrid();
-    })
-  );
   $('fileSort').addEventListener('change', (event) => setFileSort(event.target.value));
   for (const [value, text] of Object.entries(ROLES)) {
     const option = el(document, 'option', null, `すべて${text}`);

@@ -207,7 +207,8 @@ export function buildBookOrder(files, numberings, overrides = new Map()) {
  *
  * @param {ReturnType<typeof buildBookOrder>} order
  * @param {{sheets?:boolean}} [options] sheets: 片面ずつの束を組み合わせたか
- * @returns {{level:'error'|'warn'|'info', kind:string, message:string, pageKeys:string[]}[]}
+ * @returns {{level:'error'|'warn'|'info', kind:string, message:string, pageKeys:string[], number?:number, numbers?:number[]}[]}
+ *   number: 重なった番号（duplicate）。numbers: 抜けている番号（missing）
  */
 export function checkSequence(order, { sheets = false } = {}) {
   const problems = [];
@@ -246,6 +247,7 @@ export function checkSequence(order, { sheets = false } = {}) {
       kind: 'duplicate',
       message: `${number} 頁が ${items.length} 回あります（同じ束を 2 度スキャンした・番号の読み違い）。`,
       pageKeys: items.map((item) => item.pageKey),
+      number,
     });
   }
 
