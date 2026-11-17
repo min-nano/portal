@@ -3,6 +3,7 @@
 // 頁番号の並び（ordering.js）、スキャンの検査（image-checks.js）、文字情報の
 // 有無を、頁ごとの「確認が要ること」にまとめる。DOM には触らない。
 
+import { branchLayout } from './ordering.js';
 import { formatNumber } from './page-numbers.js';
 
 /** 番号の決まり方の見出し（頁の下に小さく出す）。 */
@@ -20,7 +21,7 @@ export const STATUS_LABEL = {
 export function displayLabel(entry) {
   if (entry.role === 'front') return '表紙';
   if (entry.role === 'back') return '裏表紙';
-  return entry.number === null ? '番号不明' : `${formatNumber(entry.number)} 頁`;
+  return entry.number === null ? '番号不明' : `${formatNumber(entry.number, entry.branch)} 頁`;
 }
 
 /**
@@ -90,27 +91,50 @@ const MAX_MISSING_CARDS = 6;
 /**
  * 一覧に並べるもの。頁のほかに、抜けている頁の札を、あるべき位置に挟む。
  *
+ * 枝番の頁に差し替えられたとみなす番号（ordering.js の branchLayout）には
+ * 札を挟まない。枝番の抜け（57-1 と 57-3 の間の 57-2）には、枝番を付けた札を挟む。
+ *
  * @param {ReturnType<import('./ordering.js').buildBookOrder>} order
- * @returns {({type:'page', entry:object} | {type:'missing', from:number, to:number})[]}
+ * @returns {({type:'page', entry:object} | {type:'missing', from:number, to:number, branch?:number})[]}
  */
 export function gridItems(order) {
+  const isNumbered = (entry) => entry.role === 'body' && Number.isInteger(entry.number);
+  const { replaced } = branchLayout(order.filter(isNumbered));
   const items = [];
+  const missing = (from, to) => {
+    if (to - from + 1 > MAX_MISSING_CARDS) {
+      items.push({ type: 'missing', from, to });
+    } else {
+      for (let m = from; m <= to; m++) items.push({ type: 'missing', from: m, to: m });
+    }
+  };
   let previous = null;
   for (const entry of order) {
-    const n = entry.role === 'body' && Number.isInteger(entry.number) ? entry.number : null;
-    if (n !== null && previous !== null && n > previous + 1) {
-      const from = previous + 1;
-      const to = n - 1;
-      if (to - from + 1 > MAX_MISSING_CARDS) {
-        items.push({ type: 'missing', from, to });
-      } else {
-        for (let m = from; m <= to; m++) items.push({ type: 'missing', from: m, to: m });
+    if (isNumbered(entry) && previous !== null) {
+      let from = null;
+      for (let m = previous.number + 1; m <= entry.number; m++) {
+        const absent = m < entry.number && !replaced.has(m);
+        if (absent && from === null) from = m;
+        if (!absent && from !== null) {
+          missing(from, m - 1);
+          from = null;
+        }
+      }
+      const firstBranch = previous.number === entry.number ? (previous.branch ?? 0) + 1 : 1;
+      for (let b = firstBranch; b < (entry.branch ?? 0); b++) {
+        items.push({ type: 'missing', from: entry.number, to: entry.number, branch: b });
       }
     }
-    if (n !== null) previous = n;
+    if (isNumbered(entry)) previous = entry;
     items.push({ type: 'page', entry });
   }
   return items;
+}
+
+/** 抜けている頁の札の見出し（58 頁・60〜70 頁・57-2 頁）。 */
+export function missingLabel(item) {
+  if (item.branch) return `${item.from}-${item.branch} 頁`;
+  return item.from === item.to ? `${item.from} 頁` : `${item.from}〜${item.to} 頁`;
 }
 
 /**

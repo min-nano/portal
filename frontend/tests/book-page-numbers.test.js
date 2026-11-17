@@ -15,6 +15,8 @@ import {
   normalizeDigits,
   numberingSequence,
   pageNumberCandidates,
+  pageNumberText,
+  parsePageNumber,
 } from '../src/pdf-book-merger/page-numbers.js';
 
 /** 頁に対する割合で置いた文字の断片。 */
@@ -25,6 +27,8 @@ function item(text, { x = 0.5, y = 0.95, h = 0.012, w = 0.02 } = {}) {
 /** 頁番号だけが読めた頁の候補（頁番号の読み取りを通さず、直接作る）。 */
 const read = (value, score = 3.5) => [{ value, score, source: 'text', zone: 'bottom' }];
 const none = () => [];
+/** 枝番の付いた番号（57-1）だけが読めた頁の候補。 */
+const branch = (value, number) => [{ value, branch: number, score: 3.5, source: 'text', zone: 'bottom' }];
 
 describe('normalizeDigits / groupLines', () => {
   it('全角の数字を半角にする', () => {
@@ -225,5 +229,89 @@ describe('manualFileNumbers / numberingSequence / formatNumber', () => {
     expect(formatNumber(-1)).toBe('前付(-1)');
     expect(formatNumber(16.5)).toBe('16と17の間');
     expect(formatNumber(null)).toBe('?');
+  });
+});
+
+describe('枝番の頁（加除式の差し替え）', () => {
+  it.each(['57-1', '57 - 1', '５７－１', '- 57-1 -', '57ー1頁'])('枝番の付いた番号 %s', (text) => {
+    const [candidate] = pageNumberCandidates([item(text)]);
+
+    expect(candidate).toMatchObject({ value: 57, branch: 1 });
+    expect(candidate.score).toBeGreaterThanOrEqual(3);
+  });
+
+  it('枝番の無い番号には branch を付けない', () => {
+    expect(pageNumberCandidates([item('57')])[0]).not.toHaveProperty('branch');
+    expect(pageNumberCandidates([item('57-0')])).toEqual([]);
+  });
+
+  it('同じ番号でも、枝番が違えば別の候補', () => {
+    const values = pageNumberCandidates([item('57', { y: 0.04 }), item('57-1')]).map((c) => [c.value, c.branch]);
+    expect(values).toEqual(
+      expect.arrayContaining([
+        [57, undefined],
+        [57, 1],
+      ])
+    );
+    expect(values).toHaveLength(2);
+  });
+
+  it('同じ番号が上下に 2 度あれば、候補は 1 つ', () => {
+    expect(pageNumberCandidates([item('12', { y: 0.04 }), item('12', { y: 0.96 })])).toHaveLength(1);
+  });
+
+  it('奇数頁の束: 枝番の頁は読めたまま置き、その前後で番号が飛んでもよい', () => {
+    // 57・58 頁の紙が 57-1〜57-4 に差し替えられている。59 頁は束の最後の 1 頁だけ。
+    const { step, pages } = inferFileNumbers([read(51), read(53), read(55), branch(57, 1), branch(57, 3), read(59)]);
+
+    expect(step).toBe(2);
+    expect(pages.map((p) => [p.number, p.branch ?? null, p.status])).toEqual([
+      [51, null, 'detected'],
+      [53, null, 'detected'],
+      [55, null, 'detected'],
+      [57, 1, 'detected'],
+      [57, 3, 'detected'],
+      [59, null, 'detected'],
+    ]);
+  });
+
+  it('裏返した偶数頁の束も同じ', () => {
+    const { step, pages } = inferFileNumbers([read(62), read(60), branch(57, 4), branch(57, 2), read(56), none()]);
+
+    expect(step).toBe(-2);
+    expect(pages.map((p) => (p.branch ? `${p.number}-${p.branch}` : p.number))).toEqual([62, 60, '57-4', '57-2', 56, 54]);
+  });
+
+  it('枝番の頁をまたぐ頁どうしの差は、歩幅の票に数えない', () => {
+    // 55 → 59（間に枝番の頁）を数えると、歩幅 4 にも 2 にもならない並びが混ざる。
+    expect(detectStep([read(55), read(59)], new Set([1])).step).toBeNull();
+    expect(detectStep([read(55), read(57)]).step).toBe(2);
+  });
+
+  it('枝番の頁だけのファイル', () => {
+    const { step, pages } = inferFileNumbers([branch(57, 1), branch(57, 3)]);
+
+    expect(step).toBeNull();
+    expect(pages.map((p) => p.status)).toEqual(['detected', 'detected']);
+  });
+
+  it('番号の付き方の要約では、枝番の頁を前後と続けない', () => {
+    const numbering = inferFileNumbers([
+      read(49), read(51), read(53), read(55), branch(57, 1), branch(57, 3), read(59), read(61),
+    ]);
+
+    expect(numberingSequence(numbering)).toBe('49, 51, 53, 55, 57-1, 57-3, 59, 61');
+  });
+
+  it('見せ方と、手で入れる番号の読み方', () => {
+    expect(formatNumber(57, 1)).toBe('57-1');
+    expect(parsePageNumber('57-1')).toEqual({ number: 57, branch: 1 });
+    expect(parsePageNumber(' ５７－２ ')).toEqual({ number: 57, branch: 2 });
+    expect(parsePageNumber('12.5')).toEqual({ number: 12.5 });
+    expect(parsePageNumber('-3')).toEqual({ number: -3 });
+    expect(parsePageNumber('abc')).toBeNull();
+    expect(parsePageNumber('')).toBeNull();
+    expect(pageNumberText({ number: 57, branch: 1 })).toBe('57-1');
+    expect(pageNumberText({ number: 12.5 })).toBe('12.5');
   });
 });

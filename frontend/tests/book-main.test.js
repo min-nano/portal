@@ -659,7 +659,7 @@ describe('ファイルを足して並べる', () => {
 
     // 数字でなければ断る。
     change(document.querySelector('#pageGrid [data-page-key$=":1"] .bm-page-number'), 'abc');
-    expect($('message').textContent).toBe('番号は数字で入れてください。');
+    expect($('message').textContent).toBe('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。');
 
     // ファイルの先頭の番号を手で決める（奇数頁の束を 11 から）。
     const startField = fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]');
@@ -669,6 +669,36 @@ describe('ファイルを足して並べる', () => {
     expect($('message').textContent).toBe('先頭の頁の番号は整数で入れてください。');
     change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '');
     expect(gridLabels()).toContain('7 頁');
+  });
+
+  it('枝番の付いた頁（加除式の差し替え）を並べ、番号を枝番で直せる', async () => {
+    drop([
+      file(
+        '法令_奇数.pdf',
+        pdf([page('o53', 53), page('o55', 55), page('o571', '57-1'), page('o573', '57-3'), page('o59', 59), page('o61', 61)])
+      ),
+      file(
+        '法令_偶数.pdf',
+        pdf([page('e62', 62), page('e60', 60), page('e574', '57-4'), page('e572', '57-2'), page('e56', 56), page('e54', 54)])
+      ),
+    ]);
+    await settled(2);
+
+    const labels = ['53 頁', '54 頁', '55 頁', '56 頁', '57-1 頁', '57-2 頁', '57-3 頁', '57-4 頁', '59 頁', '60 頁', '61 頁', '62 頁'];
+    expect(gridLabels()).toEqual(labels);
+    expect(fileItem('法令_奇数.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 53, 55, 57-1, 57-3, 59, 61)');
+    expect($('problems').textContent).toContain('57〜58 頁は無く、枝番の付いた頁（57-1〜57-4）があります。');
+    expect($('problems').textContent).not.toContain('見つかりません');
+
+    // 57-3 頁を 57-5 頁に直すと、57-3 頁の抜けの札が出る。
+    const card = (label) =>
+      [...document.querySelectorAll('#pageGrid .bm-page')].find(
+        (li) => li.querySelector('.bm-page-label strong')?.textContent === label
+      );
+    change(card('57-3 頁').querySelector('.bm-page-number'), '57-5');
+    expect(gridLabels()).toEqual([...labels.slice(0, 6), '-57-3 頁', '57-4 頁', '57-5 頁', ...labels.slice(8)]);
+    expect(card('57-5 頁').querySelector('.bm-page-number').value).toBe('57-5');
+    expect($('problems').textContent).toContain('57-3 頁が見つかりません（枝番の付いた頁）');
   });
 
   it('頁を読めなければ、何頁目のどこで止まったかを添えて一覧に残す', async () => {
