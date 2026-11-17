@@ -1456,11 +1456,18 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   }
 }
 
-/* --- ツール一覧（ポータルトップ） ---------------------------------------- */
+/* --- ツール一覧（ポータルトップ） ----------------------------------------
+ * 1 枚のカードは「大きな絵・名前・1 行の説明」だけ。長い説明は読まれない
+ * ので、どのツールかは絵と名前で見分けてもらう。絵は各ツールが名乗った SVG
+ * （マニフェストの icon）で、線も塗りも currentColor で描いてあるため、色は
+ * ここで決まり、明暗テーマにもそのまま付いてくる。
+ *
+ * 広い画面では絵を上に置いて並べ、狭い画面（640px 以下・1 列）では絵を左に
+ * 置いて 1 枚を低くする（縦に積むと 5 枚で画面 2 つ分を超えるため）。 */
 
 .tool-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
   gap: var(--s-4);
   list-style: none;
   padding: 0;
@@ -1474,9 +1481,10 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
 .tool-card {
   display: flex;
   flex-direction: column;
-  gap: var(--s-2);
+  align-items: flex-start;
+  gap: var(--s-3);
   height: 100%;
-  padding: var(--s-4);
+  padding: var(--s-5);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
@@ -1491,14 +1499,41 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   transform: translateY(-1px);
 }
 
+.tool-card .tool-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 6rem;
+  height: 6rem;
+  border-radius: var(--r-xl);
+  background: var(--brand-50);
+  color: var(--text-brand);
+  transition: background-color var(--dur) var(--ease);
+}
+
+.tool-card:hover .tool-icon {
+  background: var(--brand-100);
+}
+
+.tool-card .tool-icon svg {
+  width: 4rem;
+  height: 4rem;
+}
+
 .tool-card .name {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: var(--s-2);
+  align-self: stretch;
   font-weight: 700;
   font-size: var(--fs-md);
+  line-height: var(--lh-tight);
   color: var(--text-brand);
+  /* 名前は語の切れ目（空白）で折り返す（「…証明書 / 作成ツール」）。
+     切れ目の無い名前が収まらないときだけ、どこででも折る。 */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 
 .tool-card .name::after {
@@ -1511,6 +1546,39 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   max-width: none;
   font-size: var(--fs-sm);
   color: var(--text-2);
+}
+
+@media (max-width: 640px) {
+  .tool-card {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-content: center;
+    column-gap: var(--s-3);
+    row-gap: var(--s-1);
+    padding: var(--s-4);
+  }
+
+  /* 幅 375px の画面で、切れ目の無い一番長い名前（13 字）が 1 行に収まる大きさ。 */
+  .tool-card .tool-icon {
+    grid-row: span 2;
+    align-self: center;
+    width: 4rem;
+    height: 4rem;
+    border-radius: var(--r-lg);
+  }
+
+  .tool-card .tool-icon svg {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .tool-card .name {
+    align-self: end;
+  }
+
+  .tool-card .desc {
+    align-self: start;
+  }
 }
 
 /* --- 画面下のメッセージ・生成結果 ---------------------------------------- */

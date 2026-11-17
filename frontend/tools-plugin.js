@@ -7,7 +7,7 @@
 //   マニフェスト ─┬─→ tools/<id>/index.html  ビルドの入口（= /tools/<id>/）
 //                 ├─→ tools/<id>/entry.js    ツールの入口を読み込むだけの 1 行
 //                 ├─→ tools/tools.css        全ツールの CSS（見本ページ用）
-//                 └─→ トップページのツール一覧
+//                 └─→ トップページのツール一覧（絵・名前・説明）
 //
 // 組み立て先の tools/ はビルドの成果物なのでコミットしない（.gitignore）。
 // ページの外枠は tool-frame.html にあり、ツールが書くのはその中身だけ。
@@ -26,15 +26,6 @@ const STAGE_DIR = 'tools';
 
 /** トップページの中の、ツール一覧を差し込む目印。 */
 const TOOL_LIST_MARKER = '<!--PORTAL_TOOL_LIST-->';
-
-/** 説明文（マニフェストの description）の字下げを落として 1 つの塊にする。 */
-function trimDescription(text) {
-  return String(text ?? '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join('\n');
-}
 
 /** HTML の中に文字列として置くための最小限の逃がし。 */
 function escapeHtml(text) {
@@ -192,17 +183,42 @@ function stageToolStyles(tools, { root }) {
   return path;
 }
 
-/** トップページに並べるツール一覧（<li>）を組み立てる。 */
+/**
+ * ツールの絵（マニフェストの icon。SVG）を読む。
+ *
+ * 画像として参照せず、カードの中へそのまま埋め込む。線と塗りを currentColor
+ * で描いておけば、色が CSS（tokens.css の役割の名前）から決まり、明暗テーマ
+ * にもそのまま付いてくるため。
+ */
+function readIcon(tool) {
+  return readFileSync(iconFile(tool), 'utf8').trim();
+}
+
+/** 絵のファイルの位置。絵の無いツールは載せない（一覧で 1 つだけ欠けるため）。 */
+function iconFile(tool) {
+  if (!tool.icon) {
+    throw new Error(`${tool.id} のマニフェストに icon（トップページの絵）がありません。`);
+  }
+  return toolFile(tool, tool.icon);
+}
+
+/**
+ * トップページに並べるツール一覧（<li>）を組み立てる。
+ *
+ * カードは「大きな絵・名前・1 行の説明」だけにする。絵は飾りなので読み上げ
+ * から外し（aria-hidden）、リンクの名前は文字の名前と説明から付く。
+ */
 function toolListHtml(tools) {
   return tools
     .map((tool) =>
       [
         '<li>',
         `  <a class="tool-card" href="/${STAGE_DIR}/${tool.id}/">`,
+        '    <span class="tool-icon" aria-hidden="true">',
+        indent(readIcon(tool), 6),
+        '    </span>',
         `    <span class="name">${escapeHtml(tool.name)}</span>`,
-        '    <p class="desc">',
-        indent(escapeHtml(trimDescription(tool.description)), 6),
-        '    </p>',
+        `    <p class="desc">${escapeHtml(tool.description.trim())}</p>`,
         '  </a>',
         '</li>',
       ].join('\n')
@@ -236,7 +252,7 @@ export function stageTools(tools, root) {
  * 組み立てたツールをポータルへつなぐ。
  *
  *   - トップページのツール一覧を差し込む
- *   - ツールの page.html / overlay.html を直したら、手元の画面を作り直す
+ *   - ツールの page.html / overlay.html / 絵を直したら、手元の画面を作り直す
  *
  * @param {object[]} tools 載せるツールのマニフェスト
  * @param {string} root frontend/ の絶対パス
@@ -252,17 +268,22 @@ export function portalToolsPlugin(tools, root) {
       order: 'pre',
       handler(html) {
         if (!html.includes(TOOL_LIST_MARKER)) return html;
-        return html.replace(TOOL_LIST_MARKER, indent(toolListHtml(tools), 6).trimStart());
+        // 置き換えは関数で渡す（stageTool と同じ理由。絵の SVG や名前に $' などが
+        // 混ざっていても、そのまま入るように）。
+        return html.replace(TOOL_LIST_MARKER, () =>
+          indent(toolListHtml(tools), 6).trimStart()
+        );
       },
     },
 
     // 手元の開発（npm run dev）では、組み立て元を直したときに組み立て直す。
     // ツールの main.js などは Vite がそのまま見ているので、ここで見るのは
-    // 組み立ての材料（ページの中身と外枠）だけでよい。
+    // 組み立ての材料（ページの中身と外枠、トップページに埋め込む絵）だけでよい。
     configureServer(server) {
       const sources = new Set([resolve(root, 'tool-frame.html')]);
       for (const tool of tools) {
         sources.add(toolFile(tool, tool.page));
+        sources.add(iconFile(tool));
         if (tool.overlay) sources.add(toolFile(tool, tool.overlay));
       }
       for (const file of sources) server.watcher.add(file);
@@ -276,4 +297,4 @@ export function portalToolsPlugin(tools, root) {
   };
 }
 
-export { STAGE_DIR, TOOL_LIST_MARKER, toolListHtml, trimDescription };
+export { STAGE_DIR, TOOL_LIST_MARKER, toolListHtml };

@@ -12,17 +12,19 @@ export default {
   // URL（/tools/<id>/）と API の接頭辞（/api/tools/<id>/）になる。
   id: 'excel-report-formatter',
   name: '現況検査レポート作成ツール',
-  // トップページのツール一覧に出る説明。
-  description: `
-    傾斜測定の計測値を入力して、Excel の報告書（社外秘フォーマット）を生成します。
-    雛形は Google Drive 上の最新ファイルを自動で参照します。
-  `,
+  // トップページのツール一覧で、名前の下に出る説明。読まれる長さにとどめる
+  // ため **1 行・40 字まで**（テストが数える）。詳しい説明は README に書く。
+  description: '傾斜の計測値から、Excel の報告書を作ります。',
   // ページの見出し（<title>）。ツール名と違うことがあるので別に持つ。
   title: '現況検査レポート作成ツール',
-  // 下の 3 つは、このファイルからの相対で解決する（ツールが portal の中に
+  // 下のファイルは、このファイルからの相対で解決する（ツールが portal の中に
   // あっても、パッケージとして node_modules の中にあっても同じように解ける）。
   dir: fileURLToPath(new URL('.', import.meta.url)),
   page: 'page.html', // <div id="app"> の中身
   entry: 'main.js', // 画面の入口
+  // トップページのツール一覧に大きく出す絵（SVG。カードの中へそのまま埋め込む）。
+  // 描き方の決まり（48 の升目・currentColor・線の太さ 2.5）は README の
+  // 「🧩 土台とツール」。この絵は、クリップボードに傾きの角度（傾斜の計測）。
+  icon: 'icon.svg',
   styles: 'tool.css', // このツールにしか出てこない形（見本ページが束ねる）
 };
