@@ -398,11 +398,25 @@ pdf.js には、PDF の外にあるデータ——**CMap・標準フォント・
 
 | | 名乗る場所 | 土台が読む場所 |
 | --- | --- | --- |
-| 画面 | `frontend/src/<id>/tool.js`（id・名前・説明・ページ・入口・CSS） | `frontend/tools.config.js` → `tools-plugin.js` がページとツール一覧を組み立てる |
+| 画面 | `frontend/src/<id>/tool.js`（id・名前・説明・絵・ページ・入口・CSS） | `frontend/tools.config.js` → `tools-plugin.js` がページとツール一覧を組み立てる |
 | API | `backend/app/tools/<id>.py` の `TOOL = Tool(...)`（id・名前・ルーター） | `backend/app/tools/__init__.py` → `main.py` が `/api/tools/<id>` へ載せる |
 
 ツールを増やす・減らすときに触るのは、この 2 つの一覧だけです。`vite.config.js` にも
 `index.html` にも `main.py` にもツールの名前は出てきません。
+
+**トップページのツール一覧は、1 枚のカードが「大きな絵・名前・1 行の説明」だけです。**
+長い説明は読まれないので、どのツールかは絵と名前で見分けてもらいます。そのため
+マニフェストの `description` は **1 行・40 字まで**（`frontend/tests/tools-plugin.test.js`
+が数えます）にし、詳しい説明はこの README の「✨ 現在の機能」に書きます。絵は各ツールの
+`icon.svg` で、`tools-plugin.js` がカードの中へそのまま埋め込みます（画像として参照
+しないのは、色を CSS から決めて明暗テーマに付いてこさせるため）。絵の描き方の決まりは
+次のとおりです（升目と最後の 3 つは、テストが確かめます）。
+
+* 48 × 48 の升目（`viewBox="0 0 48 48"`）に、線の太さ 2.5・端と角は丸めて描く
+* 面の塗りは `fill="currentColor" fill-opacity=".14"`、小さな点や留め具だけ `currentColor` で塗りつぶす
+* 色は `currentColor` だけ（生の色は書かない。明暗テーマの片方で見えなくなるため）
+* `width` / `height` は書かない（大きさはカードの CSS が決める）
+* `id`・`<script>`・`<style>`・`style=` は持たない（ページの中へそのまま埋め込むため。`<style>` はページ全体に効く）
 
 **ツールは別リポジトリへは分けません。** 以前は 1 つずつ別リポジトリへ出す
 設計を置いていましたが、土台を直すたびに追従の PR が要る・横断的な変更が
@@ -454,7 +468,8 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   src/pdf-pages.js            # PDF の頁を canvas に描いて並べる（雛形のプレビュー。pdf.js は開いたときに読む）
   src/pdf-data.js             # pdf.js に渡す CMap・標準フォント・画像の展開の wasm（同梱したもの）
                               # ツール（1 つにつき 1 ディレクトリ。tool.js が名乗り、
-                              # page.html が中身、tool.css がそのツールにしか出てこない形）
+                              # page.html が中身、tool.css がそのツールにしか出てこない形、
+                              # icon.svg がトップページのツール一覧に出す絵）
   src/excel-report-formatter/ # フォーム本体（GAS 版 index.html の移植）
   src/structural-cert-formatter/  # 構造計算安全証明書のフォーム・編集画面
   src/timber-panel-shear-calculator/  # 大壁と面材（釘配列）の入力・結果表示・釘配列図
