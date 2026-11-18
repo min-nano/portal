@@ -132,7 +132,10 @@ export function estimateSkew(points, { range = 4, coarse = 0.25, fine = 0.05 } =
  *   box:{left:number,top:number,right:number,bottom:number}|null,
  *   skew:{angle:number,sharpness:number,direction:string},
  *   streaks:number,
+ *   print:Int8Array|null,
  * }} box は中身（インクのある範囲）で、頁の幅・高さを 1 とした割合。
+ *   print は同じ頁が 2 度入っていないかを見比べるための指紋（imagePrint。白紙に
+ *   近い頁は null）。
  */
 export function measurePage({ width, height, gray }) {
   const threshold = otsuThreshold(gray);
@@ -176,7 +179,86 @@ export function measurePage({ width, height, gray }) {
     box,
     skew: estimateSkew(points),
     streaks: countStreaks(colFull, height) + countStreaks(rowFull, width),
+    print: box && inkRatio >= PRINT_MIN_INK ? imagePrint({ width, height, gray }, threshold, box) : null,
   };
+}
+
+/** 指紋のます目（横 × 縦）。 */
+export const PRINT_COLUMNS = 32;
+export const PRINT_ROWS = 48;
+/** これよりインクの少ない頁（番号や見出しだけの頁）は、指紋を作らない（形が似やすい）。 */
+const PRINT_MIN_INK = 0.005;
+
+/**
+ * 同じ頁が 2 度入っていないかを見比べるための、頁の画像の指紋。
+ *
+ * 中身の範囲（box）を縦横のます目に分け、ます目ごとのインクの割合を数える。
+ * 範囲で切り揃えるので、置き方のずれ・わずかな拡大縮小には左右されず、
+ * インクの割合で数えるので、明るさの違いにも左右されない。
+ *
+ * そのままでは、同じ本の頁どうしが似すぎる（文字の行の位置は、どの頁でも
+ * 同じ）。そこで、行ごと・列ごとの平均を引いて、どの頁にも共通する「行の
+ * 縞」を消し、頁ごとに違う形（段落の切れ目・行の長さ・図）だけを残す。
+ * 最後に平均 0・ばらつき 1 にそろえ、32 倍して整数（-127〜127）にする。
+ *
+ * 合成した頁（本文を描いた画像を、ずらす・0.6° まで回す・明るさを変える・
+ * ざらつかせる）で、同じ頁は相関 0.6 以上、違う頁は 0.2 以下だった。
+ *
+ * @param {{width:number, height:number, gray:Uint8Array}} image
+ * @param {number} threshold これ以下の明るさをインクとみなす
+ * @param {{left:number,top:number,right:number,bottom:number}} box 中身の範囲（割合）
+ * @returns {Int8Array} PRINT_COLUMNS × PRINT_ROWS
+ */
+export function imagePrint({ width, height, gray }, threshold, box) {
+  const cols = PRINT_COLUMNS;
+  const rows = PRINT_ROWS;
+  const { left, right, top, bottom } = scaleBox(box, width, height);
+  const ink = new Float64Array(cols * rows);
+  const area = new Float64Array(cols * rows);
+  for (let y = top; y < bottom; y++) {
+    const cy = Math.min(rows - 1, Math.floor(((y - top) * rows) / (bottom - top)));
+    for (let x = left; x < right; x++) {
+      const cell = cy * cols + Math.min(cols - 1, Math.floor(((x - left) * cols) / (right - left)));
+      area[cell]++;
+      if (gray[y * width + x] <= threshold) ink[cell]++;
+    }
+  }
+  // 中身の範囲がます目より狭いと、画素の入らないます目がある（0 とする）。
+  const values = ink.map((count, i) => count / Math.max(1, area[i]));
+  for (let y = 0; y < rows; y++) {
+    let sum = 0;
+    for (let x = 0; x < cols; x++) sum += values[y * cols + x];
+    for (let x = 0; x < cols; x++) values[y * cols + x] -= sum / cols;
+  }
+  for (let x = 0; x < cols; x++) {
+    let sum = 0;
+    for (let y = 0; y < rows; y++) sum += values[y * cols + x];
+    for (let y = 0; y < rows; y++) values[y * cols + x] -= sum / rows;
+  }
+  // 行・列の平均を引いたので、全体の平均は 0。
+  let squares = 0;
+  for (const value of values) squares += value * value;
+  const deviation = Math.sqrt(squares / values.length) || 1;
+  return Int8Array.from(values, (value) => Math.max(-127, Math.min(127, Math.round((value / deviation) * 32))));
+}
+
+/**
+ * 2 つの指紋の似かた（相関。-1〜1）。どちらかが無ければ null。
+ *
+ * @param {Int8Array|null} a
+ * @param {Int8Array|null} b
+ */
+export function printSimilarity(a, b) {
+  if (!a || !b || a.length !== b.length) return null;
+  let ab = 0;
+  let aa = 0;
+  let bb = 0;
+  for (let i = 0; i < a.length; i++) {
+    ab += a[i] * b[i];
+    aa += a[i] * a[i];
+    bb += b[i] * b[i];
+  }
+  return aa && bb ? ab / Math.sqrt(aa * bb) : 0;
 }
 
 /** 行・列ごとのインクの量から、中身のある範囲を割合で返す。 */
