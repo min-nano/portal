@@ -110,9 +110,9 @@ const LEVEL_RANK = { error: 0, warn: 1, info: 2 };
  */
 export function issueGroups(order, problems, issues) {
   // 項目の key は、頁を直しても変わらないものにする（開閉を key で覚えるので）。
-  // 重なりは番号ごとに出るので、その番号で分ける。
+  // 番号ごとに出る指摘（重なり、枝番の頁の抜け・差し替え）は、その番号で分ける。
   const groups = problems.map((problem) => ({
-    key: problem.kind === 'duplicate' ? `duplicate:${problem.number}` : problem.kind,
+    key: problem.number === undefined ? problem.kind : `${problem.kind}:${problem.number}`,
     level: problem.level,
     message: problem.message,
     pageKeys: problem.pageKeys,

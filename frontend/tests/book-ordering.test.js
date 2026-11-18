@@ -364,6 +364,7 @@ describe('枝番の頁（加除式の差し替え）', () => {
         kind: 'replaced',
         message: '57〜58 頁は無く、枝番の付いた頁（57-1〜57-4）があります。差し替えられた頁とみなしました。',
         pageKeys: ['odd:4', 'even:3', 'odd:5', 'even:2'],
+        number: 57,
       },
     ]);
   });
@@ -375,6 +376,7 @@ describe('枝番の頁（加除式の差し替え）', () => {
     ];
     const problems = checkSequence(arrange(files));
 
+    expect(problems.map((p) => p.number)).toEqual(['57-2', 57, 57]);
     expect(problems.map((p) => p.message)).toEqual([
       '57-2 頁が 2 回あります（同じ束を 2 度スキャンした・番号の読み違い）。',
       '57-3 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。',

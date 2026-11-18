@@ -166,6 +166,21 @@ describe('issueGroups', () => {
     ]);
   });
 
+  it('枝番の頁の抜け・差し替えは、番号ごとに別の項目にする', () => {
+    const problems = [
+      { level: 'error', kind: 'missing', message: '3 頁が見つかりません', pageKeys: [], numbers: [3] },
+      { level: 'error', kind: 'missing', message: '57-3 頁が見つかりません', pageKeys: [], number: 57 },
+      { level: 'info', kind: 'replaced', message: '57〜58 頁は無く', pageKeys: ['a'], number: 57 },
+      { level: 'info', kind: 'replaced', message: '79〜80 頁は無く', pageKeys: ['b'], number: 79 },
+    ];
+    expect(issueGroups([], problems, new Map()).map((group) => group.key)).toEqual([
+      'missing',
+      'missing:57',
+      'replaced:57',
+      'replaced:79',
+    ]);
+  });
+
   it('指摘が無ければ空', () => {
     expect(issueGroups([body('a', 1)], [], new Map())).toEqual([]);
   });
