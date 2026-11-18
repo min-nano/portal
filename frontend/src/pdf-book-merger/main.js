@@ -1905,7 +1905,12 @@ function pageCard(entry, file, issues, { jump }) {
   card.append(thumb);
 
   const label = el(document, 'div', 'bm-page-label');
-  label.append(el(document, 'strong', null, displayLabel(entry)));
+  const name = el(document, 'strong', null, displayLabel(entry));
+  label.append(name);
+  // 番号で並べる配置のファイルの頁には、番号を直す欄を見出しの中に隠しておき、✎ を押すと
+  // 見出しをその場で欄に替える（欄を別の行に置くと、カードが 1 行ぶん高くなるため）。
+  // 番号を読めなかった頁も直せる。何頁か直せば、残りの頁はその番号から推定し直す。
+  if (entry.role === 'body' || file.role === 'body') label.append(...numberEditor(entry, name, { jump }));
   const status = STATUS_LABEL[entry.status];
   if (status) label.append(el(document, 'span', `bm-status ${entry.status}`, status));
   card.append(label);
@@ -1917,36 +1922,107 @@ function pageCard(entry, file, issues, { jump }) {
     card.append(list);
   }
 
-  // 番号で並べる配置のファイルの頁には、番号の欄を出す（番号を読めずに一覧の位置で先頭・
-  // 末尾に置いた頁も。何頁か直せば、残りの頁はその番号から推定し直す）。
-  if (entry.role === 'body' || file.role === 'body') {
-    const input = el(document, 'input', 'bm-page-number');
-    input.type = 'text';
-    input.placeholder = '番号を直す';
-    // 指摘の項目の中にも同じ頁が並ぶので、読み上げでどちらの欄か分かるようにする。
-    input.setAttribute('aria-label', `${displayLabel(entry)} の番号を直す${jump ? '（指摘の項目の中）' : ''}`);
-    input.value = overrides.has(entry.pageKey) ? pageNumberText(overrides.get(entry.pageKey)) : '';
-    input.addEventListener('change', () => {
-      const value = input.value.trim();
-      const number = parsePageNumber(value);
-      if (!value) {
-        overrides.delete(entry.pageKey);
-      } else if (number) {
-        overrides.set(entry.pageKey, number);
-      } else {
-        showMessage('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。', 'red');
-        return;
-      }
-      showMessage('');
-      refresh();
-    });
-    card.append(input);
-  }
   if (jump) {
     const title = 'すべての頁の一覧で、この頁の前後を見る';
     card.append(smallButton('前後を見る', title, () => jumpToPage(entry.pageKey), 'secondary bm-page-jump'));
   }
   return card;
+}
+
+/**
+ * 頁の番号を直す欄と、それを開く ✎ のボタン（見出しの中に並べる）。
+ * 欄には手で入れた番号だけを入れ、いまの番号は薄く見本に出す。Enter か外を押すと閉じて
+ * 確定し、Esc で元に戻して閉じる。空にすると手で入れた番号を消す。推定した番号と同じ番号を
+ * 打てば、その番号を確かなものにする。
+ * 確定は change ではなく、閉じるときに自分で行う（change は欄に入ったときの値と比べるので、
+ * 別のアプリへ移って戻ると、打った番号が確定されないまま閉じることがある）。
+ */
+function numberEditor(entry, name, { jump }) {
+  const title = `${displayLabel(entry)} の番号を直す${jump ? '（指摘の項目の中）' : ''}`;
+  const input = el(document, 'input', 'bm-page-number');
+  input.type = 'text';
+  input.hidden = true;
+  input.enterKeyHint = 'done';
+  // 指摘の項目の中にも同じ頁が並ぶので、読み上げでどちらの欄か分かるようにする。
+  input.setAttribute('aria-label', title);
+  input.placeholder = entry.number === null ? '番号' : pageNumberText(entry);
+  const initial = overrides.has(entry.pageKey) ? pageNumberText(overrides.get(entry.pageKey)) : '';
+  input.value = initial;
+  let warned = false; // 正しくない番号の断りを出した
+
+  const show = (open) => {
+    name.hidden = open;
+    edit.hidden = open;
+    input.hidden = !open;
+  };
+  const open = () => {
+    show(true);
+    input.focus();
+    input.select();
+  };
+  // 一覧の中のこの頁の ✎（確定するとカードを作り直すので、その都度探す。指摘の項目から
+  // 外れたり、項目ごと消えたりしたら無い）。
+  const editIn = (list) =>
+    list.isConnected ? list.querySelector(`[data-page-key="${entry.pageKey}"] .bm-page-edit`) : null;
+  const listOf = () => input.closest('li').parentElement;
+  /** 欄の番号を確かめて閉じる。正しくない番号なら閉じずに false を返す。 */
+  const commit = () => {
+    const value = input.value.trim();
+    const number = parsePageNumber(value);
+    if (value && !number) {
+      showMessage('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。', 'red');
+      warned = true;
+      return false;
+    }
+    show(false);
+    // 番号と関わりの無い知らせは、番号を変えずに閉じただけなら消さない。
+    if (warned || value !== initial) showMessage('');
+    warned = false;
+    if (value === initial) return true;
+    if (number) overrides.set(entry.pageKey, number);
+    else overrides.delete(entry.pageKey);
+    refresh();
+    return true;
+  };
+
+  const edit = smallButton('✎', title, () => {
+    // ほかの頁の欄が開いていれば、先に閉じて確定する。番号が変わるとほかの頁のカードも
+    // 作り直すので、作り直した後のこの頁の ✎ を押し直す。
+    const list = listOf();
+    const active = document.activeElement;
+    if (active.classList.contains('bm-page-number')) active.blur();
+    const next = editIn(list);
+    if (next === edit) open();
+    else next?.click();
+  }, 'secondary bm-page-edit');
+  // 押し始めでフォーカスを移さない（移すと、開いている欄がその場で確定してカードを作り直し、
+  // 押し終わる前にこの ✎ が消えて、押しても開かない）。
+  edit.addEventListener('mousedown', (event) => event.preventDefault());
+
+  input.addEventListener('keydown', (event) => {
+    // 日本語入力の変換を確かめる Enter では閉じない（Safari は isComposing を付けず、
+    // keyCode を 229 にする）。
+    if (event.isComposing || event.keyCode === 229 || !['Enter', 'Escape'].includes(event.key)) return;
+    if (event.key === 'Escape') input.value = initial;
+    const list = listOf();
+    // 正しくない番号なら、欄を開いたまま直してもらう。
+    if (!commit()) return;
+    // 閉じたら ✎ にフォーカスを戻す（作り直したカードなら、その ✎ へ。指摘の項目から外れたら、
+    // すべての頁の一覧のこの頁へ）。
+    (editIn(list) ?? editIn($('pageGrid'))).focus();
+  });
+  input.addEventListener('blur', () => {
+    // 別のアプリ・タブへ移っただけなら、開いたままにする（戻ってから続けられるように。
+    // そのときは、欄がフォーカスを持ったまま blur が届く）。描き直しで外されたカードの欄
+    // では確定しない（描き直しの途中で、また描き直すことになる）。
+    if (input.hidden || document.activeElement === input || !input.isConnected) return;
+    // 外を押したときは、正しくない番号なら元に戻して閉じる（断りは commit が出している）。
+    if (!commit()) {
+      input.value = initial;
+      show(false);
+    }
+  });
+  return [input, edit];
 }
 
 // --- 拡大表示 ----------------------------------------------------------------
