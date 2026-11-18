@@ -5,6 +5,7 @@ import {
   displayLabel,
   gridItems,
   mergeIssues,
+  missingLabel,
   pageIssues,
   suggestBookName,
   textCoverage,
@@ -26,6 +27,7 @@ describe('displayLabel', () => {
     expect(displayLabel({ role: 'back' })).toBe('裏表紙');
     expect(displayLabel(body('a', 12))).toBe('12 頁');
     expect(displayLabel(body('a', null, 'unknown'))).toBe('番号不明');
+    expect(displayLabel({ ...body('a', 57), branch: 1 })).toBe('57-1 頁');
   });
 });
 
@@ -81,6 +83,28 @@ describe('gridItems', () => {
 
     expect(items[1]).toEqual({ type: 'missing', from: 2, to: 39 });
     expect(items).toHaveLength(3);
+  });
+
+  it('枝番の頁に差し替えられた番号には札を挟まず、枝番の抜けには枝番の札を挟む', () => {
+    const branch = (number, b) => ({ ...body(`${number}-${b}`, number), branch: b });
+    const order = [
+      body('55', 55),
+      body('56', 56),
+      branch(57, 1),
+      branch(57, 2),
+      branch(57, 4), // 57-3 が無い
+      body('59', 59), // 58 は 57-1〜57-4 に差し替えられた
+      branch(60, 2), // 60 は枝番の頁に差し替えられた（偶数なので裏の 61 は別）。60-1 が無い
+    ];
+    const labels = gridItems(order).map((item) => (item.type === 'missing' ? `-${missingLabel(item)}` : item.entry.pageKey));
+
+    expect(labels).toEqual(['55', '56', '57-1', '57-2', '-57-3 頁', '57-4', '59', '-60-1 頁', '60-2']);
+  });
+
+  it('抜けの札の見出し', () => {
+    expect(missingLabel({ from: 58, to: 58 })).toBe('58 頁');
+    expect(missingLabel({ from: 60, to: 70 })).toBe('60〜70 頁');
+    expect(missingLabel({ from: 57, to: 57, branch: 2 })).toBe('57-2 頁');
   });
 });
 

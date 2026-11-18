@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  branchLayout,
   buildBookOrder,
   checkSequence,
   compressRanges,
@@ -19,7 +20,7 @@ import {
 } from '../src/pdf-book-merger/ordering.js';
 
 /**
- * ファイル 1 つ。numbers は頁ごとに読めた番号（null は読めなかった頁）。
+ * ファイル 1 つ。numbers は頁ごとに読めた番号（null は読めなかった頁、'57-1' は枝番の頁）。
  */
 function file(key, numbers, { role = 'body', manual = null, coverStart = null, coverStep = 1 } = {}) {
   return {
@@ -30,10 +31,20 @@ function file(key, numbers, { role = 'body', manual = null, coverStart = null, c
     coverStep,
     pages: numbers.map((value, index) => ({
       key: `${key}:${index}`,
-      candidates: value === null ? [] : [{ value, score: 3.5, source: 'text', zone: 'bottom' }],
+      candidates: value === null ? [] : [{ ...readValue(value), score: 3.5, source: 'text', zone: 'bottom' }],
     })),
   };
 }
+
+/** 12 → { value: 12 }、'57-1' → { value: 57, branch: 1 }。 */
+function readValue(value) {
+  if (typeof value === 'number') return { value };
+  const [main, branch] = value.split('-').map(Number);
+  return { value: main, branch };
+}
+
+/** 並びの頁の番号（枝番の頁は '57-1'）。 */
+const labelOf = (entry) => (entry.branch ? `${entry.number}-${entry.branch}` : entry.number);
 
 const range = (from, to, step) => {
   const list = [];
@@ -166,7 +177,7 @@ describe('buildBookOrder', () => {
   });
 
   it('頁ごとに手で直した番号を優先する（小数で間に入れられる）', () => {
-    const order = arrange(book(), new Map([['odd-a:0', 2.5]]));
+    const order = arrange(book(), new Map([['odd-a:0', { number: 2.5 }]]));
 
     const at = order.findIndex((e) => e.pageKey === 'odd-a:0');
     expect(order[at]).toMatchObject({ number: 2.5, status: 'manual' });
@@ -277,7 +288,7 @@ describe('頁ラベル', () => {
       file('cover', [null, null], { role: 'front' }),
       file('body', [null, null, 1, 2, 3]),
     ];
-    const order = buildBookOrder(files, numberFiles(files), new Map([['body:4', 2.5]]));
+    const order = buildBookOrder(files, numberFiles(files), new Map([['body:4', { number: 2.5 }]]));
     const ranges = pageLabelRanges(order);
 
     expect(pageLabelTexts(ranges, order.length)).toEqual([
@@ -326,6 +337,106 @@ describe('小物', () => {
   });
 
   it('奇数側・偶数側', () => {
-    expect([1, 2, -1, 0, 2.5, null].map(sideOf)).toEqual(['odd', 'even', 'odd', 'even', null, null]);
+    expect([1, 2, -1, 0, 2.5, null].map((n) => sideOf(n))).toEqual(['odd', 'even', 'odd', 'even', null, null]);
+  });
+});
+
+describe('枝番の頁（加除式の差し替え）', () => {
+  // 49〜56、57-1〜57-4（57・58 頁の紙を差し替えたもの）、59〜62。
+  const odd = () => file('odd', [49, 51, 53, 55, '57-1', '57-3', 59, 61]);
+  const even = () => file('even', [62, 60, '57-4', '57-2', 56, 54, 52, 50]); // 裏返したので逆順
+
+  it('枝番の頁を、同じ番号の頁のあと・次の番号の前に並べる', () => {
+    const order = arrange([odd(), even()]);
+
+    expect(order.map(labelOf)).toEqual([
+      49, 50, 51, 52, 53, 54, 55, 56, '57-1', '57-2', '57-3', '57-4', 59, 60, 61, 62,
+    ]);
+    expect(order.every((entry) => entry.status === 'detected')).toBe(true);
+  });
+
+  it('差し替えられた番号は抜けとみなさず、そう読んだことを知らせる', () => {
+    const problems = checkSequence(arrange([odd(), even()]), { sheets: true });
+
+    expect(problems).toEqual([
+      {
+        level: 'info',
+        kind: 'replaced',
+        message: '57〜58 頁は無く、枝番の付いた頁（57-1〜57-4）があります。差し替えられた頁とみなしました。',
+        pageKeys: ['odd:4', 'even:3', 'odd:5', 'even:2'],
+      },
+    ]);
+  });
+
+  it('枝番の抜け・重なりを指摘する', () => {
+    const files = [
+      file('odd', [55, '57-1', 59]), // 57-3 を入れ忘れた
+      file('even', [60, '57-4', '57-2', '57-2', 56]),
+    ];
+    const problems = checkSequence(arrange(files));
+
+    expect(problems.map((p) => p.message)).toEqual([
+      '57-2 頁が 2 回あります（同じ束を 2 度スキャンした・番号の読み違い）。',
+      '57-3 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。',
+      '57〜58 頁は無く、枝番の付いた頁（57-1〜57-4）があります。差し替えられた頁とみなしました。',
+    ]);
+  });
+
+  it('枝番の頁で始まる・終わる束は、紙の表と裏を枝番で確かめる', () => {
+    const problems = checkSequence(arrange([file('mid', ['57-2', '57-3'])]), { sheets: true });
+
+    expect(problems.filter((p) => p.level === 'warn').map((p) => p.message)).toEqual([
+      '最初の頁が偶数（57-2 頁）です。その表（57-1 頁）が欠けていないか確かめてください。',
+      '最後の頁が奇数（57-3 頁）です。その裏（57-4 頁）が欠けていないか確かめてください（裏が白紙でスキャンしていない場合は問題ありません）。',
+    ]);
+  });
+
+  it('枝番の頁を手で決められる', () => {
+    const files = [file('body', [55, 56, null, 58])];
+    const order = arrange(files, new Map([['body:2', { number: 57, branch: 2 }]]));
+
+    expect(order.map(labelOf)).toEqual([55, 56, '57-2', 58]);
+    expect(order[2].status).toBe('manual');
+  });
+
+  it('頁ラベルは「57-」を頭に付けた番号', () => {
+    const order = arrange([odd(), even()]);
+
+    expect(pageLabelTexts(pageLabelRanges(order), order.length).slice(6, 14)).toEqual([
+      '55', '56', '57-1', '57-2', '57-3', '57-4', '59', '60',
+    ]);
+    expect(pageLabelRanges(order)).toContainEqual({ start: 8, style: 'D', prefix: '57-', first: 1 });
+  });
+
+  it('番号の頁もあれば、枝番の頁は差し込まれたもの（抜けも差し替えも無い）', () => {
+    const order = arrange([file('all', [55, 56, '56-1', '56-2', 57, 58])]);
+
+    expect(order.map(labelOf)).toEqual([55, 56, '56-1', '56-2', 57, 58]);
+    expect(checkSequence(order)).toEqual([]);
+  });
+
+  it('番号の頁があるなら、その裏が無いのは抜け（差し替えとみなさない）', () => {
+    const problems = checkSequence(arrange([file('all', [56, 57, '57-1', '57-2', 59])]));
+
+    expect(problems.map((p) => p.kind)).toEqual(['missing']);
+    expect(problems[0].numbers).toEqual([58]);
+  });
+
+  it('束が枝番の頁で終われば、その先の番号を差し替えとは言わない', () => {
+    const problems = checkSequence(arrange([file('all', [56, '57-1', '57-2'])]));
+
+    expect(problems.map((p) => p.message)).toEqual([
+      '57 頁は無く、枝番の付いた頁（57-1〜57-2）があります。差し替えられた頁とみなしました。',
+    ]);
+  });
+
+  it('枝番の頁の表は奇数側、裏は偶数側', () => {
+    expect([sideOf(56, 1), sideOf(57, 2)]).toEqual(['odd', 'even']);
+  });
+
+  it('偶数の番号の枝番は、その番号だけを差し替えたとみなす', () => {
+    const { replaced } = branchLayout([{ number: 55 }, { number: 56, branch: 1 }, { number: 56, branch: 2 }]);
+
+    expect([...replaced]).toEqual([[56, 56]]);
   });
 });

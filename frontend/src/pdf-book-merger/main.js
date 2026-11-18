@@ -47,7 +47,14 @@ import {
   roleFromName,
   sideOf,
 } from './ordering.js';
-import { numberingSequence, pageNumberCandidates } from './page-numbers.js';
+import {
+  mergeCandidates,
+  numberingSequence,
+  pageNumberCandidates,
+  pageNumberText,
+  parsePageNumber,
+  unsettledPages,
+} from './page-numbers.js';
 import { findScanImages } from './scan-images.js';
 import { pdfLibViews } from './pdf-lib-views.js';
 import {
@@ -66,6 +73,7 @@ import {
   displayLabel,
   gridItems,
   mergeIssues,
+  missingLabel,
   pageIssues,
   STATUS_LABEL,
   suggestBookName,
@@ -229,6 +237,14 @@ function createProgress({ jobs = false } = {}) {
     overall() {
       return progress.place((progress.jobs?.done ?? 0) + progress.inJob());
     },
+    /**
+     * いまの仕事の始まり（流れ全体の位置）。途中で仕事を足して数え直したときは、
+     * 数え直した位置から。
+     */
+    jobStart() {
+      const { jobs } = progress;
+      return progress.place(Math.max(jobs?.done ?? 0, jobs?.start ?? 0));
+    },
     /** 中身が届いたところ（流れ全体の位置）。 */
     loadedEnd() {
       return progress.place((progress.jobs?.done ?? 0) + progress.loaded);
@@ -279,11 +295,16 @@ function renderProgress() {
     const loaded = Math.max(done, progress.loadedEnd());
     const bar = $('progressBar');
     bar.dataset.loaded = String(loaded);
-    bar.setAttribute('aria-valuenow', String(done));
     $('progressDone').style.width = `${done * 100}%`;
     $('progressLoaded').hidden = loaded <= done;
     $('progressLoaded').style.left = `${done * 100}%`;
     $('progressLoaded').style.width = `${(loaded - done) * 100}%`;
+    // 細くても動いているのが見える幅（tool.css の .bm-bar-loaded）は、いまの仕事の始まり
+    // から測る。ベタ塗りの右端から測ると、ベタ塗りが仕事の終わりに近づいたときに
+    // ストライプが次の仕事の区間まではみ出し、仕事を終えて消えるときに右端が戻って見える。
+    $('progressLoaded').style.setProperty('--bm-bar-from', `${(progress.jobStart() - done) * 100}%`);
+    // aria-valuenow は最後に書く（テストはこれを合図に、ほかの値を読む）。
+    bar.setAttribute('aria-valuenow', String(done));
   }
   renderLog();
   // 進み具合は頁ごとに変わるので、残すのは間を空けて（localStorage への書き込みは
@@ -657,13 +678,14 @@ async function readFile(file) {
     // PDF（暗号化など）は数が無い（描くときは 0 として扱う）。
     for (const page of file.pages) page.softMasks = scans[page.index] ? 0 : softMasks[page.index];
 
-    // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
+    // 文字情報だけでは番号の決まらない頁（候補が無い・並びに合わない）は、
+    // 画像の余白を OCR する（page-numbers.js の unsettledPages）。名前で表紙と分かる
     // もののほかは、配置を決める前に番号を読み切る（文字情報の無い束も、画像
     // から番号が読めれば本文と分かる）。OCR の準備は、画像を描く間に進める。
     // ソフトマスクの多い頁（InDesign の影・ぼかしのある表紙など）は粗く描き、
     // OCR しない（OCR に足りる細かさで描くと、1 頁で何十秒もかかる。
     // pdf-source.js の manySoftMasks）。番号は前後の頁から補う。
-    const unnumbered = roleFromName(file.name) ? [] : file.pages.filter((page) => page.candidates.length === 0);
+    const unnumbered = roleFromName(file.name) ? [] : unsettledOf(file);
     const ocrPages = new Set(unnumbered.filter((page) => !manySoftMasks(page.softMasks)).map((page) => page.index));
     if (ocrPages.size) startOcr();
     const coarse = file.pages.filter((page) => manySoftMasks(page.softMasks)).length;
@@ -676,13 +698,13 @@ async function readFile(file) {
     const boxesBefore = boxesReadSoFar();
     const drawnAt = await analyzePages(file, scans, ocrPages);
     // あとから本文に変えたとき（名前で表紙と見て OCR しなかったファイル）の
-    // ために、番号の見つかっていない頁の JPEG を残す（PDF 全体を読み直さずに
+    // ために、番号の決まっていない頁の JPEG を残す（PDF 全体を読み直さずに
     // 済む）。JPEG はファイルのバイト列の一部を指すだけなので（pdf-lib-views.js）、
     // 残してもメモリはほとんど使わない。その書き換えが効いていないと JPEG は
     // 写しなので、残さずに、あとで調べ直す。
     if (pdfLibViews && !file.stashed) {
-      for (const page of file.pages) {
-        if (page.candidates.length === 0 && !page.ocr) page.scan = scans[page.index] ?? null;
+      for (const page of unsettledOf(file)) {
+        if (!page.ocr) page.scan = scans[page.index] ?? null;
       }
     }
     const byOcr = file.pages.filter((page) => page.ocr && page.candidates.some((c) => c.source === 'ocr')).length;
@@ -691,7 +713,7 @@ async function readFile(file) {
         `余白を OCR ${ocrPages.size} 頁・うち番号が読めた頁 ${byOcr}、${seconds(imagesStarted)}。` +
         `うち頁を描き終えるまで ${seconds(imagesStarted, drawnAt)}、読んだ文字のかたまり ${boxesReadSoFar() - boxesBefore}）` +
         (coarse ? `。ソフトマスクの多い ${coarse} 頁は粗く描きました` : '') +
-        (skippedOcr ? `（うち番号の見つからない ${skippedOcr} 頁は、余白を OCR しませんでした）` : '') +
+        (skippedOcr ? `（うち番号の決まらない ${skippedOcr} 頁は、余白を OCR しませんでした）` : '') +
         (redrawnSafely(file.doc) ? '。pdf.js で描けなかった頁があり、安全な設定で開き直して描き直しました' : '')
     );
 
@@ -867,6 +889,7 @@ async function readStrips(file, page, strips) {
   try {
     if (!files.includes(file) || !(await startOcr())) return;
     const results = await Promise.all(strips.map((strip) => readStrip(strip)));
+    // 文字情報の候補（並びに合わなかったもの）も残し、どれが合うかは並びで決める。
     page.candidates = mergeCandidates(page.candidates, pageNumberCandidates(results.flat(), 'ocr'));
     page.ocr = true;
     page.scan = null;
@@ -898,7 +921,7 @@ function isPdf(bytes) {
 }
 
 /**
- * 読み終えたファイルの、番号の見つかっていない頁の余白を OCR する（あとから
+ * 読み終えたファイルの、番号の決まっていない頁の余白を OCR する（あとから
  * 本文に変えたとき）。読んでいる間も、ファイルは並びに入れたままにする
  * （頁が抜けて見えないように）。読み終えたら並べ直す。
  *
@@ -951,12 +974,18 @@ async function readMarginsWithOcr(file, pages) {
   await Promise.all(reading);
 }
 
-/** 読み終えたファイルの、番号の見つかっていない頁の OCR を頼む（あとから本文に変えたとき）。 */
+/** ファイルの、文字情報だけでは番号の決まらない頁（unsettledPages）。 */
+function unsettledOf(file) {
+  const indexes = unsettledPages(file.pages.map((page) => page.candidates));
+  return file.pages.filter((page) => indexes.has(page.index));
+}
+
+/** 読み終えたファイルの、番号の決まっていない頁の OCR を頼む（あとから本文に変えたとき）。 */
 function queueLateOcr(file) {
   // 読んでいる最中のファイルは、もう一度は頼まない（切り替えを繰り返しても
   // 同じ頁を 2 度読まない）。
   if (file.role !== 'body' || file.ocrBusy) return;
-  const pages = file.pages.filter((page) => page.candidates.length === 0 && !page.ocr && !manySoftMasks(page.softMasks));
+  const pages = unsettledOf(file).filter((page) => !page.ocr && !manySoftMasks(page.softMasks));
   if (pages.length === 0) return;
   file.ocrBusy = true;
   renderFile(file);
@@ -1044,15 +1073,6 @@ function setPreviewFile(file) {
   previewFile = file;
   if (file) holdDoc(file);
   if (previous) releaseDoc(previous);
-}
-
-function mergeCandidates(a, b) {
-  const byValue = new Map();
-  for (const c of [...a, ...b]) {
-    const previous = byValue.get(c.value);
-    if (!previous || previous.score < c.score) byValue.set(c.value, c);
-  }
-  return [...byValue.values()].sort((x, y) => y.score - x.score);
 }
 
 function removeFile(file) {
@@ -1169,7 +1189,7 @@ function refresh() {
     .filter((entry) => entry.role === 'body')
     .map((entry) => {
       const page = pageOf(entry);
-      return { key: entry.pageKey, side: sideOf(entry.number), size: page.size, measure: page.measure };
+      return { key: entry.pageKey, side: sideOf(entry.number, entry.branch), size: page.size, measure: page.measure };
     });
   const duplicates = duplicateIssues(
     order,
@@ -1209,7 +1229,7 @@ function refresh() {
 
 /** 結合する中身（名前と、並びの頁・配置・頁番号）を 1 つの文字列にしたもの。 */
 function mergeKey() {
-  return [outputName(), ...view.order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}`)].join('\n');
+  return [outputName(), ...view.order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}|${entry.branch ?? ''}`)].join('\n');
 }
 
 function discardMerged() {
@@ -1640,7 +1660,7 @@ function renderGrid() {
   const seen = new Map(); // 抜けの札の key が重ならないように（番号が前後と合わないと、同じ抜けが 2 度出る）
   for (const item of gridItems(view.order)) {
     if (item.type === 'missing') {
-      const range = `${item.from}-${item.to}`;
+      const range = `${item.from}-${item.to}${item.branch ? `-${item.branch}` : ''}`;
       seen.set(range, (seen.get(range) ?? 0) + 1);
       cards.push({ key: `missing:${range}:${seen.get(range)}`, sig: range, build: () => missingCard(item) });
       continue;
@@ -1666,7 +1686,7 @@ function renderGrid() {
 function missingCard(item) {
   const card = el(document, 'li', 'bm-page missing');
   card.append(
-    el(document, 'span', 'bm-missing-label', item.from === item.to ? `${item.from} 頁` : `${item.from}〜${item.to} 頁`),
+    el(document, 'span', 'bm-missing-label', missingLabel(item)),
     el(document, 'span', 'hint', 'ありません')
   );
   return card;
@@ -1705,18 +1725,18 @@ function pageCard(entry, issues, level) {
   if (entry.role === 'body') {
     const input = el(document, 'input', 'bm-page-number');
     input.type = 'text';
-    input.inputMode = 'decimal';
     input.placeholder = '番号を直す';
     input.setAttribute('aria-label', `${displayLabel(entry)} の番号を直す`);
-    input.value = overrides.has(entry.pageKey) ? String(overrides.get(entry.pageKey)) : '';
+    input.value = overrides.has(entry.pageKey) ? pageNumberText(overrides.get(entry.pageKey)) : '';
     input.addEventListener('change', () => {
       const value = input.value.trim();
+      const number = parsePageNumber(value);
       if (!value) {
         overrides.delete(entry.pageKey);
-      } else if (Number.isFinite(Number(value))) {
-        overrides.set(entry.pageKey, Number(value));
+      } else if (number) {
+        overrides.set(entry.pageKey, number);
       } else {
-        showMessage('番号は数字で入れてください。', 'red');
+        showMessage('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。', 'red');
         return;
       }
       showMessage('');

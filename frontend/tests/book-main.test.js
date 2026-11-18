@@ -30,7 +30,10 @@ function pdf(pages, extra = {}) {
 }
 const specOf = (bytes) => JSON.parse(decoder.decode(bytes).slice('%PDF-'.length));
 
-/** 本文の頁。ocr: 文字情報には無く、画像からだけ読める番号。 */
+/**
+ * 本文の頁。ocr: 文字情報には無く、画像からだけ読める番号。misread: 文字情報に
+ * 載っている、読み違えた番号（画像からは正しく読める）。head: 上の余白の柱の文字。
+ */
 const page = (id, number, extra = {}) => ({ id, number, ...extra });
 
 const mocks = vi.hoisted(() => ({
@@ -147,7 +150,10 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
       if (p.broken) throw new Error(p.broken);
       return {
         size: p.size ?? { width: 364, height: 515 },
-        items: p.number && !p.ocr ? bottomNumber(p.number) : [],
+        items: [
+          ...(p.misread ? bottomNumber(p.misread) : p.number && !p.ocr ? bottomNumber(p.number) : []),
+          ...(p.head ? [{ text: p.head, x0: 0.6, x1: 0.88, y: 0.05, h: 0.012 }] : []),
+        ],
         signature: { length: p.noText ? 0 : 12, hash: `h-${p.id}` },
         // 頁の文字情報（文字情報の確かめと、同じ頁の見比べに使う）。
         text: p.text ?? '',
@@ -674,7 +680,7 @@ describe('ファイルを足して並べる', () => {
 
     // 数字でなければ断る。
     change(document.querySelector('#pageGrid [data-page-key$=":1"] .bm-page-number'), 'abc');
-    expect($('message').textContent).toBe('番号は数字で入れてください。');
+    expect($('message').textContent).toBe('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。');
 
     // ファイルの先頭の番号を手で決める（奇数頁の束を 11 から）。
     const startField = fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]');
@@ -684,6 +690,36 @@ describe('ファイルを足して並べる', () => {
     expect($('message').textContent).toBe('先頭の頁の番号は整数で入れてください。');
     change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '');
     expect(gridLabels()).toContain('7 頁');
+  });
+
+  it('枝番の付いた頁（加除式の差し替え）を並べ、番号を枝番で直せる', async () => {
+    drop([
+      file(
+        '法令_奇数.pdf',
+        pdf([page('o53', 53), page('o55', 55), page('o571', '57-1'), page('o573', '57-3'), page('o59', 59), page('o61', 61)])
+      ),
+      file(
+        '法令_偶数.pdf',
+        pdf([page('e62', 62), page('e60', 60), page('e574', '57-4'), page('e572', '57-2'), page('e56', 56), page('e54', 54)])
+      ),
+    ]);
+    await settled(2);
+
+    const labels = ['53 頁', '54 頁', '55 頁', '56 頁', '57-1 頁', '57-2 頁', '57-3 頁', '57-4 頁', '59 頁', '60 頁', '61 頁', '62 頁'];
+    expect(gridLabels()).toEqual(labels);
+    expect(fileItem('法令_奇数.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 53, 55, 57-1, 57-3, 59, 61)');
+    expect($('problems').textContent).toContain('57〜58 頁は無く、枝番の付いた頁（57-1〜57-4）があります。');
+    expect($('problems').textContent).not.toContain('見つかりません');
+
+    // 57-3 頁を 57-5 頁に直すと、57-3 頁の抜けの札が出る。
+    const card = (label) =>
+      [...document.querySelectorAll('#pageGrid .bm-page')].find(
+        (li) => li.querySelector('.bm-page-label strong')?.textContent === label
+      );
+    change(card('57-3 頁').querySelector('.bm-page-number'), '57-5');
+    expect(gridLabels()).toEqual([...labels.slice(0, 6), '-57-3 頁', '57-4 頁', '57-5 頁', ...labels.slice(8)]);
+    expect(card('57-5 頁').querySelector('.bm-page-number').value).toBe('57-5');
+    expect($('problems').textContent).toContain('57-3 頁が見つかりません（枝番の付いた頁）');
   });
 
   it('頁を読めなければ、何頁目のどこで止まったかを添えて一覧に残す', async () => {
@@ -752,7 +788,9 @@ describe('ファイルを足して並べる', () => {
 
   /**
    * バーに出した値（済んだところ）と、そのときの見出しを記録する。返す関数で記録をやめる。
-   * withEnd なら、中身が届いたところ（ストライプの右端）も記録する。
+   * renderProgress が aria-valuenow を最後に書くのに合わせて、そのときに読む。
+   * withEnd なら、中身が届いたところ（ストライプの右端）と、ストライプの最小幅を
+   * 測る起点も記録する。
    */
   function watchBar({ withEnd = false } = {}) {
     const seen = [];
@@ -761,7 +799,11 @@ describe('ファイルを足して並べる', () => {
     bar.setAttribute = (name, value) => {
       if (name === 'aria-valuenow') {
         const entry = { value: Number(value), label: $('progressText').textContent };
-        if (withEnd) entry.end = Number(bar.dataset.loaded);
+        if (withEnd) {
+          entry.end = Number(bar.dataset.loaded);
+          // ストライプの最小幅を測る起点（いまの仕事の始まり）。ベタ塗りの右端から見た位置で出しているので戻す。
+          entry.start = entry.value + parseFloat($('progressLoaded').style.getPropertyValue('--bm-bar-from')) / 100;
+        }
         seen.push(entry);
       }
       setAttribute(name, value);
@@ -823,17 +865,23 @@ describe('ファイルを足して並べる', () => {
     expect(hidden).toEqual([false, true]);
     // 替わり目では、1 つめを済ませた位置（半分）で止め、2 つめの見出しに替える。
     // 2 つめの中身も手元にあるので、ストライプは 2 つめの仕事の終わりまで。
-    expect(seen).toContainEqual({ value: 0.5, end: 1, label: 'ファイルを調べています（2 / 2）' });
-    // 1 つめの間は、ストライプは 1 つめの仕事の終わりまで。
+    expect(seen).toContainEqual({ value: 0.5, end: 1, start: 0.5, label: 'ファイルを調べています（2 / 2）' });
+    // 1 つめの間は、ストライプは 1 つめの仕事の終わりまで。ストライプの最小幅は、
+    // ベタ塗りの右端ではなく仕事の始まりから測る（ベタ塗りが仕事の終わりに近づいても、
+    // ストライプが次の仕事の区間へはみ出して、仕事を終えたときに右端が戻らないように）。
     const first = seen.filter((s) => s.label === 'ファイルを調べています（1 / 2）');
     expect(first.length).toBeGreaterThan(2);
-    for (const s of first) expect(s.end).toBe(0.5);
+    expect(first.some((s) => s.value > 0.4)).toBe(true);
+    for (const s of first) {
+      expect(s.end).toBe(0.5);
+      expect(s.start).toBeCloseTo(0);
+    }
     expectNeverBack(seen);
   });
 
   it('調べている途中でファイルを足しても、バーは戻らない', async () => {
     const release = holdImage('o3');
-    const seen = watchBar();
+    const seen = watchBar({ withEnd: true });
     drop([file('猫_奇数.pdf', pdf(ODD))]);
     await vi.waitFor(() => expect(mocks.renderPageImage).toHaveBeenCalled());
     const before = seen.at(-1).value;
@@ -846,7 +894,14 @@ describe('ファイルを足して並べる', () => {
     seen.stop();
 
     expectNeverBack(seen);
-    expect(seen.map((s) => s.label)).toContain('ファイルを調べています（1 / 3）');
+    // ストライプの最小幅を測る起点（いまの仕事の始まり）も戻らず、ベタ塗りを越えない。
+    // 足して数え直した後の 1 つめの仕事は、数え直した位置から始まるものとする。
+    seen.forEach((s, i) => {
+      expect(s.start).toBeGreaterThanOrEqual((seen[i - 1]?.start ?? 0) - 1e-9);
+      expect(s.start).toBeLessThanOrEqual(s.value + 1e-9);
+    });
+    const recounted = seen.find((s) => s.label === 'ファイルを調べています（1 / 3）');
+    expect(recounted.start).toBeCloseTo(before);
     expect(seen.map((s) => s.label)).toContain('ファイルを調べています（3 / 3）');
   });
 
@@ -1407,10 +1462,10 @@ describe('ファイルを足して並べる', () => {
     $('logBox').dispatchEvent(new Event('toggle'));
     const lines = $('logText').textContent.split('\n');
     const imageLine = (name) => lines.find((text) => text.includes(`「${name}」の頁の画像を調べました`));
-    // 粗く描いた頁は 2 つ。そのうち OCR を見送ったのは、番号の見つからない 1 頁だけ。
+    // 粗く描いた頁は 2 つ。そのうち OCR を見送ったのは、番号の決まらない 1 頁だけ。
     expect(imageLine('odd.pdf')).toContain('余白を OCR 2 頁・うち番号が読めた頁 2');
     expect(imageLine('odd.pdf')).toMatch(
-      /。ソフトマスクの多い 2 頁は粗く描きました（うち番号の見つからない 1 頁は、余白を OCR しませんでした）$/
+      /。ソフトマスクの多い 2 頁は粗く描きました（うち番号の決まらない 1 頁は、余白を OCR しませんでした）$/
     );
     // 名前で表紙と分かるファイルは、もともと OCR しないので、見送ったとは書かない。
     expect(imageLine('表紙.pdf')).toMatch(/。ソフトマスクの多い 2 頁は粗く描きました$/);
@@ -1422,6 +1477,30 @@ describe('ファイルを足して並べる', () => {
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalled());
     await vi.waitFor(() => expect(fileItem('表紙.pdf').textContent).not.toContain('余白を読み取り中'));
     expect(mocks.renderMargins.mock.calls.map(([, index]) => index).sort()).toEqual([2, 3]);
+  });
+
+  it('文字情報の番号が並びに合わない頁も、余白を OCR して確かめる（スキャナーの読み落とし・読み違え）', async () => {
+    // 加除式の本の奇数頁の束。5-1 と 8-1 の頁は、文字情報が余白の番号を読み落とし、
+    // 柱の数字だけが拾える。10 の頁は 16 と読み違えている。枝番の頁を挟むと
+    // 番号の並びが変わる（5-1 のあとは 6）ので、前後から補うと 6 まで食い違いになる。
+    const pages = [
+      page('o1', 1),
+      page('o3', 3),
+      page('o5-1', '5-1', { ocr: true, head: '第3章 12' }),
+      page('o6', 6),
+      page('o8-1', '8-1', { ocr: true, head: '第3章 20' }),
+      page('o10', 10, { ocr: true, misread: 16 }),
+      page('o12', 12),
+    ];
+    drop([file('odd.pdf', pdf(pages))]);
+    await settled(1);
+
+    // 並びに合って読めた頁は読み直さない。
+    const margins = mocks.renderPageImage.mock.calls.filter(([, , , options]) => options.margins);
+    expect(margins.map(([, index]) => index).sort()).toEqual([2, 4, 5]);
+    expect(gridLabels().filter((label) => !label.startsWith('-'))).toEqual([
+      '1 頁', '3 頁', '5-1 頁', '6 頁', '8-1 頁', '10 頁', '12 頁',
+    ]);
   });
 
   it('OCR する頁が無ければ、OCR の準備を始めない（iPhone・iPad でメモリを余計に使わない）', async () => {
