@@ -30,7 +30,10 @@ function pdf(pages, extra = {}) {
 }
 const specOf = (bytes) => JSON.parse(decoder.decode(bytes).slice('%PDF-'.length));
 
-/** 本文の頁。ocr: 文字情報には無く、画像からだけ読める番号。 */
+/**
+ * 本文の頁。ocr: 文字情報には無く、画像からだけ読める番号。misread: 文字情報に
+ * 載っている、読み違えた番号（画像からは正しく読める）。head: 上の余白の柱の文字。
+ */
 const page = (id, number, extra = {}) => ({ id, number, ...extra });
 
 const mocks = vi.hoisted(() => ({
@@ -135,7 +138,10 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
       if (p.broken) throw new Error(p.broken);
       return {
         size: p.size ?? { width: 364, height: 515 },
-        items: p.number && !p.ocr ? bottomNumber(p.number) : [],
+        items: [
+          ...(p.misread ? bottomNumber(p.misread) : p.number && !p.ocr ? bottomNumber(p.number) : []),
+          ...(p.head ? [{ text: p.head, x0: 0.6, x1: 0.88, y: 0.05, h: 0.012 }] : []),
+        ],
         signature: { length: p.noText ? 0 : 12, hash: `h-${p.id}` },
       };
     },
@@ -1441,10 +1447,10 @@ describe('ファイルを足して並べる', () => {
     $('logBox').dispatchEvent(new Event('toggle'));
     const lines = $('logText').textContent.split('\n');
     const imageLine = (name) => lines.find((text) => text.includes(`「${name}」の頁の画像を調べました`));
-    // 粗く描いた頁は 2 つ。そのうち OCR を見送ったのは、番号の見つからない 1 頁だけ。
+    // 粗く描いた頁は 2 つ。そのうち OCR を見送ったのは、番号の決まらない 1 頁だけ。
     expect(imageLine('odd.pdf')).toContain('余白を OCR 2 頁・うち番号が読めた頁 2');
     expect(imageLine('odd.pdf')).toMatch(
-      /。ソフトマスクの多い 2 頁は粗く描きました（うち番号の見つからない 1 頁は、余白を OCR しませんでした）$/
+      /。ソフトマスクの多い 2 頁は粗く描きました（うち番号の決まらない 1 頁は、余白を OCR しませんでした）$/
     );
     // 名前で表紙と分かるファイルは、もともと OCR しないので、見送ったとは書かない。
     expect(imageLine('表紙.pdf')).toMatch(/。ソフトマスクの多い 2 頁は粗く描きました$/);
@@ -1456,6 +1462,30 @@ describe('ファイルを足して並べる', () => {
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalled());
     await vi.waitFor(() => expect(fileItem('表紙.pdf').textContent).not.toContain('余白を読み取り中'));
     expect(mocks.renderMargins.mock.calls.map(([, index]) => index).sort()).toEqual([2, 3]);
+  });
+
+  it('文字情報の番号が並びに合わない頁も、余白を OCR して確かめる（スキャナーの読み落とし・読み違え）', async () => {
+    // 加除式の本の奇数頁の束。5-1 と 8-1 の頁は、文字情報が余白の番号を読み落とし、
+    // 柱の数字だけが拾える。10 の頁は 16 と読み違えている。枝番の頁を挟むと
+    // 番号の並びが変わる（5-1 のあとは 6）ので、前後から補うと 6 まで食い違いになる。
+    const pages = [
+      page('o1', 1),
+      page('o3', 3),
+      page('o5-1', '5-1', { ocr: true, head: '第3章 12' }),
+      page('o6', 6),
+      page('o8-1', '8-1', { ocr: true, head: '第3章 20' }),
+      page('o10', 10, { ocr: true, misread: 16 }),
+      page('o12', 12),
+    ];
+    drop([file('odd.pdf', pdf(pages))]);
+    await settled(1);
+
+    // 並びに合って読めた頁は読み直さない。
+    const margins = mocks.renderPageImage.mock.calls.filter(([, , , options]) => options.margins);
+    expect(margins.map(([, index]) => index).sort()).toEqual([2, 4, 5]);
+    expect(gridLabels().filter((label) => !label.startsWith('-'))).toEqual([
+      '1 頁', '3 頁', '5-1 頁', '6 頁', '8-1 頁', '10 頁', '12 頁',
+    ]);
   });
 
   it('OCR する頁が無ければ、OCR の準備を始めない（iPhone・iPad でメモリを余計に使わない）', async () => {

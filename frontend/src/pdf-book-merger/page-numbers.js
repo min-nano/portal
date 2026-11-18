@@ -193,6 +193,43 @@ export function pageNumberCandidates(items, source = 'text') {
   return [...found.values()].sort((a, b) => b.score - a.score || a.value - b.value);
 }
 
+/**
+ * 同じ頁の候補を 2 通りの読み（文字情報と OCR）から合わせる。同じ番号（枝番も
+ * 同じ）は 1 つにし、点数の高いほうを残す。同点なら後の読み（OCR）を残し、
+ * 画像からも読めた番号として数える（記録の「番号が読めた頁」）。
+ *
+ * @param {{value:number, branch?:number, score:number}[]} first
+ * @param {{value:number, branch?:number, score:number}[]} second
+ */
+export function mergeCandidates(first, second) {
+  const found = new Map();
+  for (const candidate of [...first, ...second]) {
+    const key = `${candidate.value}-${candidate.branch ?? ''}`;
+    const previous = found.get(key);
+    if (!previous || previous.score <= candidate.score) found.set(key, candidate);
+  }
+  return [...found.values()].sort((a, b) => b.score - a.score || a.value - b.value);
+}
+
+/**
+ * 文字情報の候補だけでは番号の決まらない頁（画像の余白を OCR して確かめる頁）。
+ *
+ * 候補が 1 つも無い頁のほか、候補はあっても並びに合わない頁（柱や表の中の
+ * 数字だけが拾えた頁、読み違えた頁）も含める。スキャナーの付ける文字情報は、
+ * 余白の頁番号を読み落としたり（枝番の頁）、読み違えたり（154 を 151、184-1 を
+ * 「184ソ」）する。その頁を前後から補うと、枝番の頁を挟んで番号の並びが
+ * 変わるところ（57-1 のあとの奇数頁の束に、58 が来る）で、正しく読めた頁まで
+ * 食い違いにしてしまう。並びに合って読めた頁は OCR しない（柱に番号のある
+ * 本で、全部の頁を読み直さないため）。
+ *
+ * @param {{value:number,score:number}[][]} candidates 頁ごとの候補（文字情報から）
+ * @returns {Set<number>} 頁の位置
+ */
+export function unsettledPages(candidates) {
+  const { pages } = inferFileNumbers(candidates);
+  return new Set(pages.flatMap((page, index) => (page.status === 'detected' ? [] : [index])));
+}
+
 /** 枝番の候補（あれば）。枝番は番号だけの行からしか取らないので、どれも強い候補。 */
 function branchCandidate(list) {
   return list.find((c) => c.branch) || null;

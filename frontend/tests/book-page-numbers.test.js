@@ -12,11 +12,13 @@ import {
   groupLines,
   inferFileNumbers,
   manualFileNumbers,
+  mergeCandidates,
   normalizeDigits,
   numberingSequence,
   pageNumberCandidates,
   pageNumberText,
   parsePageNumber,
+  unsettledPages,
 } from '../src/pdf-book-merger/page-numbers.js';
 
 /** 頁に対する割合で置いた文字の断片。 */
@@ -365,5 +367,65 @@ describe('本文の脇の行番号（5 行おき）', () => {
     expect(pageNumberCandidates([left(40, 0.86, '本文の行'), pageNumber(45)]).map((c) => c.value)).toEqual([45]);
     // 5 大きい番号が上にある（行番号は上から増える）。
     expect(pageNumberCandidates([left(50, 0.5, '本文の行'), left(45, 0.95)]).map((c) => c.value)).toEqual([45]);
+  });
+});
+
+describe('文字情報だけでは番号の決まらない頁（余白を OCR する頁）', () => {
+  /** 柱や表の中の数字だけが拾えた頁（弱い候補）。 */
+  const weak = (value) => [{ value, score: 2, source: 'text', zone: 'top' }];
+  const ocr = (value, branchNumber) => [
+    { value, ...(branchNumber ? { branch: branchNumber } : {}), score: 4, source: 'ocr', zone: 'bottom' },
+  ];
+
+  it('候補が無い頁・並びに合わない頁（弱い候補だけ・読み違え）を挙げ、並びに合う頁は挙げない', () => {
+    // 実際のスキャン（加除式の本の奇数頁の束）: 181-1 は文字情報が読み落とし、
+    // 柱の 3 だけが拾える。182 は読めている。184-1 は「184ソ」で読めない。
+    // 175 は 171 と読み違えている。
+    const text = [read(173), read(171), read(177), read(179), weak(3), read(182), weak(12), none()];
+
+    expect([...unsettledPages(text)]).toEqual([1, 4, 5, 6, 7]);
+  });
+
+  it('OCR で読めた番号を足すと、枝番の頁を挟んで並びが変わっても、読めた頁を食い違いにしない', () => {
+    const text = [read(173), read(171), read(177), read(179), weak(3), read(182), weak(12)];
+    // 文字情報だけでは、182 が前後と食い違う（183 とされる）。
+    expect(inferFileNumbers(text).pages[5]).toMatchObject({ number: 183, status: 'conflict' });
+
+    const merged = text.slice();
+    merged[1] = mergeCandidates(text[1], ocr(175));
+    merged[4] = mergeCandidates(text[4], ocr(181, 1));
+    merged[5] = mergeCandidates(text[5], ocr(182));
+    merged[6] = mergeCandidates(text[6], ocr(184, 1));
+    const { pages } = inferFileNumbers(merged);
+    expect(pages.map((p) => [p.branch ? `${p.number}-${p.branch}` : p.number, p.status])).toEqual([
+      [173, 'detected'],
+      [175, 'detected'],
+      [177, 'detected'],
+      [179, 'detected'],
+      ['181-1', 'detected'],
+      [182, 'detected'],
+      ['184-1', 'detected'],
+    ]);
+    expect(unsettledPages(merged).size).toBe(0);
+  });
+
+  it('同じ番号の候補は 1 つにして点数の高いほうを残し、点数の順に並べる', () => {
+    const text = [
+      { value: 182, score: 4, source: 'text', zone: 'bottom' },
+      { value: 3, score: 2, source: 'text', zone: 'top' },
+    ];
+    const fromImage = [
+      { value: 182, score: 3.5, source: 'ocr', zone: 'bottom' },
+      { value: 182, branch: 1, score: 3.5, source: 'ocr', zone: 'bottom' },
+      { value: 3, score: 4, source: 'ocr', zone: 'bottom' },
+    ];
+    // 同点なら後の読み（OCR）を残す。
+    expect(mergeCandidates(text, [{ value: 182, score: 4, source: 'ocr', zone: 'bottom' }])[0].source).toBe('ocr');
+
+    expect(mergeCandidates(text, fromImage)).toEqual([
+      { value: 3, score: 4, source: 'ocr', zone: 'bottom' },
+      { value: 182, score: 4, source: 'text', zone: 'bottom' },
+      { value: 182, branch: 1, score: 3.5, source: 'ocr', zone: 'bottom' },
+    ]);
   });
 });
