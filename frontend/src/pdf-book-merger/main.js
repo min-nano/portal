@@ -1229,7 +1229,7 @@ function describePage(entry) {
 /** 並びと指摘を組み立て直し、画面を描き直す。結合した PDF は捨てる。 */
 function refresh() {
   const ready = readyFiles();
-  const numberings = numberFiles(ready);
+  const numberings = numberFiles(ready, overrides);
   const order = buildBookOrder(ready, numberings, overrides);
   const sheets = ready.some(
     (file) => file.role === 'body' && Math.abs(numberings.get(file.key)?.step ?? 0) === 2
@@ -1474,10 +1474,13 @@ function fileDetails(file) {
   const parts = [];
   const numbering = file.role === 'body' ? view.numberings.get(file.key) : null;
   if (numbering) {
-    const read = numbering.pages.filter((page) => page.status === 'detected').length;
-    const byOcr = numbering.pages.filter(
-      (page) => page.status === 'detected' && page.read?.source === 'ocr'
-    ).length;
+    // 手で入れた番号でも、読み取りがその番号と合っていれば読めた頁に数える
+    // （番号を直しただけで内訳が変わらないように）。
+    const readPages = numbering.pages.filter(
+      (page) => page.status === 'detected' || (page.status === 'manual' && page.read)
+    );
+    const read = readPages.length;
+    const byOcr = readPages.filter((page) => page.read?.source === 'ocr').length;
     parts.push(`${file.pages.length} 頁のうち番号を読めた頁 ${read}${byOcr ? `（うち画像から ${byOcr}）` : ''}`);
   }
   const textPages = file.pages.filter((page) => page.signature.length > 0).length;

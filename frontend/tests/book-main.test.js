@@ -430,6 +430,15 @@ describe('ファイルを足して並べる', () => {
     expect($('problems').textContent).toContain('見つかりませんでした');
     // 画像から読むのは、文字情報に番号が無かった頁だけ（表紙は名前で分かるので読まない）。
     expect(mocks.readStrip).toHaveBeenCalledTimes(2);
+
+    // 読めたとおりの番号を手で入れても、読み取りの内訳は変わらない。違う番号なら数えない。
+    const details = () => fileItem('猫_奇数.pdf').querySelector('.bm-file-details').textContent;
+    const number = (key) => document.querySelector(`#pageGrid [data-page-key="${key}"] .bm-page-number`);
+    change(number('f1:2'), '5');
+    expect(details()).toBe('4 頁のうち番号を読めた頁 4（うち画像から 1）');
+    change(number('f1:2'), '');
+    change(number('f1:3'), '9');
+    expect(details()).toBe('4 頁のうち番号を読めた頁 3（うち画像から 1）');
   });
 
   it('一度に何十・何百ファイル足しても、一覧は 1 度だけ描き、行やカードは中身が変わったものだけ作り直す', async () => {
@@ -1723,7 +1732,10 @@ describe('確かめる', () => {
     expect(details.querySelector('.bm-page-number').value).toBe('3');
 
     // 重い指摘（重なり）は上に出る。頁の無い指摘（抜け）は開かない。
+    // （手で入れた番号から前後の頁の番号が決め直されないように、最初と最後の頁も入れておく）
     const number = (key) => document.querySelector(`#pageGrid [data-page-key="${key}"] .bm-page-number`);
+    change(number('f1:0'), '1');
+    change(number('f1:3'), '7');
     change(number('f1:2'), '7');
     change(number('f1:1'), '7');
     const labels = () =>
