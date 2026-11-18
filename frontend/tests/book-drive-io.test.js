@@ -86,6 +86,19 @@ describe('downloadDriveFile', () => {
     expect(progress.at(-1)).toEqual([25, 25]);
   });
 
+  it('大きさが分かったら、読み始める前に大きさの枠を待つ', async () => {
+    let admit;
+    const reserve = vi.fn(() => new Promise((resolve) => (admit = resolve)));
+
+    const reading = downloadDriveFile({ id: 'f', name: 'a.pdf' }, { reserve });
+    await vi.waitFor(() => expect(reserve).toHaveBeenCalledWith(DATA.length));
+    expect(fetchMock).not.toHaveBeenCalled();
+    admit();
+
+    expect([...(await reading)]).toEqual([...DATA]);
+    expect(reserve).toHaveBeenCalledTimes(1);
+  });
+
   it('途中で切れたら、続きから読み直す', async () => {
     fetchMock
       .mockImplementationOnce(async () => new Response(body(DATA, { pieces: 5, cutAt: 10 }), { status: 200 }))

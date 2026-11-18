@@ -1049,6 +1049,60 @@ describe('ファイルを足して並べる', () => {
     await settled(2);
   });
 
+  describe('Drive の読み込みは、調べるのを待たずに並べて進める', () => {
+    const MB = 1024 * 1024;
+    /** 大きさ size のファイルを選び、読み込みを止めておく（id → 放す関数）。 */
+    function pickHeld(picked, size) {
+      const releases = new Map();
+      mocks.pickFiles.mockResolvedValue(picked);
+      mocks.downloadDriveFile.mockImplementation(async (file, { reserve }) => {
+        await reserve(size);
+        await new Promise((done) => releases.set(file.id, done));
+        return pdf(file.id === 'd-odd' ? ODD : file.id === 'd-even' ? EVEN : COVER);
+      });
+      $('driveBtn').click();
+      return releases;
+    }
+    const picked = [
+      { id: 'd-odd', name: '猫_1.pdf' },
+      { id: 'd-even', name: '猫_2.pdf' },
+      { id: 'd-cover', name: '猫_表紙.pdf' },
+    ];
+
+    it('小さなファイルは、いくつも同時に読む', async () => {
+      const releases = pickHeld(picked, MB);
+      await vi.waitFor(() => expect([...releases.keys()]).toEqual(['d-odd', 'd-even', 'd-cover']));
+      for (const release of releases.values()) release();
+      await settled(3);
+    });
+
+    it('大きなファイルは、先に読んでいるものが終わるまで待つ（足した順に読む）', async () => {
+      const releases = pickHeld(picked, 40 * MB);
+      await vi.waitFor(() => expect([...releases.keys()]).toEqual(['d-odd']));
+      await flush();
+      expect(mocks.downloadDriveFile).toHaveBeenCalledTimes(3); // 問い合わせまでは並べて進める
+      expect([...releases.keys()]).toEqual(['d-odd']);
+      releases.get('d-odd')();
+      await vi.waitFor(() => expect([...releases.keys()]).toEqual(['d-odd', 'd-even']));
+      releases.get('d-even')();
+      await vi.waitFor(() => expect(releases.has('d-cover')).toBe(true));
+      releases.get('d-cover')();
+      await settled(3);
+    });
+
+    it('大きさの枠を待つ間に外したファイルは、読まずにやめる', async () => {
+      const releases = pickHeld(picked, 40 * MB);
+      await vi.waitFor(() => expect([...releases.keys()]).toEqual(['d-odd']));
+      fileItem('猫_2.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
+      releases.get('d-odd')();
+      await vi.waitFor(() => expect(releases.has('d-cover')).toBe(true));
+      expect(releases.has('d-even')).toBe(false);
+      releases.get('d-cover')();
+      await settled(2);
+      expect($('logText').textContent).not.toContain('「猫_2.pdf」を読み込めませんでした');
+    });
+  });
+
   it('Drive から選んだファイルを、進み具合を出しながら読む', async () => {
     mocks.pickFiles.mockResolvedValue([
       { id: 'd-even', name: 'book-b-even.pdf' },

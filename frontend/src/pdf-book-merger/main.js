@@ -30,6 +30,7 @@ import { startPage } from '../page-start.js';
 import { pickFiles } from '../drive-picker.js';
 import { ensurePdfExtension } from '../pdf-file-ops.js';
 import { downloadDriveFile } from './drive-download.js';
+import { createDownloadPool } from './download-pool.js';
 import { compareScans } from './image-checks.js';
 import { isMobile, saveMethod, savePdf } from './save-file.js';
 import { measure } from './measure-client.js';
@@ -99,6 +100,9 @@ const OCR_IN_FLIGHT = 3;
  * 0.2 秒ほど）が、展開は画面とは別のところで進むので、端末の芯を並べて使う。
  */
 const PAGES_IN_FLIGHT = 3;
+/** 同時に読み込むファイルの数と、その中身の大きさの合計の上限（バイト）。 */
+const DOWNLOADS_IN_FLIGHT = 4;
+const DOWNLOAD_BUDGET = 64 * 1024 * 1024;
 
 let nextKey = 1;
 /** 選んだファイル（画面の並び順）。中身は addFiles() を参照。 */
@@ -126,8 +130,11 @@ let fileSort = 'added';
 // ファイルは 1 つずつ調べる（pdf.js も OCR も、同時に動かすと遅くなるだけなので）。
 let queue = Promise.resolve();
 // Drive からの読み込みは、調べるのを待たずに先へ進める（調べている間に、次の
-// ファイルを読んでおく）。読み込みどうしは 1 つずつ。
-let downloads = Promise.resolve();
+// ファイルを読んでおく）。小さなファイルは何個かを並べて読む（1 つずつだと、
+// ファイルごとの問い合わせの待ちが積み重なり、調べ終えるたびに次の読み込みを
+// 待って止まる）。並べるのは、合わせた大きさが DOWNLOAD_BUDGET に収まる間だけ
+// （読んでいる間は中身をまるごとメモリに持つので、大きな本は 1 つずつ）。
+const downloads = createDownloadPool({ limit: DOWNLOADS_IN_FLIGHT, budget: DOWNLOAD_BUDGET });
 /**
  * 読み込んだ PDF と結合した PDF を置く保存領域（stash.js）。使えなければ null
  * （メモリに持つ）。ツールを開いたときに用意する。
@@ -436,7 +443,8 @@ function breathe() {
  * 足している途中でページごと落ちた。処理の記録を残すのも、足し終えてから 1 度。
  *
  * @param {Array<{name:string, size?:number, driveId?:string, modified?:number|null,
- *          load:(onProgress:Function) => Promise<Uint8Array>}>} sources
+ *          load:(onProgress:Function, onWait:Function, reserve:Function) => Promise<Uint8Array>}>} sources
+ *   load は、中身の大きさが分かったら、読み始める前に reserve(size) を待つ（download-pool.js）
  */
 function addFiles(sources) {
   const added = [];
@@ -469,8 +477,8 @@ function addFiles(sources) {
   sortFiles();
   renderFiles();
   for (const { file, source } of added) {
-    file.loaded = downloads.then(() => loadBytes(file, source));
-    downloads = file.loaded.catch(() => {});
+    file.loaded = downloads.run((reserve) => loadBytes(file, source, reserve));
+    file.loaded.catch(() => {}); // 失敗は調べるときに知らせる（readFile）
     file.pending = true; // 調べ終えるまで（見出しの「n / m」に使う）
     enqueue(async () => {
       try {
@@ -511,7 +519,7 @@ function showWaiting(file) {
  * 読む）。元のファイルを読み直さないのは、端末のファイルでも実体がクラウドに
  * あって、取り直しになることがあるため。
  */
-async function loadBytes(file, source) {
+async function loadBytes(file, source, reserve) {
   if (!files.includes(file)) return;
   file.status = 'loading';
   renderFile(file);
@@ -534,9 +542,15 @@ async function loadBytes(file, source) {
         file.waitUntil = Date.now() + ms;
         file.waitReason = reason;
         if (file.waiting) showWaiting(file);
+      },
+      // 大きさの枠を待つ間に外されたら、読まずにやめる（ほかのファイルの枠を使わない）。
+      async (size) => {
+        await reserve(size);
+        if (!files.includes(file)) throw new Error('外されました。');
       }
     );
   } catch (error) {
+    if (!files.includes(file)) return; // 外したファイルは、読めなくても知らせない
     log(`「${file.name}」を読み込めませんでした（${error?.message || error}）`);
     throw error;
   }
@@ -2121,7 +2135,7 @@ function addDriveFiles(picked) {
         name: file.name,
         driveId: file.id,
         modified: file.modifiedTime ? Date.parse(file.modifiedTime) : null,
-        load: (onProgress, onWait) => downloadDriveFile(file, { onProgress, onWait }),
+        load: (onProgress, onWait, reserve) => downloadDriveFile(file, { onProgress, onWait, reserve }),
       }))
   );
 }
@@ -2134,7 +2148,8 @@ function addLocal(fileList) {
     pdfs.sort(byName).map((file) => ({
       name: file.name,
       modified: file.lastModified,
-      load: async (onProgress) => {
+      load: async (onProgress, onWait, reserve) => {
+        await reserve(file.size);
         const bytes = new Uint8Array(await file.arrayBuffer());
         onProgress(bytes.length, bytes.length);
         return bytes;
