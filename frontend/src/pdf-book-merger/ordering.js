@@ -10,8 +10,9 @@
 //
 // 本文の頁の番号は page-numbers.js が決め、ここでは並べて確かめるだけにする。
 // 手で直した番号（頁ごと・ファイルごと）は、読み取った番号より優先する。
+// 枝番の頁（57-1, 57-2, …）は、同じ番号の頁（57）のあと、次の番号（58）の前に並べる。
 
-import { inferFileNumbers, manualFileNumbers, STEPS } from './page-numbers.js';
+import { inferFileNumbers, manualFileNumbers, pageNumberText, STEPS } from './page-numbers.js';
 
 export const ROLES = {
   body: '本文（頁番号で並べる）',
@@ -118,11 +119,13 @@ const STATUS_RANK = { manual: 0, detected: 0, inferred: 1, conflict: 1, uncertai
  * @param {{key:string, role:string, coverStart?:number|null, coverStep?:1|-1,
  *          pages:object[]}[]} files 画面の順
  * @param {Map<string, object>} numberings numberFiles の結果
- * @param {Map<string, number>} overrides 頁ごとに手で決めた番号（頁の key → 番号）
+ * @param {Map<string, {number:number, branch?:number}>} overrides 頁ごとに手で決めた番号
+ *   （頁の key → 番号と枝番。page-numbers.js の parsePageNumber で読んだもの）
  * @returns {{
  *   fileKey:string, pageIndex:number, pageKey:string, role:'front'|'body'|'back',
- *   number:number|null, status:string, read:object|null,
+ *   number:number|null, branch?:number, status:string, read:object|null,
  * }[]}
+ *   branch は枝番（あるときだけ）
  */
 export function buildBookOrder(files, numberings, overrides = new Map()) {
   const front = [];
@@ -163,10 +166,12 @@ export function buildBookOrder(files, numberings, overrides = new Map()) {
     file.pages.forEach((page, index) => {
       const inferred = numbering?.pages[index] ?? { number: null, status: 'unknown', read: null };
       const manual = overrides.get(page.key);
+      const { number, branch } = manual ?? inferred;
       body.push(
         entry(file, page, index, 'body', {
-          number: Number.isFinite(manual) ? manual : inferred.number,
-          status: Number.isFinite(manual) ? 'manual' : inferred.status,
+          number,
+          ...(branch ? { branch } : {}),
+          status: manual ? 'manual' : inferred.status,
           read: inferred.read,
           fileOrder,
         })
@@ -182,6 +187,7 @@ export function buildBookOrder(files, numberings, overrides = new Map()) {
       return a.number - b.number;
     }
     return (
+      (a.branch ?? 0) - (b.branch ?? 0) ||
       STATUS_RANK[a.status] - STATUS_RANK[b.status] ||
       a.fileOrder - b.fileOrder ||
       a.pageIndex - b.pageIndex
@@ -233,11 +239,13 @@ export function checkSequence(order, { sheets = false } = {}) {
     });
   }
 
+  // 番号（枝番の頁は 57-1 の形）ごとの頁。間に挟んだ頁（12.5）は並びを確かめない。
+  const numbered = body.filter((item) => Number.isInteger(item.number));
   const byNumber = new Map();
-  for (const item of body) {
-    if (item.number === null || !Number.isInteger(item.number)) continue;
-    if (!byNumber.has(item.number)) byNumber.set(item.number, []);
-    byNumber.get(item.number).push(item);
+  for (const item of numbered) {
+    const key = pageNumberText(item);
+    if (!byNumber.has(key)) byNumber.set(key, []);
+    byNumber.get(key).push(item);
   }
 
   for (const [number, items] of byNumber) {
@@ -251,11 +259,12 @@ export function checkSequence(order, { sheets = false } = {}) {
     });
   }
 
-  const numbers = [...byNumber.keys()].sort((a, b) => a - b);
-  if (numbers.length) {
+  if (numbered.length) {
+    const { plain, branches, replaced } = branchLayout(numbered);
+    const numbers = [...new Set(numbered.map((item) => item.number))].sort((a, b) => a - b);
     const missing = [];
     for (let n = numbers[0]; n <= numbers[numbers.length - 1]; n++) {
-      if (!byNumber.has(n)) missing.push(n);
+      if (!plain.has(n) && !replaced.has(n)) missing.push(n);
     }
     if (missing.length) {
       problems.push({
@@ -267,23 +276,50 @@ export function checkSequence(order, { sheets = false } = {}) {
       });
     }
 
+    for (const [number, present] of branches) {
+      const absent = [];
+      const top = Math.max(...present);
+      for (let b = 1; b < top; b++) if (!present.has(b)) absent.push(`${number}-${b}`);
+      if (absent.length) {
+        problems.push({
+          level: 'error',
+          kind: 'missing',
+          message: `${absent.join('・')} 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。`,
+          pageKeys: [],
+        });
+      }
+      const instead = [...replaced.entries()]
+        .filter(([n, by]) => by === number && n <= numbers[numbers.length - 1])
+        .map(([n]) => n);
+      if (instead.length) {
+        problems.push({
+          level: 'info',
+          kind: 'replaced',
+          message: `${compressRanges(instead)} 頁は無く、枝番の付いた頁（${number}-${Math.min(...present)}〜${number}-${top}）があります。差し替えられた頁とみなしました。`,
+          pageKeys: numbered.filter((item) => item.branch && item.number === number).map((item) => item.pageKey),
+        });
+      }
+    }
+
     if (sheets) {
-      const first = numbers[0];
-      const last = numbers[numbers.length - 1];
-      if (first % 2 === 0) {
+      const first = numbered[0];
+      const last = numbered[numbered.length - 1];
+      if (sideOf(first.number, first.branch) === 'even') {
+        const front = first.branch ? `${first.number}-${first.branch - 1}` : first.number - 1;
         problems.push({
           level: 'warn',
           kind: 'sheet-start',
-          message: `最初の頁が偶数（${first} 頁）です。その表（${first - 1} 頁）が欠けていないか確かめてください。`,
-          pageKeys: byNumber.get(first).map((item) => item.pageKey),
+          message: `最初の頁が偶数（${pageNumberText(first)} 頁）です。その表（${front} 頁）が欠けていないか確かめてください。`,
+          pageKeys: byNumber.get(pageNumberText(first)).map((item) => item.pageKey),
         });
       }
-      if (last % 2 !== 0) {
+      if (sideOf(last.number, last.branch) === 'odd') {
+        const back = last.branch ? `${last.number}-${last.branch + 1}` : last.number + 1;
         problems.push({
           level: 'warn',
           kind: 'sheet-end',
-          message: `最後の頁が奇数（${last} 頁）です。その裏（${last + 1} 頁）が欠けていないか確かめてください（裏が白紙でスキャンしていない場合は問題ありません）。`,
-          pageKeys: byNumber.get(last).map((item) => item.pageKey),
+          message: `最後の頁が奇数（${pageNumberText(last)} 頁）です。その裏（${back} 頁）が欠けていないか確かめてください（裏が白紙でスキャンしていない場合は問題ありません）。`,
+          pageKeys: byNumber.get(pageNumberText(last)).map((item) => item.pageKey),
         });
       }
     }
@@ -339,6 +375,7 @@ export function compressRanges(numbers) {
  *   表紙       「表紙」（複数頁なら 表紙1, 表紙2…）
  *   前付け     i, ii, iii…（番号が 0 以下に推定された頁）
  *   本文       本の頁番号
+ *   枝番の頁   57-1, 57-2…（「57-」を頭に付けた番号）
  *   位置を決めきれない頁 「差込」
  *   裏表紙     「裏表紙」
  *
@@ -364,6 +401,7 @@ export function pageLabelRanges(order) {
       return backs > 1 ? { style: 'D', prefix: '裏表紙', number: backSeen } : { style: null, prefix: '裏表紙', number: 0 };
     }
     if (item.number === null || !Number.isInteger(item.number)) return { style: null, prefix: '差込', number: 0 };
+    if (item.branch) return { style: 'D', prefix: `${item.number}-`, number: item.branch };
     if (item.number <= 0) {
       frontMatter++;
       return { style: 'r', prefix: '', number: frontMatter };
@@ -431,10 +469,47 @@ export function pageLabelTexts(ranges, count) {
 /**
  * 頁が奇数側か偶数側か（スキャンの位置のずれを、同じ側の頁どうしで比べるため）。
  *
+ * 枝番の頁は、差し替えの紙の表（57-1, 57-3, …）が奇数側、裏（57-2, 57-4, …）が
+ * 偶数側になる。
+ *
  * @param {number|null} number
+ * @param {number|null} [branch] 枝番
  * @returns {'odd'|'even'|null}
  */
-export function sideOf(number) {
+export function sideOf(number, branch = null) {
   if (number === null || !Number.isInteger(number)) return null;
-  return Math.abs(number) % 2 === 1 ? 'odd' : 'even';
+  return Math.abs(branch ?? number) % 2 === 1 ? 'odd' : 'even';
+}
+
+/**
+ * 枝番の頁の並び方。
+ *
+ * 加除式の本では、元の紙（57・58 頁）を抜いて、枝番の頁（57-1〜57-4）の紙に
+ * 差し替えることがある。枝番の頁がある番号（57）が無ければ差し替えられたと
+ * みなし、それが奇数なら同じ紙の裏（58）も、頁が無くても抜けとはみなさない。
+ * 57 があるなら、枝番の頁は差し込まれたもので、58 が無ければ抜け。
+ *
+ * @param {{number:number, branch?:number}[]} numbered 番号の決まった本文の頁
+ * @returns {{plain:Set<number>, branches:Map<number, Set<number>>, replaced:Map<number, number>}}
+ *   plain は枝番の無い頁の番号、branches は番号ごとの枝番、replaced は枝番の頁に
+ *   差し替えられたとみなす番号（→ 枝番の頁の番号）
+ */
+export function branchLayout(numbered) {
+  const plain = new Set();
+  const branches = new Map();
+  for (const { number, branch } of numbered) {
+    if (!branch) {
+      plain.add(number);
+    } else {
+      if (!branches.has(number)) branches.set(number, new Set());
+      branches.get(number).add(branch);
+    }
+  }
+  const replaced = new Map();
+  for (const number of branches.keys()) {
+    if (plain.has(number)) continue;
+    replaced.set(number, number);
+    if (Math.abs(number) % 2 === 1 && !plain.has(number + 1)) replaced.set(number + 1, number);
+  }
+  return { plain, branches, replaced };
 }

@@ -7,15 +7,11 @@ import { fileURLToPath } from 'node:url';
 export default {
   id: 'wall-quantity-calculator',
   name: '小規模木造建築物 必要壁量 計算ツール',
-  description: `
-    日本住宅・木材技術センターが配布している「壁量等の基準(令和7年施行)に
-    対応した表計算ツール（多機能版）」に、フォームの入力をそのまま書き込んだ
-    Excel ファイルを作ります。提出を求められるのは配布物そのものなので、
-    様式は一切変えず、Excel 形式のままダウンロードします。
-  `,
+  description: '必要壁量を計算し、配布の Excel 様式のまま出力します。',
   title: '小規模木造建築物 必要壁量 計算ツール',
   dir: fileURLToPath(new URL('.', import.meta.url)),
   page: 'page.html',
   entry: 'main.js', // 画面の入口
+  icon: 'icon.svg', // トップページの絵: 筋かいの入った壁のある家（木造の壁量）
   styles: 'tool.css', // このツールにしか出てこない形（見本ページが束ねる）
 };
