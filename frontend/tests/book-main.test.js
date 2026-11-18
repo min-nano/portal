@@ -1090,6 +1090,21 @@ describe('ファイルを足して並べる', () => {
       await settled(3);
     });
 
+    it('読み込めなかったファイルは、記録に残して誤りにする（次のファイルは読む）', async () => {
+      mocks.pickFiles.mockResolvedValue(picked.slice(0, 2));
+      mocks.downloadDriveFile.mockImplementation(async (file) => {
+        if (file.id === 'd-odd') throw new Error('「猫_1.pdf」を Drive から読み込めませんでした（HTTP 404）。');
+        return pdf(EVEN);
+      });
+      $('driveBtn').click();
+      await settled(2);
+      expect(fileItem('猫_1.pdf').classList.contains('error')).toBe(true);
+      $('logBox').open = true;
+      $('logBox').dispatchEvent(new Event('toggle'));
+      expect($('logText').textContent).toContain('「猫_1.pdf」を読み込めませんでした');
+      expect(fileItem('猫_2.pdf').classList.contains('error')).toBe(false);
+    });
+
     it('大きさの枠を待つ間に外したファイルは、読まずにやめる', async () => {
       const releases = pickHeld(picked, 40 * MB);
       await vi.waitFor(() => expect([...releases.keys()]).toEqual(['d-odd']));
@@ -1099,6 +1114,9 @@ describe('ファイルを足して並べる', () => {
       expect(releases.has('d-even')).toBe(false);
       releases.get('d-cover')();
       await settled(2);
+      $('logBox').open = true;
+      $('logBox').dispatchEvent(new Event('toggle'));
+      expect($('logText').textContent).toContain('「猫_表紙.pdf」を読み込みました');
       expect($('logText').textContent).not.toContain('「猫_2.pdf」を読み込めませんでした');
     });
   });
