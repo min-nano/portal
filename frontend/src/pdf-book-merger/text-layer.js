@@ -65,10 +65,26 @@ export function textSignature(items) {
     .map((item) => (typeof item.str === 'string' ? item.str : ''))
     .join('')
     .replace(/\s+/g, '');
+  return { length: text.length, hash: fnv1a(text).toString(16).padStart(8, '0') };
+}
+
+/** 文字列の FNV-1a（32 bit）。 */
+export function fnv1a(text) {
   let hash = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {
     hash ^= text.charCodeAt(i);
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
-  return { length: text.length, hash: hash.toString(16).padStart(8, '0') };
+  return hash;
+}
+
+/**
+ * 頁の文字情報を 1 つの文字列にする（断片をそのままつなげ、行の終わりで改行する）。
+ *
+ * @param {{str?:string, hasEOL?:boolean}[]} items getTextContent().items
+ */
+export function textOf(items) {
+  return (items || [])
+    .map((item) => (typeof item.str === 'string' ? item.str : '') + (item.hasEOL ? '\n' : ''))
+    .join('');
 }

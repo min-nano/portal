@@ -18,7 +18,7 @@ import { MARGIN_ZONE } from './page-numbers.js';
 import { isIOS, isWebKit } from './device.js';
 import { BundledDataFactory } from '../pdf-data.js';
 import { drawScan } from './scan-images.js';
-import { multiply, textItems, textSignature } from './text-layer.js';
+import { multiply, textItems, textOf, textSignature } from './text-layer.js';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
@@ -406,7 +406,9 @@ function thumbnailUrl(source) {
  * @param {object} doc openPdf の結果
  * @param {number} index 0 から数えた頁の位置
  * @returns {Promise<{size:{width:number,height:number}, items:object[],
- *                    signature:{length:number,hash:string}}>}
+ *                    signature:{length:number,hash:string}, text:string}>}
+ *   text は頁の文字情報をつなげたもの（行の終わりは改行）。文字情報の確かめ
+ *   （text-quality.js）と、同じ頁の見比べ（duplicates.js）に使う
  */
 export async function readPageText(doc, index) {
   const page = await doc.getPage(index + 1);
@@ -417,6 +419,7 @@ export async function readPageText(doc, index) {
       size: { width: base.width, height: base.height },
       items: textItems(content, base),
       signature: textSignature(content.items),
+      text: textOf(content.items),
     };
   } finally {
     page.cleanup();

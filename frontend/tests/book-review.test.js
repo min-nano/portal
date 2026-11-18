@@ -5,10 +5,12 @@ import {
   displayLabel,
   gridItems,
   issueGroups,
+  mergeIssues,
   missingLabel,
   pageIssues,
   suggestBookName,
   textCoverage,
+  textIssues,
   worstLevel,
 } from '../src/pdf-book-merger/review.js';
 
@@ -181,7 +183,42 @@ describe('issueGroups', () => {
     ]);
   });
 
+  it('同じ頁の重なりは、重なっている頁をすべて並べる', () => {
+    const order = [body('a', 1), body('b', 2), body('c', 3)];
+    const problems = [{ level: 'warn', kind: 'same-page', message: '同じ内容の頁が 1 組', pageKeys: ['c'] }];
+    const issues = new Map([
+      ['c', [{ kind: 'same-page' }]],
+      ['a', [{ kind: 'same-page' }]],
+    ]);
+    expect(issueGroups(order, problems, issues)).toEqual([
+      { key: 'same-page', level: 'warn', message: '同じ内容の頁が 1 組', pageKeys: ['a', 'c'] },
+    ]);
+  });
+
   it('指摘が無ければ空', () => {
     expect(issueGroups([body('a', 1)], [], new Map())).toEqual([]);
+  });
+});
+
+describe('textIssues / mergeIssues', () => {
+  it('文字情報の確かめの結果を、頁ごとの注意にし、ほかの指摘と 1 つにまとめる', () => {
+    const order = [body('a', 1), body('b', 2), { pageKey: 'c', role: 'front', number: null, status: 'cover' }];
+    const checks = {
+      a: { kind: 'mojibake', sample: '縺ゅ≠縺' },
+      b: null,
+      c: { kind: 'reversed', sample: 'すまりあ' },
+    };
+    const text = textIssues(order, (entry) => ({ textCheck: checks[entry.pageKey] }));
+    expect(text).toEqual(
+      new Map([
+        ['a', [{ kind: 'text', level: 'warn', message: '文字情報が文字化けしているようです（「縺ゅ≠縺」）' }]],
+        ['c', [{ kind: 'text', level: 'warn', message: '文字情報の並びが逆順になっているようです（「すまりあ」）' }]],
+      ])
+    );
+    const scan = new Map([['a', [{ kind: 'skew', level: 'warn', message: '傾いています' }]]]);
+    const merged = mergeIssues(scan, text, new Map());
+    expect(merged.get('a').map((issue) => issue.kind)).toEqual(['skew', 'text']);
+    expect(merged.get('c').map((issue) => issue.kind)).toEqual(['text']);
+    expect(merged.has('b')).toBe(false);
   });
 });

@@ -5,9 +5,14 @@
 // その 2 つを切る。どのブラウザを WebKit とみなすかと、使い終えた canvas の
 // 画素を手放すことを縛る。
 
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
+import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { describe, expect, it } from 'vitest';
 import { isIOS, isWebKit } from '../src/pdf-book-merger/device.js';
-import { cropTransform, releaseCanvas } from '../src/pdf-book-merger/pdf-source.js';
+import { cropTransform, readPageText, releaseCanvas } from '../src/pdf-book-merger/pdf-source.js';
+import { textSignature } from '../src/pdf-book-merger/text-layer.js';
 
 const UA = {
   iphoneSafari:
@@ -79,5 +84,32 @@ describe('cropTransform', () => {
     const t = cropTransform(bottom, full);
     expect(apply(t, 0, 0.86 * 2060)).toEqual([0, 0]);
     expect(apply(t, 1456, 2060)).toEqual([1456, 288.4]);
+  });
+});
+
+describe('readPageText', () => {
+  it('頁の大きさ・文字の位置・指紋と、文字情報をつなげたもの（行の終わりで改行）を返す', async () => {
+    const source = await PDFDocument.create();
+    const font = await source.embedFont(StandardFonts.Helvetica);
+    const page = source.addPage([364, 515]);
+    page.drawText('Body text', { x: 40, y: 300, size: 11, font });
+    page.drawText('7', { x: 175, y: 20, size: 9, font });
+    const bytes = await source.save();
+
+    // pdf-source.js は、ビルドした worker の URL を渡している。Node では、
+    // pdf.js の worker をこの場で動かす（fake worker）。
+    pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(
+      resolve('node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs')
+    ).href;
+    const doc = await pdfjs.getDocument({ data: bytes, isEvalSupported: false }).promise;
+    try {
+      const text = await readPageText(doc, 0);
+      expect(text.size).toEqual({ width: 364, height: 515 });
+      expect(text.items.map((item) => item.text)).toEqual(['Body text', '7']);
+      expect(text.signature).toEqual(textSignature([{ str: 'Bodytext7' }]));
+      expect(text.text.split('\n').map((line) => line.trim())).toEqual(['Body text', '7']);
+    } finally {
+      await doc.loadingTask.destroy();
+    }
   });
 });

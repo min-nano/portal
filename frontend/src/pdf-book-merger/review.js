@@ -5,6 +5,7 @@
 
 import { branchLayout } from './ordering.js';
 import { formatNumber } from './page-numbers.js';
+import { TEXT_QUALITY_MESSAGE } from './text-quality.js';
 
 /** 番号の決まり方の見出し（頁の下に小さく出す）。 */
 export const STATUS_LABEL = {
@@ -93,6 +94,7 @@ const PAGE_KIND_TEXT = {
   orientation: ['warn', '向きが他と違う頁'],
   streak: ['warn', 'すじが入っている頁'],
   blank: ['info', '白紙の頁'],
+  text: ['warn', '文字情報（OCR の結果）が文字化けしている・文として読めない頁'],
   textless: ['info', '文字情報の無い頁'],
 };
 
@@ -111,11 +113,16 @@ const LEVEL_RANK = { error: 0, warn: 1, info: 2 };
 export function issueGroups(order, problems, issues) {
   // 項目の key は、頁を直しても変わらないものにする（開閉を key で覚えるので）。
   // 番号ごとに出る指摘（重なり、枝番の頁の抜け・差し替え）は、その番号で分ける。
+  // 同じ頁の重なりは、本全体の指摘には組ごとに後ろの頁しか挙がっていないので、
+  // 開いたときに見比べられるよう、重なっている頁をすべて（本の順に）並べる。
+  const samePages = order
+    .filter((entry) => (issues.get(entry.pageKey) || []).some((issue) => issue.kind === 'same-page'))
+    .map((entry) => entry.pageKey);
   const groups = problems.map((problem) => ({
     key: problem.number === undefined ? problem.kind : `${problem.kind}:${problem.number}`,
     level: problem.level,
     message: problem.message,
-    pageKeys: problem.pageKeys,
+    pageKeys: problem.kind === 'same-page' ? samePages : problem.pageKeys,
   }));
   const byKind = new Map(Object.keys(PAGE_KIND_TEXT).map((kind) => [kind, new Set()]));
   for (const entry of order) {
@@ -209,6 +216,34 @@ export function textCoverage(order, pageOf) {
     };
   }
   return { textless: new Set(without.map((entry) => entry.pageKey)), problem: null };
+}
+
+/**
+ * 文字情報（OCR の結果）の確かめ（text-quality.js）を、頁ごとの指摘にする。
+ *
+ * @param {ReturnType<import('./ordering.js').buildBookOrder>} order
+ * @param {(entry:object) => {textCheck?:{kind:string, sample:string}|null}} pageOf
+ * @returns {Map<string, {kind:'text', level:'warn', message:string}[]>}
+ */
+export function textIssues(order, pageOf) {
+  const issues = new Map();
+  for (const entry of order) {
+    const check = pageOf(entry).textCheck;
+    if (!check) continue;
+    issues.set(entry.pageKey, [
+      { kind: 'text', level: 'warn', message: `${TEXT_QUALITY_MESSAGE[check.kind]}（「${check.sample}」）` },
+    ]);
+  }
+  return issues;
+}
+
+/** 頁ごとの指摘をいくつか、1 つにまとめる（同じ頁の指摘は、渡した順に並べる）。 */
+export function mergeIssues(...maps) {
+  const merged = new Map();
+  for (const map of maps) {
+    for (const [key, list] of map) merged.set(key, [...(merged.get(key) ?? []), ...list]);
+  }
+  return merged;
 }
 
 /**
