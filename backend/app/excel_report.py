@@ -63,6 +63,9 @@ def form_config() -> dict:
                 "key": m["key"],
                 "label": m["label"],
                 "options": select.get("options", []),
+                # 画面の「測る」ボタン（端末の傾きセンサー）が測る基準。
+                # 無い計測点にはボタンを出さない。
+                "tilt": m.get("tilt"),
             }
         )
     return {

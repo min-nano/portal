@@ -41,6 +41,13 @@
     "  列がずれた場合は floor_col / room_name_col / value_fields / 各 select.col を直す。",
     "  選択肢が変わった場合は該当 measurement の select.options を直す（雛形のプルダウンと一致させる）。",
     "",
+    "■ 端末の傾きセンサーで測る（tilt）",
+    "  measurement の tilt は、画面の『測る』ボタン（スマートフォンの傾きセンサーで水平器の",
+    "  計測値を測る）が、どの基準からの傾きを測るかを表す。雛形には書き込まない。",
+    "    - horizontal: 水平からの傾き（床）。画面を上にして、長い辺を測る方向に合わせて置く。",
+    "    - vertical:   鉛直からの傾き（壁・柱）。縦に持って側面を当て、次に反対側の側面を当てる。",
+    "  省いた計測点には『測る』ボタンを出さない。",
+    "",
     "■ 出力前の簡易バリデーション（validation）",
     "  Excel 出力ボタンを押したときに、フロントエンドが出力前に行う確認用のルールを",
     "  ここに集約している。これは入力をブロックする厳格チェックではなく、入力ミスを",
@@ -73,21 +80,21 @@
       "distance": "AG"
     },
     "measurements": [
-      { "key": "floor_x",   "group": "床", "label": "X方向",   "row_offset": 0,
+      { "key": "floor_x",    "tilt": "horizontal", "group": "床", "label": "X方向",   "row_offset": 0,
         "select": { "col": "S", "label": "傾斜方向", "options": ["←", "→", "傾斜無"] } },
-      { "key": "floor_y",   "group": "床", "label": "Y方向",   "row_offset": 2,
+      { "key": "floor_y",    "tilt": "horizontal", "group": "床", "label": "Y方向",   "row_offset": 2,
         "select": { "col": "S", "label": "傾斜方向", "options": ["↑", "↓", "傾斜無"] } },
-      { "key": "floor_diag", "group": "床", "label": "斜め方向", "row_offset": 4,
+      { "key": "floor_diag", "tilt": "horizontal", "group": "床", "label": "斜め方向", "row_offset": 4,
         "select": { "col": "S", "label": "傾斜方向", "options": ["↖", "↗", "↘", "↙", "傾斜無"] } },
 
-      { "key": "wall_ud", "group": "壁", "label": "上下", "row_offset": 6,
+      { "key": "wall_ud",   "tilt": "vertical", "group": "壁", "label": "上下", "row_offset": 6,
         "select": { "col": "P", "label": "測定した壁", "options": ["上壁", "下壁"] } },
-      { "key": "wall_lr", "group": "壁", "label": "左右", "row_offset": 8,
+      { "key": "wall_lr",   "tilt": "vertical", "group": "壁", "label": "左右", "row_offset": 8,
         "select": { "col": "P", "label": "測定した壁", "options": ["右壁", "左壁"] } },
 
-      { "key": "pillar_ud", "group": "柱", "label": "上下", "row_offset": 10,
+      { "key": "pillar_ud", "tilt": "vertical", "group": "柱", "label": "上下", "row_offset": 10,
         "select": { "col": "P", "label": "測定した柱", "options": ["上柱", "下柱", "―"] } },
-      { "key": "pillar_lr", "group": "柱", "label": "左右", "row_offset": 12,
+      { "key": "pillar_lr", "tilt": "vertical", "group": "柱", "label": "左右", "row_offset": 12,
         "select": { "col": "P", "label": "測定した柱", "options": ["右柱", "左柱", "―"] } }
     ]
   },

@@ -24,6 +24,18 @@ def test_config_groups_follow_mapping(client, drive):
     for m in MAPPING["room_block"]["measurements"]:
         assert points[m["key"]]["label"] == m["label"]
         assert points[m["key"]]["options"] == m["select"]["options"]
+        assert points[m["key"]]["tilt"] == m["tilt"]
+
+    # 床は水平から、壁・柱は鉛直からの傾きを測る（画面の「測る」ボタン）。
+    assert {k: p["tilt"] for k, p in points.items()} == {
+        "floor_x": "horizontal",
+        "floor_y": "horizontal",
+        "floor_diag": "horizontal",
+        "wall_ud": "vertical",
+        "wall_lr": "vertical",
+        "pillar_ud": "vertical",
+        "pillar_lr": "vertical",
+    }
 
 
 def test_config_validation_and_limits(client, drive):

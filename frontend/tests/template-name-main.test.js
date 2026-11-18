@@ -38,6 +38,11 @@ vi.mock('../src/template-preview.js', () => ({
   connectTemplatePreview: (...args) => mocks.connectTemplatePreview(...args),
 }));
 
+// jsdom には matchMedia が無い。傾きセンサーで測る「測る」ボタン
+// （excel-report-formatter/tilt-meter.js の canMeasureTilt）が見るので、
+// 指で操作する端末ではない（ボタンを出さない）ことにしておく。
+window.matchMedia ??= () => ({ matches: false });
+
 // 証明書ツールの画面の組み立てに使う定義（項目は無くてよい）。
 const EMPTY_CERT_CONFIG = { text_fields: [], choice_groups: [], sections: [] };
 // 傾斜測定の報告フォームの定義（計測点は無くてよい）。

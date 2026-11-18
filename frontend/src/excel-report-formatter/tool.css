@@ -171,3 +171,39 @@
   background-position: right 2px center;
   background-size: 10px 10px;
 }
+
+/* 傾きセンサーで測るボタン（tilt-meter.js）。計測点の名前の下に小さく置き、
+   列の幅を増やさない。 */
+.measure-table .measure-tilt {
+  display: block;
+  min-height: 28px;
+  margin-top: var(--s-1);
+  padding: 0 var(--s-2);
+  font-size: var(--fs-2xs);
+}
+
+/* 傾きを測る画面。測り直しの理由は複数行になることがある。 */
+.tilt-meter .dialog-error {
+  white-space: pre-line;
+}
+
+.tilt-meter-readings {
+  margin: var(--s-3) 0 0;
+  padding-left: var(--s-5);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.tilt-meter-readings:empty {
+  display: none;
+}
+
+.app-dialog .tilt-meter-status {
+  margin-top: var(--s-3);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.tilt-meter .tilt-meter-redo[hidden] {
+  display: none;
+}

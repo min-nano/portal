@@ -14,6 +14,8 @@ import { apiGet, apiPostForBlob, apiSendJson } from '../api.js';
 import { pickFile } from '../drive-picker.js';
 import { connectTemplatePreview } from '../template-preview.js';
 import { collectWarnings, selectFocusTarget } from './form-logic.js';
+import { LOW_END } from './tilt-logic.js';
+import { canMeasureTilt, openTiltMeter } from './tilt-meter.js';
 
 const TOOL_API = '/api/tools/excel-report-formatter';
 
@@ -25,6 +27,8 @@ const XLSX_MIME =
 let config = null; // /config の応答（measurement_groups / validation / max_rooms）
 let templateConfigured = false;
 let roomSeq = 0;
+// 端末の傾きセンサーで測れるか（「測る」ボタンを出すか）。準備のときに決める。
+let tiltAvailable = false;
 
 function showMessage(text, color) {
   const msg = document.getElementById('message');
@@ -94,6 +98,10 @@ async function chooseTemplate() {
 
 // 1 つの計測点を表の 1 行にする。ラベル（差/距離/水平器）はヘッダー列で代表する。
 // 数値欄は inputmode="decimal" で半角数字キーパッドを出す。
+//
+// 傾きセンサーで測れる端末では、計測点の名前の下に「測る」ボタンを置く
+// （tilt-meter.js。測った値は同じ行の水平器の欄に入る）。測り方と見出しは、
+// 押したときに計測点の key から /config の定義を引く。
 function buildMeasurementRow(point) {
   const opts = ['']
     .concat(point.options)
@@ -107,9 +115,14 @@ function buildMeasurementRow(point) {
       field + '" data-point="' + point.key + '"></td>'
     );
   }
+  const measureButton =
+    tiltAvailable && point.tilt
+      ? '<button type="button" class="secondary measure-tilt" data-tilt-point="' + point.key +
+        '">測る</button>'
+      : '';
   return (
     '<tr>' +
-    '<td class="point-cell">' + point.label + '</td>' +
+    '<td class="point-cell">' + point.label + measureButton + '</td>' +
     '<td><select data-field="select" data-point="' + point.key + '">' + opts + '</select></td>' +
     numCell('diff') +
     numCell('distance') +
@@ -238,6 +251,49 @@ function collectFormData() {
   };
 }
 
+// --- 傾きセンサーで測る -------------------------------------------------------
+
+// 「測る」ボタン。測った値を同じ行の水平器の欄に入れる。
+//
+// 傾斜方向（床）・測った壁や柱が未選択か、「傾斜無」「―」のように計測値を
+// 入れない選択肢のままなら、続けて選び直せるよう選択欄へ送る。測る画面は
+// 閉じてしまうので、床でどちらの端が低かったかは画面下のメッセージに残す。
+
+async function measureTilt(button) {
+  const row = button.closest('tr');
+  const key = button.dataset.tiltPoint;
+  const group = config.measurement_groups.find(function (g) {
+    return g.points.some(function (p) {
+      return p.key === key;
+    });
+  });
+  const point = group.points.find(function (p) {
+    return p.key === key;
+  });
+  const title = group.group + ' ' + point.label;
+  let measured;
+  try {
+    measured = await openTiltMeter({ doc: document, tilt: point.tilt, title });
+  } catch (error) {
+    showMessage('傾きを測る画面を開けませんでした: ' + error.message, 'red');
+    return;
+  }
+  if (!measured) return;
+  const input = row.querySelector('input[data-field="digital_level"]');
+  input.value = measured.value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+
+  let text = title + ' に ' + measured.value + '/1000 を入れました。';
+  if (measured.lowEnd) {
+    text += '1 回目に置いた向きで、スマートフォンの' + LOW_END[measured.lowEnd] + 'の側が低くなっていました。';
+  }
+  showMessage(text, 'green');
+
+  const select = row.querySelector('select[data-field="select"]');
+  const noValueOptions = config.validation.no_value_select_options;
+  if (select.value === '' || noValueOptions.indexOf(select.value) !== -1) select.focus();
+}
+
 // --- 出力 -------------------------------------------------------------------
 
 async function submitForm() {
@@ -312,6 +368,10 @@ function bindRoomEvents() {
   document.getElementById('rooms').addEventListener('input', function (e) {
     if (e.target.dataset && e.target.dataset.roomField) renumberRooms();
   });
+  document.getElementById('rooms').addEventListener('click', function (e) {
+    const button = e.target.closest('.measure-tilt');
+    if (button) measureTilt(button);
+  });
 }
 
 function bindStickyHeadWorkarounds() {
@@ -367,6 +427,7 @@ function bindStickyHeadWorkarounds() {
 // このツールの準備。ここが終わった時点で「入力できる」とみなされ、
 // page-start.js が画面を出す（それまでは読み込み中の表示のまま）。
 async function prepare() {
+  tiltAvailable = canMeasureTilt(window);
 
   document.getElementById('templateBtn').addEventListener('click', chooseTemplate);
   connectTemplatePreview(document.getElementById('templateName'), `${TOOL_API}/template/preview`);
