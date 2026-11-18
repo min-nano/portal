@@ -425,7 +425,6 @@ describe('ファイルを足して並べる', () => {
       '4 頁のうち番号を読めた頁 4（うち画像から 1）'
     );
     expect(fileItem('猫_偶数.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 8, 6, 4, 2)');
-    expect($('summary').textContent).toContain('1〜8（8 頁）');
     expect($('checkSection').hidden).toBe(false);
     expect($('outputName').value).toBe('猫.pdf');
     expect($('problems').textContent).toContain('見つかりませんでした');

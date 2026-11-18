@@ -1568,33 +1568,9 @@ function coverControls(file, controls) {
 // --- 描く：並びの確認 --------------------------------------------------------
 
 function renderReview() {
-  renderSummary();
   contextNow = cardContext();
   renderProblems();
   renderGrid();
-}
-
-function summaryBox(key, value) {
-  const box = el(document, 'div', 'result-box');
-  box.append(el(document, 'span', 'key', key), el(document, 'span', 'value', value));
-  return box;
-}
-
-function renderSummary() {
-  const { order, issues } = view;
-  const body = order.filter((entry) => entry.role === 'body');
-  const numbers = body.map((entry) => entry.number).filter(Number.isInteger);
-  const covers = order.length - body.length;
-  const flagged = order.filter((entry) => ['error', 'warn'].includes(worstLevel(issues.get(entry.pageKey)))).length;
-  $('summary').replaceChildren(
-    summaryBox('結合する頁', `${order.length} 頁`),
-    summaryBox(
-      '本文',
-      numbers.length ? `${Math.min(...numbers)}〜${Math.max(...numbers)}（${body.length} 頁）` : `${body.length} 頁`
-    ),
-    summaryBox('表紙・裏表紙など', `${covers} 頁`),
-    summaryBox('確認が要る頁', `${flagged} 頁`)
-  );
 }
 
 /** いま出している指摘の項目（key ごと）と、頁のカードを作るときに引く表。項目の中のボタンは、押したときにここから最新のものを引く。 */
