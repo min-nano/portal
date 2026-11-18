@@ -664,7 +664,7 @@ describe('ファイルを足して並べる', () => {
 
     // 数字でなければ断る。
     change(document.querySelector('#pageGrid [data-page-key$=":1"] .bm-page-number'), 'abc');
-    expect($('message').textContent).toBe('番号は数字で入れてください。');
+    expect($('message').textContent).toBe('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。');
 
     // ファイルの先頭の番号を手で決める（奇数頁の束を 11 から）。
     const startField = fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]');
@@ -674,6 +674,36 @@ describe('ファイルを足して並べる', () => {
     expect($('message').textContent).toBe('先頭の頁の番号は整数で入れてください。');
     change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '');
     expect(gridLabels()).toContain('7 頁');
+  });
+
+  it('枝番の付いた頁（加除式の差し替え）を並べ、番号を枝番で直せる', async () => {
+    drop([
+      file(
+        '法令_奇数.pdf',
+        pdf([page('o53', 53), page('o55', 55), page('o571', '57-1'), page('o573', '57-3'), page('o59', 59), page('o61', 61)])
+      ),
+      file(
+        '法令_偶数.pdf',
+        pdf([page('e62', 62), page('e60', 60), page('e574', '57-4'), page('e572', '57-2'), page('e56', 56), page('e54', 54)])
+      ),
+    ]);
+    await settled(2);
+
+    const labels = ['53 頁', '54 頁', '55 頁', '56 頁', '57-1 頁', '57-2 頁', '57-3 頁', '57-4 頁', '59 頁', '60 頁', '61 頁', '62 頁'];
+    expect(gridLabels()).toEqual(labels);
+    expect(fileItem('法令_奇数.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 53, 55, 57-1, 57-3, 59, 61)');
+    expect($('problems').textContent).toContain('57〜58 頁は無く、枝番の付いた頁（57-1〜57-4）があります。');
+    expect($('problems').textContent).not.toContain('見つかりません');
+
+    // 57-3 頁を 57-5 頁に直すと、57-3 頁の抜けの札が出る。
+    const card = (label) =>
+      [...document.querySelectorAll('#pageGrid .bm-page')].find(
+        (li) => li.querySelector('.bm-page-label strong')?.textContent === label
+      );
+    change(card('57-3 頁').querySelector('.bm-page-number'), '57-5');
+    expect(gridLabels()).toEqual([...labels.slice(0, 6), '-57-3 頁', '57-4 頁', '57-5 頁', ...labels.slice(8)]);
+    expect(card('57-5 頁').querySelector('.bm-page-number').value).toBe('57-5');
+    expect($('problems').textContent).toContain('57-3 頁が見つかりません（枝番の付いた頁）');
   });
 
   it('頁を読めなければ、何頁目のどこで止まったかを添えて一覧に残す', async () => {
@@ -742,7 +772,7 @@ describe('ファイルを足して並べる', () => {
 
   /**
    * バーに出した値（済んだところ）と、そのときの見出しを記録する。返す関数で記録をやめる。
-   * withEnd なら、いま進めている区間の終わり（ストライプの右端）も記録する。
+   * withEnd なら、中身が届いたところ（ストライプの右端）も記録する。
    */
   function watchBar({ withEnd = false } = {}) {
     const seen = [];
@@ -751,7 +781,7 @@ describe('ファイルを足して並べる', () => {
     bar.setAttribute = (name, value) => {
       if (name === 'aria-valuenow') {
         const entry = { value: Number(value), label: $('progressText').textContent };
-        if (withEnd) entry.end = Number(bar.dataset.busyEnd);
+        if (withEnd) entry.end = Number(bar.dataset.loaded);
         seen.push(entry);
       }
       setAttribute(name, value);
@@ -812,8 +842,12 @@ describe('ファイルを足して並べる', () => {
     // 出したら、隠すのは最後の 1 度だけ。
     expect(hidden).toEqual([false, true]);
     // 替わり目では、1 つめを済ませた位置（半分）で止め、2 つめの見出しに替える。
-    // ストライプは 2 つめの仕事の終わりまで。
+    // 2 つめの中身も手元にあるので、ストライプは 2 つめの仕事の終わりまで。
     expect(seen).toContainEqual({ value: 0.5, end: 1, label: 'ファイルを調べています（2 / 2）' });
+    // 1 つめの間は、ストライプは 1 つめの仕事の終わりまで。
+    const first = seen.filter((s) => s.label === 'ファイルを調べています（1 / 2）');
+    expect(first.length).toBeGreaterThan(2);
+    for (const s of first) expect(s.end).toBe(0.5);
     expectNeverBack(seen);
   });
 
@@ -836,26 +870,105 @@ describe('ファイルを足して並べる', () => {
     expect(seen.map((s) => s.label)).toContain('ファイルを調べています（3 / 3）');
   });
 
-  it('進み具合が分からないあいだも、済んだところは出したまま、進めている区間をストライプで出す', async () => {
-    let release;
-    mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
-    mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress }) => {
-      onProgress(5, 0); // 大きさの分からない読み込み
-      await new Promise((done) => (release = done));
-      return pdf(ODD);
+  describe('Drive の読み込みはストライプ（バイトの数）、調べるのはベタ塗り（頁の数）で出す', () => {
+    /** Drive から選んで、読み込みの途中（返す関数を呼ぶまで）で止める。chunks は止める前に呼ぶ。 */
+    async function pickDrive(chunks) {
+      let release;
+      mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
+      mocks.downloadDriveFile.mockImplementation(async (picked, options) => {
+        await vi.waitFor(() => expect($('progressText').textContent).toBe('ファイルを調べています（1 / 1）'));
+        chunks(options);
+        await new Promise((done) => (release = done));
+        options.onProgress(100, 100);
+        return pdf(ODD);
+      });
+      $('driveBtn').click();
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+      return () => release();
+    }
+    const bar = () => $('progressBar');
+
+    it('届いた割合をストライプに描き、調べるまではベタ塗りを 0 にしておく', async () => {
+      const seen = watchBar({ withEnd: true });
+      const release = await pickDrive(({ onProgress }) => onProgress(25, 100));
+      expect(seen.at(-1)).toMatchObject({ value: 0, end: 0.25 });
+      expect($('progressLoaded').hidden).toBe(false);
+      expect($('progressLoaded').style.left).toBe('0%');
+      expect($('progressLoaded').style.width).toBe('25%');
+
+      release();
+      await settled(1);
+      seen.stop();
+      // 届き終えたらストライプは仕事の終わりまで。ベタ塗りは頁を調べるごとに追いつく。
+      const after = seen.slice(seen.findIndex((s) => s.end === 1));
+      expect(after.length).toBeGreaterThan(2);
+      for (const s of after) expect(s.end).toBe(1);
+      expect(Math.max(...after.map((s) => s.value))).toBeGreaterThan(0.9);
+      expectNeverBack(seen);
+      seen.forEach((s, i) => expect(s.end).toBeGreaterThanOrEqual(seen[i - 1]?.end ?? 0));
+      seen.forEach((s) => expect(s.end).toBeGreaterThanOrEqual(s.value));
     });
-    $('driveBtn').click();
-    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
-    expect($('progress').hidden).toBe(false);
-    // 読み込みの段（仕事の 3 割）は、済んだところ 0 から、段の終わりまでのストライプ。
-    const bar = $('progressBar');
-    expect(bar.getAttribute('aria-valuenow')).toBe('0');
-    expect(Number(bar.dataset.busyEnd)).toBeCloseTo(0.3);
-    expect($('progressDone').style.width).toBe('0%');
-    expect($('progressBusy').style.left).toBe('0%');
-    expect(parseFloat($('progressBusy').style.width)).toBeCloseTo(30);
-    release();
-    await settled(1);
+
+    it('大きさの分からない読み込みでは、ストライプを描かない', async () => {
+      const release = await pickDrive(({ onProgress }) => onProgress(5, 0));
+      expect(bar().getAttribute('aria-valuenow')).toBe('0');
+      expect($('progressDone').style.width).toBe('0%');
+      expect($('progressLoaded').hidden).toBe(true);
+      release();
+      await settled(1);
+    });
+
+    it('はじめから読み直しても、ストライプは戻さない', async () => {
+      const seen = watchBar({ withEnd: true });
+      const release = await pickDrive(({ onProgress }) => {
+        onProgress(80, 100);
+        onProgress(10, 100); // 続きから読めず、はじめから
+      });
+      expect(seen.at(-1).end).toBe(0.8);
+      release();
+      await settled(1);
+      seen.stop();
+    });
+
+    it('外したファイルの読み込みは、バーに出さない', async () => {
+      let more;
+      let release;
+      mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
+      mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress }) => {
+        await vi.waitFor(() => expect($('progressText').textContent).toBe('ファイルを調べています（1 / 1）'));
+        onProgress(25, 100);
+        await new Promise((done) => (more = done));
+        onProgress(50, 100); // 外したあとに届いた
+        await new Promise((done) => (release = done));
+        return pdf(ODD);
+      });
+      const seen = watchBar({ withEnd: true });
+      $('driveBtn').click();
+      await vi.waitFor(() => expect(more).toBeTypeOf('function'));
+      fileItem('猫_奇数.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
+      const count = seen.length;
+      more();
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+      expect(seen.slice(count).some((s) => s.end === 0.5)).toBe(false);
+      release();
+      await vi.waitFor(() => expect($('progress').hidden).toBe(true));
+      seen.stop();
+    });
+
+    it('先読みで届いた分は、調べる順番が来たときからストライプに描く', async () => {
+      let release;
+      mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
+      mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress }) => {
+        onProgress(60, 100); // 調べる順番が来る前に届いた
+        await new Promise((done) => (release = done));
+        return pdf(ODD);
+      });
+      $('driveBtn').click();
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+      await vi.waitFor(() => expect(bar().dataset.loaded).toBe('0.6'));
+      release();
+      await settled(1);
+    });
   });
 
   it('調べている途中に結合しても、済んだら調べている方の見出しとバーに戻す', async () => {
@@ -1470,8 +1583,17 @@ describe('結合と検証', () => {
     await addBook();
     change(fileItem('猫_表紙.pdf').querySelector('select'), 'split');
 
+    // 結合と検証の中身は手元にあるので、ストライプはバーの終わりまで（動いているのが見える）。
+    const loaded = [];
+    const observer = new MutationObserver(() => {
+      if ($('progressText').textContent === '結合しています') loaded.push($('progressBar').dataset.loaded);
+    });
+    observer.observe($('progressBar'), { attributes: true, attributeFilter: ['data-loaded'] });
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    observer.disconnect();
+    expect(loaded.length).toBeGreaterThan(0);
+    for (const value of loaded) expect(value).toBe('1');
 
     expect(window.confirm).not.toHaveBeenCalled();
     const { order, title, infoFrom } = mocks.mergePdf.mock.calls[0][0];

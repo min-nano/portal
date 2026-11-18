@@ -99,7 +99,7 @@ button.bm-help-btn:hover,
   white-space: nowrap;
 }
 
-/* バー。済んだところはベタ塗り、いま進めている区間は動くストライプで描き分ける
+/* バー。調べ終えたところはベタ塗り、中身が届いたところは動くストライプで描き分ける
    （ブラウザの「分からない表示」はバー全体を往復して、済んだところと重なるため使わない）。 */
 .bm-bar {
   position: relative;
@@ -113,7 +113,7 @@ button.bm-help-btn:hover,
 }
 
 .bm-bar-done,
-.bm-bar-busy {
+.bm-bar-loaded {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -124,8 +124,8 @@ button.bm-help-btn:hover,
   background: var(--brand-600);
 }
 
-.bm-bar-busy {
-  /* 区間が細くても（ファイルが数百あると 1 つ分は 1px に満たない）動いているのが見える幅は取る。 */
+.bm-bar-loaded {
+  /* 細くても（ファイルが数百あると 1 つ分は 1px に満たない）動いているのが見える幅は取る。 */
   min-width: 0.75rem;
   /* ベタ塗りと同じ色を薄めて使う（明るい・暗いどちらの配色でも同じ見え方にする）。 */
   --bm-bar-stripe: color-mix(in srgb, var(--brand-600) 60%, transparent);
@@ -137,17 +137,17 @@ button.bm-help-btn:hover,
     transparent 75%
   );
   background-size: 0.75rem 0.75rem;
-  animation: bm-bar-busy 0.8s linear infinite;
+  animation: bm-bar-loaded 0.8s linear infinite;
 }
 
-@keyframes bm-bar-busy {
+@keyframes bm-bar-loaded {
   to {
     background-position: 0.75rem 0;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .bm-bar-busy {
+  .bm-bar-loaded {
     animation: none;
   }
 }
