@@ -2,62 +2,117 @@
 //
 // ファイルごとに、結合した PDF の中での配置を決める。
 //
-//   body    本文。頁番号で並べる（奇数頁の束・偶数頁の束・両面の束）
-//   front   先頭に置く（表紙・見返しなど）
-//   back    末尾に置く（裏表紙など）
+//   body    頁番号で並べる。番号が 1 つも決まらないファイルは、一覧の位置で
+//           置く（一覧で本文のファイルより上なら先頭、下なら末尾）
 //   split   前半を先頭・後半を末尾に置く（表紙と裏表紙を 1 回でスキャンしたとき）
 //   exclude 結合しない
 //
-// 本文の頁の番号は page-numbers.js が決め、ここでは並べて確かめるだけにする。
-// 手で直した番号（頁ごと・ファイルごと）は、読み取った番号より優先する。
+// 本文の頁の番号は page-numbers.js が、部（番号の振り直し）は parts.js が
+// 決め、ここでは並べて確かめるだけにする。手で直した番号（頁ごと・ファイル
+// ごと）は、読み取った番号より優先する。
 // 頁ごとに直した番号は確かなものとして、同じファイルの残りの頁の番号を推定し直す。
 // 枝番の頁（57-1, 57-2, …）は、同じ番号の頁（57）のあと、次の番号（58）の前に並べる。
 
-import { inferFileNumbers, manualFileNumbers, pageNumberText, STEPS } from './page-numbers.js';
+import { inferFileNumbers, manualFileNumbers, pageNumberText, sideOf, STEPS, STRONG_SCORE } from './page-numbers.js';
+import { assignParts } from './parts.js';
 
 export const ROLES = {
-  body: '本文（頁番号で並べる）',
-  front: '先頭に置く（表紙など）',
-  back: '末尾に置く（裏表紙など）',
+  body: '頁番号で並べる（番号が無ければ一覧の位置で）',
   split: '前半を先頭・後半を末尾（表紙と裏表紙）',
   exclude: '結合しない',
 };
 
-const BOTH_NAME = /表紙.*裏表紙|表裏|表紙.*表[4４]|cover.*back/i;
+/** 配置の短い名前（記録に出す）。 */
+export const ROLE_NAMES = { body: '本文', split: '表紙と裏表紙', exclude: '結合しない' };
+
+/** 部の名前（「第 2 部」）。part は 0 から。 */
+export function partName(part) {
+  return `第 ${part + 1} 部`;
+}
+
+const BOTH_NAME = /表紙.*裏表紙|表裏|表紙.*表[4４]|cover.*back(?!up|ground|log)/i;
 const BACK_NAME = /裏表紙|表[4４]|back[\s_-]*cover|ura[\s_-]*byoshi/i;
 const FRONT_NAME = /表紙|表[1１]|cover|カバー|hyoshi/i;
+// 表紙と関係の無い英単語（discover・recover・uncover、covered・covering・coverage・
+// covery・coverable）。名前から先に取り除いてから、cover を探す（StoreCover・CoverYellow のように、
+// 別の語と続いているものは残す）。後読み（(?<!…)）は iOS 16.3 以前の Safari が読めない
+// ので使わない。
+const NOT_COVER_START = /([A-Za-z]?)(dis|re|un)(cover)/gi;
+// 動詞の cover の語形（covered・covering・coverage・coverable・unrecoverable・covery）。
+// covers・coverpage・coverback のような表紙の言い方は残す。
+const NOT_COVER_END = /[Cc]over(?:ed|ing|age|able|y)(?![a-z])|COVER(?:ED|ING|AGE|ABLE|Y)(?![A-Z])/g;
 
 /**
- * ファイル名から分かる配置（表紙・裏表紙）。手掛かりが無ければ null。
+ * discover・recover・uncover（とその大文字だけの書き方）を取り除く。語の始まりにあり、
+ * Recover・recover のように 1 語として書かれたものだけ（StoreCover・STORECOVER・
+ * STOREcover は別の語として残す）。
+ */
+function dropNotCover(name) {
+  // 別表・図表・付表の「表 1」は、表紙の「表 1」（表 1・表 4）ではない。
+  return name
+    .replace(/[別図付附]表/g, '')
+    .replace(NOT_COVER_START, (word, before, prefix, cover) => {
+      // 語の始まり: 前に英字が無いか、AutoRecover のように大文字から始まる。cover は小文字で
+      // 続くもの（StoreCover は別の語）か、RECOVER のようにすべて大文字で語の始まりにあるもの
+      // （STORECOVER は別の語）。
+      const starts = !before || /[A-Z]/.test(prefix[0]);
+      const caps = prefix + cover === (prefix + cover).toUpperCase() && !/[A-Z]/.test(before);
+      const lower = cover === 'cover' && prefix.slice(1) === prefix.slice(1).toLowerCase();
+      const oneWord = lower || caps;
+      return starts && oneWord ? before : word;
+    })
+    .replace(NOT_COVER_END, '');
+}
+
+/**
+ * ファイル名から分かる置き場所（表紙・裏表紙）。手掛かりが無ければ null。
  *
- * 名前で表紙と分かるファイルは、頁番号を画像から読む手間を掛けない。
+ * 一覧の並べ替えで、表紙と分かるものを上、裏表紙と分かるものを下に寄せる
+ * （漢字の名前は文字コードの順に並ぶので、名前順だと「本文」「表紙」「裏表紙」の
+ * 順になってしまう）。名前で表紙と分かるファイルは、頁番号を画像から読む
+ * 手間も掛けない。
  *
  * @param {string} name ファイル名
+ * @returns {'split'|'front'|'back'|null}
  */
 export function roleFromName(name) {
-  if (BOTH_NAME.test(name)) return 'split';
-  if (BACK_NAME.test(name)) return 'back';
-  if (FRONT_NAME.test(name)) return 'front';
+  const text = dropNotCover(name);
+  if (BOTH_NAME.test(text)) return 'split';
+  if (BACK_NAME.test(text)) return 'back';
+  if (FRONT_NAME.test(text)) return 'front';
   return null;
+}
+
+/** 名前で表紙・裏表紙と分かるか（「表紙と裏表紙」も）。 */
+export function isCoverName(name) {
+  return roleFromName(name) !== null;
+}
+
+/**
+ * 一覧の並べ替えでの、名前による寄せ方（0: 上へ、1: そのまま、2: 下へ）。表紙と
+ * 分かるもの（「表紙と裏表紙」も）を上、裏表紙と分かるものを下に寄せる。
+ */
+export function nameRank(name) {
+  return { split: 0, front: 0, back: 2 }[roleFromName(name)] ?? 1;
 }
 
 /**
  * ファイルの配置の初期値を決める（頁番号を読み終えてから）。
  *
- * ファイル名に「表紙」「裏表紙」とあればそれに従う。名前に手掛かりが無く、
- * 頁番号も 1 つも読めない数頁だけのファイルは、表紙と裏表紙として扱う
- * （本文の束なら、どこかの頁で番号が読めるはずなので）。決め打ちが外れても
- * 画面で配置を選び直せる。
+ * ファイル名に「表紙と裏表紙」とあるか、名前に手掛かりが無く、頁番号も 1 つも
+ * 読めない数頁だけのファイルは、表紙と裏表紙として扱う（本文の束なら、どこかの
+ * 頁で番号が読めるはずなので）。そのほかは本文（番号が無ければ一覧の位置で
+ * 置く）。決め打ちが外れても画面で配置を選び直せる。
  *
  * @param {string} name ファイル名
  * @param {{candidates:object[]}[]} pages
  */
 export function guessRole(name, pages) {
   const named = roleFromName(name);
-  if (named === 'split') return pages.length >= 2 ? 'split' : 'front';
-  if (named) return named;
+  if (pages.length < 2) return 'body';
+  if (named === 'split') return 'split';
   const numbered = pages.filter((page) => page.candidates.length > 0).length;
-  if (numbered === 0 && pages.length <= 4) return pages.length >= 2 ? 'split' : 'front';
+  if (!named && numbered === 0 && pages.length <= 4) return 'split';
   return 'body';
 }
 
@@ -71,7 +126,7 @@ export function guessRole(name, pages) {
  * 頁ごとに手で入れた番号（overrides）は確かなものとして推定に入れ、残りの頁は
  * そこから歩幅に沿って決め直す（読み取りがうまくいかなかった束でも、何頁か
  * 直せば並ぶように）。ファイルごとに番号を入れた（manual）ファイルは、その番号の
- * まま（頁ごとの番号は buildBookOrder で上書きする）。
+ * まま（頁ごとの番号は arrangeBook で上書きする）。
  *
  * @param {{key:string, role:string, manual:?{start:number,step:number},
  *          pages:{key:string, candidates:object[]}[]}[]} files
@@ -81,9 +136,12 @@ export function guessRole(name, pages) {
 export function numberFiles(files, overrides = new Map()) {
   const result = new Map();
   const body = files.filter((file) => file.role === 'body');
+  // 名前で表紙と見たファイル（coverByName）は、番号を手で入れない限り番号を見ない
+  // （余白に刷られた巻数などを頁番号と取り違えず、ほかの束の歩幅も狂わせない）。
+  const byName = (file) => file.coverByName && !file.manual;
   const infer = (file, step) =>
     inferFileNumbers(
-      file.pages.map((page) => page.candidates),
+      byName(file) ? file.pages.map(() => []) : file.pages.map((page) => page.candidates),
       { step, fixed: file.pages.map((page) => overrides.get(page.key)) }
     );
   for (const file of body) {
@@ -106,38 +164,127 @@ export function numberFiles(files, overrides = new Map()) {
 
   if (prior !== null) {
     for (const file of body) {
-      if (file.manual || result.get(file.key).step !== null) continue;
+      // 名前で表紙と見たファイルも、頁ごとに番号を入れたなら、残りの頁はその番号から推定する。
+      const fixed = file.pages.some((page) => overrides.has(page.key));
+      if (file.manual || (byName(file) && !fixed) || result.get(file.key).step !== null) continue;
       result.set(file.key, infer(file, prior));
     }
   }
   return result;
 }
 
+// 頁番号の無いファイルのうち、これより頁の多いものは本文の束かもしれないので、表紙と
+// せず（番号なし）、知らせる（表紙と裏表紙・帯・口絵などは数頁）。
+const LISTED_PAGES = 4;
+
 // 並べたときに同じ番号が並んだら、確かなものを先に置く。
-const STATUS_RANK = { manual: 0, detected: 0, inferred: 1, conflict: 1, uncertain: 2, unknown: 3 };
+const STATUS_RANK = { manual: 0, detected: 0, inferred: 1, conflict: 1, uncertain: 2, unknown: 3, unplaced: 3 };
+
+/**
+ * 番号が 1 つでも決まったファイルか（手で入れた番号も含む。名前で表紙と見たファイルは、
+ * numberFiles が番号を見ないので、手で入れない限り決まらない）。
+ */
+function isNumbered(file, numberings, overrides) {
+  if (file.role !== 'body') return false;
+  // 頁ごとに手で番号を入れた頁があれば、番号で並べる（入れていない頁は番号不明）。
+  if (file.pages.some((page) => overrideOf(overrides, page) !== null)) return true;
+  return numberings.get(file.key).pages.some((page) => page.number !== null);
+}
+
+/**
+ * 名前で表紙と見たファイルが本文の束かもしれないとき、印を付ける頁を選ぶ関数を返す
+ * （本文の束らしくなければ null）。表紙にしては頁が多ければすべての頁、違う番号が 2 頁以上に
+ * あれば番号のある頁。
+ *
+ * @param {{pages:object[]}} file
+ */
+function suspectBody(file) {
+  if (file.pages.length > COVER_PAGES) return () => true;
+  const values = new Set(
+    file.pages
+      .map(strongCandidate)
+      .filter(Boolean)
+      .map((c) => pageNumberText({ number: c.value, branch: c.branch }))
+  );
+  return values.size >= 2 ? strongCandidate : null;
+}
+
+/** 頁の、番号だけの行の候補（無ければ undefined）。 */
+function strongCandidate(page) {
+  return page.candidates.find((c) => c.score >= STRONG_SCORE);
+}
+
+// 名前で表紙と見たファイルで、これより頁が多ければ本文の束かもしれない。名前の無い
+// ファイル（LISTED_PAGES）より多めに見る（表紙・袖・帯・見返しなどを 1 つにしたもの）。
+const COVER_PAGES = LISTED_PAGES * 2;
+
+/** 頁ごとに手で入れた番号（{number, branch?}。入れていなければ null）。 */
+function overrideOf(overrides, page) {
+  return overrides.get(page.key) ?? null;
+}
+
+/**
+ * ファイルごとの置き場所。
+ *
+ *   numbered 頁番号で並べる
+ *   front    番号が無く、一覧で本文のファイルより上（本文が無ければ、すべてここ）
+ *   back     番号が無く、一覧で本文のファイルより下
+ *   between  番号が無く、一覧で本文のファイルの間（置き場所を決められない）
+ *   split    前半を先頭・後半を末尾（本文が無ければ front と同じく一覧の順に）
+ *   exclude  結合しない
+ *
+ * @param {{key:string, role:string}[]} files 一覧の順
+ * @param {Map<string, object>} numberings numberFiles の結果
+ * @param {Map<string, {number:number, branch?:number}>} [overrides] 頁ごとに手で決めた番号
+ * @returns {Map<string, 'numbered'|'front'|'back'|'between'|'split'|'exclude'>}
+ */
+export function placeFiles(files, numberings, overrides = new Map()) {
+  const numbered = files.map((file) => isNumbered(file, numberings, overrides));
+  const first = numbered.indexOf(true);
+  const last = numbered.lastIndexOf(true);
+  return new Map(
+    files.map((file, index) => {
+      if (file.role === 'exclude') return [file.key, 'exclude'];
+      if (file.role === 'split') return [file.key, first < 0 ? 'front' : 'split'];
+      if (numbered[index]) return [file.key, 'numbered'];
+      return [file.key, first < 0 || index < first ? 'front' : index > last ? 'back' : 'between'];
+    })
+  );
+}
 
 /**
  * 1 冊の並びを作る。
  *
- * 先頭・末尾に置く頁は、本文と同じく「先頭の頁の番号」（coverStart）と
- * 「進み方」（coverStep。1 つずつか 1 つずつ逆順）から決まる番号の順に並べる。
- * この番号は先頭・末尾の中での順番を決めるだけで、本文の頁番号とは比べない。
- * 番号を入れていないファイルの頁は、番号を入れたものの後ろに、画面の順
- * （追加した順）で並べる。逆順のファイル（給紙の都合で最後の頁から並んだ
- * もの）は、番号を入れていなくても最後の頁から置く。
+ * 番号の付いた頁は、部（parts.js）・番号の順に並べる。番号の無いファイル
+ * （と、表紙と裏表紙のファイル）の頁は、一覧の順に先頭・末尾へ置く（状態は、
+ * 表紙と分かるもの＝表紙と裏表紙のファイル・名前で表紙と分かるファイルが
+ * cover、ほかは listed）。逆順の
+ * ファイル（給紙の都合で最後の頁から並んだもの）は、最後の頁から置く。本文の
+ * ファイルの間にある番号の無いファイルは、置き場所を決められないので、本文の
+ * 最後に置いて指摘する（目立つところへ）。
  *
- * @param {{key:string, role:string, coverStart?:number|null, coverStep?:1|-1,
- *          pages:object[]}[]} files 画面の順
+ * @param {{key:string, role:string, coverStep?:1|-1, coverByName?:boolean, pages:object[]}[]} files 一覧の順
  * @param {Map<string, object>} numberings numberFiles の結果
  * @param {Map<string, {number:number, branch?:number}>} overrides 頁ごとに手で決めた番号
  *   （頁の key → 番号と枝番。page-numbers.js の parsePageNumber で読んだもの）
  * @returns {{
- *   fileKey:string, pageIndex:number, pageKey:string, role:'front'|'body'|'back',
- *   number:number|null, branch?:number, status:string, read:object|null,
- * }[]}
- *   branch は枝番（あるときだけ）
+ *   order: {
+ *     fileKey:string, pageIndex:number, pageKey:string, role:'front'|'body'|'back',
+ *     number:number|null, branch?:number, status:string, read:object|null, part:number|null,
+ *   }[],
+ *   mismatch: boolean,
+ *   places: ReturnType<typeof placeFiles>,
+ * }}
+ *   branch は枝番（あるときだけ）。part は何部目か（0 から。部が 1 つなら null）。
+ *   mismatch は、番号の振り直しが束の種類（奇数頁・偶数頁）ごとに揃わず、部に分けるのを
+ *   やめたとき。
  */
-export function buildBookOrder(files, numberings, overrides = new Map()) {
+export function arrangeBook(files, numberings, overrides = new Map()) {
+  const places = placeFiles(files, numberings, overrides);
+  const numbered = files.filter((file) => places.get(file.key) === 'numbered');
+  // 部は、頁ごとに手で直した番号も入れて推定した番号（numberFiles）で決める（読み違えた
+  // 1 頁を直せば、そこで部を切らない）。
+  const parts = assignParts(numbered, numberings);
   const front = [];
   const body = [];
   const back = [];
@@ -150,32 +297,42 @@ export function buildBookOrder(files, numberings, overrides = new Map()) {
     number: null,
     status: role === 'body' ? 'unknown' : 'cover',
     read: null,
+    part: null,
     ...extra,
   });
 
   files.forEach((file, fileOrder) => {
-    // 先頭・末尾の頁は、番号の小さい順（逆順なら最後の頁から）に並べてから振り分ける。
-    // place は並べ順（番号を入れていなければ null）。
-    const step = file.coverStep === -1 ? -1 : 1;
-    const pages = file.pages.map((page, index) => ({
-      page,
-      index,
-      place: Number.isInteger(file.coverStart) ? file.coverStart + step * index : null,
-    }));
-    if (step === -1) pages.reverse();
-    const cover = ({ page, index, place }, role) =>
-      (role === 'front' ? front : back).push(entry(file, page, index, role, { place }));
-    if (file.role === 'front') pages.forEach((p) => cover(p, 'front'));
-    if (file.role === 'back') pages.forEach((p) => cover(p, 'back'));
-    if (file.role === 'split') {
-      const half = Math.ceil(pages.length / 2);
-      pages.forEach((p, i) => cover(p, i < half ? 'front' : 'back'));
+    const place = places.get(file.key);
+    if (place === 'exclude') return;
+    if (place !== 'numbered') {
+      // 名前で表紙と見て番号を見なかったのに、本文の束かもしれないファイル（名前に cover を
+      // 含む本文の束など）。表紙にしては頁が多い（画像だけの PDF は名前で表紙と見ると余白を
+      // 読まないので、番号では分からない）か、違う番号の、頁番号らしい番号（番号だけの行）が
+      // 2 頁以上にある（同じ巻数が表と裏にあるだけの表紙は除く）。その頁に印を付けて知らせる。
+      const suspect = file.role === 'body' && file.coverByName ? suspectBody(file) : null;
+      const pages = file.pages.map((page, index) => ({ page, index }));
+      if (file.coverStep === -1) pages.reverse();
+      const half = place === 'split' ? Math.ceil(pages.length / 2) : 0;
+      pages.forEach(({ page, index }, i) => {
+        const byName = Boolean(suspect?.(page));
+        if (place === 'between') {
+          body.push(entry(file, page, index, 'body', { status: 'unplaced', byName, fileOrder, seq: body.length }));
+        } else {
+          // 本文があれば、表紙と分かるもの・数頁だけのもの（表紙・帯・口絵など）は表紙、
+          // 頁の多いもの（付録・番号を読めなかった本文の束など）は番号なし。本文が無ければ、
+          // 一覧の順につなぐだけの頁（番号なし）。
+          const cover = file.role === 'split' || file.coverByName || file.pages.length <= LISTED_PAGES;
+          const status = numbered.length && cover ? 'cover' : 'listed';
+          const role = place === 'front' || (place === 'split' && i < half) ? 'front' : 'back';
+          (role === 'front' ? front : back).push(entry(file, page, index, role, { status, byName }));
+        }
+      });
+      return;
     }
-    if (file.role !== 'body') return;
     const numbering = numberings.get(file.key);
     file.pages.forEach((page, index) => {
-      const inferred = numbering?.pages[index] ?? { number: null, status: 'unknown', read: null };
-      const manual = overrides.get(page.key);
+      const inferred = numbering.pages[index];
+      const manual = overrideOf(overrides, page);
       const { number, branch } = manual ?? inferred;
       body.push(
         entry(file, page, index, 'body', {
@@ -183,7 +340,9 @@ export function buildBookOrder(files, numberings, overrides = new Map()) {
           ...(branch ? { branch } : {}),
           status: manual ? 'manual' : inferred.status,
           read: inferred.read,
+          part: parts.count > 1 ? parts.partOf.get(page.key) : null,
           fileOrder,
+          seq: body.length,
         })
       );
     });
@@ -193,6 +352,8 @@ export function buildBookOrder(files, numberings, overrides = new Map()) {
     // 番号の決まらない頁は本文の最後に（並べようが無いので、目立つところへ）。
     if (a.number === null || b.number === null) {
       if (a.number !== b.number) return a.number === null ? 1 : -1;
+    } else if (a.part !== b.part) {
+      return a.part - b.part;
     } else if (a.number !== b.number) {
       return a.number - b.number;
     }
@@ -200,90 +361,121 @@ export function buildBookOrder(files, numberings, overrides = new Map()) {
       (a.branch ?? 0) - (b.branch ?? 0) ||
       STATUS_RANK[a.status] - STATUS_RANK[b.status] ||
       a.fileOrder - b.fileOrder ||
-      a.pageIndex - b.pageIndex
+      a.seq - b.seq
     );
   });
-  body.forEach((item) => delete item.fileOrder);
-  // 番号の同じ頁・番号の無い頁は、入れた順のまま（sort は安定）。
-  for (const covers of [front, back]) {
-    // 番号の無い頁どうしは Infinity - Infinity が NaN になるので 0 にする。
-    covers.sort((a, b) => (a.place ?? Infinity) - (b.place ?? Infinity) || 0);
-    covers.forEach((item) => delete item.place);
+  for (const item of body) {
+    delete item.fileOrder;
+    delete item.seq;
   }
-  return [...front, ...body, ...back];
+  return { order: [...front, ...body, ...back], mismatch: parts.mismatch, places };
 }
 
 /**
  * 並びを確かめる（抜け・重なり・番号の決まらない頁）。
  *
- * 片面ずつの束（歩幅 ±2）を組み合わせたときは、紙 1 枚の表と裏が
- * 揃っているかも見る。本は表（奇数頁）から始まるので、最初の頁が偶数なら
- * その表が、最後の頁が奇数ならその裏が無い（白紙でも、スキャンしていれば
- * 番号が補われてここに並ぶはず）。
+ * 抜け・重なりは部ごとに見る。片面ずつの束（歩幅 ±2）を組み合わせたときは、
+ * 紙 1 枚の表と裏が揃っているかも見る。本は表（奇数頁）から始まるので、最初の
+ * 頁が偶数ならその表が、最後の頁が奇数ならその裏が無い（白紙でも、スキャン
+ * していれば番号が補われてここに並ぶはず）。
  *
- * @param {ReturnType<typeof buildBookOrder>} order
- * @param {{sheets?:boolean}} [options] sheets: 片面ずつの束を組み合わせたか
- * @returns {{level:'error'|'warn'|'info', kind:string, message:string, pageKeys:string[], number?:number, numbers?:number[]}[]}
- *   number: 同じ種類の指摘が番号ごとに出るときの、その番号（重なり、枝番の頁の抜け・差し替え）。
+ * 本文（番号の付いた頁）が無ければ、一覧の順につなぐだけなので並びは見ない（名前で表紙と
+ * 見たファイルが本文の束かもしれないことは、本文が無くても知らせる。その束が唯一の本文の
+ * こともあるので）。
+ *
+ * @param {ReturnType<typeof arrangeBook>['order']} order
+ * @param {{sheets?:boolean, mismatch?:boolean}} [options]
+ *   sheets: 片面ずつの束を組み合わせたか。mismatch: arrangeBook の mismatch
+ * @returns {{level:'error'|'warn'|'info', kind:string, message:string, pageKeys:string[], number?:number|string, numbers?:number[]}[]}
+ *   number: 同じ種類の指摘が番号ごと・部ごとに出るときの、それを見分けるもの（重なり、枝番の
+ *   頁の抜け・差し替えの番号。部が分かれていれば「部:番号」、番号の無い指摘は部）。
  *   numbers: 抜けている番号（枝番でない頁の抜け）
  */
-export function checkSequence(order, { sheets = false } = {}) {
+export function checkSequence(order, { sheets = false, mismatch = false } = {}) {
   const problems = [];
-  const body = order.filter((item) => item.role === 'body');
-  if (body.length === 0) {
+  if (order.length === 0) {
     problems.push({
       level: 'error',
-      kind: 'no-body',
-      message: '本文のファイルがありません。ファイルの配置を確かめてください。',
+      kind: 'no-pages',
+      message: '結合する頁がありません。ファイルの配置を確かめてください。',
       pageKeys: [],
     });
-    return problems;
   }
+  const body = order.filter((item) => item.role === 'body');
 
-  const unknown = body.filter((item) => item.number === null);
+  const unknown = body.filter((item) => item.status === 'unknown');
   if (unknown.length) {
     problems.push({
       level: 'error',
       kind: 'unknown',
-      message: `頁番号を決められない頁が ${unknown.length} 頁あります（本文の最後に並べてあります）。ファイルの「先頭の番号」を入れるか、頁ごとに番号を直してください。`,
+      message: `頁番号を決められない頁が ${unknown.length} 頁あります（本文の最後に並べてあります）。ファイルの「先頭の頁の番号」を入れるか、頁ごとに番号を直してください。`,
       pageKeys: unknown.map((item) => item.pageKey),
     });
   }
-
-  // 番号（枝番の頁は 57-1 の形）ごとの頁。間に挟んだ頁（12.5）は並びを確かめない。
-  const numbered = body.filter((item) => Number.isInteger(item.number));
-  const byNumber = new Map();
-  for (const item of numbered) {
-    const key = pageNumberText(item);
-    if (!byNumber.has(key)) byNumber.set(key, []);
-    byNumber.get(key).push(item);
-  }
-
-  for (const [number, items] of byNumber) {
-    if (items.length < 2) continue;
+  const unplaced = body.filter((item) => item.status === 'unplaced');
+  if (unplaced.length) {
     problems.push({
       level: 'error',
-      kind: 'duplicate',
-      message: `${number} 頁が ${items.length} 回あります（同じ束を 2 度スキャンした・番号の読み違い）。`,
-      pageKeys: items.map((item) => item.pageKey),
-      number,
+      kind: 'unplaced',
+      message: `頁番号の無いファイルが本文のファイルの間にあり、置き場所を決められない頁が ${unplaced.length} 頁あります（本文の最後に並べてあります）。一覧で本文のファイルより上（先頭に置く）か下（末尾に置く）へ動かすか、ファイルの「先頭の頁の番号」を入れてください。`,
+      pageKeys: unplaced.map((item) => item.pageKey),
     });
   }
 
-  if (numbered.length) {
+  // 部ごとの、番号の決まった頁（並びの順）。間に挟んだ頁（12.5）は並びを確かめない。
+  const parts = new Map();
+  for (const item of body) {
+    if (!Number.isInteger(item.number)) continue;
+    const part = item.part ?? 0;
+    if (!parts.has(part)) parts.set(part, []);
+    parts.get(part).push(item);
+  }
+  const several = parts.size > 1;
+  const ranges = [];
+  for (const part of [...parts.keys()].sort((a, b) => a - b)) {
+    const numbered = parts.get(part);
+    const prefix = several ? `${partName(part)}の ` : '';
+    // 確認の画面の項目を見分けるもの（部が分かれていれば部も入れる）。
+    const tag = (number) => {
+      if (!several) return number === undefined ? {} : { number };
+      return { number: number === undefined ? `${part}` : `${part}:${number}` };
+    };
+
+    // 番号（枝番の頁は 57-1 の形）ごとの頁。
+    const byNumber = new Map();
+    for (const item of numbered) {
+      const key = pageNumberText(item);
+      if (!byNumber.has(key)) byNumber.set(key, []);
+      byNumber.get(key).push(item);
+    }
+    for (const [number, items] of byNumber) {
+      if (items.length < 2) continue;
+      problems.push({
+        level: 'error',
+        kind: 'duplicate',
+        message: `${prefix}${number} 頁が ${items.length} 回あります（同じ束を 2 度スキャンした・番号の読み違い）。`,
+        pageKeys: items.map((item) => item.pageKey),
+        ...tag(number),
+      });
+    }
+
     const { plain, branches, replaced } = branchLayout(numbered);
     const numbers = [...new Set(numbered.map((item) => item.number))].sort((a, b) => a - b);
+    const lowest = numbers[0];
+    const highest = numbers[numbers.length - 1];
+    ranges.push(`${partName(part)} ${lowest}〜${highest} 頁`);
     const missing = [];
-    for (let n = numbers[0]; n <= numbers[numbers.length - 1]; n++) {
+    for (let n = lowest; n <= highest; n++) {
       if (!plain.has(n) && !replaced.has(n)) missing.push(n);
     }
     if (missing.length) {
       problems.push({
         level: 'error',
         kind: 'missing',
-        message: `${compressRanges(missing)} 頁が見つかりません（計 ${missing.length} 頁）。束の入れ忘れ・重送の可能性があります。`,
+        message: `${prefix}${compressRanges(missing)} 頁が見つかりません（計 ${missing.length} 頁）。束の入れ忘れ・重送の可能性があります。`,
         pageKeys: [],
         numbers: missing,
+        ...tag(),
       });
     }
 
@@ -295,21 +487,19 @@ export function checkSequence(order, { sheets = false } = {}) {
         problems.push({
           level: 'error',
           kind: 'missing',
-          message: `${absent.join('・')} 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。`,
+          message: `${prefix}${absent.join('・')} 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。`,
           pageKeys: [],
-          number,
+          ...tag(number),
         });
       }
-      const instead = [...replaced.entries()]
-        .filter(([n, by]) => by === number && n <= numbers[numbers.length - 1])
-        .map(([n]) => n);
+      const instead = [...replaced.entries()].filter(([n, by]) => by === number && n <= highest).map(([n]) => n);
       if (instead.length) {
         problems.push({
           level: 'info',
           kind: 'replaced',
-          message: `${compressRanges(instead)} 頁は無く、枝番の付いた頁（${number}-${Math.min(...present)}〜${number}-${top}）があります。差し替えられた頁とみなしました。`,
+          message: `${prefix}${compressRanges(instead)} 頁は無く、枝番の付いた頁（${number}-${Math.min(...present)}〜${number}-${top}）があります。差し替えられた頁とみなしました。`,
           pageKeys: numbered.filter((item) => item.branch && item.number === number).map((item) => item.pageKey),
-          number,
+          ...tag(number),
         });
       }
     }
@@ -322,8 +512,9 @@ export function checkSequence(order, { sheets = false } = {}) {
         problems.push({
           level: 'warn',
           kind: 'sheet-start',
-          message: `最初の頁が偶数（${pageNumberText(first)} 頁）です。その表（${front} 頁）が欠けていないか確かめてください。`,
+          message: `${prefix}最初の頁が偶数（${pageNumberText(first)} 頁）です。その表（${front} 頁）が欠けていないか確かめてください。`,
           pageKeys: byNumber.get(pageNumberText(first)).map((item) => item.pageKey),
+          ...tag(),
         });
       }
       if (sideOf(last.number, last.branch) === 'odd') {
@@ -331,11 +522,52 @@ export function checkSequence(order, { sheets = false } = {}) {
         problems.push({
           level: 'warn',
           kind: 'sheet-end',
-          message: `最後の頁が奇数（${pageNumberText(last)} 頁）です。その裏（${back} 頁）が欠けていないか確かめてください（裏が白紙でスキャンしていない場合は問題ありません）。`,
+          message: `${prefix}最後の頁が奇数（${pageNumberText(last)} 頁）です。その裏（${back} 頁）が欠けていないか確かめてください（裏が白紙でスキャンしていない場合は問題ありません）。`,
           pageKeys: byNumber.get(pageNumberText(last)).map((item) => item.pageKey),
+          ...tag(),
         });
       }
     }
+  }
+  if (several) {
+    problems.push({
+      level: 'warn',
+      kind: 'parts',
+      message: `頁番号が振り直されているところで、本文を ${parts.size} 部に分けて並べました（${ranges.join('・')}）。部の分かれていない本なら、同じ束を最初から 2 度入れていないか確かめてください。頁ラベルは付けないので、ビューアーの頁番号は通し番号になります。`,
+      pageKeys: [],
+    });
+  }
+  if (mismatch) {
+    problems.push({
+      level: 'warn',
+      kind: 'parts-mismatch',
+      message:
+        '頁番号が最初に戻る束がありますが、奇数頁の束と偶数頁の束で戻る回数が揃わないので、部には分けずに並べました。同じ束を 2 度入れていないか確かめてください。',
+      pageKeys: [],
+    });
+  }
+
+  const byName = order.filter((item) => item.byName);
+  if (byName.length) {
+    problems.push({
+      level: 'warn',
+      kind: 'cover-numbers',
+      message: `名前から表紙・裏表紙と見て、頁番号を見ずに一覧の位置で置いたファイルが、本文の束かもしれません（頁番号らしい番号がある・表紙にしては頁が多い。${byName.length} 頁）。本文の束なら、ファイルの設定の「頁番号を読んで並べる」を押してください（表紙・口絵などなら、そのままで構いません）。`,
+      pageKeys: byName.map((item) => item.pageKey),
+    });
+  }
+
+  // 本文があるのに頁番号を 1 つも読めなかった大きなファイル（OCR に失敗した本文の
+  // 束かもしれない）。一覧の位置で置いたことを知らせる（数頁だけのファイルは表紙として
+  // 置き、状態は cover なので知らせない）。
+  const listed = body.length ? order.filter((item) => item.status === 'listed') : [];
+  if (listed.length) {
+    problems.push({
+      level: 'warn',
+      kind: 'listed',
+      message: `頁番号を 1 つも読めなかったファイルの ${listed.length} 頁を、一覧の位置で先頭・末尾に置きました。本文の束なら、ファイルの「先頭の頁の番号」を入れてください。`,
+      pageKeys: listed.map((item) => item.pageKey),
+    });
   }
 
   const conflicts = body.filter((item) => item.status === 'conflict');
@@ -391,20 +623,28 @@ export function compressRanges(numbers) {
  *   枝番の頁   57-1, 57-2…（「57-」を頭に付けた番号）
  *   位置を決めきれない頁 「差込」
  *   裏表紙     「裏表紙」
+ *   一覧の位置で置いた、表紙と分からない頁 「番号なし」
  *
- * 同じ形で番号が 1 つずつ進むところは 1 つの範囲にまとめる。
+ * 同じ形で番号が 1 つずつ進むところは 1 つの範囲にまとめる。本文が無い
+ * （一覧の順につなぐだけの）とき・部が分かれているときは付けない（ビューアーの
+ * 頁番号は、結合した PDF の通し番号になる）。
  *
- * @param {ReturnType<typeof buildBookOrder>} order
+ * @param {ReturnType<typeof arrangeBook>['order']} order
  * @returns {{start:number, style:'D'|'r'|null, prefix:string, first:number}[]}
  */
 export function pageLabelRanges(order) {
-  const fronts = order.filter((item) => item.role === 'front').length;
-  const backs = order.filter((item) => item.role === 'back').length;
+  if (!order.some((item) => item.role === 'body') || order.some((item) => Number.isInteger(item.part))) {
+    return [];
+  }
+  const fronts = order.filter((item) => item.role === 'front' && item.status !== 'listed').length;
+  const backs = order.filter((item) => item.role === 'back' && item.status !== 'listed').length;
   let frontMatter = 0;
   let frontSeen = 0;
   let backSeen = 0;
 
   const labels = order.map((item) => {
+    // 一覧の位置で置いた、表紙と分からない頁（付録など）。画面の見出しと同じ「番号なし」。
+    if (item.status === 'listed') return { style: null, prefix: '番号なし', number: 0 };
     if (item.role === 'front') {
       frontSeen++;
       return fronts > 1 ? { style: 'D', prefix: '表紙', number: frontSeen } : { style: null, prefix: '表紙', number: 0 };
@@ -477,21 +717,6 @@ export function pageLabelTexts(ranges, count) {
     texts.push(`${current.prefix}${body}`);
   }
   return texts;
-}
-
-/**
- * 頁が奇数側か偶数側か（スキャンの位置のずれを、同じ側の頁どうしで比べるため）。
- *
- * 枝番の頁は、差し替えの紙の表（57-1, 57-3, …）が奇数側、裏（57-2, 57-4, …）が
- * 偶数側になる。
- *
- * @param {number|null} number
- * @param {number|null} [branch] 枝番
- * @returns {'odd'|'even'|null}
- */
-export function sideOf(number, branch = null) {
-  if (number === null || !Number.isInteger(number)) return null;
-  return Math.abs(branch ?? number) % 2 === 1 ? 'odd' : 'even';
 }
 
 /**

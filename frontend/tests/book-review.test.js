@@ -26,9 +26,16 @@ describe('displayLabel', () => {
   it('表紙・裏表紙・本文の頁', () => {
     expect(displayLabel({ role: 'front' })).toBe('表紙');
     expect(displayLabel({ role: 'back' })).toBe('裏表紙');
+    expect(displayLabel({ role: 'front', status: 'listed' })).toBe('番号なし');
+    expect(displayLabel({ role: 'back', status: 'listed' })).toBe('番号なし');
     expect(displayLabel(body('a', 12))).toBe('12 頁');
     expect(displayLabel(body('a', null, 'unknown'))).toBe('番号不明');
     expect(displayLabel({ ...body('a', 57), branch: 1 })).toBe('57-1 頁');
+  });
+
+  it('部が分かれていれば、部を添える', () => {
+    expect(displayLabel({ ...body('a', 3), part: 1 })).toBe('第 2 部 3 頁');
+    expect(displayLabel({ ...body('a', 3), part: null })).toBe('3 頁');
   });
 });
 
@@ -39,10 +46,13 @@ describe('pageIssues', () => {
       body('b', 2, 'conflict', { value: 8 }),
       body('c', 3, 'uncertain'),
       body('d', null, 'unknown'),
+      body('e', null, 'unplaced'),
     ];
     const problems = [
       { kind: 'duplicate', pageKeys: ['a'] },
       { kind: 'missing', pageKeys: [] },
+      { kind: 'listed', pageKeys: ['c'] },
+      { kind: 'cover-numbers', pageKeys: ['b'] },
     ];
     const scan = new Map([['c', [{ kind: 'skew', level: 'warn', message: '0.9° 左に傾いています' }]]]);
 
@@ -50,11 +60,16 @@ describe('pageIssues', () => {
 
     expect(issues.get('a').map((i) => [i.kind, i.level])).toEqual([['duplicate', 'error']]);
     expect(issues.get('b')[0].message).toBe('読み取った番号（8）が前後の並びと合いません');
-    expect(issues.get('c').map((i) => i.kind)).toEqual(['uncertain', 'skew']);
+    expect(issues.get('b').map((i) => [i.kind, i.level])).toEqual([
+      ['conflict', 'warn'],
+      ['cover-numbers', 'warn'],
+    ]);
+    expect(issues.get('c').map((i) => i.kind)).toEqual(['uncertain', 'listed', 'skew']);
     expect(issues.get('d').map((i) => [i.kind, i.level])).toEqual([
       ['unknown', 'error'],
       ['textless', 'info'],
     ]);
+    expect(issues.get('e').map((i) => [i.kind, i.level])).toEqual([['unplaced', 'error']]);
   });
 
   it('いちばん重い指摘', () => {
@@ -82,8 +97,25 @@ describe('gridItems', () => {
   it('長く抜けていたら、1 枚の札にまとめる', () => {
     const items = gridItems([body('1', 1), body('40', 40)]);
 
-    expect(items[1]).toEqual({ type: 'missing', from: 2, to: 39 });
+    expect(items[1]).toEqual({ type: 'missing', from: 2, to: 39, part: undefined });
     expect(items).toHaveLength(3);
+  });
+
+  it('部が変わったところでは、番号が戻っても札を挟まない（部の中の抜けには挟む）', () => {
+    const order = [
+      { ...body('a', 1), part: 0 },
+      { ...body('b', 2), part: 0 },
+      { ...body('c', 1), part: 1 },
+      { ...body('d', 3), part: 1 },
+    ];
+
+    expect(gridItems(order).map((item) => (item.type === 'missing' ? `-${item.part}:${item.from}` : item.entry.pageKey))).toEqual([
+      'a',
+      'b',
+      'c',
+      '-1:2',
+      'd',
+    ]);
   });
 
   it('枝番の頁に差し替えられた番号には札を挟まず、枝番の抜けには枝番の札を挟む', () => {
@@ -106,6 +138,8 @@ describe('gridItems', () => {
     expect(missingLabel({ from: 58, to: 58 })).toBe('58 頁');
     expect(missingLabel({ from: 60, to: 70 })).toBe('60〜70 頁');
     expect(missingLabel({ from: 57, to: 57, branch: 2 })).toBe('57-2 頁');
+    expect(missingLabel({ from: 58, to: 58, part: 1 })).toBe('第 2 部 58 頁');
+    expect(missingLabel({ from: 57, to: 57, branch: 2, part: 1 })).toBe('第 2 部 57-2 頁');
   });
 });
 

@@ -287,8 +287,19 @@ function fileItem(name) {
 }
 
 /** ファイルの「進み方」のセレクトボックス（配置の次）。 */
+/** 番号の無いファイル・表紙と裏表紙のファイルの「進み方」。 */
 function stepSelect(name) {
-  return fileItem(name).querySelectorAll('.bm-file-controls select')[1];
+  return fileItem(name).querySelector('.bm-file-controls select.bm-cover-step');
+}
+
+/** 名前で表紙と見たファイルの「頁番号を読んで並べる」を押す。 */
+function readNumbers(name) {
+  [...fileItem(name).querySelectorAll('.bm-file-controls button')].find((b) => b.textContent === '頁番号を読んで並べる').click();
+}
+
+/** ファイルの行のメニューのボタン。 */
+function menuButton(name, text) {
+  return [...fileItem(name).querySelectorAll('.bm-menu button')].find((button) => button.textContent === text);
 }
 
 function change(element, value) {
@@ -374,7 +385,7 @@ beforeEach(async () => {
     const pages = await sourcePages(sources, order);
     onProgress?.(order.length, order.length);
     return {
-      bytes: pdf(pages, { title, labels: pageLabelTexts(labels, order.length) }),
+      bytes: pdf(pages, { title, labels: labels.length ? pageLabelTexts(labels, order.length) : null }),
       digests: pages.map((p) => `d-${p.id}`),
     };
   });
@@ -384,7 +395,7 @@ beforeEach(async () => {
     const { pageLabelTexts } = await import('../src/pdf-book-merger/ordering.js');
     const pages = await sourcePages(sources, order);
     onProgress?.(order.length, order.length);
-    const bytes = pdf(pages, { title, labels: pageLabelTexts(labels, order.length) });
+    const bytes = pdf(pages, { title, labels: labels.length ? pageLabelTexts(labels, order.length) : null });
     await write(bytes.slice(0, 10));
     await write(bytes.slice(10));
     return { size: bytes.length, digests: pages.map((p) => `d-${p.id}`) };
@@ -483,7 +494,7 @@ describe('ファイルを足して並べる', () => {
 
     expect(fileItem('猫_奇数.pdf').hasAttribute('collapsed')).toBe(true);
     expect(meta('猫_奇数.pdf')).toBe('本文(頁番号: 1, 3, 5, 7)');
-    expect(meta('猫_表紙.pdf')).toBe('先頭に置く(2 頁)');
+    expect(meta('猫_表紙.pdf')).toBe('番号なし→先頭(2 頁)');
 
     fileItem('猫_表紙.pdf').toggle();
     change(fileItem('猫_表紙.pdf').querySelector('select'), 'split');
@@ -493,9 +504,8 @@ describe('ファイルを足して並べる', () => {
     expect(fileItem('猫_表紙.pdf').hasAttribute('collapsed')).toBe(false);
     expect(fileItem('猫_奇数.pdf').hasAttribute('collapsed')).toBe(true);
     expect(meta('猫_表紙.pdf')).toBe('前半を先頭・後半を末尾(2 頁, 最後の頁から)');
-
-    change(fileItem('猫_表紙.pdf').querySelector('.bm-file-controls input[type="text"]'), '3');
-    expect(meta('猫_表紙.pdf')).toBe('前半を先頭・後半を末尾(2 頁, 先頭の頁の番号 3, 最後の頁から)');
+    // 表紙と裏表紙のファイルには、番号の欄を出さない。
+    expect(fileItem('猫_表紙.pdf').querySelector('.bm-file-controls input[type="text"]')).toBeNull();
     change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '-11');
     expect(meta('猫_奇数.pdf')).toBe('本文(頁番号: -11, -9, -7, -5, 手入力)');
   });
@@ -524,7 +534,7 @@ describe('ファイルを足して並べる', () => {
 
     expect(firstAndLast()).toEqual(['f3:1', 'f3:0']);
     expect(stepSelect('猫_表紙.pdf').value).toBe('-1');
-    // 逆順のチェックは無く、本文と同じ「先頭の頁の番号」と「進み方」の欄だけ。
+    // 逆順のチェックは無く、「進み方」の欄で選ぶ。
     expect(fileItem('猫_表紙.pdf').querySelector('input[type="checkbox"]')).toBeNull();
     expect(fileItem('猫_奇数.pdf').querySelector('input[type="checkbox"]')).toBeNull();
   });
@@ -554,39 +564,153 @@ describe('ファイルを足して並べる', () => {
     expect([...document.querySelectorAll('#pageGrid > li')]).toEqual(kept);
   });
 
-  it('先頭に置くファイルは、先頭の頁の番号で順番を決められる', async () => {
+  it('番号の無いファイルは一覧の位置で先頭・末尾に置き、メニューで並べ替えられる', async () => {
     await addBook();
     const keys = () => [...document.querySelectorAll('#pageGrid > li')].map((card) => card.dataset.pageKey);
-    // 奇数頁の束を先頭に置くファイルにすると、名前の順（奇数 → 表紙）に並ぶ。
-    change(fileItem('猫_奇数.pdf').querySelector('select'), 'front');
-    expect(keys().slice(0, 6)).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f3:0', 'f3:1']);
+    const names = () => [...document.querySelectorAll('#fileList .bm-file .name')].map((n) => n.textContent);
+    const meta = (name) => fileItem(name).querySelector('.bm-file-head .hint').textContent;
+    // 名前で表紙と分かるファイルは、一覧の上へ寄せる（名前の順では本文より下になる）。
+    expect(names()).toEqual(['猫_表紙.pdf', '猫_奇数.pdf', '猫_偶数.pdf']);
+    expect($('fileSortManual')).toBeNull();
+    expect(menuButton('猫_表紙.pdf', '最前へ').disabled).toBe(true);
+    expect(menuButton('猫_表紙.pdf', '前へ').disabled).toBe(true);
+    expect(menuButton('猫_偶数.pdf', '後ろへ').disabled).toBe(true);
+    expect(menuButton('猫_偶数.pdf', '最後へ').disabled).toBe(true);
 
-    // 表紙に番号を入れると、番号を入れていない奇数頁の束より前に並ぶ。
-    const start = () => fileItem('猫_表紙.pdf').querySelector('input[type="text"]');
-    change(start(), '1');
-    expect(keys().slice(0, 6)).toEqual(['f3:0', 'f3:1', 'f1:0', 'f1:1', 'f1:2', 'f1:3']);
-    expect(start().value).toBe('1');
+    // 最後へ動かすと、末尾に置く。並び順は「手動」になる。
+    fileItem('猫_表紙.pdf').querySelector('.bm-file-menu').open = true;
+    menuButton('猫_表紙.pdf', '最後へ').click();
+    expect(names()).toEqual(['猫_奇数.pdf', '猫_偶数.pdf', '猫_表紙.pdf']);
+    expect(keys().slice(-2)).toEqual(['f3:0', 'f3:1']);
+    expect(meta('猫_表紙.pdf')).toBe('番号なし→末尾(2 頁)');
+    expect($('fileSort').value).toBe('manual');
+    expect($('fileSortManual').textContent).toBe('手動で並べた順');
+    // メニューは閉じ、動かした行のメニューにフォーカスを戻す。
+    expect(fileItem('猫_表紙.pdf').querySelector('.bm-file-menu').open).toBe(false);
+    expect(document.activeElement).toBe(fileItem('猫_表紙.pdf').querySelector('.bm-file-menu summary'));
 
-    // 番号は頁ごとに 1 つずつ進むので、重なれば頁が互い違いに並ぶ（0, 1, 1, 2, 2, 3）。
-    const odd = () => fileItem('猫_奇数.pdf').querySelector('input[type="text"]');
-    change(odd(), '0');
-    expect(keys().slice(0, 6)).toEqual(['f1:0', 'f1:1', 'f3:0', 'f1:2', 'f3:1', 'f1:3']);
-    // 奇数頁の束を表紙より小さい番号で始めれば、まとめてそちらが前。
-    change(odd(), '-10');
-    expect(keys().slice(0, 6)).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f3:0', 'f3:1']);
+    // 本文のファイルの間に置くと、置き場所を決められない（本文の最後に並べて指摘する）。
+    menuButton('猫_表紙.pdf', '前へ').click();
+    expect(names()).toEqual(['猫_奇数.pdf', '猫_表紙.pdf', '猫_偶数.pdf']);
+    expect(meta('猫_表紙.pdf')).toBe('番号なし→置き場所不明(2 頁)');
+    expect(gridLabels().slice(-2)).toEqual(['番号不明', '番号不明']);
+    expect($('problems').textContent).toContain('置き場所を決められない頁が 2 頁あります');
 
-    // 番号を消すと、番号を入れた奇数頁の束の後ろへ戻る。
-    change(start(), '');
-    expect(start().value).toBe('');
-    expect(keys().slice(0, 6)).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f3:0', 'f3:1']);
+    menuButton('猫_表紙.pdf', '最前へ').click();
+    expect(keys().slice(0, 2)).toEqual(['f3:0', 'f3:1']);
 
-    // 結合しないファイルには番号の欄を出さない。
-    change(fileItem('猫_表紙.pdf').querySelector('select'), 'exclude');
-    expect(start()).toBeNull();
+    // メニューは、外を押すか Esc で閉じる（中を押しても閉じない）。
+    const menuOf = (name) => fileItem(name).querySelector('.bm-file-menu');
+    menuOf('猫_奇数.pdf').open = true;
+    menuOf('猫_偶数.pdf').open = true;
+    menuOf('猫_奇数.pdf').querySelector('.bm-menu').dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect([menuOf('猫_奇数.pdf').open, menuOf('猫_偶数.pdf').open]).toEqual([true, false]);
+    // メニューの中（ボタンの間の余白）を押しても、ファイルの設定の欄は開け閉めしない。
+    menuOf('猫_奇数.pdf').querySelector('.bm-menu').click();
+    expect(fileItem('猫_奇数.pdf').hasAttribute('collapsed')).toBe(true);
+    // キーは、フォーカスのある要素から届く。
+    const press = (key) => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    press('Enter');
+    expect(menuOf('猫_奇数.pdf').open).toBe(true);
+    // Esc で閉じたら、メニューの中にいたフォーカスはつまみ（…）へ戻る。
+    menuButton('猫_奇数.pdf', '前へ').focus();
+    press('Escape');
+    expect(menuOf('猫_奇数.pdf').open).toBe(false);
+    expect(document.activeElement).toBe(menuOf('猫_奇数.pdf').querySelector('summary'));
+    // ページの外（document そのもの）を押しても閉じる。閉じた直後に行を描き直しても開き直さない。
+    menuOf('猫_偶数.pdf').open = true;
+    await flush(); // toggle が届く
+    document.dispatchEvent(new Event('pointerdown'));
+    expect(menuOf('猫_偶数.pdf').open).toBe(false);
+    menuButton('猫_奇数.pdf', '後ろへ').click(); // 偶数の行を描き直す
+    expect(menuOf('猫_偶数.pdf').open).toBe(false);
+    menuButton('猫_奇数.pdf', '前へ').click();
+    menuOf('猫_偶数.pdf').open = true;
+    $('outputName').focus();
+    press('Escape');
+    expect(menuOf('猫_偶数.pdf').open).toBe(false);
+    expect(document.activeElement).toBe($('outputName'));
 
-    change(odd(), 'x');
-    expect($('message').textContent).toContain('整数で');
-    expect(fileItem('猫_奇数.pdf').querySelector('button[aria-label^="ひとつ"]')).toBeNull();
+    menuButton('猫_奇数.pdf', '後ろへ').click();
+    expect(names()).toEqual(['猫_表紙.pdf', '猫_偶数.pdf', '猫_奇数.pdf']);
+
+    // 手動のあいだに足したファイルは末尾に入る。名前で表紙と分かるものだけは先頭へ。
+    const appendix = Array.from({ length: 5 }, (_, i) => page(`x${i}`, null)); // 数頁より多いので、表紙と裏表紙とは見ない
+    drop([file('猫_カバー.pdf', pdf([page('k1', null), page('k2', null)])), file('猫_付録.pdf', pdf(appendix))]);
+    await settled(5);
+    expect(names()).toEqual(['猫_カバー.pdf', '猫_表紙.pdf', '猫_偶数.pdf', '猫_奇数.pdf', '猫_付録.pdf']);
+    expect(meta('猫_カバー.pdf')).toBe('番号なし→先頭(2 頁)');
+    expect(meta('猫_付録.pdf')).toBe('番号なし→末尾(5 頁)');
+    // 一覧の位置で置いた頁にも、頁ごとの番号の欄を出す（何頁か直せば、残りを推定し直す）。
+    expect(document.querySelector('#pageGrid [data-page-key="f5:0"] .bm-page-number')).not.toBeNull();
+    // 名前で裏表紙と分かるファイルが末尾にあれば、足したファイルはその前に入る。
+    drop([file('猫_裏表紙.pdf', pdf([page('u1', null)]))]);
+    await settled(6);
+    drop([file('猫_奥付.pdf', pdf(appendix))]);
+    await settled(7);
+    expect(names().slice(-3)).toEqual(['猫_付録.pdf', '猫_奥付.pdf', '猫_裏表紙.pdf']);
+    // 足した裏表紙は、もとの裏表紙の後ろ（いちばん下）へ。
+    drop([file('猫_帯_裏表紙.pdf', pdf([page('b1', null)]))]);
+    await settled(8);
+    expect(names().slice(-2)).toEqual(['猫_裏表紙.pdf', '猫_帯_裏表紙.pdf']);
+    fileItem('猫_帯_裏表紙.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
+    fileItem('猫_奥付.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
+    fileItem('猫_裏表紙.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
+    expect($('problems').textContent).toContain('頁番号を 1 つも読めなかったファイルの 5 頁を、一覧の位置で先頭・末尾に置きました');
+    fileItem('猫_付録.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
+
+    // 並び順を選び直すと、並べ直して「手動」を外す（もう一度動かしても 1 つだけ）。
+    menuButton('猫_カバー.pdf', '後ろへ').click();
+    expect(document.querySelectorAll('#fileSort option[value="manual"]')).toHaveLength(1);
+    change($('fileSort'), 'name');
+    expect($('fileSortManual')).toBeNull();
+    expect(names()).toEqual(['猫_カバー.pdf', '猫_表紙.pdf', '猫_奇数.pdf', '猫_偶数.pdf']);
+
+    // 本文が無ければ、一覧の順につなぐ。
+    fileItem('猫_奇数.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
+    fileItem('猫_偶数.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
+    expect(meta('猫_表紙.pdf')).toBe('一覧の順につなぐ(2 頁)');
+    expect(keys()).toEqual(['f4:0', 'f4:1', 'f3:0', 'f3:1']);
+    expect($('problems').textContent).toContain('見つかりませんでした');
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('「猫_表紙.pdf」を一覧の 3 番目へ動かしました');
+    await flush(); // 開いた記録の toggle（あとから届く）を、片付けの前に受ける
+  });
+
+  it('名前で表紙と見たファイルは頁番号を見ず、ボタンで番号を読んで並べ直せる', async () => {
+    drop([file('猫_表紙.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+    const meta = () => fileItem('猫_表紙.pdf').querySelector('.bm-file-head .hint').textContent;
+    // 中身は奇数頁の束でも、名前で表紙と見て一覧の位置（先頭）に置く。
+    expect(meta()).toBe('番号なし→先頭(4 頁)');
+    // 頁番号らしい番号があるので、本文の束かもしれないと知らせる。
+    expect($('problems').textContent).toContain('本文の束かもしれません');
+    fileItem('猫_表紙.pdf').toggle();
+    expect(fileItem('猫_表紙.pdf').querySelector('.bm-file-controls').textContent).toContain('頁番号を見ません');
+
+    readNumbers('猫_表紙.pdf');
+    await vi.waitFor(() => expect(meta()).toBe('本文(頁番号: 1, 3, 5, 7)'));
+    expect(fileItem('猫_表紙.pdf').querySelector('.bm-file-controls').textContent).not.toContain('頁番号を見ません');
+    expect($('problems').textContent).not.toContain('本文の束かもしれません');
+    // 名前で読まなかった余白も読む。
+    await vi.waitFor(() => expect(mocks.readStrip).toHaveBeenCalled());
+    await vi.waitFor(() => expect(fileItem('猫_表紙.pdf').textContent).not.toContain('余白を読み取り中'));
+  });
+
+  it('ファイルのメニューは、開いている間に行を描き直しても開いたまま', async () => {
+    drop([file('猫_奇数.pdf', pdf(ODD))]);
+    await settled(1);
+    const menu = () => fileItem('猫_奇数.pdf').querySelector('.bm-file-menu');
+    menu().open = true;
+    await flush(); // toggle が届く
+    const before = menu();
+
+    // ファイルを足すと、最後の行でなくなるので行を作り直す。
+    drop([file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+    expect(menu()).not.toBe(before);
+    expect(menu().open).toBe(true);
   });
 
   it('ファイルの並び順を、追加順・名前順・更新日時順（それぞれ昇順・降順）で切り替えられる', async () => {
@@ -601,27 +725,28 @@ describe('ファイルを足して並べる', () => {
     const keys = () => [...document.querySelectorAll('#pageGrid > li')].map((card) => card.dataset.pageKey);
     const sortBy = (value) => change($('fileSort'), value);
 
-    // 既定は追加した順（一度に選んだファイルは名前の順）。
+    // 既定は追加した順（一度に選んだファイルは名前の順）。どの並び順でも、名前で
+    // 表紙と分かるものは上、裏表紙と分かるものは下に寄せる。
     expect($('fileSortField').hidden).toBe(false);
-    expect(names()).toEqual(['猫_奇数.pdf', '猫_表紙.pdf', '猫_偶数.pdf']);
+    expect(names()).toEqual(['猫_表紙.pdf', '猫_奇数.pdf', '猫_偶数.pdf']);
 
     sortBy('time');
     expect(names()).toEqual(['猫_表紙.pdf', '猫_偶数.pdf', '猫_奇数.pdf']);
-    // 番号を入れていない先頭のファイルは、一覧の順に並ぶ。
-    change(fileItem('猫_奇数.pdf').querySelector('select'), 'front');
-    expect(keys().slice(0, 6)).toEqual(['f2:0', 'f2:1', 'f1:0', 'f1:1', 'f1:2', 'f1:3']);
+    // 番号の無いファイルは、一覧で本文より上なので先頭に置く。
+    expect(keys().slice(0, 2)).toEqual(['f2:0', 'f2:1']);
 
     sortBy('name');
-    expect(names()).toEqual(['猫_奇数.pdf', '猫_偶数.pdf', '猫_表紙.pdf']);
-    expect(keys().slice(0, 6)).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f2:0', 'f2:1']);
+    expect(names()).toEqual(['猫_表紙.pdf', '猫_奇数.pdf', '猫_偶数.pdf']);
 
     // あとから足したファイルも、選んでいる並び順の位置に入る。
-    drop([at('猫_あとがき.pdf', pdf(COVER), 500)]);
-    await settled(4);
-    expect(names()).toEqual(['猫_あとがき.pdf', '猫_奇数.pdf', '猫_偶数.pdf', '猫_表紙.pdf']);
+    drop([at('猫_あとがき.pdf', pdf(COVER), 500), at('猫_裏表紙.pdf', pdf(COVER), 400)]);
+    await settled(5);
+    expect(names()).toEqual(['猫_表紙.pdf', '猫_あとがき.pdf', '猫_奇数.pdf', '猫_偶数.pdf', '猫_裏表紙.pdf']);
+    expect(keys().slice(-2)).toEqual(['f5:0', 'f5:1']);
+    fileItem('猫_裏表紙.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
 
     sortBy('added');
-    expect(names()).toEqual(['猫_奇数.pdf', '猫_表紙.pdf', '猫_偶数.pdf', '猫_あとがき.pdf']);
+    expect(names()).toEqual(['猫_表紙.pdf', '猫_奇数.pdf', '猫_偶数.pdf', '猫_あとがき.pdf']);
 
     // Drive のファイルは modifiedTime で並べ、更新日時の分からないファイルは後ろへ。
     mocks.pickFiles.mockResolvedValue([
@@ -632,21 +757,21 @@ describe('ファイルを足して並べる', () => {
     $('driveBtn').click();
     await settled(6);
     sortBy('time');
-    expect(names()).toEqual(['猫_帯.pdf', '猫_あとがき.pdf', '猫_表紙.pdf', '猫_偶数.pdf', '猫_奇数.pdf', '猫_栞.pdf']);
+    expect(names()).toEqual(['猫_表紙.pdf', '猫_帯.pdf', '猫_あとがき.pdf', '猫_偶数.pdf', '猫_奇数.pdf', '猫_栞.pdf']);
 
     // 降順（新しい順）。更新日時の分からないファイルは、新しい順でも後ろのまま。
     sortBy('time-desc');
-    expect(names()).toEqual(['猫_奇数.pdf', '猫_偶数.pdf', '猫_表紙.pdf', '猫_あとがき.pdf', '猫_帯.pdf', '猫_栞.pdf']);
+    expect(names()).toEqual(['猫_表紙.pdf', '猫_奇数.pdf', '猫_偶数.pdf', '猫_あとがき.pdf', '猫_帯.pdf', '猫_栞.pdf']);
     sortBy('name-desc');
-    expect(names()).toEqual(['猫_栞.pdf', '猫_表紙.pdf', '猫_帯.pdf', '猫_偶数.pdf', '猫_奇数.pdf', '猫_あとがき.pdf']);
+    expect(names()).toEqual(['猫_表紙.pdf', '猫_栞.pdf', '猫_帯.pdf', '猫_偶数.pdf', '猫_奇数.pdf', '猫_あとがき.pdf']);
     sortBy('added-desc');
-    expect(names()).toEqual(['猫_栞.pdf', '猫_帯.pdf', '猫_あとがき.pdf', '猫_偶数.pdf', '猫_表紙.pdf', '猫_奇数.pdf']);
+    expect(names()).toEqual(['猫_表紙.pdf', '猫_栞.pdf', '猫_帯.pdf', '猫_あとがき.pdf', '猫_偶数.pdf', '猫_奇数.pdf']);
     $('logBox').open = true;
     $('logBox').dispatchEvent(new Event('toggle'));
     expect($('logText').textContent).toContain('ファイルを「追加順（新しい順）」に並べました');
   });
 
-  it('配置を一括で変え、自動に戻せる（すべて先頭に置いて、名前順に単純につなぐ）', async () => {
+  it('配置を一括で変え、自動に戻せる', async () => {
     expect($('bulkRoleField').hidden).toBe(true);
     await addBook();
     const keys = () => [...document.querySelectorAll('#pageGrid > li')].map((card) => card.dataset.pageKey);
@@ -654,20 +779,27 @@ describe('ファイルを足して並べる', () => {
     expect($('bulkRoleField').hidden).toBe(false);
     // 「まとめて変える…」を選び直しても、何も変えない。
     change($('bulkRole'), '');
-    expect(roles()).toEqual(['body', 'body', 'front']);
+    expect(roles()).toEqual(['body', 'body', 'body']);
 
-    change($('fileSort'), 'name');
     change(stepSelect('猫_表紙.pdf'), '-1');
-    change($('bulkRole'), 'front');
-    expect(roles()).toEqual(['front', 'front', 'front']);
+    change($('bulkRole'), 'split');
+    expect(roles()).toEqual(['split', 'split', 'split']);
     // 選んだら「まとめて変える…」に戻る（同じ配置をもう一度選べるように）。
     expect($('bulkRole').value).toBe('');
-    // 名前順（奇数・偶数・表紙）に、ファイルの中の頁の順でつなぐ。表紙の進み方は残す。
-    expect(keys()).toEqual(['f1:0', 'f1:1', 'f1:2', 'f1:3', 'f2:0', 'f2:1', 'f2:2', 'f2:3', 'f3:1', 'f3:0']);
+    // 表紙の進み方は残す（最後の頁から）。本文が無いので、表紙と裏表紙のファイルも一覧の順につなぐ。
+    expect(keys().slice(0, 3)).toEqual(['f3:1', 'f3:0', 'f1:0']);
+
+    // 本文を選び直すと、名前で表紙と見て読まなかった頁も読む（もとから本文なら読み直さない）。
+    change($('bulkRole'), 'body');
+    await vi.waitFor(() => expect(mocks.readStrip).toHaveBeenCalledTimes(6)); // 表紙 2 頁の上下
+    await vi.waitFor(() => expect(fileItem('猫_表紙.pdf').textContent).not.toContain('余白を読み取り中'));
+    change($('bulkRole'), 'body');
+    await flush();
+    expect(mocks.readStrip).toHaveBeenCalledTimes(6);
 
     // 自動に戻すと、読み込んだときの推測に戻り、手で変えた進み方も消える。
     change($('bulkRole'), 'auto');
-    expect(roles()).toEqual(['body', 'body', 'front']);
+    expect(roles()).toEqual(['body', 'body', 'body']);
     expect(gridLabels()).toEqual(['表紙', '表紙', '1 頁', '2 頁', '3 頁', '4 頁', '5 頁', '6 頁', '7 頁', '8 頁']);
     expect(keys().slice(0, 2)).toEqual(['f3:0', 'f3:1']);
     $('logBox').open = true;
@@ -679,14 +811,14 @@ describe('ファイルを足して並べる', () => {
     await addBook();
 
     // 1 頁を 4.5 に動かす（4 頁と 5 頁の間へ）。
-    const first = document.querySelector('#pageGrid [data-page-key$=":0"] .bm-page-number');
+    const first = document.querySelector('#pageGrid [data-page-key="f1:0"] .bm-page-number');
     change(first, '4.5');
     expect(gridLabels().slice(2, 8)).toEqual(['2 頁', '3 頁', '4 頁', '4と5の間 頁', '5 頁', '6 頁']);
     // 1 頁が動いたので、最初の頁が偶数（2 頁）になった。
     expect($('problems').textContent).toContain('最初の頁が偶数（2 頁）です。');
 
     // 数字でなければ断る。
-    change(document.querySelector('#pageGrid [data-page-key$=":1"] .bm-page-number'), 'abc');
+    change(document.querySelector('#pageGrid [data-page-key="f1:1"] .bm-page-number'), 'abc');
     expect($('message').textContent).toBe('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。');
 
     // ファイルの先頭の番号を手で決める（奇数頁の束を 11 から）。
@@ -1077,7 +1209,7 @@ describe('ファイルを足して並べる', () => {
     const release = holdImage('e4');
     drop([file('猫_偶数.pdf', pdf(EVEN))]);
     await vi.waitFor(() => expect(mocks.renderPageImage.mock.calls.some(([doc]) => doc.spec.pages[0].id === 'e8')).toBe(true));
-    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
+    readNumbers('猫_表紙.pdf');
     await flush();
     expect($('progressText').textContent).toBe('ファイルを調べています（2 / 2）');
 
@@ -1266,7 +1398,7 @@ describe('ファイルを足して並べる', () => {
     await settled(1);
     expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
 
-    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
+    readNumbers('猫_表紙.pdf');
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalled());
     // 写しの JPEG は残していないので、1 度だけ調べ直して、その JPEG で描く。
     expect(mocks.findScanImages).toHaveBeenCalledTimes(2);
@@ -1280,7 +1412,7 @@ describe('ファイルを足して並べる', () => {
     await vi.waitFor(() => expect(mocks.renderPreview).toHaveBeenCalled());
     const [shown] = mocks.renderPreview.mock.calls[0];
 
-    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
+    readNumbers('猫_表紙.pdf');
     await vi.waitFor(() =>
       expect(document.querySelector('#pageGrid [data-page-key="f1:2"] .bm-status').textContent).toBe('読取')
     );
@@ -1300,7 +1432,7 @@ describe('ファイルを足して並べる', () => {
       await gate;
       return [];
     });
-    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
+    readNumbers('猫_表紙.pdf');
     await vi.waitFor(() => expect(mocks.readStrip).toHaveBeenCalled());
     $('outputName').value = '自分で付けた名前';
     $('outputName').dispatchEvent(new Event('input'));
@@ -1449,7 +1581,7 @@ describe('ファイルを足して並べる', () => {
     expect(mocks.releaseOcr).toHaveBeenCalledTimes(1);
 
     // あとから本文に変えて読むときは、用意し直し、読み終えたらまた手放す。
-    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
+    readNumbers('猫_表紙.pdf');
     await vi.waitFor(() => expect(mocks.releaseOcr).toHaveBeenCalledTimes(2));
     expect(mocks.prepareOcr).toHaveBeenCalledTimes(2);
   });
@@ -1466,7 +1598,7 @@ describe('ファイルを足して並べる', () => {
     expect(document.querySelector('#pageGrid [data-page-key="f1:2"] .bm-status').textContent).toBe('推定');
   });
 
-  it('表紙と見たファイルを本文に変えると、残りの頁を読む（読んでいる間も頁は並びに残す）', async () => {
+  it('名前で表紙と見たファイルも、頁番号を読んで並べ直すと残りの頁を読む（読んでいる間も頁は並びに残す）', async () => {
     drop([file('猫_表紙.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
     await settled(2);
     // 名前で表紙と分かるファイルは、はじめは余白を読まない。
@@ -1481,8 +1613,7 @@ describe('ファイルを足して並べる', () => {
       await gate;
       return answer(strip);
     });
-    const toggle = (role) => change(fileItem('猫_表紙.pdf').querySelector('select'), role);
-    toggle('body');
+    readNumbers('猫_表紙.pdf');
     await vi.waitFor(() => expect(mocks.readStrip).toHaveBeenCalled());
 
     // 読んでいる間も、そのファイルの頁は抜けにしない。
@@ -1492,9 +1623,8 @@ describe('ファイルを足して並べる', () => {
     change(fileItem('猫_偶数.pdf').querySelector('select'), 'body');
     expect(gridLabels()).toEqual(labels);
     expect(fileItem('猫_表紙.pdf').textContent).toContain('余白を読み取り中');
-    // 切り替えを繰り返しても、同じ頁を 2 度は頼まない。
-    toggle('front');
-    toggle('body');
+    // 読んでいる間にもう一度頼んでも（一括で本文に）、同じ頁を 2 度は頼まない。
+    change($('bulkRole'), 'body');
     release();
 
     await vi.waitFor(() =>
@@ -1540,7 +1670,7 @@ describe('ファイルを足して並べる', () => {
     await settled(1);
     expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
 
-    change(fileItem('cover.pdf').querySelector('select'), 'body');
+    readNumbers('cover.pdf');
 
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalledTimes(40));
     // 調べたときの JPEG（ファイルの一部を指すだけ）で描く。
@@ -1583,7 +1713,7 @@ describe('ファイルを足して並べる', () => {
     expect(gridLabels()).toContain('3 頁');
 
     // 名前で表紙と見たファイルを本文に変えても、その頁は OCR しない。
-    change(fileItem('表紙.pdf').querySelector('select'), 'body');
+    readNumbers('表紙.pdf');
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalled());
     await vi.waitFor(() => expect(fileItem('表紙.pdf').textContent).not.toContain('余白を読み取り中'));
     expect(mocks.renderMargins.mock.calls.map(([, index]) => index).sort()).toEqual([2, 3]);
@@ -1880,9 +2010,9 @@ describe('確かめる', () => {
     drop([file('猫_奇数.pdf', pdf(odd)), file('猫_偶数.pdf', pdf(EVEN)), file('猫_差し替え.pdf', pdf(again))]);
     await settled(3);
 
-    // 番号の無い 1 頁のファイルは表紙と見て、先頭に並ぶ。
+    // 番号の無い 1 頁のファイルは、一覧で本文より下にあるので末尾に並ぶ。
     expect($('problems').textContent).toContain(
-      '同じ内容の頁が 1 組あります（「猫_差し替え.pdf」の 1 頁目と「猫_奇数.pdf」の 2 頁目）。'
+      '同じ内容の頁が 1 組あります（「猫_奇数.pdf」の 2 頁目と「猫_差し替え.pdf」の 1 頁目）。'
     );
     const card = document.querySelector('[data-page-key="f1:1"]');
     expect(card.classList.contains('warn')).toBe(true);
@@ -1968,6 +2098,33 @@ describe('結合と検証', () => {
     $('logBox').open = true;
     $('logBox').dispatchEvent(new Event('toggle'));
     expect($('logText').textContent).toContain('「猫.pdf」をダウンロードしました');
+  });
+
+  it('部ごとに頁番号が振り直されていれば部に分けて並べ、頁ラベルは付けない（通し番号）', async () => {
+    drop([
+      file('本_1.pdf', pdf([page('a1', 1), page('a2', 2), page('a3', 3), page('a4', 4)])),
+      file('本_2.pdf', pdf([page('a5', 5), page('a6', 6), page('b1', 1), page('b2', 2), page('b3', 3)])), // 第 2 部の始まりをまたぐ
+      file('本_3.pdf', pdf([page('b5', 5), page('b6', 6)])),
+    ]);
+    await settled(3);
+
+    expect(gridLabels()).toEqual([
+      ...[1, 2, 3, 4, 5, 6].map((n) => `第 1 部 ${n} 頁`),
+      '第 2 部 1 頁',
+      '第 2 部 2 頁',
+      '第 2 部 3 頁',
+      '-第 2 部 4 頁',
+      '第 2 部 5 頁',
+      '第 2 部 6 頁',
+    ]);
+    expect($('problems').textContent).toContain('第 2 部の 4 頁が見つかりません');
+    expect($('problems').textContent).toContain('本文を 2 部に分けて並べました（第 1 部 1〜6 頁・第 2 部 1〜6 頁）');
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    expect(mocks.mergePdf.mock.calls[0][0].labels).toEqual([]);
+    expect($('verifyResult').className).toBe('bm-verify ok');
+    expect($('verifyResult').textContent).toContain('頁ラベル（ビューアーに出る頁番号）: 付けていません（通し番号）');
   });
 
   it('iPhone では、共有シートに渡せない大きさの PDF は、ダウンロードに保存し、そう記録に残す', async () => {
@@ -2247,7 +2404,7 @@ describe('結合と検証', () => {
     stash.readGate = new Promise((resolve) => (release = resolve));
     stash.readStale = true;
     stash.reads.length = 0;
-    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
+    readNumbers('猫_表紙.pdf');
     await vi.waitFor(() => expect(stash.reads).toHaveLength(1));
     fileItem('猫_表紙.pdf').querySelector('.danger').click();
     release();
@@ -2263,7 +2420,7 @@ describe('結合と検証', () => {
     await settled(2);
     stash.reads.length = 0;
 
-    change(fileItem('猫_表紙.pdf').querySelector('select'), 'body');
+    readNumbers('猫_表紙.pdf');
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalled());
     await vi.waitFor(() => expect(fileItem('猫_表紙.pdf').textContent).not.toContain('余白を読み取り中'));
     // 頁の JPEG は残していないので、置いたものを 1 度だけ読んで調べ直す（PDF を
@@ -2341,9 +2498,8 @@ describe('結合と検証', () => {
 
     $('mergeBtn').click();
     await flush();
-    // 先頭に置くファイルが 1 つだけなら、番号を入れても本の並びは変わらない。
-    fileItem('猫_表紙.pdf').toggle();
-    change(fileItem('猫_表紙.pdf').querySelector('.bm-file-controls input[type="text"]'), '3');
+    // 本文のファイルは頁番号で並ぶので、一覧で動かしても本の並びは変わらない。
+    menuButton('猫_奇数.pdf', '後ろへ').click();
     release();
 
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));

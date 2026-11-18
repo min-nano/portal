@@ -21,7 +21,9 @@
 const TAG = 'portal-section';
 
 // 見出しの行の中で押されても開け閉めしないもの（操作ボタン・入力欄など）。
-const INTERACTIVE = 'a, button, input, select, textarea, label, summary, [contenteditable]';
+// data-interactive は、ボタンを並べたメニューのように、ボタンの間の余白を押しても
+// 開け閉めしたくない入れ物に付ける。
+const INTERACTIVE = 'a, button, input, select, textarea, label, summary, [contenteditable], [data-interactive]';
 
 const STYLE = `
   :host { display: block; }

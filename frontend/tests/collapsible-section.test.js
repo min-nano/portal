@@ -72,6 +72,13 @@ describe('portal-section', () => {
     expect(node.open).toBe(true);
   });
 
+  it('data-interactive を付けた入れ物（メニューなど）の中では、ボタンの間を押しても開閉しない', () => {
+    const node = section('<h3 slot="title">ファイル</h3><div slot="actions" data-interactive><span>余白</span></div>');
+
+    node.querySelector('span').click();
+    expect(node.open).toBe(true);
+  });
+
   it('つまみの読み上げ名は見出しから作る（label 属性が優先）', () => {
     const node = section('<h3 slot="title">面材と釘</h3>');
     expect(toggleButton(node).getAttribute('aria-label')).toBe('面材と釘（開閉）');

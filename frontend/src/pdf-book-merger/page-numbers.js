@@ -38,7 +38,13 @@ export const STEPS = [2, -2, 1, -1];
  * 枝番（57-1）は 2 つ目の組に取る。ハイフンの類は、OCR がよく取り違えるものまで
  * 含めておく。
  */
-const STANDALONE = /^[\s\-–—−‐‑‒－ー~〜・.,()（）[\]［］〔〕<>《》|｜]*(?:p\.?|P\.?|page|ページ|頁)?\s*(\d{1,4})(?:\s*[\-–—−‐‑‒－ー]\s*([1-9]\d?))?\s*(?:頁|ページ)?[\s\-–—−‐‑‒－ー~〜・.,()（）[\]［］〔〕<>《》|｜]*$/;
+// 枝番の区切り（ハイフンの類）。
+const DASH = '[\\-–—−‐‑‒－ー]';
+// 頁番号のまわりの飾り（空白・記号）。柱と頁番号の間の区切りにも使う。
+const DECOR = '[\\s　\\-–—−‐‑‒－ー~〜・.,()（）[\\]［］〔〕<>《》|｜]';
+const STANDALONE = new RegExp(
+  `^${DECOR}*(?:p\\.?|P\\.?|page|ページ|頁)?\\s*(\\d{1,4})(?:\\s*${DASH}\\s*([1-9]\\d?))?\\s*(?:頁|ページ)?${DECOR}*$`
+);
 
 /** 行の先頭・末尾に付いた番号（柱に頁番号が並んでいる形）。 */
 const LEADING = /^(\d{1,4})[\s　]+\S/;
@@ -169,7 +175,23 @@ function isLineNumber(number, numbers) {
  *   branch は枝番（57-1 の 1）。枝番の無い候補には付けない。
  */
 export function pageNumberCandidates(items, source = 'text') {
-  const lines = groupLines(items).map((line) => ({ line, numbers: numbersInLine(line) }));
+  return candidatesOf(groupLines(items), source);
+}
+
+/**
+ * 1 頁ぶんの文字の、頁番号の候補（pageNumberCandidates と同じ）と柱の文字（headsOf）。
+ * 行にまとめる手間を 1 度で済ませる。
+ *
+ * @param {{text:string,x0:number,x1:number,y:number,h:number}[]} items
+ * @param {string} [source]
+ */
+export function readMargin(items, source = 'text') {
+  const lines = groupLines(items);
+  return { candidates: candidatesOf(lines, source), heads: headsOf(lines) };
+}
+
+function candidatesOf(groupedLines, source) {
+  const lines = groupedLines.map((line) => ({ line, numbers: numbersInLine(line) }));
   // 行番号の列は頁全体から見る（帯の中だけでは、続きの行番号が見えない）。
   const fives = lines.flatMap(({ numbers }) => numbers).filter((number) => number.value % 5 === 0);
   const found = new Map();
@@ -228,6 +250,71 @@ export function mergeCandidates(first, second) {
 export function unsettledPages(candidates) {
   const { pages } = inferFileNumbers(candidates);
   return new Set(pages.flatMap((page, index) => (page.status === 'detected' ? [] : [index])));
+}
+
+// 「頁 / 総頁数」の形の頁番号（Page 16 of 200・p. 16 of 200・16 / 200 頁・p16/200）。
+// 「12/25」のような日付と取り違えないよう、頁を表す語か of のあるものだけ。
+const PAGE_OF = new RegExp(
+  `^${DECOR}*(?:(?:pages?|p\\.?|ページ|頁)\\s*\\d{1,4}\\s*(?:of|[/／])|\\d{1,4}\\s*of)\\s*\\d{1,4}\\s*(?:pages?|ページ|頁)?${DECOR}*$|^${DECOR}*\\d{1,4}\\s*[/／]\\s*\\d{1,4}\\s*(?:pages?|ページ|頁)${DECOR}*$`,
+  'i'
+);
+// 「Page16」「p16」のように、頁を表す語と番号だけのもの。
+const PAGE_WORD = new RegExp(`^${DECOR}*(?:pages?|p\\.?)\\s*\\d{1,4}${DECOR}*$`, 'i');
+
+/**
+ * 頁番号だけの行か（番号だけの行・「Page 16 of 200」「16 / 200 頁」の形）。日付（2024/05/01・12/25）や
+ * 「1.2」のような節の番号だけの柱は残す。
+ */
+function pageWordsOnly(text) {
+  return STANDALONE.test(text) || PAGE_OF.test(text) || PAGE_WORD.test(text);
+}
+
+/**
+ * 余白の行から、上下の余白の帯にある文字（柱。書名・部や章の名前）を拾う
+ * （readMargin）。番号だけの行（頁番号）は除く。柱に付いた頁番号は、その頁の番号が
+ * 決まってから落とす（stripPageNumber。「Part 2」の 2 のような番号は残すため）。
+ *
+ * @returns {string[]} 帯の行ごとの文字（重なりなし）
+ */
+function headsOf(lines) {
+  const heads = new Set();
+  for (const line of lines) {
+    if (line.y >= MARGIN_ZONE && line.y <= 1 - MARGIN_ZONE) continue;
+    // 頁番号だけの行（「- 12 -」「Page 16 of 200」「16 / 200 頁」）は、どの頁でも同じに
+    // なるので柱にしない。
+    if (pageWordsOnly(line.text)) continue;
+    if (line.text.length >= 2 && line.text.length <= 80) heads.add(line.text);
+  }
+  return [...heads];
+}
+
+/**
+ * 柱から、その頁の頁番号（先頭か末尾にあるもの。空白のほか「｜」「・」などで区切られて
+ * いても）を落とし、空白も詰める。頁をまたいで柱を比べるため（parts.js）。
+ *
+ * @param {string} head readMargin の柱
+ * @param {number|null} number その頁の番号（決まらなければ null。そのときは空白だけ詰める）
+ * @param {number|null} [branch] 枝番（57-1 の頁なら、「57-1」をまとめて落とす）
+ */
+export function stripPageNumber(head, number, branch = null) {
+  let text = head;
+  // 整数の番号だけ（小数の「.」を正規表現に入れない）。
+  if (Number.isInteger(number)) {
+    const [start, end] = numberPatterns(number, branch);
+    text = text.replace(start, '').replace(end, '');
+  }
+  return text.replace(/\s+/g, '');
+}
+
+// 番号ごとの正規表現（頁ごと・描き直しのたびに作り直さない）。number・branch は整数。
+const patterns = new Map();
+function numberPatterns(number, branch) {
+  const key = `${number}-${branch ?? ''}`;
+  if (!patterns.has(key)) {
+    const text = branch ? `${number}\\s*${DASH}\\s*${branch}` : String(number);
+    patterns.set(key, [new RegExp(`^${DECOR}*${text}${DECOR}+`), new RegExp(`${DECOR}+${text}${DECOR}*$`)]);
+  }
+  return patterns.get(key);
 }
 
 /** 枝番の候補（あれば）。枝番は番号だけの行からしか取らないので、どれも強い候補。 */
@@ -523,7 +610,7 @@ export function formatNumber(number, branch = null) {
 }
 
 /** 手で直す番号の書き方（12、前付けの -3、間に挟む 12.5、枝番の 57-1）。 */
-const BRANCH_INPUT = /^(\d{1,4})\s*[\-–—−‐‑‒－ー]\s*([1-9]\d?)$/;
+const BRANCH_INPUT = new RegExp(`^(\\d{1,4})\\s*${DASH}\\s*([1-9]\\d?)$`);
 
 /**
  * 手で入れた頁番号を読む。読めなければ null。
@@ -543,4 +630,19 @@ export function parsePageNumber(text) {
 /** parsePageNumber で読める形に書き戻す（入力欄に出す）。 */
 export function pageNumberText({ number, branch }) {
   return branch ? `${number}-${branch}` : String(number);
+}
+
+/**
+ * 頁が奇数側か偶数側か（スキャンの位置のずれを、同じ側の頁どうしで比べるため）。
+ *
+ * 枝番の頁は、差し替えの紙の表（57-1, 57-3, …）が奇数側、裏（57-2, 57-4, …）が
+ * 偶数側になる。
+ *
+ * @param {number|null} number
+ * @param {number|null} [branch] 枝番
+ * @returns {'odd'|'even'|null}
+ */
+export function sideOf(number, branch = null) {
+  if (number === null || !Number.isInteger(number)) return null;
+  return Math.abs(branch ?? number) % 2 === 1 ? 'odd' : 'even';
 }

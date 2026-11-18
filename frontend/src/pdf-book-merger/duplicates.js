@@ -2,8 +2,8 @@
 //
 // 頁番号の重なり（ordering.js の checkSequence）は、番号を読めた本文の頁でしか
 // 分からない。同じ頁を 2 度スキャンした・同じ頁を含むファイルを 2 度足した、
-// といった失敗を、表紙や番号の無い頁、並び順のままつなぐとき（配置を一括で
-// 「先頭に置く」）にも見つけるため、頁の中身どうしを見比べる。
+// といった失敗を、表紙や番号の無い頁、頁番号の無い PDF を一覧の順につなぐとき
+// にも見つけるため、頁の中身どうしを見比べる。
 //
 //   文字情報 … 文字の 3 つ並び（和文は 1 字、英文などは 1 語を 1 つと数える）の
 //              集まりの重なり（Jaccard 係数）を、MinHash で見積もる
@@ -218,20 +218,25 @@ function listed(names, separator) {
 /**
  * 同じ頁らしい組から、頁ごとの指摘と、本全体の指摘を作る。
  *
- * 頁番号を読み取れた本文の頁どうしで番号が違えば、別の頁とする（同じ形の頁が
- * 何度も刷られている本——罫線だけのメモの頁など——で、指摘しないため）。前後から
+ * 頁番号を読み取れた本文の頁どうしで番号が違えば（部が分かれていれば、中身まで同じ頁で
+ * なければ、部が違っても）、別の頁とする（同じ形の頁が何度も刷られている本——罫線だけのメモの頁、部ごとに同じ
+ * 番号の扉など——で、指摘しないため）。前後から
  * 補った番号と、手で入れた番号は当てにしない（ファイルごとに入れた先頭の番号は、
  * 同じ束を 2 度スキャンしたファイルにも別の番号を振る。頁ごとに入れた番号も、
  * 指摘を消すために 2 度目のスキャンへ入れたものかもしれない）。
  *
- * @param {ReturnType<import('./ordering.js').buildBookOrder>} order
+ * @param {ReturnType<import('./ordering.js').arrangeBook>['order']} order
  * @param {{a:string, b:string, exact:boolean}[]} pairs
  * @param {(entry:object) => string} describe 頁の呼び方（「「猫.pdf」の 3 頁目」など）
  * @returns {{issues:Map<string, {kind:string, level:'error'|'warn', message:string}[]>, problem:object|null}}
  */
 export function duplicateIssues(order, pairs, describe) {
   const entries = new Map(order.map((entry, position) => [entry.pageKey, { entry, position }]));
-  const readNumber = ({ entry }) => (entry.role === 'body' && entry.status === 'detected' ? entry.number : null);
+  // 中身まで同じ頁（exact）は、部が違っても同じ頁（同じ束を 2 度入れて、部の始まりと見られたとき）。
+  const readNumber = ({ entry }, exact) => {
+    if (entry.role !== 'body' || entry.status !== 'detected') return null;
+    return exact ? `${entry.number}` : `${entry.part ?? 0}:${entry.number}`;
+  };
   const issues = new Map();
   const groups = new Map(); // 頁 → 同じ頁らしい頁の集まり（並びの順）
   let exactPairs = 0;
@@ -239,8 +244,8 @@ export function duplicateIssues(order, pairs, describe) {
     const a = entries.get(pair.a);
     const b = entries.get(pair.b);
     if (!a || !b) continue; // 結合しない頁
-    const na = readNumber(a);
-    const nb = readNumber(b);
+    const na = readNumber(a, pair.exact);
+    const nb = readNumber(b, pair.exact);
     if (na !== null && nb !== null && na !== nb) continue;
     if (pair.exact) exactPairs++;
     for (const [self, other] of [

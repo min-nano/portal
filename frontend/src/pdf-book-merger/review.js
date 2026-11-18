@@ -3,7 +3,7 @@
 // 頁番号の並び（ordering.js）、スキャンの検査（image-checks.js）、文字情報の
 // 有無を、頁ごとの「確認が要ること」にまとめる。DOM には触らない。
 
-import { branchLayout } from './ordering.js';
+import { branchLayout, partName } from './ordering.js';
 import { formatNumber } from './page-numbers.js';
 import { TEXT_QUALITY_MESSAGE } from './text-quality.js';
 
@@ -15,20 +15,30 @@ export const STATUS_LABEL = {
   conflict: '要確認',
   uncertain: '要確認',
   unknown: '不明',
+  unplaced: '不明',
   cover: '',
+  listed: '',
 };
 
 /** 頁の見出し（一覧・拡大表示）。 */
 export function displayLabel(entry) {
+  // 一覧の位置で置いた、表紙と分からない頁（本文の無い結合・付録など）。
+  if (entry.status === 'listed') return '番号なし';
   if (entry.role === 'front') return '表紙';
   if (entry.role === 'back') return '裏表紙';
-  return entry.number === null ? '番号不明' : `${formatNumber(entry.number, entry.branch)} 頁`;
+  if (entry.number === null) return '番号不明';
+  return `${partPrefix(entry.part)}${formatNumber(entry.number, entry.branch)} 頁`;
+}
+
+/** 部が分かれているときの頁の見出しの頭（「第 2 部 」）。 */
+export function partPrefix(part) {
+  return part === null || part === undefined ? '' : `${partName(part)} `;
 }
 
 /**
  * 頁ごとの「確認が要ること」をまとめる。
  *
- * @param {ReturnType<import('./ordering.js').buildBookOrder>} order
+ * @param {ReturnType<import('./ordering.js').arrangeBook>['order']} order
  * @param {ReturnType<import('./ordering.js').checkSequence>} problems
  * @param {Map<string, {kind:string, level:string, message:string}[]>} scanIssues
  * @param {Set<string>} textless 文字情報の無い頁の key（本の他の頁にはある場合）
@@ -56,6 +66,12 @@ export function pageIssues(order, problems, scanIssues, textless = new Set()) {
       });
     } else if (entry.status === 'unknown') {
       add(entry.pageKey, { kind: 'unknown', level: 'error', message: '頁番号を決められません' });
+    } else if (entry.status === 'unplaced') {
+      add(entry.pageKey, {
+        kind: 'unplaced',
+        level: 'error',
+        message: '番号が無く、本文のファイルの間にあるので置き場所を決められません',
+      });
     }
   }
 
@@ -64,6 +80,8 @@ export function pageIssues(order, problems, scanIssues, textless = new Set()) {
     duplicate: { level: 'error', message: '同じ番号の頁が他にもあります' },
     'sheet-start': { level: 'warn', message: '最初の頁が偶数です（その表が無い）' },
     'sheet-end': { level: 'warn', message: '最後の頁が奇数です（その裏が無い）' },
+    listed: { level: 'warn', message: '頁番号を読めず、一覧の位置で置いています' },
+    'cover-numbers': { level: 'warn', message: '名前から表紙と見ましたが、本文の頁かもしれません' },
   };
   for (const problem of problems) {
     const short = SHORT[problem.kind];
@@ -105,7 +123,7 @@ const LEVEL_RANK = { error: 0, warn: 1, info: 2 };
  * 頁ごとの指摘（スキャンの傾き・すじなど）を種類ごとに数えたものを、重いものから
  * 並べる。項目ごとに、該当する頁の key を本の順で持つ（開くとその頁だけを並べる）。
  *
- * @param {ReturnType<import('./ordering.js').buildBookOrder>} order
+ * @param {ReturnType<import('./ordering.js').arrangeBook>['order']} order
  * @param {{level:string, kind:string, message:string, pageKeys:string[], number?:number}[]} problems
  * @param {Map<string, {kind:string}[]>} issues pageIssues の結果
  * @returns {{key:string, level:'error'|'warn'|'info', message:string, pageKeys:string[]}[]}
@@ -141,28 +159,42 @@ export function issueGroups(order, problems, issues) {
 const MAX_MISSING_CARDS = 6;
 
 /**
- * 一覧に並べるもの。頁のほかに、抜けている頁の札を、あるべき位置に挟む。
+ * 一覧に並べるもの。頁のほかに、抜けている頁の札を、あるべき位置に挟む
+ * （部が変わったところでは、番号が戻るので挟まない）。
  *
- * 枝番の頁に差し替えられたとみなす番号（ordering.js の branchLayout）には
+ * 枝番の頁に差し替えられたとみなす番号（ordering.js の branchLayout。部ごと）には
  * 札を挟まない。枝番の抜け（57-1 と 57-3 の間の 57-2）には、枝番を付けた札を挟む。
  *
- * @param {ReturnType<import('./ordering.js').buildBookOrder>} order
- * @returns {({type:'page', entry:object} | {type:'missing', from:number, to:number, branch?:number})[]}
+ * @param {ReturnType<import('./ordering.js').arrangeBook>['order']} order
+ * @returns {({type:'page', entry:object} |
+ *   {type:'missing', from:number, to:number, branch?:number, part:number|null})[]}
  */
 export function gridItems(order) {
   const isNumbered = (entry) => entry.role === 'body' && Number.isInteger(entry.number);
-  const { replaced } = branchLayout(order.filter(isNumbered));
+  const byPart = new Map();
+  for (const entry of order.filter(isNumbered)) {
+    if (!byPart.has(entry.part)) byPart.set(entry.part, []);
+    byPart.get(entry.part).push(entry);
+  }
+  const replacedIn = new Map([...byPart].map(([part, entries]) => [part, branchLayout(entries).replaced]));
   const items = [];
+  let previous = null;
   const missing = (from, to) => {
+    const { part } = previous;
     if (to - from + 1 > MAX_MISSING_CARDS) {
-      items.push({ type: 'missing', from, to });
+      items.push({ type: 'missing', from, to, part });
     } else {
-      for (let m = from; m <= to; m++) items.push({ type: 'missing', from: m, to: m });
+      for (let m = from; m <= to; m++) items.push({ type: 'missing', from: m, to: m, part });
     }
   };
-  let previous = null;
   for (const entry of order) {
-    if (isNumbered(entry) && previous !== null) {
+    if (!isNumbered(entry)) {
+      items.push({ type: 'page', entry });
+      continue;
+    }
+    // 部が変わったところでは、番号が戻るので比べない。
+    if (previous !== null && previous.part === entry.part) {
+      const replaced = replacedIn.get(entry.part);
       let from = null;
       for (let m = previous.number + 1; m <= entry.number; m++) {
         const absent = m < entry.number && !replaced.has(m);
@@ -174,19 +206,20 @@ export function gridItems(order) {
       }
       const firstBranch = previous.number === entry.number ? (previous.branch ?? 0) + 1 : 1;
       for (let b = firstBranch; b < (entry.branch ?? 0); b++) {
-        items.push({ type: 'missing', from: entry.number, to: entry.number, branch: b });
+        items.push({ type: 'missing', from: entry.number, to: entry.number, branch: b, part: entry.part });
       }
     }
-    if (isNumbered(entry)) previous = entry;
+    previous = entry;
     items.push({ type: 'page', entry });
   }
   return items;
 }
 
-/** 抜けている頁の札の見出し（58 頁・60〜70 頁・57-2 頁）。 */
+/** 抜けている頁の札の見出し（58 頁・60〜70 頁・57-2 頁。部が分かれていれば「第 2 部 58 頁」）。 */
 export function missingLabel(item) {
-  if (item.branch) return `${item.from}-${item.branch} 頁`;
-  return item.from === item.to ? `${item.from} 頁` : `${item.from}〜${item.to} 頁`;
+  const prefix = partPrefix(item.part);
+  if (item.branch) return `${prefix}${item.from}-${item.branch} 頁`;
+  return `${prefix}${item.from === item.to ? `${item.from} 頁` : `${item.from}〜${item.to} 頁`}`;
 }
 
 /**
@@ -196,7 +229,7 @@ export function missingLabel(item) {
  * （OCR を掛け忘れた束が混ざっている、など）。どこにも無ければ、本全体の
  * 指摘として 1 つだけ返す。
  *
- * @param {ReturnType<import('./ordering.js').buildBookOrder>} order
+ * @param {ReturnType<import('./ordering.js').arrangeBook>['order']} order
  * @param {(entry:object) => {signature:{length:number}}} pageOf
  * @returns {{textless:Set<string>, problem:object|null}}
  */
@@ -221,7 +254,7 @@ export function textCoverage(order, pageOf) {
 /**
  * 文字情報（OCR の結果）の確かめ（text-quality.js）を、頁ごとの指摘にする。
  *
- * @param {ReturnType<import('./ordering.js').buildBookOrder>} order
+ * @param {ReturnType<import('./ordering.js').arrangeBook>['order']} order
  * @param {(entry:object) => {textCheck?:{kind:string, sample:string}|null}} pageOf
  * @returns {Map<string, {kind:'text', level:'warn', message:string}[]>}
  */

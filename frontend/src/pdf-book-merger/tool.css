@@ -235,7 +235,58 @@ portal-section.bm-file.error {
   margin: 0 0 var(--s-2);
 }
 
-.bm-file > button[slot='actions'],
+/* ファイルの行のメニュー（一覧の中で動かす・削除）。つまみ（…）を押すと、
+   その下に操作のボタンを縦に並べて出す。 */
+.bm-file-menu {
+  position: relative;
+}
+
+.bm-file-menu > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 32px;
+  padding: 0 var(--s-2);
+  font-weight: 700;
+  color: var(--text-brand);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  list-style: none;
+}
+
+.bm-file-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.bm-file-menu > summary:hover {
+  background: var(--surface-hover);
+  border-color: var(--brand-300);
+}
+
+.bm-file-menu > summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.bm-menu {
+  position: absolute;
+  top: calc(100% + var(--s-1));
+  right: 0;
+  z-index: var(--z-dock);
+  display: grid;
+  gap: var(--s-1);
+  min-width: 8em;
+  padding: var(--s-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2);
+}
+
+.bm-menu button,
 .bm-problem-more,
 .bm-page-jump {
   min-height: 32px;
