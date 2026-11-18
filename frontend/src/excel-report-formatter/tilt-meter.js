@@ -1,8 +1,10 @@
 // 端末の傾きセンサーで、水平器の計測値（1000 分率）を測る画面。
 //
-// 計測点の行の「測る」ボタンから開く。反転法で 2 回測る（1 回目のあと、同じ
-// 場所で 180° 回して 2 回目）。2 回の差の半分が傾き、和の半分がセンサーの
-// ずれなので、端末ごとのゼロ点のずれが結果に残らない。計算は tilt-logic.js。
+// 計測点の行の「測る」ボタンから開く。反転法で 2 回測る（床は画面を上にして
+// 寝かせ、1 回目のあと同じ場所で 180° 回す。壁・柱は側面を当て、次に反対側の
+// 側面を当てる）。2 回の差の半分が傾き、和の半分がずれなので、センサーの
+// ゼロ点のずれや（床では）カメラの出っ張りの分が結果に残らない。計算は
+// tilt-logic.js。
 //
 // 測るたびに、ブラウザが届ける値の刻み・届く頻度・ばらつきを確かめ、足りな
 // ければ値を入れさせない。Safari が W3C の仕様案どおりに値を丸めるように
@@ -55,37 +57,50 @@ export async function requestTiltPermission(win) {
 }
 
 /**
- * 少し待ってから、ms のあいだ beta / gamma を集める。
+ * deviceorientation を聞き始める。止める（stop）まで聞き続け、その間に
+ * 何度でも値を集められる（collect）。
+ *
+ * 1 回ごとに聞き始めず、測る画面を開いている間は聞き続けるのは、alpha の
+ * 基準（端末ごとの任意の向き）が、聞き始めるたびに変わりうるため。1 回目と
+ * 2 回目で基準が同じでないと、2 回目を逆向きに置いたかを確かめられない。
  *
  * @param {Window} win
- * @param {number} ms
- * @return {Promise<{beta: number, gamma: number, t: number}[]>}
+ * @return {{collect: (wait: number, ms: number) =>
+ *   Promise<{alpha: number|null, beta: number, gamma: number, t: number}[]>, stop: () => void}}
  */
-export function collectSamples(win, ms) {
-  return new Promise((resolve) => {
-    const samples = [];
-    const onEvent = (event) => {
-      if (event.beta === null || event.gamma === null) return;
-      samples.push({ beta: event.beta, gamma: event.gamma, t: event.timeStamp });
-    };
-    setTimeout(() => {
-      win.addEventListener('deviceorientation', onEvent);
-      setTimeout(() => {
-        win.removeEventListener('deviceorientation', onEvent);
-        resolve(samples);
-      }, ms);
-    }, SETTLE_MS);
-  });
+export function listenOrientation(win) {
+  const collecting = new Set();
+  const onEvent = (event) => {
+    if (collecting.size === 0 || event.beta === null || event.gamma === null) return;
+    const sample = { alpha: event.alpha, beta: event.beta, gamma: event.gamma, t: event.timeStamp };
+    collecting.forEach((samples) => samples.push(sample));
+  };
+  win.addEventListener('deviceorientation', onEvent);
+  return {
+    // wait ms 待ってから、ms のあいだ集める。
+    collect: (wait, ms) =>
+      new Promise((resolve) => {
+        setTimeout(() => {
+          const samples = [];
+          collecting.add(samples);
+          setTimeout(() => {
+            collecting.delete(samples);
+            resolve(samples);
+          }, ms);
+        }, wait);
+      }),
+    stop: () => win.removeEventListener('deviceorientation', onEvent),
+  };
 }
 
 const HOWTO = {
   horizontal: [
-    '長い辺を測る方向に合わせて、スマートフォンを床に置きます。ケースは外し、カメラの出っ張りで傾かないよう、側面で立てるか平らな板の上に置いてください。',
-    '同じ場所で、向きを 180° 回して（上端と下端を入れ替えて）置き直します。',
+    '画面を上にして、長い辺を測る方向に合わせて床に置き、押したら手を離します（ケースは外してください。カメラの出っ張りで少し傾いても、2 回測ると打ち消されます）。',
+    '同じ場所で、画面を上にしたまま向きを 180° 回して（上端と下端を入れ替えて）置き直します。',
   ],
   vertical: [
-    'スマートフォンを縦に立て、側面（長い辺）を壁・柱にぴったり当てます。',
-    '同じ場所で、反対側の側面を当てて置き直します（画面が逆を向きます）。',
+    'スマートフォンを縦に持ち、平らな側面（長い辺）を壁・柱にぴったり当て、押したら動かさずに待ちます（ケースは外してください）。',
+    '同じ場所で、反対側の側面を当てて測ります（画面が逆を向きます）。',
   ],
 };
 
@@ -148,18 +163,20 @@ export function openTiltMeter({ doc, tilt, title }) {
   dialog.append(heading, howto, readings, status, error, actions);
   doc.body.append(dialog);
 
-  // 1 回目・2 回目の slope と、確定した結果。
-  let firstSlope = null;
+  // 1 回目の計測のまとめと、確定した結果。
+  let first = null;
   let result = null;
+  // センサーの値（許可を得てから聞き始め、閉じるまで聞き続ける）。
+  let sensor = null;
   // 測り直し・閉じるたびに増える番号。測っている途中で「最初から」や
   // 「やめる」を押したら、その計測の結果は捨てる。
   let generation = 0;
 
   const show = () => {
-    const step = firstSlope === null ? 0 : 1;
+    const step = first === null ? 0 : 1;
     howto.textContent = result ? describeResult(result, tilt) : HOWTO[tilt][step];
     go.textContent = result ? `${formatPerMille(result.value)} を入れる` : `${step + 1} 回目を測る`;
-    redo.hidden = firstSlope === null && !result;
+    redo.hidden = first === null && !result;
   };
 
   const addReading = (label, summary) => {
@@ -170,11 +187,13 @@ export function openTiltMeter({ doc, tilt, title }) {
 
   const reset = () => {
     generation += 1;
-    firstSlope = null;
+    first = null;
     result = null;
     readings.replaceChildren();
     status.textContent = '';
     error.textContent = '';
+    // 測っている途中なら、その計測は捨てるので、すぐ測り直せるようにする。
+    go.disabled = false;
     show();
   };
 
@@ -190,8 +209,9 @@ export function openTiltMeter({ doc, tilt, title }) {
         error.textContent = 'センサーの利用が許可されませんでした。ブラウザの設定で「モーションと画面の向き」へのアクセスを許可してください。';
         return;
       }
-      status.textContent = '測っています。スマートフォンから手を離してお待ちください…';
-      const samples = await collectSamples(win, MEASURE_MS);
+      status.textContent = '測っています。スマートフォンを動かさずにお待ちください…';
+      sensor ??= listenOrientation(win);
+      const samples = await sensor.collect(SETTLE_MS, MEASURE_MS);
       if (stale()) return;
       const { summary, problems } = checkSamples(samples, tilt);
       status.textContent = '';
@@ -199,12 +219,12 @@ export function openTiltMeter({ doc, tilt, title }) {
         error.textContent = problems.map((problem) => problem.message).join('\n');
         return;
       }
-      if (firstSlope === null) {
-        firstSlope = summary.slope;
+      if (first === null) {
+        first = summary;
         addReading('1 回目', summary);
       } else {
         addReading('2 回目', summary);
-        const combined = combineReversal(firstSlope, summary.slope);
+        const combined = combineReversal(first, summary, tilt);
         if (combined.problems.length > 0) {
           const message = combined.problems.map((problem) => problem.message).join('\n');
           reset();
@@ -212,7 +232,10 @@ export function openTiltMeter({ doc, tilt, title }) {
           return;
         }
         result = combined;
-        status.textContent = `センサーのずれ ${formatPerMille(combined.bias)}/1000 を差し引いた値です。`;
+        status.textContent =
+          `ずれ ${formatPerMille(combined.bias)}/1000` +
+          (tilt === 'horizontal' ? '（センサーとカメラの出っ張りの分）' : '（センサーの分）') +
+          'を差し引いた値です。';
       }
       show();
     } catch (failure) {
@@ -220,9 +243,22 @@ export function openTiltMeter({ doc, tilt, title }) {
       status.textContent = '';
       error.textContent = `センサーを使えませんでした: ${failure.message}`;
     } finally {
-      go.disabled = false;
+      // 捨てた計測は、測り直しを始めたボタンの状態に触らない。
+      if (!stale()) go.disabled = false;
     }
   };
+
+  // 測っている途中や 1 回目と 2 回目の間に画面が消える（ロックされる・ほかの
+  // アプリへ移る）と、ブラウザが alpha の基準を取り直すことがあり、2 回目を
+  // 逆向きに置いたかを正しく確かめられないので、最初から測り直す。測る前と、
+  // 結果が出たあとは関係ないのでそのまま。
+  const onVisibility = () => {
+    const measuring = go.disabled;
+    if (!doc.hidden || result || (first === null && !measuring)) return;
+    reset();
+    error.textContent = '画面が消えたので、最初から測り直してください。';
+  };
+  doc.addEventListener('visibilitychange', onVisibility);
 
   return new Promise((resolve) => {
     let answer = null;
@@ -231,17 +267,15 @@ export function openTiltMeter({ doc, tilt, title }) {
         measure();
         return;
       }
-      // 低い側の端は床のときだけ意味がある（壁・柱で測るのは側面の法線）。
-      answer = {
-        value: formatPerMille(result.value),
-        lowEnd: tilt === 'horizontal' ? result.lowEnd : null,
-      };
+      answer = { value: formatPerMille(result.value), lowEnd: result.lowEnd };
       dialog.close();
     });
     redo.addEventListener('click', reset);
     cancel.addEventListener('click', () => dialog.close());
     dialog.addEventListener('close', () => {
       generation += 1;
+      sensor?.stop();
+      doc.removeEventListener('visibilitychange', onVisibility);
       dialog.remove();
       resolve(answer);
     });
