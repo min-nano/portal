@@ -129,6 +129,8 @@ const openGroups = new Map();
 let fileSort = 'added';
 // ファイルは 1 つずつ調べる（pdf.js も OCR も、同時に動かすと遅くなるだけなので）。
 let queue = Promise.resolve();
+/** 順番を待っている仕事（足した順）。file はファイルを調べる仕事のファイル（あとからの OCR は null）。 */
+const waitingJobs = [];
 // Drive からの読み込みは、調べるのを待たずに先へ進める（調べている間に、次の
 // ファイルを読んでおく）。小さなファイルは何個かを並べて読む（1 つずつだと、
 // ファイルごとの問い合わせの待ちが積み重なり、調べ終えるたびに次の読み込みを
@@ -205,8 +207,10 @@ const crashLog = createCrashLog();
  *
  * loaded は、いまの仕事で中身が届いた割合（0〜1。ストライプに描く）。たいていの
  * 仕事は中身が手元にあるので 1 とし、Drive から読み込む間だけ下げる（showLoading）。
+ * ahead は、順番を待っている仕事の中身が届いた分（仕事の数で数える）を返す。
+ * 読み込みは調べるのを待たずに先へ進むので、ストライプはその分も先へ伸ばす。
  */
-function createProgress({ jobs = false } = {}) {
+function createProgress({ jobs = false, ahead = () => 0 } = {}) {
   const progress = {
     label: () => '',
     from: 0,
@@ -256,7 +260,7 @@ function createProgress({ jobs = false } = {}) {
     },
     /** 中身が届いたところ（流れ全体の位置）。 */
     loadedEnd() {
-      return progress.place((progress.jobs?.done ?? 0) + progress.loaded);
+      return progress.place((progress.jobs?.done ?? 0) + progress.loaded + ahead());
     },
     addJob() {
       const { jobs } = progress;
@@ -281,7 +285,8 @@ function createProgress({ jobs = false } = {}) {
         return;
       }
       progress.stage(0, 0);
-      Object.assign(progress, { fraction: 0, heading: '', loaded: 1 });
+      // 次の仕事はまだ順番待ちに数えている（ahead）ので、ここでは数えない。
+      Object.assign(progress, { fraction: 0, heading: '', loaded: 0 });
       renderProgress();
     },
   };
@@ -289,7 +294,7 @@ function createProgress({ jobs = false } = {}) {
 }
 
 /** ファイルを調べる流れ（あとからの OCR も）。 */
-const readProgress = createProgress({ jobs: true });
+const readProgress = createProgress({ jobs: true, ahead: () => waitingJobs.reduce((sum, job) => sum + loadedPart(job.file), 0) });
 /** 結合と検証。 */
 const mergeProgress = createProgress();
 
@@ -330,10 +335,16 @@ function showProgress(text, fraction, heading = '') {
  * 仕事を順番待ちに足す（ファイルを調べる・あとからの OCR）。済んだら数える。
  * 順番待ちが空になったら、OCR を手放す（結合の前に、メモリを空けておく）。
  */
-function enqueue(task) {
+function enqueue(task, file = null) {
   readProgress.addJob();
+  const job = { file };
+  waitingJobs.push(job);
   queue = queue
-    .then(task)
+    .then(() => {
+      waitingJobs.splice(waitingJobs.indexOf(job), 1);
+      readProgress.loaded = 1; // 中身が届いていなければ、readFile が下げる
+      return task();
+    })
     .catch(() => {})
     .then(() => {
       readProgress.finishJob();
@@ -486,7 +497,7 @@ function addFiles(sources) {
       } finally {
         file.pending = false;
       }
-    });
+    }, file);
   }
   renderLog();
   keepLog();
@@ -531,9 +542,14 @@ async function loadBytes(file, source, reserve) {
         file.waitUntil = 0; // 届き始めた（待ち終えた）
         clearTimeout(file.waitTimer);
         file.transfer = { received, total };
-        // 調べる順番が来て、読み込みを待っているときだけ、進み具合に出す（外した
-        // ファイルの読み込みは止まらないので、出さない）。
-        if (file.waiting && files.includes(file)) showLoading(file);
+        // はじめから読み直したとき（続きから読めなかった）も、ストライプは戻さない。
+        file.loadedShown = Math.max(file.loadedShown ?? 0, total ? received / total : 0);
+        // 外したファイルの読み込みは止まらないので、出さない。
+        if (!files.includes(file)) return;
+        // 調べる順番が来て読み込みを待っているときは見出しにも出し、順番を待って
+        // いるときはストライプだけを伸ばす（調べるのを待たずに）。
+        if (file.waiting) showLoading(file);
+        else renderSoon();
       },
       // 読み直す前に待つときは、記録に残し、待っていることを画面に出す（先読みの
       // 途中なら、調べる順番が来たときに出す。readFile）。
@@ -550,10 +566,12 @@ async function loadBytes(file, source, reserve) {
       }
     );
   } catch (error) {
+    file.loadedShown = 1; // もう読まない（ストライプを止めたままにしない）
     if (!files.includes(file)) return; // 外したファイルは、読めなくても知らせない
     log(`「${file.name}」を読み込めませんでした（${error?.message || error}）`);
     throw error;
   }
+  file.loadedShown = 1;
   log(`「${file.name}」を読み込みました（${megabytes(bytes.length)}、${seconds(started)}）`);
   if (!files.includes(file)) return; // 読んでいる間に外された。
   file.bytes = bytes;
@@ -608,6 +626,27 @@ async function bytesOf(file) {
 }
 
 /**
+ * ファイルの中身が届いた割合（0〜1）。この端末のファイルは、はじめから届いている
+ * ものとする。外したファイルは、もう待たないので 1。
+ */
+function loadedPart(file) {
+  if (!file || !file.driveId || !files.includes(file)) return 1;
+  return file.loadedShown ?? 0;
+}
+
+/** 進み具合を少し後に描き直す（何個かを並べて読む間、届くたびに描き直さないように）。 */
+const RENDER_EVERY_MS = 100;
+let renderTimer = 0;
+function renderSoon() {
+  if (renderTimer) return;
+  renderTimer = setTimeout(() => {
+    renderTimer = 0;
+    // 調べる流れを出している間だけ（隠したバーや、結合の進み具合を描き直さない）。
+    if (readProgress.text && !mergeProgress.text) renderProgress();
+  }, RENDER_EVERY_MS);
+}
+
+/**
  * 読み込みを待っている間の進み具合を出す。Drive のファイルは、届いた割合を
  * ストライプに描く（大きさが分からなければ描かない）。この端末のファイルは、
  * はじめから届いているものとする。
@@ -615,9 +654,7 @@ async function bytesOf(file) {
 function showLoading(file) {
   const { received = 0, total = 0 } = file.transfer ?? {};
   const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
-  // はじめから読み直したとき（続きから読めなかった）も、ストライプは戻さない。
-  file.loadedShown = Math.max(file.loadedShown ?? 0, total ? received / total : 0);
-  readProgress.loaded = file.driveId ? file.loadedShown : 1;
+  readProgress.loaded = loadedPart(file);
   showProgress(`「${file.name}」を読み込んでいます${file.transfer ? `（${amount}）` : ''}`, null);
 }
 

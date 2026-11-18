@@ -865,14 +865,15 @@ describe('ファイルを足して並べる', () => {
     // 替わり目では、1 つめを済ませた位置（半分）で止め、2 つめの見出しに替える。
     // 2 つめの中身も手元にあるので、ストライプは 2 つめの仕事の終わりまで。
     expect(seen).toContainEqual({ value: 0.5, end: 1, start: 0.5, label: 'ファイルを調べています（2 / 2）' });
-    // 1 つめの間は、ストライプは 1 つめの仕事の終わりまで。ストライプの最小幅は、
+    // 1 つめの間も、ストライプは 2 つめの仕事の終わりまで（この端末のファイルは、
+    // 順番を待っている分もはじめから届いている）。ストライプの最小幅は、
     // ベタ塗りの右端ではなく仕事の始まりから測る（ベタ塗りが仕事の終わりに近づいても、
     // ストライプが次の仕事の区間へはみ出して、仕事を終えたときに右端が戻らないように）。
     const first = seen.filter((s) => s.label === 'ファイルを調べています（1 / 2）');
     expect(first.length).toBeGreaterThan(2);
     expect(first.some((s) => s.value > 0.4)).toBe(true);
     for (const s of first) {
-      expect(s.end).toBe(0.5);
+      expect(s.end).toBe(1);
       expect(s.start).toBeCloseTo(0);
     }
     expectNeverBack(seen);
@@ -989,7 +990,37 @@ describe('ファイルを足して並べる', () => {
       seen.stop();
     });
 
-    it('先読みで届いた分は、調べる順番が来たときからストライプに描く', async () => {
+    it('調べている間も、順番を待っているファイルの読み込みをストライプに描く', async () => {
+      const release = holdImage('o3');
+      let more;
+      mocks.pickFiles.mockResolvedValue([
+        { id: 'd-odd', name: '猫_1.pdf' },
+        { id: 'd-even', name: '猫_2.pdf' },
+      ]);
+      mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress }) => {
+        if (picked.id === 'd-odd') {
+          onProgress(100, 100);
+          return pdf(ODD);
+        }
+        // 1 つめの頁の画像を調べている間に、2 つめが半分届く。
+        await vi.waitFor(() => expect(mocks.renderPageImage).toHaveBeenCalled());
+        onProgress(50, 100);
+        await new Promise((done) => (more = done));
+        onProgress(100, 100);
+        return pdf(EVEN);
+      });
+      $('driveBtn').click();
+      await vi.waitFor(() => expect(more).toBeTypeOf('function'));
+      // 1 つめは届き終え、2 つめは半分（仕事 2 つのうち 1.5 つぶん）。
+      await vi.waitFor(() => expect(bar().dataset.loaded).toBe('0.75'));
+      expect($('progressText').textContent).toBe('ファイルを調べています（1 / 2）');
+      more();
+      await vi.waitFor(() => expect(bar().dataset.loaded).toBe('1'));
+      release();
+      await settled(2);
+    });
+
+    it('先読みで届いた分も、ストライプに描く', async () => {
       let release;
       mocks.pickFiles.mockResolvedValue([{ id: 'd-odd', name: '猫_奇数.pdf' }]);
       mocks.downloadDriveFile.mockImplementation(async (picked, { onProgress }) => {
