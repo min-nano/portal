@@ -38,15 +38,16 @@ import { boxesReadSoFar, prepareOcr, readStrip, releaseOcr } from './ocr.js';
 import { blobStash, openStash } from './stash.js';
 import { CRASH_LOG_LINES, createCrashLog } from './crash-log.js';
 import {
-  buildBookOrder,
+  arrangeBook,
   checkSequence,
   guessRole,
+  isCoverName,
+  nameRank,
   numberFiles,
   pageLabelRanges,
   pageLabelTexts,
+  ROLE_NAMES,
   ROLES,
-  roleFromName,
-  sideOf,
 } from './ordering.js';
 import {
   mergeCandidates,
@@ -54,6 +55,8 @@ import {
   pageNumberCandidates,
   pageNumberText,
   parsePageNumber,
+  readMargin,
+  sideOf,
   unsettledPages,
 } from './page-numbers.js';
 import { findScanImages } from './scan-images.js';
@@ -112,7 +115,7 @@ const overrides = new Map();
 /** 同じ頁らしい組を探す（前に見比べた頁どうしは見比べ直さない）。 */
 const findDuplicates = createDuplicateFinder();
 /** 最後に組み立てた並びと指摘。 */
-let view = { order: [], problems: [], issues: new Map(), numberings: new Map() };
+let view = { order: [], problems: [], issues: new Map(), numberings: new Map(), places: new Map(), anyNumbered: false };
 /** 結合した PDF と検証の結果。並びが変わったら捨てる。 */
 let merged = null;
 /** 結合と検証の途中か（その間は、拡大表示のために PDF を開かない）。 */
@@ -125,7 +128,10 @@ let generation = 0;
 let orderKey = '';
 /** 指摘の項目のうち、開いているものと、そこに並べる頁の数（描き直しても開いたままにする）。 */
 const openGroups = new Map();
-/** ファイルの一覧の並び順（added: 追加した順 / name: 名前の順 / time: 更新日時の古い順。-desc を付けると降順（新しい順））。 */
+/**
+ * ファイルの一覧の並び順（added: 追加した順 / name: 名前の順 / time: 更新日時の古い順。-desc を付けると
+ * 降順（新しい順）。manual: 手で並べ替えた順。足したファイルの入る場所は sortFiles）。
+ */
 let fileSort = 'added';
 // ファイルは 1 つずつ調べる（pdf.js も OCR も、同時に動かすと遅くなるだけなので）。
 let queue = Promise.resolve();
@@ -474,8 +480,9 @@ function addFiles(sources) {
       error: '',
       role: 'body',
       manual: null,
-      coverStart: null, // 先頭・末尾に置くファイルの並べ順（先頭の頁の番号）
-      coverStep: 1, // 先頭・末尾に置くファイルの進み方（-1 なら最後の頁から）
+      coverStep: 1, // 番号の無いファイル・表紙と裏表紙の進み方（-1 なら最後の頁から）
+      // 名前で表紙・裏表紙と分かるか（番号を手で入れるか、本文を選び直すまで、番号で並べない）。
+      coverByName: isCoverName(source.name),
       open: false, // 一覧で設定の欄を開いているか（描き直しても保つ）
       bytes: null,
       doc: null,
@@ -706,7 +713,8 @@ async function readFile(file) {
         ...rest,
         textCheck: textQuality(text),
         textPrint: textPrint(text),
-        candidates: pageNumberCandidates(items, 'text'),
+        // 頁番号の候補と、柱の文字（部の振り直しで、どの束の続きかを見分ける）。
+        ...readMargin(items, 'text'),
         measure: null,
         thumbUrl: '',
         ocr: false,
@@ -738,7 +746,7 @@ async function readFile(file) {
     // ソフトマスクの多い頁（InDesign の影・ぼかしのある表紙など）は粗く描き、
     // OCR しない（OCR に足りる細かさで描くと、1 頁で何十秒もかかる。
     // pdf-source.js の manySoftMasks）。番号は前後の頁から補う。
-    const unnumbered = roleFromName(file.name) ? [] : unsettledOf(file);
+    const unnumbered = isCoverName(file.name) ? [] : unsettledOf(file);
     const ocrPages = new Set(unnumbered.filter((page) => !manySoftMasks(page.softMasks)).map((page) => page.index));
     if (ocrPages.size) startOcr();
     const coarse = file.pages.filter((page) => manySoftMasks(page.softMasks)).length;
@@ -773,7 +781,7 @@ async function readFile(file) {
     file.role = guessRole(file.name, file.pages);
     file.status = 'ready';
     if (file.stashed) file.bytes = null;
-    log(`「${file.name}」を調べ終えました（${ROLES[file.role]}、合計 ${seconds(started)}）`);
+    log(`「${file.name}」を調べ終えました（${ROLE_NAMES[file.role]}、合計 ${seconds(started)}）`);
   } catch (error) {
     // 外したファイルは、読めなくても知らせない（置いたものを先に消したため）。
     if (!files.includes(file)) return;
@@ -1033,11 +1041,11 @@ function unsettledOf(file) {
   return file.pages.filter((page) => indexes.has(page.index));
 }
 
-/** 読み終えたファイルの、番号の決まっていない頁の OCR を頼む（あとから本文に変えたとき）。 */
+/** 読み終えたファイルの、番号の決まっていない頁の OCR を頼む（名前で表紙と見たファイルを、番号で並べ直すとき）。 */
 function queueLateOcr(file) {
   // 読んでいる最中のファイルは、もう一度は頼まない（切り替えを繰り返しても
   // 同じ頁を 2 度読まない）。
-  if (file.role !== 'body' || file.ocrBusy) return;
+  if (file.ocrBusy) return;
   const pages = unsettledOf(file).filter((page) => !page.ocr && !manySoftMasks(page.softMasks));
   if (pages.length === 0) return;
   file.ocrBusy = true;
@@ -1158,12 +1166,29 @@ function forgetStashed(file) {
 const byName = (a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true });
 
 /**
- * ファイルの一覧を、選んだ並び順に並べ直す。先頭・末尾に置くファイルのうち
- * 番号を入れていないものは、この順に並ぶ（本文は頁番号で並ぶので変わらない）。
- * 決まらないところは追加した順（降順なら、それも逆）。更新日時の分からない
- * ファイルは、降順でも後ろへ。
+ * ファイルの一覧を、選んだ並び順に並べ直す。頁番号の無いファイルは、一覧の
+ * 位置で先頭・末尾に置くので、この順が結合の順になる（本文は頁番号で並ぶので
+ * 変わらない）。どの並び順でも、名前で表紙と分かるものは上、裏表紙と分かる
+ * ものは下に寄せる。決まらないところは追加した順（降順なら、それも逆）。
+ * 更新日時の分からないファイルは、降順でも後ろへ。手で並べ替えたあとは
+ * 並べ直さない（足したファイルは、名前で表紙と分かるものは先頭、裏表紙と分かる
+ * ものはいちばん下、ほかは末尾の裏表紙の前に入る）。
  */
 function sortFiles() {
+  if (fileSort === 'manual') {
+    // 手で並べた順は崩さない。足したファイルは、名前で表紙と分かるものは先頭へ（末尾だと
+    // 裏表紙として置かれてしまう）、裏表紙と分かるものは末尾へ、ほかは末尾の裏表紙（名前で
+    // 分かるもの）の前へ。
+    const kept = files.filter((file) => file.positioned);
+    let tail = kept.length;
+    while (tail > 0 && nameRank(kept[tail - 1].name) === 2) tail--;
+    const [covers, middle, backs] = [[], [], []];
+    for (const file of files) if (!file.positioned) [covers, middle, backs][nameRank(file.name)].push(file);
+    files.splice(0, files.length, ...covers, ...kept.slice(0, tail), ...middle, ...kept.slice(tail), ...backs);
+    for (const file of files) file.positioned = true;
+    return;
+  }
+  for (const file of files) file.positioned = true;
   const key = fileSort.replace(/-desc$/, '');
   const sign = fileSort.endsWith('-desc') ? -1 : 1;
   const byAdded = (a, b) => a.added - b.added;
@@ -1173,34 +1198,72 @@ function sortFiles() {
     time: (a, b) => (a.modified ?? 0) - (b.modified ?? 0) || byName(a, b) || byAdded(a, b),
   }[key];
   const unknown = (file) => key === 'time' && file.modified === null;
-  files.sort((a, b) => unknown(a) - unknown(b) || sign * compare(a, b));
+  // 名前の手掛かりは、比べるたびに正規表現を当てずに、先に 1 度だけ調べておく。
+  const rank = new Map(files.map((file) => [file, nameRank(file.name)]));
+  files.sort((a, b) => rank.get(a) - rank.get(b) || unknown(a) - unknown(b) || sign * compare(a, b));
+}
+
+/**
+ * ファイルを一覧の中で動かす（first: 最前へ / up: 前へ / down: 後ろへ / last: 最後へ）。
+ * 並び順は「手動」になる。
+ */
+function moveFile(file, where) {
+  const from = files.indexOf(file);
+  const to = Math.min(Math.max({ first: 0, up: from - 1, down: from + 1, last: files.length - 1 }[where], 0), files.length - 1);
+  files.splice(from, 1);
+  files.splice(to, 0, file);
+  fileSort = 'manual';
+  showManualSort(true);
+  $('fileSort').value = 'manual';
+  log(`「${file.name}」を一覧の ${to + 1} 番目へ動かしました`);
+  refresh();
+  // 動かした行のメニューに戻る（行を動かすと、押したボタンからフォーカスが外れる）。
+  fileRow(file)?.querySelector('.bm-file-menu summary')?.focus();
+}
+
+/**
+ * 並び順の選択肢に「手動で並べた順」を出す・外す（手で動かしたあとだけ選べる）。
+ * <option hidden> は iPhone・iPad の Safari では隠れないので、足したり外したりする。
+ */
+function showManualSort(show) {
+  const option = $('fileSortManual');
+  if (show && !option) {
+    const manual = el(document, 'option', null, '手動で並べた順');
+    manual.value = 'manual';
+    manual.id = 'fileSortManual';
+    $('fileSort').append(manual);
+  } else if (!show && option) {
+    option.remove();
+  }
 }
 
 function setFileSort(value) {
   fileSort = value;
+  showManualSort(false);
   sortFiles();
   log(`ファイルを「${$('fileSort').selectedOptions[0].textContent}」に並べました`);
   refresh();
 }
 
 /**
- * 読み終えたファイルの配置をまとめて変える（例: 全部「先頭に置く」にして、一覧の
- * 並び順のとおりに単純につなぐ）。auto は読み込んだときの推測に戻し、手で入れた
- * 番号・進み方も消す。配置を選んだときは、ファイルごとの番号・進み方は残す。
+ * 読み終えたファイルの配置をまとめて変える。auto は読み込んだときの推測に戻し、
+ * 手で入れた番号・進み方も消す。配置を選んだときは、ファイルごとの番号・進み方は残す。
  */
 function setAllRoles(value) {
   const ready = readyFiles();
   for (const file of ready) {
     if (value === 'auto') {
       file.role = guessRole(file.name, file.pages);
+      file.coverByName = isCoverName(file.name);
       file.manual = null;
-      file.coverStart = null;
       file.coverStep = 1;
     } else {
       file.role = value;
+      // 本文を選び直したら、名前で表紙と見たファイルも番号で並べ、読まなかった余白も読む。
+      if (value === 'body') file.coverByName = false;
     }
-    queueLateOcr(file);
   }
+  if (value === 'body') ready.forEach(queueLateOcr);
   const text = value === 'auto' ? '自動' : ROLES[value];
   log(`${ready.length} ファイルの配置を「${text}」にしました`);
   $('bulkRole').value = '';
@@ -1230,11 +1293,11 @@ function describePage(entry) {
 function refresh() {
   const ready = readyFiles();
   const numberings = numberFiles(ready, overrides);
-  const order = buildBookOrder(ready, numberings, overrides);
+  const { order, mismatch, places } = arrangeBook(ready, numberings, overrides);
   const sheets = ready.some(
-    (file) => file.role === 'body' && Math.abs(numberings.get(file.key)?.step ?? 0) === 2
+    (file) => places.get(file.key) === 'numbered' && Math.abs(numberings.get(file.key).step ?? 0) === 2
   );
-  const problems = checkSequence(order, { sheets });
+  const problems = checkSequence(order, { sheets, mismatch });
   const { textless, problem } = textCoverage(order, pageOf);
   if (problem) problems.push(problem);
 
@@ -1261,7 +1324,7 @@ function refresh() {
     textless
   );
 
-  view = { order, problems, issues, numberings };
+  view = { order, problems, issues, numberings, places, anyNumbered: [...places.values()].includes('numbered') };
   if (!$('outputName').value.trim() || $('outputName').dataset.suggested === 'true') {
     const suggested = suggestBookName(files.map((file) => file.name));
     $('outputName').value = suggested;
@@ -1282,7 +1345,14 @@ function refresh() {
 
 /** 結合する中身（名前と、並びの頁・配置・頁番号）を 1 つの文字列にしたもの。 */
 function mergeKey() {
-  return [outputName(), ...view.order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}|${entry.branch ?? ''}`)].join('\n');
+  // 状態と部は頁ラベル（表紙・番号なし・部が分かれていれば付けない）を決める。
+  return [
+    outputName(),
+    ...view.order.map(
+      (entry) =>
+        `${entry.pageKey}|${entry.role}|${entry.number}|${entry.branch ?? ''}|${entry.role === 'body' ? '' : entry.status}|${entry.part}`
+    ),
+  ].join('\n');
 }
 
 function discardMerged() {
@@ -1356,8 +1426,8 @@ function renderFiles() {
   showFileFields();
 }
 
-/** ファイルの一覧の 1 行（reconcile に渡す形）。 */
-function fileEntry(file) {
+/** ファイルの一覧の 1 行（reconcile に渡す形）。at は一覧の中の位置。 */
+function fileEntry(file, at) {
   const numbering = file.role === 'body' ? view.numberings.get(file.key) : null;
   const sig = JSON.stringify([
     file.name,
@@ -1365,15 +1435,19 @@ function fileEntry(file) {
     file.open,
     file.role,
     file.manual,
-    file.coverStart,
     file.coverStep,
     fileMeta(file),
     file.status === 'ready' ? fileDetails(file) : '',
     // 設定の欄（fileControls）の「先頭の頁の番号」の見本と、進み方の既定。
     numbering?.pages[0]?.number ?? null,
     numbering?.step ?? null,
+    view.places.get(file.key) ?? null,
+    file.coverByName,
+    // メニューの「前へ」「後ろへ」を押せるか。
+    at === 0,
+    at === files.length - 1,
   ]);
-  return { key: file.key, sig, build: () => fileItem(file) };
+  return { key: file.key, sig, build: () => fileItem(file, at) };
 }
 
 /**
@@ -1381,15 +1455,20 @@ function fileEntry(file) {
  * 見出しだけが変わるとき）。ほかの行の要約は計算し直さない。
  */
 function renderFile(file) {
-  const node = [...$('fileList').children].find((li) => li.dataset.key === file.key);
+  const node = fileRow(file);
   if (!node) return;
-  const { sig, build } = fileEntry(file);
+  const { sig, build } = fileEntry(file, files.indexOf(file));
   if (drawnAs.get(node) === sig) return;
   const fresh = build();
   fresh.dataset.key = file.key;
   drawnAs.set(fresh, sig);
   node.replaceWith(fresh);
   showFileFields();
+}
+
+/** 一覧の中の、ファイルの行。 */
+function fileRow(file) {
+  return [...$('fileList').children].find((li) => li.dataset.key === file.key);
 }
 
 /** 一覧のまわりの欄（並び順・一括設定・確かめる・保存）を、ファイルの数に合わせて出す。 */
@@ -1403,7 +1482,7 @@ function showFileFields() {
 // ファイルは 1 つずつ折り畳める（<portal-section>）。束が何ファイルもあると
 // 設定の欄で一覧が長くなるので、既定は閉じておき、見出しの行には名前と
 // 設定の要約の 2 行だけを残す。開け閉めは描き直しても保つ。
-function fileItem(file) {
+function fileItem(file, at) {
   const item = el(document, 'li');
   const ready = file.status === 'ready';
   const section = el(
@@ -1425,9 +1504,9 @@ function fileItem(file) {
   head.append(el(document, 'p', 'hint', fileMeta(file)));
   section.append(head);
 
-  const remove = smallButton('削除', 'このファイルを削除', () => removeFile(file), 'secondary danger');
-  remove.slot = 'actions';
-  section.append(remove);
+  const menu = fileMenu(file, at);
+  menu.slot = 'actions';
+  section.append(menu);
 
   if (ready) {
     const details = fileDetails(file);
@@ -1438,35 +1517,78 @@ function fileItem(file) {
   return item;
 }
 
-const ROLE_SHORT = {
-  body: '本文',
-  front: '先頭に置く',
-  back: '末尾に置く',
+/**
+ * ファイルの行のメニュー（一覧の中で動かす・削除）。頁番号の無いファイルは、
+ * 一覧の位置で先頭・末尾に置くので、ここで並べ替える。
+ */
+function fileMenu(file, at) {
+  const menu = el(document, 'details', 'bm-file-menu');
+  // 外を押して閉じたときに、開いていた印も消す（toggle はあとから届くので、その前に
+  // 行を描き直しても開き直さないように）。
+  menu.forget = () => {
+    file.menuOpen = false;
+  };
+  // メニューの中（ボタンの間・余白）を押しても、見出しの行の開け閉めにしない
+  // （ページの他の処理に届くよう、click は止めない）。
+  menu.dataset.interactive = '';
+  // 開いている間に行を描き直しても（ほかのファイルを読み終えた、など）、開いたまま。
+  menu.open = Boolean(file.menuOpen);
+  menu.addEventListener('toggle', () => {
+    file.menuOpen = menu.open;
+  });
+  const summary = el(document, 'summary', 'secondary', '…');
+  summary.title = 'このファイルの操作';
+  summary.setAttribute('aria-label', `「${file.name}」の操作`);
+  menu.append(summary);
+  const list = el(document, 'div', 'bm-menu');
+  const item = (text, title, onClick, disabled = false, className = 'secondary') => {
+    const button = smallButton(text, title, () => {
+      menu.open = false;
+      file.menuOpen = false;
+      onClick();
+    }, className);
+    button.disabled = disabled;
+    list.append(button);
+  };
+  item('最前へ', '一覧のいちばん上へ動かす', () => moveFile(file, 'first'), at === 0);
+  item('前へ', '一覧で 1 つ上へ動かす', () => moveFile(file, 'up'), at === 0);
+  item('後ろへ', '一覧で 1 つ下へ動かす', () => moveFile(file, 'down'), at === files.length - 1);
+  item('最後へ', '一覧のいちばん下へ動かす', () => moveFile(file, 'last'), at === files.length - 1);
+  item('削除', 'このファイルを削除', () => removeFile(file), false, 'secondary danger');
+  menu.append(list);
+  return menu;
+}
+
+/** 置き場所（ordering.js の placeFiles）ごとの、見出しの要約の頭。 */
+const PLACE_SHORT = {
+  numbered: '本文',
+  front: '番号なし→先頭',
+  back: '番号なし→末尾',
+  between: '番号なし→置き場所不明',
   split: '前半を先頭・後半を末尾',
   exclude: '結合しない',
 };
 
 /**
- * 見出しの 2 行目。読み込みの経過か、配置と設定の要約（本文なら頁番号を並べて。
- * 例: 本文(頁番号: -11, -9, -7...13, 15)）。
+ * 見出しの 2 行目。読み込みの経過か、置き場所と設定の要約（本文なら頁番号を並べて。
+ * 例: 本文(頁番号: -11, -9, -7...13, 15)）。本文が 1 つも無ければ、番号の無い
+ * ファイルは一覧の順につなぐ。
  */
 function fileMeta(file) {
   if (file.status === 'error') return file.error;
   if (file.status !== 'ready') return STATUS_TEXT[file.status];
   const details = [];
-  const numbering = file.role === 'body' ? view.numberings.get(file.key) : null;
-  if (numbering) {
-    details.push(`頁番号: ${numberingSequence(numbering)}`);
+  const place = view.places.get(file.key);
+  if (place === 'numbered') {
+    details.push(`頁番号: ${numberingSequence(view.numberings.get(file.key))}`);
     if (file.manual) details.push('手入力');
   } else {
     details.push(`${file.pages.length} 頁`);
-    if (file.role !== 'exclude' && Number.isInteger(file.coverStart)) {
-      details.push(`先頭の頁の番号 ${file.coverStart}`);
-    }
-    if (file.role !== 'exclude' && file.coverStep === -1) details.push('最後の頁から');
+    if (place !== 'exclude' && file.coverStep === -1) details.push('最後の頁から');
   }
   if (file.ocrBusy) details.push('余白を読み取り中');
-  return `${ROLE_SHORT[file.role]}(${details.join(', ')})`;
+  const head = place === 'front' && !view.anyNumbered ? '一覧の順につなぐ' : PLACE_SHORT[place];
+  return `${head}(${details.join(', ')})`;
 }
 
 /** 開いたときに出す、読み取りの内訳（番号を読めた頁の数・文字情報の無い頁）。 */
@@ -1501,16 +1623,15 @@ function fileControls(file) {
     role.append(option);
   }
   role.addEventListener('change', () => {
+    // 名前で表紙と見たファイルは、選び直しても番号を見ない（「頁番号を読んで並べる」で変える）。
     file.role = role.value;
-    // 名前で表紙と見て余白を読まなかったファイルも、本文にしたら読む。
-    queueLateOcr(file);
     refresh();
   });
   roleField.append(role);
   controls.append(roleField);
 
   if (file.role === 'exclude') return controls;
-  if (file.role !== 'body') return coverControls(file, controls);
+  if (file.role === 'split') return coverControls(file, controls);
 
   const numbering = view.numberings.get(file.key);
   const startField = el(document, 'label', 'bm-inline');
@@ -1561,39 +1682,20 @@ function fileControls(file) {
   controls.append(startField, stepField);
   const note = el(document, 'span', 'hint', '番号を読み違えているときだけ入れてください（空なら自動）。');
   controls.append(note);
+  // 番号の無いファイルは、一覧の位置で置く（その並べ方）。
+  if (view.places.get(file.key) !== 'numbered') coverControls(file, controls);
   return controls;
 }
 
 /**
- * 先頭・末尾に置くファイルの「先頭の頁の番号」と「進み方」。本文と同じ形で、
- * 表紙などが何ファイルかあるときに、先頭（末尾）の中での並べ順を決める。
- * 進み方を逆順にすると、給紙の都合で最後の頁から並んだファイルを並べ直す。
+ * 番号の無いファイル（と、表紙と裏表紙のファイル）の進み方。逆順にすると、
+ * 給紙の都合で最後の頁から並んだファイルを並べ直す。置き場所（先頭・末尾）と
+ * ほかのファイルとの順は、一覧の位置で決まる。
  */
 function coverControls(file, controls) {
-  const startField = el(document, 'label', 'bm-inline');
-  startField.append('先頭の頁の番号 ');
-  const start = el(document, 'input');
-  start.type = 'text';
-  start.inputMode = 'numeric';
-  start.size = 5;
-  start.placeholder = '順番';
-  start.value = Number.isInteger(file.coverStart) ? String(file.coverStart) : '';
-  start.addEventListener('change', () => {
-    const value = start.value.trim();
-    const number = Number(value);
-    if (value && !Number.isInteger(number)) {
-      showMessage('先頭の頁の番号は整数で入れてください。', 'red');
-      return;
-    }
-    file.coverStart = value ? number : null;
-    showMessage('');
-    refresh();
-  });
-  startField.append(start);
-
   const stepField = el(document, 'label', 'bm-inline');
-  stepField.append('進み方 ');
-  const step = el(document, 'select');
+  stepField.append('番号が無いときの進み方 ');
+  const step = el(document, 'select', 'bm-cover-step');
   [
     ['1', '1 つずつ'],
     ['-1', '1 つずつ逆順（最後の頁から）'],
@@ -1608,14 +1710,27 @@ function coverControls(file, controls) {
     refresh();
   });
   stepField.append(step);
-  controls.append(startField, stepField);
+  controls.append(stepField);
+  // 表紙と裏表紙のファイルは、一覧の位置によらず前半を先頭・後半を末尾に置く。
+  if (file.role !== 'body') return controls;
   const note = el(
     document,
     'span',
     'hint',
-    '番号は、先頭（末尾）に置くファイルが何ファイルかあるとき、その中での順番です（番号の小さい順。空なら追加した順で、番号を入れたものの後ろ）。'
+    '頁番号の無いファイルは、一覧で本文のファイルより上にあれば先頭へ、下にあれば末尾へ、一覧の順に置きます（「…」のメニューで並べ替えられます）。' +
+      (file.coverByName ? '名前から表紙・裏表紙と見たファイルは、頁番号を見ません。' : '')
   );
   controls.append(note);
+  if (file.coverByName) {
+    controls.append(
+      smallButton('頁番号を読んで並べる', '名前によらず、頁番号を読んで並べる', () => {
+        file.coverByName = false;
+        // 名前で表紙と見て読まなかった余白も読む。
+        queueLateOcr(file);
+        refresh();
+      })
+    );
+  }
   return controls;
 }
 
@@ -1735,7 +1850,7 @@ function renderGrid() {
   const seen = new Map(); // 抜けの札の key が重ならないように（番号が前後と合わないと、同じ抜けが 2 度出る）
   for (const item of gridItems(view.order)) {
     if (item.type === 'missing') {
-      const range = `${item.from}-${item.to}${item.branch ? `-${item.branch}` : ''}`;
+      const range = `${item.part}:${item.from}-${item.to}${item.branch ? `-${item.branch}` : ''}`;
       seen.set(range, (seen.get(range) ?? 0) + 1);
       cards.push({ key: `missing:${range}:${seen.get(range)}`, sig: range, build: () => missingCard(item) });
       continue;
@@ -1802,7 +1917,9 @@ function pageCard(entry, file, issues, { jump }) {
     card.append(list);
   }
 
-  if (entry.role === 'body') {
+  // 番号で並べる配置のファイルの頁には、番号の欄を出す（番号を読めずに一覧の位置で先頭・
+  // 末尾に置いた頁も。何頁か直せば、残りの頁はその番号から推定し直す）。
+  if (entry.role === 'body' || file.role === 'body') {
     const input = el(document, 'input', 'bm-page-number');
     input.type = 'text';
     input.placeholder = '番号を直す';
@@ -2018,9 +2135,20 @@ async function mergeAndVerify() {
       digest: digests[i],
     }));
     const result = compareOutput(expected, actual);
+    // 頁ラベルを付けない（本文が無い・部が分かれている）ときは、付いていないこと。
     const wantLabels = pageLabelTexts(ranges, order.length);
-    const labelsOk = Array.isArray(labels) && labels.every((label, i) => label === wantLabels[i]);
-    merged = { data: output.file ?? output.bytes, size, fileName, result, labelsOk, title: info.Title || '' };
+    const labelsOk = ranges.length
+      ? Array.isArray(labels) && labels.every((label, i) => label === wantLabels[i])
+      : labels === null;
+    merged = {
+      data: output.file ?? output.bytes,
+      size,
+      fileName,
+      result,
+      labelsOk,
+      noLabels: ranges.length === 0,
+      title: info.Title || '',
+    };
     log(
       result.ok && labelsOk
         ? `検証しました（${result.pageCount.actual} 頁すべて一致）`
@@ -2082,7 +2210,7 @@ async function mergeIntoStash(writeMergedPdf, options) {
 
 function renderVerify() {
   const box = $('verifyResult');
-  const { result, labelsOk, size, title } = merged;
+  const { result, labelsOk, noLabels, size, title } = merged;
   const ok = result.ok && labelsOk;
   box.className = `bm-verify ${ok ? 'ok' : 'ng'}`;
   const lines = [];
@@ -2096,7 +2224,9 @@ function renderVerify() {
   }
   lines.push(
     `文字情報（検索できる文字）のある頁: ${result.textPages} / ${result.pageCount.actual} 頁。` +
-      `頁ラベル（ビューアーに出る頁番号）: ${labelsOk ? '本の頁番号と一致' : '書き込みを確かめられませんでした'}。` +
+      `頁ラベル（ビューアーに出る頁番号）: ${
+        !labelsOk ? '書き込みを確かめられませんでした' : noLabels ? '付けていません（通し番号）' : '本の頁番号と一致'
+      }。` +
       `タイトル: ${title || '（なし）'}。大きさ: ${megabytes(size)}。`
   );
   box.replaceChildren(...lines.map((line) => el(document, 'p', null, line)));
@@ -2266,6 +2396,26 @@ function wireUp() {
   wireHelp();
 
   $('fileSort').addEventListener('change', (event) => setFileSort(event.target.value));
+  // ファイルの行のメニューは、外を押すか Esc で閉じる。
+  const closeMenus = (except) => {
+    for (const menu of document.querySelectorAll('.bm-file-menu[open]')) {
+      if (menu === except) continue;
+      menu.open = false;
+      menu.forget();
+    }
+  };
+  // iPhone・iPad の Safari は、押せない要素を押しても document に click を送らないので、
+  // 押し始め（pointerdown）で受ける。
+  // 押した・キーを受けた要素を含むメニュー（document そのものに届いたときは無し）。
+  const menuOf = (target) => (target instanceof Element ? target.closest('.bm-file-menu') : null);
+  document.addEventListener('pointerdown', (event) => closeMenus(menuOf(event.target)));
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    // メニューの中にいたら、閉じたあとはつまみ（…）に戻る（隠れたボタンに残さない）。
+    const inside = menuOf(event.target);
+    closeMenus(null);
+    inside?.querySelector('summary').focus();
+  });
   for (const [value, text] of Object.entries(ROLES)) {
     const option = el(document, 'option', null, `すべて${text}`);
     option.value = value;

@@ -175,6 +175,26 @@ describe('duplicateIssues', () => {
     expect(duplicateIssues([entry('a:0')], [], describe_)).toEqual({ issues: new Map(), problem: null });
   });
 
+  it('部が違えば、同じ番号の頁でも別の頁とする（部ごとに同じ番号の扉など）', () => {
+    const order = [
+      entry('a:0', { number: 1, status: 'detected', part: 0 }),
+      entry('b:0', { number: 1, status: 'detected', part: 1 }),
+      entry('c:0', { number: 1, status: 'detected', part: 1 }),
+    ];
+    const { issues } = duplicateIssues(
+      order,
+      [
+        { a: 'a:0', b: 'b:0', exact: false },
+        { a: 'b:0', b: 'c:0', exact: false },
+      ],
+      describe_
+    );
+    expect([...issues.keys()]).toEqual(['b:0', 'c:0']);
+    // 中身まで同じ頁は、部が違っても同じ頁（同じ束を 2 度入れて、部の始まりと見られたとき）。
+    const exact = duplicateIssues(order, [{ a: 'a:0', b: 'b:0', exact: true }], describe_);
+    expect([...exact.issues.keys()]).toEqual(['a:0', 'b:0']);
+  });
+
   it('中身まで同じ頁は誤り、似た頁は注意として、互いを挙げる', () => {
     const order = [entry('a:0'), entry('a:1'), entry('b:0'), entry('b:1')];
     const { issues, problem } = duplicateIssues(

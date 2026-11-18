@@ -18,6 +18,8 @@ import {
   pageNumberCandidates,
   pageNumberText,
   parsePageNumber,
+  readMargin,
+  stripPageNumber,
   unsettledPages,
 } from '../src/pdf-book-merger/page-numbers.js';
 
@@ -54,6 +56,66 @@ describe('normalizeDigits / groupLines', () => {
     ]);
 
     expect(line.text).toBe('第3章 運動の法則 57');
+  });
+});
+
+describe('readMargin', () => {
+  it('上下の余白の柱を拾う（番号だけの行と、帯の外の行は拾わない）', () => {
+    const { candidates, heads } = readMargin([
+      item('第2部 運動の法則', { x: 0.3, y: 0.05, w: 0.3 }),
+      item('57', { x: 0.9, y: 0.05 }),
+      item('- 12 -', { y: 0.95 }),
+      item('本文の行', { y: 0.5, w: 0.3 }),
+      item('12 総論', { x: 0.2, y: 0.97, w: 0.2 }),
+      item('ア', { x: 0.8, y: 0.9 }), // 1 字だけの行は柱にしない
+    ]);
+
+    expect(heads).toEqual(['第2部 運動の法則 57', '12 総論']);
+    // 頁番号の候補も同じ行から拾う。
+    expect(candidates.map((c) => c.value)).toEqual([12, 57]);
+  });
+
+  it('柱からその頁の頁番号を落とす（飾りの記号で区切られていても。ほかの数字は残す）', () => {
+    expect(stripPageNumber('第2部 運動の法則 57', 57)).toBe('第2部運動の法則');
+    expect(stripPageNumber('12 総論', 12)).toBe('総論');
+    expect(stripPageNumber('12｜書名', 12)).toBe('書名');
+    expect(stripPageNumber('書名・13', 13)).toBe('書名');
+    expect(stripPageNumber('Part 2', 13)).toBe('Part2');
+    expect(stripPageNumber('Part 2', null)).toBe('Part2');
+    // 枝番の頁は「57-1」をまとめて落とす。
+    expect(stripPageNumber('民法解説 57-1', 57, 1)).toBe('民法解説');
+    expect(stripPageNumber('57-1 民法解説', 57, 1)).toBe('民法解説');
+    expect(stripPageNumber('民法解説 57 - 1', 57, 1)).toBe('民法解説'); // OCR の断片の間の空白
+    // 小数の番号は落とさない（「.」を正規表現の何でもよい 1 字にしない）。
+    expect(stripPageNumber('森の話 1605', 16.5)).toBe('森の話1605');
+    // 同じ番号をもう一度（作った正規表現を使い回す）。
+    expect(stripPageNumber('総論 57', 57)).toBe('総論');
+  });
+
+  it('「Page 16 of 200」「16 / 200 頁」のような頁番号だけの行は、柱として拾わない', () => {
+    const { heads } = readMargin([
+      item('— Page 16 of 200 —', { y: 0.03, w: 0.3 }),
+      item('16 / 200 頁', { y: 0.97, w: 0.2 }),
+      item('Prologue', { x: 0.2, y: 0.05, w: 0.2 }),
+      item('1.2', { x: 0.8, y: 0.09 }), // 節の番号だけの柱は残す
+    ]);
+
+    expect(heads).toEqual(['Prologue', '1.2']);
+    const more = ['p. 16 of 200', 'Page16 of 200', '16 of 200', '16 / 200 pages', 'p16/200', 'Page16', '2024/05/01', '12/25'];
+    expect(more.map((text) => readMargin([item(text, { y: 0.03, w: 0.3 })]).heads)).toEqual([
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      ['2024/05/01'],
+      ['12/25'],
+    ]);
+  });
+
+  it('同じ文字の行は 1 つにする', () => {
+    expect(readMargin([item('総論', { y: 0.03 }), item('総論', { y: 0.97 })]).heads).toEqual(['総論']);
   });
 });
 
