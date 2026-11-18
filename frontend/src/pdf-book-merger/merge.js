@@ -209,7 +209,8 @@ async function writeTrailer(out, offsets, context) {
 }
 
 /**
- * 頁を指定の順に並べた 1 つの PDF を、少しずつ書き出す。
+ * 頁を指定の順に並べた PDF を、少しずつ書き出す。分けるときは、分けたファイル
+ * （parts）を同時に書き出す。
  *
  * 元のファイルは 1 つずつ読み（load）、頁を写したら、写した中身（画像・書体
  * など）をすぐに書き出して手放す。結合した PDF をメモリの上で丸ごと組み立て
@@ -217,121 +218,143 @@ async function writeTrailer(out, offsets, context) {
  * （pdf-lib の save は、元のファイルすべてと書き出した PDF を同時に持つ）。
  * 頁そのもの（小さな辞書）は、並べ終えてから頁の木と一緒に書く。
  *
+ * 分けたファイルを 1 つずつ結合すると、奇数頁・偶数頁の束のように、どの
+ * ファイルにも頁を出す元のファイルを、分けた数だけ読み直すことになる。そこで
+ * 元のファイルを 1 度だけ読み、その頁を、使う分けたファイルのそれぞれへ写す。
+ * 文書の情報は、どの分けたファイルにも本文の最初のファイル（infoFrom）から
+ * 引き継ぐ（分けたファイルがそのファイルの頁を含んでいなくても）。
+ *
  * @param {object} options
  * @param {Map<string, {name:string, load:() => Promise<Uint8Array>}>} options.sources
  *   ファイルの key → 名前と、中身を読む関数
- * @param {{fileKey:string, pageIndex:number}[]} options.order 並べる順
- * @param {string} options.title 文書のタイトル
- * @param {{start:number, style:string|null, prefix:string, first:number}[]} [options.labels]
+ * @param {{order:{fileKey:string, pageIndex:number}[], title:string,
+ *          labels?:{start:number, style:string|null, prefix:string, first:number}[],
+ *          write:(chunk:Uint8Array) => (void|Promise<void>)}[]} options.parts
+ *   書き出す PDF ごとの、並べる順・タイトル・頁ラベルと、書き出す先
  * @param {string} [options.infoFrom] 文書の情報を引き継ぐファイルの key
- * @param {(chunk:Uint8Array) => (void|Promise<void>)} options.write 書き出す先
  * @param {(done:number, total:number) => void} [options.onProgress]
- * @returns {Promise<{size:number, digests:string[]}>}
- *   size は書き出した大きさ、digests は並べた順の元の頁の指紋（pageDigest）
+ * @returns {Promise<{size:number, digests:string[]}[]>}
+ *   PDF ごとの、書き出した大きさと、並べた順の元の頁の指紋（pageDigest）
  */
-export async function writeMergedPdf({ sources, order, title, labels = [], infoFrom, write, onProgress }) {
-  const merged = await PDFDocument.create();
-  const { context } = merged;
+export async function writeMergedPdfs({ sources, parts, infoFrom, onProgress }) {
+  // 元のファイルごとに、どの PDF へどの頁を写すか（ファイルは最初に出てくる順）。
   const needed = new Map();
-  for (const item of order) {
-    if (!needed.has(item.fileKey)) needed.set(item.fileKey, new Set());
-    needed.get(item.fileKey).add(item.pageIndex);
+  const targets = [];
+  for (const [t, part] of parts.entries()) {
+    for (const item of part.order) {
+      if (!needed.has(item.fileKey)) needed.set(item.fileKey, new Map());
+      const byTarget = needed.get(item.fileKey);
+      if (!byTarget.has(t)) byTarget.set(t, new Set());
+      byTarget.get(t).add(item.pageIndex);
+    }
+    const doc = await PDFDocument.create();
+    const out = outputTo(part.write);
+    await out.push(bytesOf(PDFHeader.forVersion(1, 7)));
+    await out.text('\n\n');
+    // 最後まで残す物（文書の目録・頁の木・文書の情報と、写した頁）。
+    const kept = new Set(doc.context.enumerateIndirectObjects().map(([ref]) => ref));
+    targets.push({ part, doc, out, offsets: [], kept, copied: new Map() });
   }
 
-  const out = outputTo(write);
-  const offsets = [];
-  await out.push(bytesOf(PDFHeader.forVersion(1, 7)));
-  await out.text('\n\n');
-  // 最後まで残す物（文書の目録・頁の木・文書の情報と、写した頁）。
-  const kept = new Set(context.enumerateIndirectObjects().map(([ref]) => ref));
-
-  // ファイルごとに 1 度だけ写す（同じファイルの頁が共有している画像や
-  // 書体を、頁の数だけ複製しないため）。
-  const copied = new Map();
   const digests = new Map();
+  const total = parts.reduce((sum, part) => sum + part.order.length, 0);
   let info = null;
   let done = 0;
-  for (const [fileKey, indices] of needed) {
+  for (const [fileKey, byTarget] of needed) {
     const source = sources.get(fileKey);
     if (!source) throw new Error('結合するファイルの中身がありません。');
     const doc = await loadSource(await source.load(), source.name);
     if (fileKey === infoFrom || (!infoFrom && !info)) info = sourceInfo(doc);
-    const list = [...indices].sort((a, b) => a - b);
-    for (const index of list) {
+    const all = [...new Set([...byTarget.values()].flatMap((indices) => [...indices]))].sort((a, b) => a - b);
+    for (const index of all) {
       if (index >= doc.getPageCount()) {
         throw new Error(`「${source.name}」に ${index + 1} 頁目がありません。`);
       }
     }
-    for (const index of list) digests.set(`${fileKey}:${index}`, await pageDigest(doc.getPage(index)));
-    const pages = await merged.copyPages(doc, list);
-    list.forEach((index, i) => {
-      copied.set(`${fileKey}:${index}`, pages[i]);
-      kept.add(pages[i].ref);
-    });
-    // 写した中身を書き出して、手放す（元のファイルのバイト列を指しているので、
-    // 手放せば元のファイルもまるごと手放せる）。
-    for (const [ref, object] of context.enumerateIndirectObjects()) {
-      if (kept.has(ref)) continue;
-      await writeObject(out, offsets, ref, object);
-      context.delete(ref);
+    for (const index of all) digests.set(`${fileKey}:${index}`, await pageDigest(doc.getPage(index)));
+    // PDF ごとに 1 度だけ写す（同じファイルの頁が共有している画像や書体を、
+    // 頁の数だけ複製しないため）。
+    for (const [t, indices] of byTarget) {
+      const target = targets[t];
+      const list = [...indices].sort((a, b) => a - b);
+      const pages = await target.doc.copyPages(doc, list);
+      list.forEach((index, i) => {
+        target.copied.set(`${fileKey}:${index}`, pages[i]);
+        target.kept.add(pages[i].ref);
+      });
+      // 写した中身を書き出して、手放す（元のファイルのバイト列を指しているので、
+      // 手放せば元のファイルもまるごと手放せる）。
+      for (const [ref, object] of target.doc.context.enumerateIndirectObjects()) {
+        if (target.kept.has(ref)) continue;
+        await writeObject(target.out, target.offsets, ref, object);
+        target.doc.context.delete(ref);
+      }
+      done += list.length;
+      onProgress?.(done, total);
     }
-    done += list.length;
-    onProgress?.(done, order.length);
   }
 
-  for (const item of order) merged.addPage(copied.get(`${item.fileKey}:${item.pageIndex}`));
+  const results = [];
+  for (const { part, doc, out, offsets, copied } of targets) {
+    for (const item of part.order) doc.addPage(copied.get(`${item.fileKey}:${item.pageIndex}`));
 
-  merged.setTitle(title, { showInWindowTitleBar: true });
-  merged.setCreator(CREATOR);
-  if (info?.author) merged.setAuthor(info.author);
-  if (info?.subject) merged.setSubject(info.subject);
-  if (info?.keywords) merged.setKeywords(info.keywords.split(/\s+/).filter(Boolean));
-  if (info?.creationDate) merged.setCreationDate(info.creationDate);
-  merged.setModificationDate(new Date());
-  // 文書の言語（読み上げ・検索が使う）は、元にあったときだけ引き継ぐ。
-  if (info?.lang) merged.catalog.set(PDFName.of('Lang'), PDFHexString.fromText(info.lang));
+    doc.setTitle(part.title, { showInWindowTitleBar: true });
+    doc.setCreator(CREATOR);
+    if (info?.author) doc.setAuthor(info.author);
+    if (info?.subject) doc.setSubject(info.subject);
+    if (info?.keywords) doc.setKeywords(info.keywords.split(/\s+/).filter(Boolean));
+    if (info?.creationDate) doc.setCreationDate(info.creationDate);
+    doc.setModificationDate(new Date());
+    // 文書の言語（読み上げ・検索が使う）は、元にあったときだけ引き継ぐ。
+    if (info?.lang) doc.catalog.set(PDFName.of('Lang'), PDFHexString.fromText(info.lang));
 
-  if (labels.length) setPageLabels(merged, labels);
+    if (part.labels?.length) setPageLabels(doc, part.labels);
 
-  // 残りの物（頁・頁の木・目録・文書の情報など）を書き、相互参照表で締める。
-  for (const [ref, object] of context.enumerateIndirectObjects()) await writeObject(out, offsets, ref, object);
-  await writeTrailer(out, offsets, context);
-  await out.flush();
-
-  return {
-    size: out.offset,
-    digests: order.map((item) => digests.get(`${item.fileKey}:${item.pageIndex}`)),
-  };
+    // 残りの物（頁・頁の木・目録・文書の情報など）を書き、相互参照表で締める。
+    for (const [ref, object] of doc.context.enumerateIndirectObjects()) await writeObject(out, offsets, ref, object);
+    await writeTrailer(out, offsets, doc.context);
+    await out.flush();
+    results.push({
+      size: out.offset,
+      digests: part.order.map((item) => digests.get(`${item.fileKey}:${item.pageIndex}`)),
+    });
+  }
+  return results;
 }
 
 /**
- * 頁を指定の順に並べた 1 つの PDF を、メモリの上に作る（保存領域を使えないとき）。
+ * 頁を指定の順に並べた PDF を、メモリの上に作る（保存領域を使えないとき）。
  *
- * @param {object} options writeMergedPdf と同じ（write は要らない）。sources の
- *   中身は、load の代わりに bytes でも渡せる
- * @returns {Promise<{bytes:Uint8Array, digests:string[]}>}
+ * @param {object} options writeMergedPdfs と同じ（parts の write は要らない）。
+ *   sources の中身は、load の代わりに bytes でも渡せる
+ * @returns {Promise<{bytes:Uint8Array, digests:string[]}[]>}
  */
-export async function mergePdf({ sources, ...options }) {
-  const chunks = [];
+export async function mergePdfs({ sources, parts, ...options }) {
+  const chunks = parts.map(() => []);
   const loaders = new Map(
     [...sources].map(([key, source]) => [key, { name: source.name, load: source.load ?? (async () => source.bytes) }])
   );
-  const { size, digests } = await writeMergedPdf({
+  const results = await writeMergedPdfs({
     ...options,
     sources: loaders,
-    write: (chunk) => {
-      chunks.push(chunk);
-    },
+    parts: parts.map((part, t) => ({
+      ...part,
+      write: (chunk) => {
+        chunks[t].push(chunk);
+      },
+    })),
   });
-  // つなげながら、写し終えた分は手放す（全部の分と、つなげたものを同時に持たない）。
-  const bytes = new Uint8Array(size);
-  let at = 0;
-  for (let i = 0; i < chunks.length; i++) {
-    bytes.set(chunks[i], at);
-    at += chunks[i].length;
-    chunks[i] = null;
-  }
-  return { bytes, digests };
+  return results.map(({ size, digests }, t) => {
+    // つなげながら、写し終えた分は手放す（全部の分と、つなげたものを同時に持たない）。
+    const bytes = new Uint8Array(size);
+    let at = 0;
+    for (let i = 0; i < chunks[t].length; i++) {
+      bytes.set(chunks[t][i], at);
+      at += chunks[t][i].length;
+      chunks[t][i] = null;
+    }
+    return { bytes, digests };
+  });
 }
 
 /** 頁ラベル（/PageLabels の数の木）を書き込む。 */

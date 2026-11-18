@@ -78,6 +78,19 @@ export function groupLines(items) {
       (candidate) => Math.abs(candidate.y - item.y) <= Math.max(tolerance, candidate.h * 0.5)
     );
     if (line) {
+      // 同じ位置に重ねて書いた同じ字（InDesign の書き出しで、飾りのために同じ字を
+      // 2 度描いたもの）は 1 つにする。重ねたままつなぐと「SectionSection 22」
+      // 「011011」になり、見出しも頁番号も読めない。
+      // 重なりは字の幅・高さで見る（隣り合う同じ字——「11」の 2 つの「1」——は残す）。
+      const near = Math.max(item.x1 - item.x0, 0.001) * 0.2;
+      const twice = line.items.some(
+        (other) =>
+          other.text === item.text &&
+          Math.abs(other.x0 - item.x0) <= near &&
+          Math.abs(other.x1 - item.x1) <= near &&
+          Math.abs(other.h - item.h) <= item.h * 0.2
+      );
+      if (twice) continue;
       line.items.push(item);
       line.h = Math.max(line.h, item.h);
     } else {
@@ -171,6 +184,8 @@ function isLineNumber(number, numbers) {
  *
  * @param {{text:string,x0:number,x1:number,y:number,h:number}[]} items
  * @param {string} [source] 'text'（文字情報）か 'ocr'（画像から読み取り）
+ * @param {ReturnType<typeof groupLines>} [grouped] items を行にまとめたもの（ほかでも
+ *   使うために、もうまとめてあれば渡す）
  * @returns {{value:number, branch?:number, score:number, source:string, zone:'top'|'bottom'}[]}
  *   branch は枝番（57-1 の 1）。枝番の無い候補には付けない。
  */
@@ -184,9 +199,10 @@ export function pageNumberCandidates(items, source = 'text') {
  *
  * @param {{text:string,x0:number,x1:number,y:number,h:number}[]} items
  * @param {string} [source]
+ * @param {ReturnType<typeof groupLines>} [lines] items を行にまとめたもの（ほかでも使うために、
+ *   もうまとめてあれば渡す）
  */
-export function readMargin(items, source = 'text') {
-  const lines = groupLines(items);
+export function readMargin(items, source = 'text', lines = groupLines(items)) {
   return { candidates: candidatesOf(lines, source), heads: headsOf(lines) };
 }
 
