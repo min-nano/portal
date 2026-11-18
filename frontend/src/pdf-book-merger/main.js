@@ -47,7 +47,12 @@ import {
   roleFromName,
   sideOf,
 } from './ordering.js';
-import { numberingSequence, pageNumberCandidates } from './page-numbers.js';
+import {
+  numberingSequence,
+  pageNumberCandidates,
+  pageNumberText,
+  parsePageNumber,
+} from './page-numbers.js';
 import { findScanImages } from './scan-images.js';
 import { pdfLibViews } from './pdf-lib-views.js';
 import {
@@ -65,6 +70,7 @@ import {
 import {
   displayLabel,
   gridItems,
+  missingLabel,
   pageIssues,
   STATUS_LABEL,
   suggestBookName,
@@ -857,7 +863,8 @@ async function readStrips(file, page, strips) {
   try {
     if (!files.includes(file) || !(await startOcr())) return;
     const results = await Promise.all(strips.map((strip) => readStrip(strip)));
-    page.candidates = mergeCandidates(page.candidates, pageNumberCandidates(results.flat(), 'ocr'));
+    // OCR するのは文字情報から番号の候補が 1 つも出なかった頁だけなので、置き換えてよい。
+    page.candidates = pageNumberCandidates(results.flat(), 'ocr');
     page.ocr = true;
     page.scan = null;
   } catch {
@@ -1036,15 +1043,6 @@ function setPreviewFile(file) {
   if (previous) releaseDoc(previous);
 }
 
-function mergeCandidates(a, b) {
-  const byValue = new Map();
-  for (const c of [...a, ...b]) {
-    const previous = byValue.get(c.value);
-    if (!previous || previous.score < c.score) byValue.set(c.value, c);
-  }
-  return [...byValue.values()].sort((x, y) => y.score - x.score);
-}
-
 function removeFile(file) {
   const at = files.indexOf(file);
   if (at < 0) return;
@@ -1151,7 +1149,7 @@ function refresh() {
     .filter((entry) => entry.role === 'body')
     .map((entry) => {
       const page = pageOf(entry);
-      return { key: entry.pageKey, side: sideOf(entry.number), size: page.size, measure: page.measure };
+      return { key: entry.pageKey, side: sideOf(entry.number, entry.branch), size: page.size, measure: page.measure };
     });
   const issues = pageIssues(order, problems, compareScans(bodyPages), textless);
 
@@ -1176,7 +1174,7 @@ function refresh() {
 
 /** 結合する中身（名前と、並びの頁・配置・頁番号）を 1 つの文字列にしたもの。 */
 function mergeKey() {
-  return [outputName(), ...view.order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}`)].join('\n');
+  return [outputName(), ...view.order.map((entry) => `${entry.pageKey}|${entry.role}|${entry.number}|${entry.branch ?? ''}`)].join('\n');
 }
 
 function discardMerged() {
@@ -1606,7 +1604,7 @@ function renderGrid() {
   const seen = new Map(); // 抜けの札の key が重ならないように（番号が前後と合わないと、同じ抜けが 2 度出る）
   for (const item of gridItems(view.order)) {
     if (item.type === 'missing') {
-      const range = `${item.from}-${item.to}`;
+      const range = `${item.from}-${item.to}${item.branch ? `-${item.branch}` : ''}`;
       seen.set(range, (seen.get(range) ?? 0) + 1);
       cards.push({ key: `missing:${range}:${seen.get(range)}`, sig: range, build: () => missingCard(item) });
       continue;
@@ -1632,7 +1630,7 @@ function renderGrid() {
 function missingCard(item) {
   const card = el(document, 'li', 'bm-page missing');
   card.append(
-    el(document, 'span', 'bm-missing-label', item.from === item.to ? `${item.from} 頁` : `${item.from}〜${item.to} 頁`),
+    el(document, 'span', 'bm-missing-label', missingLabel(item)),
     el(document, 'span', 'hint', 'ありません')
   );
   return card;
@@ -1671,18 +1669,18 @@ function pageCard(entry, issues, level) {
   if (entry.role === 'body') {
     const input = el(document, 'input', 'bm-page-number');
     input.type = 'text';
-    input.inputMode = 'decimal';
     input.placeholder = '番号を直す';
     input.setAttribute('aria-label', `${displayLabel(entry)} の番号を直す`);
-    input.value = overrides.has(entry.pageKey) ? String(overrides.get(entry.pageKey)) : '';
+    input.value = overrides.has(entry.pageKey) ? pageNumberText(overrides.get(entry.pageKey)) : '';
     input.addEventListener('change', () => {
       const value = input.value.trim();
+      const number = parsePageNumber(value);
       if (!value) {
         overrides.delete(entry.pageKey);
-      } else if (Number.isFinite(Number(value))) {
-        overrides.set(entry.pageKey, Number(value));
+      } else if (number) {
+        overrides.set(entry.pageKey, number);
       } else {
-        showMessage('番号は数字で入れてください。', 'red');
+        showMessage('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。', 'red');
         return;
       }
       showMessage('');

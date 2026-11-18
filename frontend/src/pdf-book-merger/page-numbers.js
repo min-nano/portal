@@ -18,6 +18,11 @@
 // 頁は前後から補い、読み違えた 1 頁は前後と合わないので外れ値として扱う。
 // 前付けのように番号の無い頁がファイルの先頭にあっても、歩幅を延ばして
 // 0 以下の番号が付くので、並べたときに 1 頁より前に来る。
+//
+// 加除式の本には、差し替えで足された「枝番」の付いた頁（57-1, 57-2, …）がある。
+// 枝番の頁は一定の歩幅の並びに乗らないので、読めた枝番をそのまま使い、
+// 並びの推定からは外す（枝番の頁の前後で番号が飛んでもよいものとする）。
+// 枝番は頁の branch に持ち、無い頁には付けない。
 
 /** 頁の上下の、頁番号を探す帯の高さ（頁の高さに対する割合）。 */
 export const MARGIN_ZONE = 0.14;
@@ -30,9 +35,10 @@ export const STEPS = [2, -2, 1, -1];
 
 /**
  * 「番号だけが置かれている行」の形。前後の飾り（- 12 -、(12)、p.12、12頁）を許す。
- * ハイフンの類は、OCR がよく取り違えるものまで含めておく。
+ * 枝番（57-1）は 2 つ目の組に取る。ハイフンの類は、OCR がよく取り違えるものまで
+ * 含めておく。
  */
-const STANDALONE = /^[\s\-–—−‐‑‒－ー~〜・.,()（）[\]［］〔〕<>《》|｜]*(?:p\.?|P\.?|page|ページ|頁)?\s*(\d{1,4})\s*(?:頁|ページ)?[\s\-–—−‐‑‒－ー~〜・.,()（）[\]［］〔〕<>《》|｜]*$/;
+const STANDALONE = /^[\s\-–—−‐‑‒－ー~〜・.,()（）[\]［］〔〕<>《》|｜]*(?:p\.?|P\.?|page|ページ|頁)?\s*(\d{1,4})(?:\s*[\-–—−‐‑‒－ー]\s*([1-9]\d?))?\s*(?:頁|ページ)?[\s\-–—−‐‑‒－ー~〜・.,()（）[\]［］〔〕<>《》|｜]*$/;
 
 /** 行の先頭・末尾に付いた番号（柱に頁番号が並んでいる形）。 */
 const LEADING = /^(\d{1,4})[\s　]+\S/;
@@ -104,38 +110,92 @@ function placementScore(line) {
 }
 
 /**
+ * 1 行の中の番号（頁番号か行番号らしいもの）。番号だけの行、行の先頭・末尾に
+ * 付いた番号。left / right は番号の左端・右端（行の中の位置が分かる側だけ）。
+ */
+function numbersInLine(line) {
+  const standalone = line.text.match(STANDALONE);
+  if (standalone) {
+    return [
+      { value: Number(standalone[1]), branch: standalone[2], score: 3, y: line.y, left: line.x0, right: line.x1 },
+    ];
+  }
+  const leading = line.text.match(LEADING);
+  const trailing = line.text.match(TRAILING);
+  return [
+    ...(leading ? [{ value: Number(leading[1]), score: 1.5, y: line.y, left: line.x0, right: null }] : []),
+    ...(trailing ? [{ value: Number(trailing[1]), score: 1.5, y: line.y, left: null, right: line.x1 }] : []),
+  ];
+}
+
+/** 行番号の列とみなす、番号の端の位置のずれ（頁の幅に対する割合）。 */
+const LINE_COLUMN = 0.02;
+
+/**
+ * 行番号らしいか。
+ *
+ * 法令の解説書などは、本文の脇に 5 行おきの行番号（5, 10, 15, …）を刷る。
+ * 行番号は頁の下の帯にも来るので、番号だけの行として頁番号と取り違えやすい。
+ * 行番号は同じ列（番号の端が揃う）に、上から 5 ずつ増えて並ぶ。そこで、
+ * 5 の倍数で、同じ列のすぐ上に 5 小さい番号か、すぐ下に 5 大きい番号が
+ * あるものを行番号とみなす（頁番号は、上の行番号から 5 増えたものには
+ * まずならない）。
+ */
+function isLineNumber(number, numbers) {
+  // 枝番の付いた番号（57-1）は行番号ではない。
+  if (number.branch || number.value % 5 !== 0) return false;
+  const sameColumn = (other) =>
+    (number.left !== null && other.left !== null && Math.abs(number.left - other.left) <= LINE_COLUMN) ||
+    (number.right !== null && other.right !== null && Math.abs(number.right - other.right) <= LINE_COLUMN);
+  return numbers.some(
+    (other) =>
+      sameColumn(other) &&
+      ((other.value === number.value - 5 && other.y < number.y) ||
+        (other.value === number.value + 5 && other.y > number.y))
+  );
+}
+
+/**
  * 1 頁ぶんの文字から、頁番号の候補を挙げる。
  *
  * 見るのは上下の余白の帯だけ。本文の中の数字（「第 3 章」「図 12」）は
  * 拾わない。番号だけが置かれた行は強い候補、柱の先頭・末尾に付いた番号は
- * 弱い候補とする（柱には章番号や年号が混ざることがあるので）。
+ * 弱い候補とする（柱には章番号や年号が混ざることがあるので）。本文の脇の
+ * 行番号（isLineNumber）は、帯の中にあっても候補にしない。
  *
  * @param {{text:string,x0:number,x1:number,y:number,h:number}[]} items
  * @param {string} [source] 'text'（文字情報）か 'ocr'（画像から読み取り）
- * @returns {{value:number, score:number, source:string, zone:'top'|'bottom'}[]}
+ * @returns {{value:number, branch?:number, score:number, source:string, zone:'top'|'bottom'}[]}
+ *   branch は枝番（57-1 の 1）。枝番の無い候補には付けない。
  */
 export function pageNumberCandidates(items, source = 'text') {
+  const lines = groupLines(items).map((line) => ({ line, numbers: numbersInLine(line) }));
+  // 行番号の列は頁全体から見る（帯の中だけでは、続きの行番号が見えない）。
+  const fives = lines.flatMap(({ numbers }) => numbers).filter((number) => number.value % 5 === 0);
   const found = new Map();
-  for (const line of groupLines(items)) {
+  for (const { line, numbers } of lines) {
     const zone = line.y < MARGIN_ZONE ? 'top' : line.y > 1 - MARGIN_ZONE ? 'bottom' : null;
     if (!zone || line.text.length > 80) continue;
 
-    const standalone = line.text.match(STANDALONE);
-    const matches = standalone
-      ? [{ value: standalone[1], score: 3 }]
-      : [line.text.match(LEADING), line.text.match(TRAILING)]
-          .filter(Boolean)
-          .map((match) => ({ value: match[1], score: 1.5 }));
-
-    for (const match of matches) {
-      const value = Number(match.value);
-      if (!Number.isInteger(value) || value < 1 || value > MAX_PAGE_NUMBER) continue;
-      const score = match.score + placementScore(line);
-      const previous = found.get(value);
-      if (!previous || previous.score < score) found.set(value, { value, score, source, zone });
+    for (const number of numbers) {
+      const { value } = number;
+      if (value < 1 || value > MAX_PAGE_NUMBER || isLineNumber(number, fives)) continue;
+      const branch = number.branch ? Number(number.branch) : null;
+      const score = number.score + placementScore(line);
+      // 同じ番号でも、枝番が違えば別の候補。
+      const key = `${value}-${branch ?? ''}`;
+      const previous = found.get(key);
+      if (!previous || previous.score < score) {
+        found.set(key, { value, ...(branch ? { branch } : {}), score, source, zone });
+      }
     }
   }
   return [...found.values()].sort((a, b) => b.score - a.score || a.value - b.value);
+}
+
+/** 枝番の候補（あれば）。枝番は番号だけの行からしか取らないので、どれも強い候補。 */
+function branchCandidate(list) {
+  return list.find((c) => c.branch) || null;
 }
 
 /** 強い候補（番号だけの行）とみなす点数。外れたときに「食い違い」として出す。 */
@@ -150,16 +210,20 @@ const SWITCH_COST = 5;
  * そのファイルの中で番号が進む歩幅を、近くの頁どうしの候補の差から多数決で選ぶ。
  *
  * @param {{value:number,score:number}[][]} candidates 頁ごとの候補
+ * @param {Set<number>} [breaks] 並びが切れる位置（枝番の頁を挟んだ直後の頁）。
+ *   ここをまたぐ頁どうしの差は数えない
  * @returns {{step:number|null, votes:number}}
  */
-export function detectStep(candidates) {
+export function detectStep(candidates, breaks = new Set()) {
   const votes = new Map(STEPS.map((step) => [step, 0]));
   const anchored = candidates
     .map((list, index) => ({ list, index }))
     .filter((page) => page.list.length > 0);
+  const crosses = (from, to) => [...breaks].some((at) => at > from && at <= to);
 
   for (let a = 0; a < anchored.length; a++) {
     for (let b = a + 1; b < anchored.length && anchored[b].index - anchored[a].index <= 3; b++) {
+      if (crosses(anchored[a].index, anchored[b].index)) continue;
       const distance = anchored[b].index - anchored[a].index;
       for (const first of anchored[a].list) {
         for (const second of anchored[b].list) {
@@ -194,19 +258,47 @@ export function detectStep(candidates) {
  * ずれが切り替わる境目にある、番号の読めなかった頁は、どちらに属すか
  * 決められないので「要確認」にする。
  *
+ * 枝番の読めた頁（57-1）は、読めたとおりの番号にして、この並びからは外す。
+ * 枝番の頁を挟んだところでは、ずれを費用なしで切り替えてよい。
+ *
  * @param {{value:number,score:number,source:string}[][]} candidates 頁ごとの候補
  * @param {{step?:number}} [options] 歩幅が分かっているとき（他のファイルから）
  * @returns {{
  *   step: number|null,
- *   pages: {number:number|null, status:string, read:object|null}[],
+ *   pages: {number:number|null, branch?:number, status:string, read:object|null}[],
  * }}
  *   status は detected（読めた番号どおり）/ inferred（前後から推定）/
  *   conflict（読めた番号が前後と食い違う）/ uncertain（ずれの境目で決められない）/
  *   unknown（ファイルの中に手掛かりが無い）
  */
 export function inferFileNumbers(candidates, options = {}) {
+  // 枝番の頁は読めた番号のまま置き、残りの頁だけで並びを推定する。枝番の頁を
+  // 挟んだところでは、番号が飛んでもよい（差し替えで元の頁が抜けているので）。
+  const branches = candidates.map(branchCandidate);
+  const mainIndex = [];
+  const breaks = new Set();
+  branches.forEach((branch, index) => {
+    if (branch) breaks.add(mainIndex.length);
+    else mainIndex.push(index);
+  });
+  const main = inferSequence(
+    mainIndex.map((index) => candidates[index]),
+    options.step,
+    breaks
+  );
+  const pages = branches.map((read) =>
+    read ? { number: read.value, branch: read.branch, status: 'detected', read } : null
+  );
+  mainIndex.forEach((index, k) => {
+    pages[index] = main.pages[k];
+  });
+  return { step: main.step, pages };
+}
+
+/** 枝番の頁を除いた並びの、頁ごとの番号（inferFileNumbers の本体）。 */
+function inferSequence(candidates, knownStep, breaks) {
   const count = candidates.length;
-  const step = options.step ?? detectStep(candidates).step;
+  const step = knownStep ?? detectStep(candidates, breaks).step;
   const unknown = () => ({
     step: step ?? null,
     pages: candidates.map(() => ({ number: null, status: 'unknown', read: null })),
@@ -234,7 +326,7 @@ export function inferFileNumbers(candidates, options = {}) {
     const from = [];
     for (let k = 0; k < offsets.length; k++) {
       const stay = score[k];
-      const jump = score[bestPrev] - SWITCH_COST;
+      const jump = score[bestPrev] - (breaks.has(i) ? 0 : SWITCH_COST);
       if (stay >= jump) {
         next.push(stay + emission(i, offsets[k]));
         from.push(k);
@@ -321,6 +413,7 @@ export function manualFileNumbers(count, start, step) {
  *   前付けから始まる奇数頁の束 → -11, -9, -7...13, 15
  *   裏返した偶数頁の束         → 8, 6, 4, 2
  *   途中で飛ぶ                 → 1, 3, 5...17, 19, 31, 33, 35...47, 49
+ *   枝番の頁を挟む             → 51, 53, 55, 57-1, 57-3, 59, 61
  *
  * @param {{step:number|null, pages:{number:number|null}[]}} numbering
  */
@@ -330,25 +423,53 @@ export function numberingSequence(numbering) {
   if (step === null || step === undefined || pages.every((page) => page.number === null)) {
     return '?';
   }
+  // 枝番の頁は、それだけで 1 つの並びにする（前後の番号とは続けない）。
   const runs = [];
-  for (const { number } of pages) {
+  for (const { number, branch } of pages) {
     const run = runs.at(-1);
-    if (run && number === run.at(-1) + step) {
-      run.push(number);
+    if (!branch && run && number === run.last + step) {
+      run.labels.push(number);
+      run.last = number;
     } else {
-      runs.push([number]);
+      runs.push({ labels: [branch ? `${number}-${branch}` : number], last: branch ? NaN : number });
     }
   }
   return runs
-    .map((run) =>
-      run.length <= 5 ? run.join(', ') : `${run.slice(0, 3).join(', ')}...${run.slice(-2).join(', ')}`
+    .map(({ labels }) =>
+      labels.length <= 5
+        ? labels.join(', ')
+        : `${labels.slice(0, 3).join(', ')}...${labels.slice(-2).join(', ')}`
     )
     .join(', ');
 }
 
-/** 頁番号の表示。前付け（0 以下）は「前付」と分かるようにする。 */
-export function formatNumber(number) {
+/** 頁番号の表示。前付け（0 以下）は「前付」と分かるようにする。枝番は 57-1 の形。 */
+export function formatNumber(number, branch = null) {
   if (number === null || number === undefined) return '?';
+  if (branch) return `${number}-${branch}`;
   if (!Number.isInteger(number)) return `${Math.floor(number)}と${Math.ceil(number)}の間`;
   return number <= 0 ? `前付(${number})` : String(number);
+}
+
+/** 手で直す番号の書き方（12、前付けの -3、間に挟む 12.5、枝番の 57-1）。 */
+const BRANCH_INPUT = /^(\d{1,4})\s*[\-–—−‐‑‒－ー]\s*([1-9]\d?)$/;
+
+/**
+ * 手で入れた頁番号を読む。読めなければ null。
+ *
+ * @param {string} text
+ * @returns {{number:number, branch?:number}|null}
+ */
+export function parsePageNumber(text) {
+  const value = normalizeDigits(text).trim();
+  if (!value) return null;
+  const branch = value.match(BRANCH_INPUT);
+  if (branch) return { number: Number(branch[1]), branch: Number(branch[2]) };
+  const number = Number(value);
+  return Number.isFinite(number) ? { number } : null;
+}
+
+/** parsePageNumber で読める形に書き戻す（入力欄に出す）。 */
+export function pageNumberText({ number, branch }) {
+  return branch ? `${number}-${branch}` : String(number);
 }
