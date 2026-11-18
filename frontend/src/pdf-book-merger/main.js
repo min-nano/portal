@@ -30,6 +30,7 @@ import { startPage } from '../page-start.js';
 import { pickFiles } from '../drive-picker.js';
 import { ensurePdfExtension } from '../pdf-file-ops.js';
 import { downloadDriveFile } from './drive-download.js';
+import { createDownloadPool } from './download-pool.js';
 import { compareScans } from './image-checks.js';
 import { isMobile, saveMethod, savePdf } from './save-file.js';
 import { measure } from './measure-client.js';
@@ -99,6 +100,9 @@ const OCR_IN_FLIGHT = 3;
  * 0.2 秒ほど）が、展開は画面とは別のところで進むので、端末の芯を並べて使う。
  */
 const PAGES_IN_FLIGHT = 3;
+/** 同時に読み込むファイルの数と、その中身の大きさの合計の上限（バイト）。 */
+const DOWNLOADS_IN_FLIGHT = 4;
+const DOWNLOAD_BUDGET = 64 * 1024 * 1024;
 
 let nextKey = 1;
 /** 選んだファイル（画面の並び順）。中身は addFiles() を参照。 */
@@ -125,9 +129,14 @@ const openGroups = new Map();
 let fileSort = 'added';
 // ファイルは 1 つずつ調べる（pdf.js も OCR も、同時に動かすと遅くなるだけなので）。
 let queue = Promise.resolve();
+/** 順番を待っている仕事（足した順）。file はファイルを調べる仕事のファイル（あとからの OCR は null）。 */
+const waitingJobs = [];
 // Drive からの読み込みは、調べるのを待たずに先へ進める（調べている間に、次の
-// ファイルを読んでおく）。読み込みどうしは 1 つずつ。
-let downloads = Promise.resolve();
+// ファイルを読んでおく）。小さなファイルは何個かを並べて読む（1 つずつだと、
+// ファイルごとの問い合わせの待ちが積み重なり、調べ終えるたびに次の読み込みを
+// 待って止まる）。並べるのは、合わせた大きさが DOWNLOAD_BUDGET に収まる間だけ
+// （読んでいる間は中身をまるごとメモリに持つので、大きな本は 1 つずつ）。
+const downloads = createDownloadPool({ limit: DOWNLOADS_IN_FLIGHT, budget: DOWNLOAD_BUDGET });
 /**
  * 読み込んだ PDF と結合した PDF を置く保存領域（stash.js）。使えなければ null
  * （メモリに持つ）。ツールを開いたときに用意する。
@@ -198,8 +207,10 @@ const crashLog = createCrashLog();
  *
  * loaded は、いまの仕事で中身が届いた割合（0〜1。ストライプに描く）。たいていの
  * 仕事は中身が手元にあるので 1 とし、Drive から読み込む間だけ下げる（showLoading）。
+ * ahead は、順番を待っている仕事の中身が届いた分（仕事の数で数える）を返す。
+ * 読み込みは調べるのを待たずに先へ進むので、ストライプはその分も先へ伸ばす。
  */
-function createProgress({ jobs = false } = {}) {
+function createProgress({ jobs = false, ahead = () => 0 } = {}) {
   const progress = {
     label: () => '',
     from: 0,
@@ -249,7 +260,7 @@ function createProgress({ jobs = false } = {}) {
     },
     /** 中身が届いたところ（流れ全体の位置）。 */
     loadedEnd() {
-      return progress.place((progress.jobs?.done ?? 0) + progress.loaded);
+      return progress.place((progress.jobs?.done ?? 0) + progress.loaded + ahead());
     },
     addJob() {
       const { jobs } = progress;
@@ -274,7 +285,8 @@ function createProgress({ jobs = false } = {}) {
         return;
       }
       progress.stage(0, 0);
-      Object.assign(progress, { fraction: 0, heading: '', loaded: 1 });
+      // 次の仕事はまだ順番待ちに数えている（ahead）ので、ここでは数えない。
+      Object.assign(progress, { fraction: 0, heading: '', loaded: 0 });
       renderProgress();
     },
   };
@@ -282,7 +294,7 @@ function createProgress({ jobs = false } = {}) {
 }
 
 /** ファイルを調べる流れ（あとからの OCR も）。 */
-const readProgress = createProgress({ jobs: true });
+const readProgress = createProgress({ jobs: true, ahead: () => waitingJobs.reduce((sum, job) => sum + loadedPart(job.file), 0) });
 /** 結合と検証。 */
 const mergeProgress = createProgress();
 
@@ -323,10 +335,16 @@ function showProgress(text, fraction, heading = '') {
  * 仕事を順番待ちに足す（ファイルを調べる・あとからの OCR）。済んだら数える。
  * 順番待ちが空になったら、OCR を手放す（結合の前に、メモリを空けておく）。
  */
-function enqueue(task) {
+function enqueue(task, file = null) {
   readProgress.addJob();
+  const job = { file };
+  waitingJobs.push(job);
   queue = queue
-    .then(task)
+    .then(() => {
+      waitingJobs.splice(waitingJobs.indexOf(job), 1);
+      readProgress.loaded = 1; // 中身が届いていなければ、readFile が下げる
+      return task();
+    })
     .catch(() => {})
     .then(() => {
       readProgress.finishJob();
@@ -436,7 +454,8 @@ function breathe() {
  * 足している途中でページごと落ちた。処理の記録を残すのも、足し終えてから 1 度。
  *
  * @param {Array<{name:string, size?:number, driveId?:string, modified?:number|null,
- *          load:(onProgress:Function) => Promise<Uint8Array>}>} sources
+ *          load:(onProgress:Function, onWait:Function, reserve:Function) => Promise<Uint8Array>}>} sources
+ *   load は、中身の大きさが分かったら、読み始める前に reserve(size) を待つ（download-pool.js）
  */
 function addFiles(sources) {
   const added = [];
@@ -469,8 +488,8 @@ function addFiles(sources) {
   sortFiles();
   renderFiles();
   for (const { file, source } of added) {
-    file.loaded = downloads.then(() => loadBytes(file, source));
-    downloads = file.loaded.catch(() => {});
+    file.loaded = downloads.run((reserve) => loadBytes(file, source, reserve));
+    file.loaded.catch(() => {}); // 失敗は調べるときに知らせる（readFile）
     file.pending = true; // 調べ終えるまで（見出しの「n / m」に使う）
     enqueue(async () => {
       try {
@@ -478,7 +497,7 @@ function addFiles(sources) {
       } finally {
         file.pending = false;
       }
-    });
+    }, file);
   }
   renderLog();
   keepLog();
@@ -511,7 +530,7 @@ function showWaiting(file) {
  * 読む）。元のファイルを読み直さないのは、端末のファイルでも実体がクラウドに
  * あって、取り直しになることがあるため。
  */
-async function loadBytes(file, source) {
+async function loadBytes(file, source, reserve) {
   if (!files.includes(file)) return;
   file.status = 'loading';
   renderFile(file);
@@ -523,9 +542,14 @@ async function loadBytes(file, source) {
         file.waitUntil = 0; // 届き始めた（待ち終えた）
         clearTimeout(file.waitTimer);
         file.transfer = { received, total };
-        // 調べる順番が来て、読み込みを待っているときだけ、進み具合に出す（外した
-        // ファイルの読み込みは止まらないので、出さない）。
-        if (file.waiting && files.includes(file)) showLoading(file);
+        // はじめから読み直したとき（続きから読めなかった）も、ストライプは戻さない。
+        file.loadedShown = Math.max(file.loadedShown ?? 0, total ? received / total : 0);
+        // 外したファイルの読み込みは止まらないので、出さない。
+        if (!files.includes(file)) return;
+        // 調べる順番が来て読み込みを待っているときは見出しにも出し、順番を待って
+        // いるときはストライプだけを伸ばす（調べるのを待たずに）。
+        if (file.waiting) showLoading(file);
+        else renderSoon();
       },
       // 読み直す前に待つときは、記録に残し、待っていることを画面に出す（先読みの
       // 途中なら、調べる順番が来たときに出す。readFile）。
@@ -534,12 +558,20 @@ async function loadBytes(file, source) {
         file.waitUntil = Date.now() + ms;
         file.waitReason = reason;
         if (file.waiting) showWaiting(file);
+      },
+      // 大きさの枠を待つ間に外されたら、読まずにやめる（ほかのファイルの枠を使わない）。
+      async (size) => {
+        await reserve(size);
+        if (!files.includes(file)) throw new Error('外されました。');
       }
     );
   } catch (error) {
+    file.loadedShown = 1; // もう読まない（ストライプを止めたままにしない）
+    if (!files.includes(file)) return; // 外したファイルは、読めなくても知らせない
     log(`「${file.name}」を読み込めませんでした（${error?.message || error}）`);
     throw error;
   }
+  file.loadedShown = 1;
   log(`「${file.name}」を読み込みました（${megabytes(bytes.length)}、${seconds(started)}）`);
   if (!files.includes(file)) return; // 読んでいる間に外された。
   file.bytes = bytes;
@@ -594,6 +626,27 @@ async function bytesOf(file) {
 }
 
 /**
+ * ファイルの中身が届いた割合（0〜1）。この端末のファイルは、はじめから届いている
+ * ものとする。外したファイルは、もう待たないので 1。
+ */
+function loadedPart(file) {
+  if (!file || !file.driveId || !files.includes(file)) return 1;
+  return file.loadedShown ?? 0;
+}
+
+/** 進み具合を少し後に描き直す（何個かを並べて読む間、届くたびに描き直さないように）。 */
+const RENDER_EVERY_MS = 100;
+let renderTimer = 0;
+function renderSoon() {
+  if (renderTimer) return;
+  renderTimer = setTimeout(() => {
+    renderTimer = 0;
+    // 調べる流れを出している間だけ（隠したバーや、結合の進み具合を描き直さない）。
+    if (readProgress.text && !mergeProgress.text) renderProgress();
+  }, RENDER_EVERY_MS);
+}
+
+/**
  * 読み込みを待っている間の進み具合を出す。Drive のファイルは、届いた割合を
  * ストライプに描く（大きさが分からなければ描かない）。この端末のファイルは、
  * はじめから届いているものとする。
@@ -601,9 +654,7 @@ async function bytesOf(file) {
 function showLoading(file) {
   const { received = 0, total = 0 } = file.transfer ?? {};
   const amount = total ? `${megabytes(received)} / ${megabytes(total)}` : megabytes(received);
-  // はじめから読み直したとき（続きから読めなかった）も、ストライプは戻さない。
-  file.loadedShown = Math.max(file.loadedShown ?? 0, total ? received / total : 0);
-  readProgress.loaded = file.driveId ? file.loadedShown : 1;
+  readProgress.loaded = loadedPart(file);
   showProgress(`「${file.name}」を読み込んでいます${file.transfer ? `（${amount}）` : ''}`, null);
 }
 
@@ -2097,7 +2148,7 @@ function addDriveFiles(picked) {
         name: file.name,
         driveId: file.id,
         modified: file.modifiedTime ? Date.parse(file.modifiedTime) : null,
-        load: (onProgress, onWait) => downloadDriveFile(file, { onProgress, onWait }),
+        load: (onProgress, onWait, reserve) => downloadDriveFile(file, { onProgress, onWait, reserve }),
       }))
   );
 }
@@ -2110,7 +2161,8 @@ function addLocal(fileList) {
     pdfs.sort(byName).map((file) => ({
       name: file.name,
       modified: file.lastModified,
-      load: async (onProgress) => {
+      load: async (onProgress, onWait, reserve) => {
+        await reserve(file.size);
         const bytes = new Uint8Array(await file.arrayBuffer());
         onProgress(bytes.length, bytes.length);
         return bytes;

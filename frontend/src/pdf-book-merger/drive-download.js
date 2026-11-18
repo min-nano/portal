@@ -142,16 +142,21 @@ async function readInto(info, bytes, state, onProgress) {
  * @param {{id:string, name:string}} file ファイル選択ダイアログが返したもの
  * @param {{onProgress?: (received:number, total:number) => void,
  *          onWait?: (ms:number, reason:string) => void,
+ *          reserve?: (size:number) => Promise<void>,
  *          delay?: (attempt:number, rateLimited:boolean) => number}} [options]
  *   onWait は、読み直す前に待ち始めるときに呼ぶ（画面と記録に出すため）。
+ *   reserve は、大きさが分かったら、中身を入れる場所を作る前に待つ（並べて読む
+ *   大きさの枠。download-pool.js）。
  *   delay は、attempt 回目の読み直しの前に待つミリ秒（既定は 1, 2, 4, 8 秒。
  *   流量を絞られたときは 5, 10, 20, 40 秒）
  * @returns {Promise<Uint8Array>}
  */
-export async function downloadDriveFile(file, { onProgress, onWait, delay = defaultDelay } = {}) {
+export async function downloadDriveFile(file, { onProgress, onWait, reserve, delay = defaultDelay } = {}) {
   const path = `${TOOL_API}/files/${encodeURIComponent(file.id)}`;
   try {
     let info = await apiGet(path);
+    // 中身を入れる場所を作る前に、同時に読む大きさの枠を待つ（download-pool.js）。
+    await reserve?.(info.size);
     let bytes = new Uint8Array(info.size);
     const state = { received: 0 };
     let retries = 0;
