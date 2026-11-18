@@ -767,7 +767,9 @@ describe('ファイルを足して並べる', () => {
 
   /**
    * バーに出した値（済んだところ）と、そのときの見出しを記録する。返す関数で記録をやめる。
-   * withEnd なら、中身が届いたところ（ストライプの右端）も記録する。
+   * renderProgress が aria-valuenow を最後に書くのに合わせて、そのときに読む。
+   * withEnd なら、中身が届いたところ（ストライプの右端）と、ストライプの最小幅を
+   * 測る起点も記録する。
    */
   function watchBar({ withEnd = false } = {}) {
     const seen = [];
@@ -776,7 +778,11 @@ describe('ファイルを足して並べる', () => {
     bar.setAttribute = (name, value) => {
       if (name === 'aria-valuenow') {
         const entry = { value: Number(value), label: $('progressText').textContent };
-        if (withEnd) entry.end = Number(bar.dataset.loaded);
+        if (withEnd) {
+          entry.end = Number(bar.dataset.loaded);
+          // ストライプの最小幅を測る起点（いまの仕事の始まり）。ベタ塗りの右端から見た位置で出しているので戻す。
+          entry.start = entry.value + parseFloat($('progressLoaded').style.getPropertyValue('--bm-bar-from')) / 100;
+        }
         seen.push(entry);
       }
       setAttribute(name, value);
@@ -838,17 +844,23 @@ describe('ファイルを足して並べる', () => {
     expect(hidden).toEqual([false, true]);
     // 替わり目では、1 つめを済ませた位置（半分）で止め、2 つめの見出しに替える。
     // 2 つめの中身も手元にあるので、ストライプは 2 つめの仕事の終わりまで。
-    expect(seen).toContainEqual({ value: 0.5, end: 1, label: 'ファイルを調べています（2 / 2）' });
-    // 1 つめの間は、ストライプは 1 つめの仕事の終わりまで。
+    expect(seen).toContainEqual({ value: 0.5, end: 1, start: 0.5, label: 'ファイルを調べています（2 / 2）' });
+    // 1 つめの間は、ストライプは 1 つめの仕事の終わりまで。ストライプの最小幅は、
+    // ベタ塗りの右端ではなく仕事の始まりから測る（ベタ塗りが仕事の終わりに近づいても、
+    // ストライプが次の仕事の区間へはみ出して、仕事を終えたときに右端が戻らないように）。
     const first = seen.filter((s) => s.label === 'ファイルを調べています（1 / 2）');
     expect(first.length).toBeGreaterThan(2);
-    for (const s of first) expect(s.end).toBe(0.5);
+    expect(first.some((s) => s.value > 0.4)).toBe(true);
+    for (const s of first) {
+      expect(s.end).toBe(0.5);
+      expect(s.start).toBeCloseTo(0);
+    }
     expectNeverBack(seen);
   });
 
   it('調べている途中でファイルを足しても、バーは戻らない', async () => {
     const release = holdImage('o3');
-    const seen = watchBar();
+    const seen = watchBar({ withEnd: true });
     drop([file('猫_奇数.pdf', pdf(ODD))]);
     await vi.waitFor(() => expect(mocks.renderPageImage).toHaveBeenCalled());
     const before = seen.at(-1).value;
@@ -861,7 +873,14 @@ describe('ファイルを足して並べる', () => {
     seen.stop();
 
     expectNeverBack(seen);
-    expect(seen.map((s) => s.label)).toContain('ファイルを調べています（1 / 3）');
+    // ストライプの最小幅を測る起点（いまの仕事の始まり）も戻らず、ベタ塗りを越えない。
+    // 足して数え直した後の 1 つめの仕事は、数え直した位置から始まるものとする。
+    seen.forEach((s, i) => {
+      expect(s.start).toBeGreaterThanOrEqual((seen[i - 1]?.start ?? 0) - 1e-9);
+      expect(s.start).toBeLessThanOrEqual(s.value + 1e-9);
+    });
+    const recounted = seen.find((s) => s.label === 'ファイルを調べています（1 / 3）');
+    expect(recounted.start).toBeCloseTo(before);
     expect(seen.map((s) => s.label)).toContain('ファイルを調べています（3 / 3）');
   });
 

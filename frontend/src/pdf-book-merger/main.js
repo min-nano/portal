@@ -229,6 +229,14 @@ function createProgress({ jobs = false } = {}) {
     overall() {
       return progress.place((progress.jobs?.done ?? 0) + progress.inJob());
     },
+    /**
+     * いまの仕事の始まり（流れ全体の位置）。途中で仕事を足して数え直したときは、
+     * 数え直した位置から。
+     */
+    jobStart() {
+      const { jobs } = progress;
+      return progress.place(Math.max(jobs?.done ?? 0, jobs?.start ?? 0));
+    },
     /** 中身が届いたところ（流れ全体の位置）。 */
     loadedEnd() {
       return progress.place((progress.jobs?.done ?? 0) + progress.loaded);
@@ -279,11 +287,16 @@ function renderProgress() {
     const loaded = Math.max(done, progress.loadedEnd());
     const bar = $('progressBar');
     bar.dataset.loaded = String(loaded);
-    bar.setAttribute('aria-valuenow', String(done));
     $('progressDone').style.width = `${done * 100}%`;
     $('progressLoaded').hidden = loaded <= done;
     $('progressLoaded').style.left = `${done * 100}%`;
     $('progressLoaded').style.width = `${(loaded - done) * 100}%`;
+    // 細くても動いているのが見える幅（tool.css の .bm-bar-loaded）は、いまの仕事の始まり
+    // から測る。ベタ塗りの右端から測ると、ベタ塗りが仕事の終わりに近づいたときに
+    // ストライプが次の仕事の区間まではみ出し、仕事を終えて消えるときに右端が戻って見える。
+    $('progressLoaded').style.setProperty('--bm-bar-from', `${(progress.jobStart() - done) * 100}%`);
+    // aria-valuenow は最後に書く（テストはこれを合図に、ほかの値を読む）。
+    bar.setAttribute('aria-valuenow', String(done));
   }
   renderLog();
   // 進み具合は頁ごとに変わるので、残すのは間を空けて（localStorage への書き込みは
