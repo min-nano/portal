@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   displayLabel,
   gridItems,
+  issueGroups,
   mergeIssues,
   missingLabel,
   pageIssues,
@@ -141,6 +142,61 @@ describe('suggestBookName', () => {
   it('共通するところが無ければ空', () => {
     expect(suggestBookName(['scan1.pdf', 'other.pdf'])).toBe('');
     expect(suggestBookName([])).toBe('');
+  });
+});
+
+describe('issueGroups', () => {
+  it('本全体の指摘と、頁ごとの指摘の種類ごとの数を、重いものから並べる', () => {
+    const order = [body('a', 1), body('b', 2), body('c', 3), body('d', 4)];
+    const problems = [
+      { level: 'warn', kind: 'conflict', message: '食い違い', pageKeys: ['b'] },
+      { level: 'error', kind: 'duplicate', message: '1 頁が 2 回', pageKeys: ['a', 'c'], number: 1 },
+      { level: 'error', kind: 'duplicate', message: '4 頁が 2 回', pageKeys: ['d', 'b'], number: 4 },
+      { level: 'error', kind: 'missing', message: '抜け', pageKeys: [] },
+    ];
+    const issues = new Map([
+      ['d', [{ kind: 'skew' }, { kind: 'blank' }]],
+      ['b', [{ kind: 'skew' }, { kind: 'conflict' }]],
+    ]);
+    expect(issueGroups(order, problems, issues)).toEqual([
+      { key: 'duplicate:1', level: 'error', message: '1 頁が 2 回', pageKeys: ['a', 'c'] },
+      { key: 'duplicate:4', level: 'error', message: '4 頁が 2 回', pageKeys: ['d', 'b'] },
+      { key: 'missing', level: 'error', message: '抜け', pageKeys: [] },
+      { key: 'conflict', level: 'warn', message: '食い違い', pageKeys: ['b'] },
+      { key: 'skew', level: 'warn', message: '傾いている頁が 2 頁あります。', pageKeys: ['b', 'd'] },
+      { key: 'blank', level: 'info', message: '白紙の頁が 1 頁あります。', pageKeys: ['d'] },
+    ]);
+  });
+
+  it('枝番の頁の抜け・差し替えは、番号ごとに別の項目にする', () => {
+    const problems = [
+      { level: 'error', kind: 'missing', message: '3 頁が見つかりません', pageKeys: [], numbers: [3] },
+      { level: 'error', kind: 'missing', message: '57-3 頁が見つかりません', pageKeys: [], number: 57 },
+      { level: 'info', kind: 'replaced', message: '57〜58 頁は無く', pageKeys: ['a'], number: 57 },
+      { level: 'info', kind: 'replaced', message: '79〜80 頁は無く', pageKeys: ['b'], number: 79 },
+    ];
+    expect(issueGroups([], problems, new Map()).map((group) => group.key)).toEqual([
+      'missing',
+      'missing:57',
+      'replaced:57',
+      'replaced:79',
+    ]);
+  });
+
+  it('同じ頁の重なりは、重なっている頁をすべて並べる', () => {
+    const order = [body('a', 1), body('b', 2), body('c', 3)];
+    const problems = [{ level: 'warn', kind: 'same-page', message: '同じ内容の頁が 1 組', pageKeys: ['c'] }];
+    const issues = new Map([
+      ['c', [{ kind: 'same-page' }]],
+      ['a', [{ kind: 'same-page' }]],
+    ]);
+    expect(issueGroups(order, problems, issues)).toEqual([
+      { key: 'same-page', level: 'warn', message: '同じ内容の頁が 1 組', pageKeys: ['a', 'c'] },
+    ]);
+  });
+
+  it('指摘が無ければ空', () => {
+    expect(issueGroups([body('a', 1)], [], new Map())).toEqual([]);
   });
 });
 

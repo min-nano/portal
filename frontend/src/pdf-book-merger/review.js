@@ -86,6 +86,57 @@ export function worstLevel(list) {
   return 'info';
 }
 
+/** スキャンの検査など、頁ごとに付く指摘を、種類ごとの項目にまとめるときの言い方。 */
+const PAGE_KIND_TEXT = {
+  skew: ['warn', '傾いている頁'],
+  shift: ['warn', '中身の位置がずれている頁'],
+  size: ['warn', '大きさが他と違う頁'],
+  orientation: ['warn', '向きが他と違う頁'],
+  streak: ['warn', 'すじが入っている頁'],
+  blank: ['info', '白紙の頁'],
+  text: ['warn', '文字情報（OCR の結果）が文字化けしている・文として読めない頁'],
+  textless: ['info', '文字情報の無い頁'],
+};
+
+const LEVEL_RANK = { error: 0, warn: 1, info: 2 };
+
+/**
+ * 確認の画面の上に並べる項目。本全体の指摘（抜け・重なり・番号の食い違いなど）と、
+ * 頁ごとの指摘（スキャンの傾き・すじなど）を種類ごとに数えたものを、重いものから
+ * 並べる。項目ごとに、該当する頁の key を本の順で持つ（開くとその頁だけを並べる）。
+ *
+ * @param {ReturnType<import('./ordering.js').buildBookOrder>} order
+ * @param {{level:string, kind:string, message:string, pageKeys:string[], number?:number}[]} problems
+ * @param {Map<string, {kind:string}[]>} issues pageIssues の結果
+ * @returns {{key:string, level:'error'|'warn'|'info', message:string, pageKeys:string[]}[]}
+ */
+export function issueGroups(order, problems, issues) {
+  // 項目の key は、頁を直しても変わらないものにする（開閉を key で覚えるので）。
+  // 番号ごとに出る指摘（重なり、枝番の頁の抜け・差し替え）は、その番号で分ける。
+  // 同じ頁の重なりは、本全体の指摘には組ごとに後ろの頁しか挙がっていないので、
+  // 開いたときに見比べられるよう、重なっている頁をすべて（本の順に）並べる。
+  const samePages = order
+    .filter((entry) => (issues.get(entry.pageKey) || []).some((issue) => issue.kind === 'same-page'))
+    .map((entry) => entry.pageKey);
+  const groups = problems.map((problem) => ({
+    key: problem.number === undefined ? problem.kind : `${problem.kind}:${problem.number}`,
+    level: problem.level,
+    message: problem.message,
+    pageKeys: problem.kind === 'same-page' ? samePages : problem.pageKeys,
+  }));
+  const byKind = new Map(Object.keys(PAGE_KIND_TEXT).map((kind) => [kind, new Set()]));
+  for (const entry of order) {
+    for (const issue of issues.get(entry.pageKey) || []) byKind.get(issue.kind)?.add(entry.pageKey);
+  }
+  for (const [kind, keys] of byKind) {
+    if (keys.size === 0) continue;
+    const [level, text] = PAGE_KIND_TEXT[kind];
+    groups.push({ key: kind, level, message: `${text}が ${keys.size} 頁あります。`, pageKeys: [...keys] });
+  }
+  // 重いものを上に（sort は安定なので、同じ重さの中では、もとの順のまま）。
+  return groups.sort((a, b) => LEVEL_RANK[a.level] - LEVEL_RANK[b.level]);
+}
+
 /** これより長く抜けていたら、1 枚の札にまとめて出す。 */
 const MAX_MISSING_CARDS = 6;
 

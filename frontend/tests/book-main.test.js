@@ -324,7 +324,6 @@ beforeAll(async () => {
     // ブラウザと同じく、close は後から届く。
     setTimeout(() => this.dispatchEvent(new Event('close')), 0);
   };
-  Element.prototype.scrollIntoView ??= function scrollIntoView() {};
 });
 
 beforeEach(async () => {
@@ -1597,24 +1596,135 @@ describe('ファイルを足して並べる', () => {
 });
 
 describe('確かめる', () => {
-  it('確認が要る頁だけに絞り、指摘から該当の頁へ飛ぶ', async () => {
+  it('指摘を重いものから項目ごとに並べ、開くと該当する頁だけが出る', async () => {
     const tilted = { ...ODD[1], size: { width: 515, height: 364 } };
     drop([file('猫_奇数.pdf', pdf([ODD[0], tilted, ODD[2], ODD[3]])), file('猫_偶数.pdf', pdf(EVEN))]);
     await settled(2);
 
-    expect($('problems').textContent).toContain('向きが他と違う頁が 1 頁あります。');
+    const items = [...document.querySelectorAll('#problems > li')];
+    expect(items.map((li) => li.textContent)).toEqual(['向きが他と違う頁が 1 頁あります。']);
+    const details = items[0].querySelector('details');
+    expect(details.open).toBe(false);
+    const pages = () =>
+      [...details.querySelectorAll('.bm-problem-pages > li')].map((li) => li.querySelector('strong').textContent);
+    expect(pages()).toEqual([]); // 閉じているあいだは頁を作らない
 
-    const radio = document.querySelector('input[name="pageFilter"][value="issues"]');
-    radio.checked = true;
-    radio.dispatchEvent(new Event('change'));
-    expect(gridLabels()).toEqual(['3 頁']);
+    details.open = true;
+    await flush(); // toggle はブラウザと同じく後から届く
+    expect(pages()).toEqual(['3 頁']);
 
-    // 絞った一覧に無い頁へ飛ぶときは、すべての頁に戻す。
-    const scroll = vi.spyOn(Element.prototype, 'scrollIntoView');
-    const jump = [...document.querySelectorAll('#problems li')].find((li) => li.textContent.includes('向き'));
-    jump.querySelector('button').click();
-    expect(scroll).toHaveBeenCalled();
-    expect(document.querySelector('[data-page-key="f1:1"]').classList.contains('focus')).toBe(true);
+    // 項目の中で番号を直して描き直しても、開いたまま、頁も残る。
+    change(details.querySelector('.bm-page-number'), '3');
+    expect(details.isConnected).toBe(true);
+    expect(details.open).toBe(true);
+    expect(pages()).toEqual(['3 頁']);
+    expect(details.querySelector('.bm-page-number').value).toBe('3');
+
+    // 重い指摘（重なり）は上に出る。頁の無い指摘（抜け）は開かない。
+    const number = (key) => document.querySelector(`#pageGrid [data-page-key="${key}"] .bm-page-number`);
+    change(number('f1:2'), '7');
+    change(number('f1:1'), '7');
+    const labels = () =>
+      [...document.querySelectorAll('#problems > li')].map((li) => (li.querySelector('summary') ?? li).textContent);
+    expect(labels()).toEqual([
+      '7 頁が 3 回あります（同じ束を 2 度スキャンした・番号の読み違い）。',
+      '3・5 頁が見つかりません（計 2 頁）。束の入れ忘れ・重送の可能性があります。',
+      '向きが他と違う頁が 1 頁あります。',
+    ]);
+    expect(document.querySelectorAll('#problems > li')[1].querySelector('details')).toBe(null);
+    const duplicate = document.querySelector('#problems details');
+    const pagesIn = (d) => [...d.querySelectorAll('.bm-problem-pages strong')].map((s) => s.textContent);
+    duplicate.open = true;
+    await flush();
+    expect(pagesIn(duplicate)).toEqual(['7 頁', '7 頁', '7 頁']);
+
+    // 項目の中で直して数が変わっても、項目は作り直さず、文と頁だけ変わる。
+    change(duplicate.querySelector('[data-page-key="f1:1"] .bm-page-number'), '3');
+    expect(document.querySelector('#problems details')).toBe(duplicate);
+    expect(duplicate.open).toBe(true);
+    expect(duplicate.querySelector('summary').textContent).toBe(
+      '7 頁が 2 回あります（同じ束を 2 度スキャンした・番号の読み違い）。'
+    );
+    expect(pagesIn(duplicate)).toEqual(['7 頁', '7 頁']);
+
+    // 項目の中の頁から、すべての頁の一覧のその頁へ飛ぶ。
+    const scroll = vi.fn();
+    const target = document.querySelector('#pageGrid [data-page-key="f1:2"]');
+    target.scrollIntoView = scroll;
+    vi.useFakeTimers();
+    try {
+      duplicate.querySelector('[data-page-key="f1:2"] button[title*="前後"]').click();
+      expect(scroll).toHaveBeenCalled();
+      expect(target.classList.contains('focus')).toBe(true);
+      vi.advanceTimersByTime(1600);
+      expect(target.classList.contains('focus')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 直して消えた項目の開閉は忘れる（また出ても閉じている）。
+    change(number('f1:2'), '');
+    expect(labels()).toEqual(['向きが他と違う頁が 1 頁あります。']);
+    change(number('f1:2'), '7');
+    const again = document.querySelector('#problems details');
+    expect(again.open).toBe(false);
+    expect(document.querySelectorAll('#problems details')[1].open).toBe(true);
+
+    // 開いた直後、toggle が届く前に描き直しても、頁は toggle で並べる。
+    again.open = true;
+    change(number('f1:0'), '1');
+    expect(pagesIn(again)).toEqual([]);
+    await flush();
+    expect(pagesIn(again)).toEqual(['7 頁', '7 頁']);
+    change(number('f1:0'), '');
+
+    // 開いた直後、toggle が届く前に項目が消えても、後から届いた toggle は何もしない
+    // （また出たときに閉じていて、開けば頁が並ぶ）。
+    again.open = false;
+    await flush();
+    const gone = document.querySelector('#problems details');
+    gone.open = true;
+    change(number('f1:2'), '');
+    await flush();
+    change(number('f1:2'), '7');
+    const back = document.querySelector('#problems details');
+    expect(back).not.toBe(gone);
+    expect(back.open).toBe(false);
+    back.open = true;
+    await flush();
+    expect(pagesIn(back)).toEqual(['7 頁', '7 頁']);
+    change(number('f1:2'), '');
+
+    // 項目の中の頁も、押すと拡大する。
+    details.querySelector('.bm-thumb').click();
+    await flush();
+    expect($('previewTitle').textContent).toBe('3 頁（猫_奇数.pdf の 2 頁目）');
+    $('previewCloseBtn').click();
+
+    details.open = false;
+    await flush();
+    expect(pages()).toEqual([]);
+  });
+
+  it('該当する頁が多い項目は、少しずつ並べる', async () => {
+    // 文字情報が 1 頁にだけある本（残りの 70 頁に「文字情報の無い頁」が付く）。
+    const pages = Array.from({ length: 71 }, (_, i) => page(`p${i + 1}`, i + 1, i ? { noText: true } : {}));
+    drop([file('猫.pdf', pdf(pages))]);
+    await settled(1);
+
+    const details = [...document.querySelectorAll('#problems details')].find((d) =>
+      d.querySelector('summary').textContent.startsWith('文字情報')
+    );
+    details.open = true;
+    await flush();
+    const count = () => details.querySelectorAll('.bm-problem-pages > li').length;
+    const more = details.querySelector('.bm-problem-more');
+    expect(count()).toBe(60);
+    expect(more.hidden).toBe(false);
+    expect(more.textContent).toBe('さらに 10 頁並べる（残り 10 頁）');
+    more.click();
+    expect(count()).toBe(70);
+    expect(more.hidden).toBe(true);
   });
 
   it('同じ頁が 2 度入っていれば、中身で見つけて互いを挙げる（番号の無い表紙も）', async () => {

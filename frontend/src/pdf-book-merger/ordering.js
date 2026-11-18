@@ -213,7 +213,9 @@ export function buildBookOrder(files, numberings, overrides = new Map()) {
  *
  * @param {ReturnType<typeof buildBookOrder>} order
  * @param {{sheets?:boolean}} [options] sheets: 片面ずつの束を組み合わせたか
- * @returns {{level:'error'|'warn'|'info', kind:string, message:string, pageKeys:string[]}[]}
+ * @returns {{level:'error'|'warn'|'info', kind:string, message:string, pageKeys:string[], number?:number, numbers?:number[]}[]}
+ *   number: 同じ種類の指摘が番号ごとに出るときの、その番号（重なり、枝番の頁の抜け・差し替え）。
+ *   numbers: 抜けている番号（枝番でない頁の抜け）
  */
 export function checkSequence(order, { sheets = false } = {}) {
   const problems = [];
@@ -254,6 +256,7 @@ export function checkSequence(order, { sheets = false } = {}) {
       kind: 'duplicate',
       message: `${number} 頁が ${items.length} 回あります（同じ束を 2 度スキャンした・番号の読み違い）。`,
       pageKeys: items.map((item) => item.pageKey),
+      number,
     });
   }
 
@@ -284,6 +287,7 @@ export function checkSequence(order, { sheets = false } = {}) {
           kind: 'missing',
           message: `${absent.join('・')} 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。`,
           pageKeys: [],
+          number,
         });
       }
       const instead = [...replaced.entries()]
@@ -295,6 +299,7 @@ export function checkSequence(order, { sheets = false } = {}) {
           kind: 'replaced',
           message: `${compressRanges(instead)} 頁は無く、枝番の付いた頁（${number}-${Math.min(...present)}〜${number}-${top}）があります。差し替えられた頁とみなしました。`,
           pageKeys: numbered.filter((item) => item.branch && item.number === number).map((item) => item.pageKey),
+          number,
         });
       }
     }
