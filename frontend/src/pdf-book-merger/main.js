@@ -48,10 +48,12 @@ import {
   sideOf,
 } from './ordering.js';
 import {
+  mergeCandidates,
   numberingSequence,
   pageNumberCandidates,
   pageNumberText,
   parsePageNumber,
+  unsettledPages,
 } from './page-numbers.js';
 import { findScanImages } from './scan-images.js';
 import { pdfLibViews } from './pdf-lib-views.js';
@@ -666,13 +668,14 @@ async function readFile(file) {
     // PDF（暗号化など）は数が無い（描くときは 0 として扱う）。
     for (const page of file.pages) page.softMasks = scans[page.index] ? 0 : softMasks[page.index];
 
-    // 文字情報に番号の無い頁は、画像の余白を OCR する。名前で表紙と分かる
+    // 文字情報だけでは番号の決まらない頁（候補が無い・並びに合わない）は、
+    // 画像の余白を OCR する（page-numbers.js の unsettledPages）。名前で表紙と分かる
     // もののほかは、配置を決める前に番号を読み切る（文字情報の無い束も、画像
     // から番号が読めれば本文と分かる）。OCR の準備は、画像を描く間に進める。
     // ソフトマスクの多い頁（InDesign の影・ぼかしのある表紙など）は粗く描き、
     // OCR しない（OCR に足りる細かさで描くと、1 頁で何十秒もかかる。
     // pdf-source.js の manySoftMasks）。番号は前後の頁から補う。
-    const unnumbered = roleFromName(file.name) ? [] : file.pages.filter((page) => page.candidates.length === 0);
+    const unnumbered = roleFromName(file.name) ? [] : unsettledOf(file);
     const ocrPages = new Set(unnumbered.filter((page) => !manySoftMasks(page.softMasks)).map((page) => page.index));
     if (ocrPages.size) startOcr();
     const coarse = file.pages.filter((page) => manySoftMasks(page.softMasks)).length;
@@ -685,13 +688,13 @@ async function readFile(file) {
     const boxesBefore = boxesReadSoFar();
     const drawnAt = await analyzePages(file, scans, ocrPages);
     // あとから本文に変えたとき（名前で表紙と見て OCR しなかったファイル）の
-    // ために、番号の見つかっていない頁の JPEG を残す（PDF 全体を読み直さずに
+    // ために、番号の決まっていない頁の JPEG を残す（PDF 全体を読み直さずに
     // 済む）。JPEG はファイルのバイト列の一部を指すだけなので（pdf-lib-views.js）、
     // 残してもメモリはほとんど使わない。その書き換えが効いていないと JPEG は
     // 写しなので、残さずに、あとで調べ直す。
     if (pdfLibViews && !file.stashed) {
-      for (const page of file.pages) {
-        if (page.candidates.length === 0 && !page.ocr) page.scan = scans[page.index] ?? null;
+      for (const page of unsettledOf(file)) {
+        if (!page.ocr) page.scan = scans[page.index] ?? null;
       }
     }
     const byOcr = file.pages.filter((page) => page.ocr && page.candidates.some((c) => c.source === 'ocr')).length;
@@ -700,7 +703,7 @@ async function readFile(file) {
         `余白を OCR ${ocrPages.size} 頁・うち番号が読めた頁 ${byOcr}、${seconds(imagesStarted)}。` +
         `うち頁を描き終えるまで ${seconds(imagesStarted, drawnAt)}、読んだ文字のかたまり ${boxesReadSoFar() - boxesBefore}）` +
         (coarse ? `。ソフトマスクの多い ${coarse} 頁は粗く描きました` : '') +
-        (skippedOcr ? `（うち番号の見つからない ${skippedOcr} 頁は、余白を OCR しませんでした）` : '') +
+        (skippedOcr ? `（うち番号の決まらない ${skippedOcr} 頁は、余白を OCR しませんでした）` : '') +
         (redrawnSafely(file.doc) ? '。pdf.js で描けなかった頁があり、安全な設定で開き直して描き直しました' : '')
     );
 
@@ -876,8 +879,8 @@ async function readStrips(file, page, strips) {
   try {
     if (!files.includes(file) || !(await startOcr())) return;
     const results = await Promise.all(strips.map((strip) => readStrip(strip)));
-    // OCR するのは文字情報から番号の候補が 1 つも出なかった頁だけなので、置き換えてよい。
-    page.candidates = pageNumberCandidates(results.flat(), 'ocr');
+    // 文字情報の候補（並びに合わなかったもの）も残し、どれが合うかは並びで決める。
+    page.candidates = mergeCandidates(page.candidates, pageNumberCandidates(results.flat(), 'ocr'));
     page.ocr = true;
     page.scan = null;
   } catch {
@@ -908,7 +911,7 @@ function isPdf(bytes) {
 }
 
 /**
- * 読み終えたファイルの、番号の見つかっていない頁の余白を OCR する（あとから
+ * 読み終えたファイルの、番号の決まっていない頁の余白を OCR する（あとから
  * 本文に変えたとき）。読んでいる間も、ファイルは並びに入れたままにする
  * （頁が抜けて見えないように）。読み終えたら並べ直す。
  *
@@ -961,12 +964,18 @@ async function readMarginsWithOcr(file, pages) {
   await Promise.all(reading);
 }
 
-/** 読み終えたファイルの、番号の見つかっていない頁の OCR を頼む（あとから本文に変えたとき）。 */
+/** ファイルの、文字情報だけでは番号の決まらない頁（unsettledPages）。 */
+function unsettledOf(file) {
+  const indexes = unsettledPages(file.pages.map((page) => page.candidates));
+  return file.pages.filter((page) => indexes.has(page.index));
+}
+
+/** 読み終えたファイルの、番号の決まっていない頁の OCR を頼む（あとから本文に変えたとき）。 */
 function queueLateOcr(file) {
   // 読んでいる最中のファイルは、もう一度は頼まない（切り替えを繰り返しても
   // 同じ頁を 2 度読まない）。
   if (file.role !== 'body' || file.ocrBusy) return;
-  const pages = file.pages.filter((page) => page.candidates.length === 0 && !page.ocr && !manySoftMasks(page.softMasks));
+  const pages = unsettledOf(file).filter((page) => !page.ocr && !manySoftMasks(page.softMasks));
   if (pages.length === 0) return;
   file.ocrBusy = true;
   renderFile(file);
