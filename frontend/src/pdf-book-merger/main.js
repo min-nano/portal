@@ -295,6 +295,7 @@ function renderProgress() {
     // から測る。ベタ塗りの右端から測ると、ベタ塗りが仕事の終わりに近づいたときに
     // ストライプが次の仕事の区間まではみ出し、仕事を終えて消えるときに右端が戻って見える。
     $('progressLoaded').style.setProperty('--bm-bar-from', `${(progress.jobStart() - done) * 100}%`);
+    // aria-valuenow は最後に書く（テストはこれを合図に、ほかの値を読む）。
     bar.setAttribute('aria-valuenow', String(done));
   }
   renderLog();

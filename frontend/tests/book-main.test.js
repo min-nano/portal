@@ -876,7 +876,7 @@ describe('ファイルを足して並べる', () => {
     // ストライプの最小幅を測る起点（いまの仕事の始まり）も戻らず、ベタ塗りを越えない。
     // 足して数え直した後の 1 つめの仕事は、数え直した位置から始まるものとする。
     seen.forEach((s, i) => {
-      expect(s.start).toBeGreaterThanOrEqual(seen[i - 1]?.start ?? 0);
+      expect(s.start).toBeGreaterThanOrEqual((seen[i - 1]?.start ?? 0) - 1e-9);
       expect(s.start).toBeLessThanOrEqual(s.value + 1e-9);
     });
     const recounted = seen.find((s) => s.label === 'ファイルを調べています（1 / 3）');

@@ -130,7 +130,7 @@ button.bm-help-btn:hover,
      から測る。ベタ塗りの右端から測ると、ベタ塗りが進むにつれて右端が仕事の終わりを越えて
      伸び、仕事を終えて消えるときに戻って見える。仕事の始まりから測れば、1 つの仕事の間は
      右端が動かず、次の仕事では先へ進む。 */
-  min-width: max(0px, calc(var(--bm-bar-from, 0px) + 0.75rem));
+  min-width: calc(var(--bm-bar-from, 0px) + 0.75rem); /* 負になれば 0 として扱われる */
   /* ベタ塗りと同じ色を薄めて使う（明るい・暗いどちらの配色でも同じ見え方にする）。 */
   --bm-bar-stripe: color-mix(in srgb, var(--brand-600) 60%, transparent);
   background: linear-gradient(
