@@ -298,42 +298,74 @@ export function detectStep(candidates, breaks = new Set()) {
  * 枝番の読めた頁（57-1）は、読めたとおりの番号にして、この並びからは外す。
  * 枝番の頁を挟んだところでは、ずれを費用なしで切り替えてよい。
  *
+ * 頁ごとに手で入れた番号（fixed）は確かなものとして、並びが必ずそこを通るように
+ * する（読み取った候補より優先する）。読み取りがうまくいかなかったファイルでも、
+ * 何頁かに番号を入れれば、残りの頁は歩幅に沿ってそこから決まる。手で入れた
+ * 枝番の頁（57-1）と間に挟む頁（12.5）は、読めた枝番の頁と同じく並びから外す
+ * （枝番の頁を挟んだところでは番号が飛んでもよい。間に挟む頁は飛ばさない）。
+ *
  * @param {{value:number,score:number,source:string}[][]} candidates 頁ごとの候補
- * @param {{step?:number}} [options] 歩幅が分かっているとき（他のファイルから）
+ * @param {{step?:number, fixed?:({number:number, branch?:number}|null|undefined)[]}} [options]
+ *   step: 歩幅が分かっているとき（他のファイルから）。
+ *   fixed: 頁ごとに手で入れた番号（入れていない頁は null）
  * @returns {{
  *   step: number|null,
  *   pages: {number:number|null, branch?:number, status:string, read:object|null}[],
  * }}
  *   status は detected（読めた番号どおり）/ inferred（前後から推定）/
  *   conflict（読めた番号が前後と食い違う）/ uncertain（ずれの境目で決められない）/
- *   unknown（ファイルの中に手掛かりが無い）
+ *   unknown（ファイルの中に手掛かりが無い）/ manual（手で入れた番号）
  */
 export function inferFileNumbers(candidates, options = {}) {
+  const fixed = candidates.map((_, index) => options.fixed?.[index] ?? null);
   // 枝番の頁は読めた番号のまま置き、残りの頁だけで並びを推定する。枝番の頁を
   // 挟んだところでは、番号が飛んでもよい（差し替えで元の頁が抜けているので）。
-  const branches = candidates.map(branchCandidate);
+  const pages = candidates.map((list, index) => {
+    const manual = fixed[index];
+    if (manual) {
+      if (!manual.branch && Number.isInteger(manual.number)) return null;
+      const branch = manual.branch ? { branch: manual.branch } : {};
+      return { number: manual.number, ...branch, status: 'manual', read: matchingRead(list, manual) };
+    }
+    const read = branchCandidate(list);
+    return read ? { number: read.value, branch: read.branch, status: 'detected', read } : null;
+  });
   const mainIndex = [];
   const breaks = new Set();
-  branches.forEach((branch, index) => {
-    if (branch) breaks.add(mainIndex.length);
-    else mainIndex.push(index);
+  pages.forEach((page, index) => {
+    if (page?.branch) breaks.add(mainIndex.length);
+    else if (!page) mainIndex.push(index);
   });
   const main = inferSequence(
-    mainIndex.map((index) => candidates[index]),
+    mainIndex.map((index) =>
+      fixed[index] ? [{ value: fixed[index].number, score: MANUAL_SCORE, source: 'manual' }] : candidates[index]
+    ),
     options.step,
-    breaks
-  );
-  const pages = branches.map((read) =>
-    read ? { number: read.value, branch: read.branch, status: 'detected', read } : null
+    breaks,
+    mainIndex.map((index) => fixed[index] !== null)
   );
   mainIndex.forEach((index, k) => {
-    pages[index] = main.pages[k];
+    const manual = fixed[index];
+    pages[index] = manual
+      ? { number: manual.number, status: 'manual', read: matchingRead(candidates[index], manual) }
+      : main.pages[k];
   });
   return { step: main.step, pages };
 }
 
+/** 手で入れた番号と同じに読めていた候補（読み取りの内訳で「読めた頁」に数える）。無ければ null。 */
+function matchingRead(list, { number, branch }) {
+  return list.find((c) => c.value === number && (c.branch ?? null) === (branch ?? null)) ?? null;
+}
+
+/**
+ * 手で入れた番号の点数。歩幅を多数決で選ぶとき、読み取った候補より重く数える
+ * （手で入れた 2 頁から歩幅が決まるように）。並びは点数によらずその番号を通す。
+ */
+const MANUAL_SCORE = 10;
+
 /** 枝番の頁を除いた並びの、頁ごとの番号（inferFileNumbers の本体）。 */
-function inferSequence(candidates, knownStep, breaks) {
+function inferSequence(candidates, knownStep, breaks, fixed) {
   const count = candidates.length;
   const step = knownStep ?? detectStep(candidates, breaks).step;
   const unknown = () => ({
@@ -348,9 +380,11 @@ function inferSequence(candidates, knownStep, breaks) {
   ];
   if (offsets.length === 0) return unknown();
 
+  // 手で入れた頁は、その番号に合わないずれを取れない。
   const emission = (index, offset) => {
     const hit = candidates[index].find((c) => c.value - step * index === offset);
-    return hit ? hit.score : 0;
+    if (hit) return hit.score;
+    return fixed[index] ? -Infinity : 0;
   };
 
   // score[k] = 頁 i までを見て、頁 i のずれが offsets[k] のときの最大点。

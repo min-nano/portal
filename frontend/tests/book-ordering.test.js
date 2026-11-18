@@ -63,8 +63,8 @@ function book() {
   ];
 }
 
-function arrange(files, overrides) {
-  const numberings = numberFiles(files);
+function arrange(files, overrides = new Map()) {
+  const numberings = numberFiles(files, overrides);
   return buildBookOrder(files, numberings, overrides);
 }
 
@@ -183,6 +183,27 @@ describe('buildBookOrder', () => {
     expect(order[at]).toMatchObject({ number: 2.5, status: 'manual' });
     expect(order[at - 1].number).toBe(2);
     expect(order[at + 1].number).toBe(3);
+  });
+
+  it('頁ごとに直した番号から、同じファイルの残りの頁を決め直す', () => {
+    // 読み違いだらけの奇数頁の束。1 頁直せば、偶数頁の束の歩幅を借りて残りも並ぶ。
+    const files = [file('odd', [15, null, 2, null]), file('even', [2, 4, 6, 8])];
+    const order = arrange(files, new Map([['odd:0', { number: 1 }]]));
+
+    expect(order.map(labelOf)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(order.filter((e) => e.fileKey === 'odd').map((e) => e.status)).toEqual([
+      'manual',
+      'inferred',
+      'conflict',
+      'inferred',
+    ]);
+  });
+
+  it('ファイルごとに番号を決めたファイルでは、頁ごとに直した番号はその頁だけ', () => {
+    const files = [file('odd', [null, null, null], { manual: { start: 1, step: 2 } })];
+    const order = arrange(files, new Map([['odd:0', { number: 7 }]]));
+
+    expect(order.map(labelOf)).toEqual([3, 5, 7]);
   });
 
   it('ファイルごとに手で決めた番号で並べる', () => {

@@ -10,6 +10,7 @@
 //
 // 本文の頁の番号は page-numbers.js が決め、ここでは並べて確かめるだけにする。
 // 手で直した番号（頁ごと・ファイルごと）は、読み取った番号より優先する。
+// 頁ごとに直した番号は確かなものとして、同じファイルの残りの頁の番号を推定し直す。
 // 枝番の頁（57-1, 57-2, …）は、同じ番号の頁（57）のあと、次の番号（58）の前に並べる。
 
 import { inferFileNumbers, manualFileNumbers, pageNumberText, STEPS } from './page-numbers.js';
@@ -67,19 +68,28 @@ export function guessRole(name, pages) {
  * いちばん多い歩幅を借りる（奇数頁の束が何回かに分かれていれば、どれも同じ
  * 歩幅のはずなので）。
  *
+ * 頁ごとに手で入れた番号（overrides）は確かなものとして推定に入れ、残りの頁は
+ * そこから歩幅に沿って決め直す（読み取りがうまくいかなかった束でも、何頁か
+ * 直せば並ぶように）。ファイルごとに番号を入れた（manual）ファイルは、その番号の
+ * まま（頁ごとの番号は buildBookOrder で上書きする）。
+ *
  * @param {{key:string, role:string, manual:?{start:number,step:number},
- *          pages:{candidates:object[]}[]}[]} files
+ *          pages:{key:string, candidates:object[]}[]}[]} files
+ * @param {Map<string, {number:number, branch?:number}>} [overrides] 頁ごとに手で決めた番号
  * @returns {Map<string, ReturnType<typeof inferFileNumbers>>}
  */
-export function numberFiles(files) {
+export function numberFiles(files, overrides = new Map()) {
   const result = new Map();
   const body = files.filter((file) => file.role === 'body');
+  const infer = (file, step) =>
+    inferFileNumbers(
+      file.pages.map((page) => page.candidates),
+      { step, fixed: file.pages.map((page) => overrides.get(page.key)) }
+    );
   for (const file of body) {
     result.set(
       file.key,
-      file.manual
-        ? manualFileNumbers(file.pages.length, file.manual.start, file.manual.step)
-        : inferFileNumbers(file.pages.map((page) => page.candidates))
+      file.manual ? manualFileNumbers(file.pages.length, file.manual.start, file.manual.step) : infer(file)
     );
   }
 
@@ -97,7 +107,7 @@ export function numberFiles(files) {
   if (prior !== null) {
     for (const file of body) {
       if (file.manual || result.get(file.key).step !== null) continue;
-      result.set(file.key, inferFileNumbers(file.pages.map((page) => page.candidates), { step: prior }));
+      result.set(file.key, infer(file, prior));
     }
   }
   return result;
