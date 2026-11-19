@@ -116,6 +116,7 @@ import {
   splitRanges,
   middleCut,
 } from './split.js';
+import { FEATURE_VERSION, pageFeatures, pageLayout } from './features.js';
 import { crc32, zipBlob } from './zip.js';
 import { textQuality } from './text-quality.js';
 import { createDuplicateFinder, duplicateIssues, textPrint } from './duplicates.js';
@@ -169,6 +170,7 @@ let view = {
   items: [],
   shown: [],
   ranks: [],
+  suggested: [],
   places: new Map(),
   anyNumbered: false,
 };
@@ -846,6 +848,8 @@ async function readFile(file) {
         // 目次の項目（章の名前と頁番号）と柱。区切りらしさの手掛かりにする。
         tocEntries: tocEntries(lines),
         running: runningHead(lines),
+        // 頁のレイアウト（行の数・字の大きさなど）。分け方を学ぶためのデータに入れる。
+        layout: pageLayout(lines),
         bytes: 0,
         measure: null,
         thumbUrl: '',
@@ -1499,17 +1503,30 @@ function refresh() {
   const fromToc = tocStarts(order, byKey);
   const items = order.map((entry, index) => {
     const file = byKey.get(entry.fileKey);
-    const { bytes, outline, heading, running } = file.pages[entry.pageIndex];
+    const { bytes, outline, heading, running, layout } = file.pages[entry.pageIndex];
     const number = entry.role === 'body' && !entry.branch ? entry.number : null;
     const toc = fromToc.get(index) ?? null;
     // 名前には、目次の題があればそれを使う（扉の OCR の文字より崩れていない）。
-    return { fileKey: entry.fileKey, role: entry.role, fileName: file.name, bytes, outline, heading: toc ?? heading, running, number, toc };
+    return {
+      fileKey: entry.fileKey,
+      role: entry.role,
+      fileName: file.name,
+      bytes,
+      outline,
+      heading: toc ?? heading,
+      running,
+      number,
+      toc,
+      layout,
+    };
   });
   const breaks = breakCandidates(items);
   const ranks = breakRanks(items, breaks);
+  // 自動の提案（手で決めたときも、分け方を学ぶためのデータに残すので求める）。
+  const suggested = splitByRank(items, breaks, splitLimits, ranks);
   const starts = manualSplits
     ? order.flatMap((entry, index) => (index > 0 && manualSplits.has(entry.pageKey) ? [index] : []))
-    : splitByRank(items, breaks, splitLimits, ranks);
+    : suggested;
   // 分けたファイルの名前に添える、区切りの名前。
   const labels = partLabels(items, breaks, starts, { joinNext: !manualSplits, ranks });
 
@@ -1528,6 +1545,7 @@ function refresh() {
     items,
     shown,
     ranks,
+    suggested,
   };
   // 自動で提案した分ける位置と、その訳（変わったときだけ）。提案が思ったところと違う
   // ときに、どの手掛かりで選んだかを記録から追えるように。
@@ -2327,6 +2345,7 @@ function renderSplit() {
   const { order, starts } = view;
   const spans = splitRanges(order.length, starts);
   $('splitAutoBtn').hidden = !manualSplits;
+  $('trainingBox').hidden = order.length < 2;
   // 分けるとき（how）と、1 ファイルにまとめるとき（why）の、そうした訳。
   const limited = splitLimits.megabytes || splitLimits.pages;
   let how;
@@ -3163,6 +3182,39 @@ function renderDownloads() {
   );
 }
 
+/**
+ * 分け方を学ぶためのデータ（頁ごとの特徴と、今の分け方を正解としたもの）を JSON で
+ * 保存する。手で直した分け方を集めて、区切りの判定を学ばせるため（この端末に保存する
+ * だけで、どこにも送らない）。
+ */
+async function saveTrainingData() {
+  const { order, items, breaks, ranks, starts, suggested } = view;
+  const features = pageFeatures(items, breaks, ranks);
+  const cut = new Set(starts);
+  const proposed = new Set(suggested);
+  const data = {
+    version: FEATURE_VERSION,
+    createdAt: new Date().toISOString(),
+    files: [...new Set(items.map((item) => item.fileName))],
+    limits: splitLimits,
+    manual: Boolean(manualSplits),
+    pages: order.map((entry, index) => ({
+      label: displayLabel(entry),
+      // 正解（今の分け方でこの頁の前で分けるか）と、自動の提案。
+      start: cut.has(index) ? 1 : 0,
+      suggested: proposed.has(index) ? 1 : 0,
+      features: features[index],
+      // 手掛かりの文字（読み違いを確かめるため）。
+      reason: breaks[index] ? breakReason(breaks[index]) : '',
+      running: items[index].running,
+      largest: items[index].layout.largest,
+    })),
+  };
+  const text = JSON.stringify(data);
+  const bytes = new TextEncoder().encode(text);
+  await save(bytes, `${outputName().replace(/\.pdf$/i, '')}_分け方.json`, bytes.length, 'application/json');
+}
+
 /** 結合した PDF（分けたときは k 番目のファイル）を保存する。 */
 async function download(k = 0) {
   // ボタンは、結合した PDF があるときだけ押せる（捨てたら押せなくする。renderDownloads）。
@@ -3315,6 +3367,7 @@ function wireUp() {
     }
   );
   $('driveBtn').addEventListener('click', addFromDrive);
+  $('trainingBtn').addEventListener('click', saveTrainingData);
   $('localBtn').addEventListener('click', () => $('localInput').click());
   $('localInput').addEventListener('change', (event) => {
     addLocal(event.target.files);

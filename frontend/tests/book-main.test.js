@@ -3141,6 +3141,31 @@ describe('分ける', () => {
     expect(logText()).toContain(`40 頁目〜「柱${String.fromCharCode(0x4e00 + 39)}」 ほか 2 件）`);
   });
 
+  it('分け方を学ぶためのデータ（頁ごとの特徴・分けた位置・自動の提案）を JSON で保存できる', async () => {
+    const heads = ['第1章 1.1 材料', '第1章 1.1 材料', '第1章 1.2 下地', '第1章 1.2 下地', null, '第2章 2.1 施工', '第2章 2.1 施工'];
+    drop([file('本.pdf', pdf(heads.map((head, i) => page(`w${i + 1}`, i + 1, { mb: 10, ...(head ? { head } : { heading: '第2章 施工' }) }))))]);
+    await settled(1);
+    expect($('trainingBox').hidden).toBe(false);
+    change($('splitMegabytes'), '45');
+    // 手で直した位置を正解にし、自動の提案も残す。
+    splitButton('f1:2').click();
+    $('trainingBtn').click();
+    await vi.waitFor(() => expect(logText()).toContain('「本_分け方.json」をダウンロードしました'));
+    const saved = URL.createObjectURL.mock.calls.at(-1)[0];
+    const data = JSON.parse(await saved.text());
+    expect(data).toMatchObject({ version: 1, files: ['本.pdf'], manual: true });
+    expect(data.pages.map((p) => p.start)).toEqual([0, 0, 1, 0, 1, 0, 0]);
+    expect(data.pages.map((p) => p.suggested)).toEqual([0, 0, 0, 0, 1, 0, 0]);
+    expect(data.pages[4]).toMatchObject({
+      label: '5 頁',
+      reason: '見出し「第2章 施工」',
+      running: '',
+      largest: '第2章 施工',
+      features: { heading: 2, running: 3, centered: 1 },
+    });
+    expect(data.pages[2]).toMatchObject({ running: '第1章 1.2 下地', features: { running: 2, step: 1 } });
+  });
+
   it('見出しと読んだ頁が多ければ、記録には頭の方だけを出す', async () => {
     drop([file('本.pdf', pdf(Array.from({ length: 14 }, (_, i) => page(`m${i + 1}`, i + 1, { heading: `第${i + 1}章` }))))]);
     await settled(1);
