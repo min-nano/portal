@@ -1907,7 +1907,7 @@ function pageCard(entry, file, issues, { jump }) {
   const label = el(document, 'div', 'bm-page-label');
   const name = el(document, 'strong', null, displayLabel(entry));
   label.append(name);
-  // 番号で並べる配置のファイルの頁には、番号を直す欄を見出しの中に隠しておき、✎ を押すと
+  // 番号で並べる配置のファイルの頁には、番号を直す欄を見出しの中に隠しておき、「修正」を押すと
   // 見出しをその場で欄に替える（欄を別の行に置くと、カードが 1 行ぶん高くなるため）。
   // 番号を読めなかった頁も直せる。何頁か直せば、残りの頁はその番号から推定し直す。
   if (entry.role === 'body' || file.role === 'body') label.append(...numberEditor(entry, name, { jump }));
@@ -1930,7 +1930,7 @@ function pageCard(entry, file, issues, { jump }) {
 }
 
 /**
- * 頁の番号を直す欄と、それを開く ✎ のボタン（見出しの中に並べる）。
+ * 頁の番号を直す欄と、それを開く「修正」のボタン（見出しの中に並べる）。
  * 欄には手で入れた番号だけを入れ、いまの番号は薄く見本に出す。Enter か外を押すと閉じて
  * 確定し、Esc で元に戻して閉じる。空にすると手で入れた番号を消す。推定した番号と同じ番号を
  * 打てば、その番号を確かなものにする。
@@ -1960,7 +1960,7 @@ function numberEditor(entry, name, { jump }) {
     input.focus();
     input.select();
   };
-  // 一覧の中のこの頁の ✎（確定するとカードを作り直すので、その都度探す。指摘の項目から
+  // 一覧の中のこの頁の「修正」（確定するとカードを作り直すので、その都度探す。指摘の項目から
   // 外れたり、項目ごと消えたりしたら無い）。
   const editIn = (list) =>
     list.isConnected ? list.querySelector(`[data-page-key="${entry.pageKey}"] .bm-page-edit`) : null;
@@ -1985,9 +1985,9 @@ function numberEditor(entry, name, { jump }) {
     return true;
   };
 
-  const edit = smallButton('✎', title, () => {
+  const edit = smallButton('修正', title, () => {
     // ほかの頁の欄が開いていれば、先に閉じて確定する。番号が変わるとほかの頁のカードも
-    // 作り直すので、作り直した後のこの頁の ✎ を押し直す。
+    // 作り直すので、作り直した後のこの頁の「修正」を押し直す。
     const list = listOf();
     const active = document.activeElement;
     if (active.classList.contains('bm-page-number')) active.blur();
@@ -1996,7 +1996,7 @@ function numberEditor(entry, name, { jump }) {
     else next?.click();
   }, 'secondary bm-page-edit');
   // 押し始めでフォーカスを移さない（移すと、開いている欄がその場で確定してカードを作り直し、
-  // 押し終わる前にこの ✎ が消えて、押しても開かない）。
+  // 押し終わる前にこの「修正」が消えて、押しても開かない）。
   edit.addEventListener('mousedown', (event) => event.preventDefault());
 
   input.addEventListener('keydown', (event) => {
@@ -2007,7 +2007,7 @@ function numberEditor(entry, name, { jump }) {
     const list = listOf();
     // 正しくない番号なら、欄を開いたまま直してもらう。
     if (!commit()) return;
-    // 閉じたら ✎ にフォーカスを戻す（作り直したカードなら、その ✎ へ。指摘の項目から外れたら、
+    // 閉じたら「修正」にフォーカスを戻す（作り直したカードなら、その「修正」へ。指摘の項目から外れたら、
     // すべての頁の一覧のこの頁へ）。
     (editIn(list) ?? editIn($('pageGrid'))).focus();
   });

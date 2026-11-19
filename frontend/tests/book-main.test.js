@@ -823,7 +823,7 @@ describe('ファイルを足して並べる', () => {
     // 1 頁が動いたので、最初の頁が偶数（2 頁）になった。
     expect($('problems').textContent).toContain('最初の頁が偶数（2 頁）です。');
 
-    // 欄は見出しの中に隠れていて、✎ を押すとその場で番号と入れ替わる。欄には手で入れた
+    // 欄は見出しの中に隠れていて、「修正」を押すとその場で番号と入れ替わる。欄には手で入れた
     // 番号だけを入れ、いまの番号は見本に出す。
     expect(first.isConnected).toBe(false); // 番号を直した頁のカードは作り直している
     expect(document.querySelector('#pageGrid [data-page-key="f1:0"] .bm-page-number').value).toBe('4.5');
@@ -848,7 +848,7 @@ describe('ファイルを足して並べる', () => {
     expect($('message').textContent).toBe('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。');
     expect(third.hidden).toBe(false);
     expect(third.value).toBe('abc');
-    // Esc は元に戻して閉じ、断りも消して、✎ にフォーカスを戻す。
+    // Esc は元に戻して閉じ、断りも消して、「修正」にフォーカスを戻す。
     key(third, { key: 'Escape' });
     expect(third.value).toBe('');
     expect($('message').textContent).toBe('');
@@ -877,13 +877,13 @@ describe('ファイルを足して並べる', () => {
     expect(third.isConnected).toBe(true);
 
     // 推定した番号をそのまま打つと、確かな番号になる（「手入力」）。Enter で確定すると、
-    // 作り直したカードの ✎ にフォーカスが移る。
+    // 作り直したカードの「修正」にフォーカスが移る。
     edit.click();
     renumber(third, '3');
     expect(grid('f1:1', '.bm-status').textContent).toBe('手入力');
     expect(document.activeElement).toBe(grid('f1:1', '.bm-page-edit'));
 
-    // 欄を開いたまま別の頁の ✎ を押すと、先に確定してから、その頁の欄を開く（確定で
+    // 欄を開いたまま別の頁の「修正」を押すと、先に確定してから、その頁の欄を開く（確定で
     // 作り直したカードでも）。
     grid('f1:2', '.bm-page-edit').click();
     grid('f1:2', '.bm-page-number').value = '5';
@@ -891,7 +891,7 @@ describe('ファイルを足して並べる', () => {
     expect(grid('f1:2', '.bm-status').textContent).toBe('手入力');
     expect(grid('f1:3', '.bm-page-number').hidden).toBe(false);
     expect(document.activeElement).toBe(grid('f1:3', '.bm-page-number'));
-    // ほかの欄（保存名など）にいるときに ✎ を押しても、その欄は確定しない。
+    // ほかの欄（保存名など）にいるときに「修正」を押しても、その欄は確定しない。
     $('outputName').focus();
     grid('f1:3', '.bm-page-edit').click();
     expect(document.activeElement).toBe(grid('f1:3', '.bm-page-number'));
@@ -1972,7 +1972,7 @@ describe('確かめる', () => {
     expect(pagesIn(duplicate)).toEqual(['7 頁', '7 頁', '7 頁']);
 
     // 項目の中で直して数が変わっても、項目は作り直さず、文と頁だけ変わる。
-    // （項目から外れた頁は、Enter で閉じたらすべての頁の一覧のその頁の ✎ にフォーカスを移す）
+    // （項目から外れた頁は、Enter で閉じたらすべての頁の一覧のその頁の「修正」にフォーカスを移す）
     renumber(duplicate.querySelector('[data-page-key="f1:1"] .bm-page-number'), '3');
     expect(document.activeElement).toBe(document.querySelector('#pageGrid [data-page-key="f1:1"] .bm-page-edit'));
     expect(document.querySelector('#problems details')).toBe(duplicate);
@@ -1998,7 +1998,7 @@ describe('確かめる', () => {
     }
 
     // 直して消えた項目の開閉は忘れる（また出ても閉じている）。
-    // （一覧の欄を開いたまま項目の中の ✎ を押し、確定でその頁が項目から外れたら、何も開かない）
+    // （一覧の欄を開いたまま項目の中の「修正」を押し、確定でその頁が項目から外れたら、何も開かない）
     document.querySelector('#pageGrid [data-page-key="f1:2"] .bm-page-edit').click();
     number('f1:2').value = '';
     const stale = duplicate.querySelector('[data-page-key="f1:2"]');

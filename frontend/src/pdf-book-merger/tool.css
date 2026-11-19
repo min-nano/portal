@@ -494,7 +494,7 @@ button.bm-thumb:hover {
   height: auto;
 }
 
-/* 見出しの行: 番号・✎（番号を直す）・状態。✎ を押すと、番号がその場で入力欄に替わる。 */
+/* 見出しの行: 番号・「修正」（番号を直す）・状態。「修正」を押すと、番号がその場で入力欄に替わる。 */
 .bm-page-label {
   display: flex;
   align-items: center;
@@ -509,14 +509,14 @@ button.bm-thumb:hover {
   overflow-wrap: anywhere;
 }
 
+/* アイコン（✎）は小さくて何のボタンか分かりにくかったので、文字で「修正」と書く。 */
 button.bm-page-edit {
   flex: none;
-  min-height: 0;
-  width: 32px;
-  height: 32px;
-  padding: 0;
+  min-height: 32px;
+  padding: 0 var(--s-2);
   font-size: var(--fs-xs);
   line-height: 1;
+  white-space: nowrap;
 }
 
 .bm-status {
