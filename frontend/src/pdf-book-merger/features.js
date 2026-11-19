@@ -7,10 +7,50 @@
 //
 // DOM には触らない（テストで縛るため）。
 
+import { MARGIN_ZONE } from './page-numbers.js';
 import { headingRank, RANKS } from './split.js';
 
-/** 学ぶためのデータの形の版（特徴を足したり変えたりしたら上げる）。 */
-export const FEATURE_VERSION = 2;
+/**
+ * 学ぶためのデータの形の版（特徴を足したり変えたり、残す文字を変えたりしたら上げる）。
+ * 3: 頁の元の文字（余白の帯の行と大きな字の行。sourceLines）を残す。
+ */
+export const FEATURE_VERSION = 3;
+
+/** 余白の帯の外から残す、大きな字の行の数。 */
+const LARGE_LINES = 6;
+
+/** 残す行の文字の長さの上限。 */
+const LINE_TEXT = 80;
+
+/**
+ * 区切りの判定の特徴を、あとから求め直せるように残す頁の元の文字（OCR の読み違いも
+ * そのまま）。上下の余白の帯の行（柱・頁番号）と、帯の外の大きな字の行（見出し・扉の題）
+ * だけで、本文の行は残さない。
+ *
+ * @param {{text:string, x0:number, x1:number, y:number, h:number}[]} lines 頁の文字を行にまとめたもの
+ * @returns {{median:number, lines:{text:string, x0:number, x1:number, y:number, h:number}[]}}
+ *   median: 行の高さの中央値（字の大きさを比べるため）。lines は上から順
+ */
+export function sourceLines(lines) {
+  const heights = lines.map((line) => line.h).sort((a, b) => a - b);
+  const median = heights.length ? heights[Math.floor((heights.length - 1) / 2)] : 0;
+  const band = (line) => line.y < MARGIN_ZONE || line.y > 1 - MARGIN_ZONE;
+  const large = lines
+    .filter((line) => !band(line) && line.h > median)
+    .sort((a, b) => b.h - a.h)
+    .slice(0, LARGE_LINES);
+  const kept = lines.filter((line) => band(line) || large.includes(line));
+  return {
+    median: round(median),
+    lines: kept.map((line) => ({
+      text: line.text.slice(0, LINE_TEXT),
+      x0: round(line.x0),
+      x1: round(line.x1),
+      y: round(line.y),
+      h: round(line.h),
+    })),
+  };
+}
 
 /** 白紙とみなす文字の数（頁番号や、ごみの点を読んだ数文字は白紙のうち）。 */
 const BLANK_CHARS = 8;

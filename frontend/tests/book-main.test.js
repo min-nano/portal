@@ -3162,7 +3162,11 @@ describe('分ける', () => {
     await vi.waitFor(() => expect(logText()).toContain('「本_分け方.json」をダウンロードしました'));
     const saved = URL.createObjectURL.mock.calls.at(-1)[0];
     const data = JSON.parse(await saved.text());
-    expect(data).toMatchObject({ version: 2, files: ['本.pdf'], manual: true });
+    expect(data).toMatchObject({ version: 3, files: ['本.pdf'], manual: true });
+    // 頁の元の文字（柱・大きな字の行）。余白を OCR で読んでいなければ ocrSource は空。
+    expect(data.pages[2].source.lines.map((l) => l.text)).toContain('第1章 1.2 下地');
+    expect(data.pages[4].source.lines.map((l) => l.text)).toContain('第2章 施工');
+    expect(data.pages[0].ocrSource).toEqual([]);
     expect(data.pages[0].bytes).toBeGreaterThan(0);
     expect(data.pages.map((p) => p.start)).toEqual([0, 0, 1, 0, 1, 0, 0]);
     expect(data.pages.map((p) => p.suggested)).toEqual([0, 0, 0, 0, 1, 0, 0]);
@@ -3174,6 +3178,15 @@ describe('分ける', () => {
       features: { heading: 2, running: 3, centered: 1 },
     });
     expect(data.pages[2]).toMatchObject({ running: '第1章 1.2 下地', features: { running: 2, step: 1 } });
+  });
+
+  it('分け方を学ぶためのデータには、余白を OCR で読んだ文字も残す', async () => {
+    await addBook();
+    $('trainingBtn').click();
+    await vi.waitFor(() => expect(logText()).toContain('「猫_分け方.json」をダウンロードしました'));
+    const data = JSON.parse(await URL.createObjectURL.mock.calls.at(-1)[0].text());
+    const page5 = data.pages.find((p) => p.label === '5 頁');
+    expect(page5.ocrSource.map((l) => l.text)).toEqual(['5']);
   });
 
   it('見出しと読んだ頁が多ければ、記録には頭の方だけを出す', async () => {

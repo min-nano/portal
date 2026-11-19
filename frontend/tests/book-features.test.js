@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FEATURE_VERSION, pageFeatures, pageLayout } from '../src/pdf-book-merger/features.js';
+import { FEATURE_VERSION, pageFeatures, pageLayout, sourceLines } from '../src/pdf-book-merger/features.js';
 import { breakCandidates, breakRanks } from '../src/pdf-book-merger/split.js';
 
 const line = (text, { x0 = 0.1, x1 = 0.9, y = 0.5, h = 0.01 } = {}) => ({ text, x0, x1, y, h });
@@ -25,6 +25,34 @@ describe('pageLayout（頁のレイアウトの特徴）', () => {
   });
 });
 
+describe('sourceLines（あとから特徴を求め直すために残す頁の元の文字）', () => {
+  it('余白の帯の行と、帯の外の大きな字の行（6 行まで）だけを、上から順に残す（本文の行は残さない）', () => {
+    const lines = [
+      line('第2 章 22.5(2) 棟違い', { y: 0.03, h: 0.012 }), // 柱（読み違いもそのまま）
+      line('第3章', { y: 0.3, h: 0.04 }),
+      ...Array.from({ length: 7 }, (_, k) => line(`小見出し${k}`, { y: 0.35 + k * 0.02, h: 0.02 + k * 0.001 })),
+      ...Array.from({ length: 12 }, (_, k) => line('本文の行です。', { y: 0.5 + k * 0.02 })),
+      line('- 23 -', { y: 0.97 }),
+      line('x'.repeat(100), { y: 0.98 }),
+    ];
+    const { median, lines: kept } = sourceLines(lines);
+    expect(median).toBe(0.01);
+    expect(kept.map((l) => l.text)).toEqual([
+      '第2 章 22.5(2) 棟違い',
+      '第3章',
+      '小見出し2',
+      '小見出し3',
+      '小見出し4',
+      '小見出し5',
+      '小見出し6',
+      '- 23 -',
+      'x'.repeat(80),
+    ]);
+    expect(kept[0]).toEqual({ text: '第2 章 22.5(2) 棟違い', x0: 0.1, x1: 0.9, y: 0.03, h: 0.012 });
+    expect(sourceLines([])).toEqual({ median: 0, lines: [] });
+  });
+});
+
 describe('pageFeatures（頁ごとの特徴）', () => {
   const page = (extra = {}) => ({ fileKey: 'a', fileName: 'a.pdf', role: 'body', bytes: 100, ...extra });
 
@@ -43,7 +71,7 @@ describe('pageFeatures（頁ごとの特徴）', () => {
     ];
     const candidates = breakCandidates(items);
     const features = pageFeatures(items, candidates, breakRanks(items, candidates));
-    expect(FEATURE_VERSION).toBe(2);
+    expect(FEATURE_VERSION).toBe(3);
     expect(features[0]).toMatchObject({ position: 0, body: 0, candidate: 0, rank: 6, numbered: 0, step: 0, blank: 0, bytesBefore: 0 });
     expect(features[3]).toMatchObject({ blank: 1, bytes: 0.1 });
     expect(features[4]).toMatchObject({

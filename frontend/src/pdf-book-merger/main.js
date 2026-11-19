@@ -116,7 +116,7 @@ import {
   splitRanges,
   middleCut,
 } from './split.js';
-import { FEATURE_VERSION, pageFeatures, pageLayout } from './features.js';
+import { FEATURE_VERSION, pageFeatures, pageLayout, sourceLines } from './features.js';
 import { crc32, zipBlob } from './zip.js';
 import { textQuality } from './text-quality.js';
 import { createDuplicateFinder, duplicateIssues, textPrint } from './duplicates.js';
@@ -851,6 +851,8 @@ async function readFile(file) {
         running: runningHead(lines),
         // 頁のレイアウト（行の数・字の大きさなど）。分け方を学ぶためのデータに入れる。
         layout: pageLayout(lines),
+        // 頁の元の文字（余白の帯と大きな字の行）。分け方を学ぶためのデータに残す。
+        source: sourceLines(lines),
         bytes: 0,
         measure: null,
         thumbUrl: '',
@@ -1122,6 +1124,8 @@ async function readStrips(file, page, strips) {
     const results = await Promise.all(strips.map((strip) => readStrip(strip)));
     // 文字情報の候補（並びに合わなかったもの）も残し、どれが合うかは並びで決める。
     page.candidates = mergeCandidates(page.candidates, pageNumberCandidates(results.flat(), 'ocr'));
+    // 余白の帯を OCR で読んだ文字も、分け方を学ぶためのデータに残す。
+    page.ocrSource = sourceLines(groupLines(results.flat())).lines;
     page.ocr = true;
     page.scan = null;
   } catch {
@@ -3211,6 +3215,9 @@ async function saveTrainingData() {
       reason: breaks[index] ? breakReason(breaks[index]) : '',
       running: items[index].running,
       largest: items[index].layout.largest,
+      // 頁の元の文字（読み違いもそのまま。特徴の求め方を変えたら、ここから求め直す）。
+      source: pageOf(order[index]).source,
+      ocrSource: pageOf(order[index]).ocrSource ?? [],
     })),
   };
   const text = JSON.stringify(data);
