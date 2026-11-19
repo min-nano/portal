@@ -204,6 +204,8 @@ let saving = false;
 let generation = 0;
 /** いまの並びのうち、結合する PDF を決める部分（頁・配置・頁番号）。変わったときだけ結合した PDF を捨てる。 */
 let orderKey = '';
+/** 最後に記録に出した、分ける位置の提案（変わったときだけ出す）。 */
+let suggestionNote = '';
 /** 指摘の項目のうち、開いているものと、そこに並べる頁の数（描き直しても開いたままにする）。 */
 const openGroups = new Map();
 /**
@@ -711,18 +713,42 @@ async function bytesOf(file) {
   return file.stashed ? stash.read(stashName(file)) : null;
 }
 
+/** 区切りの候補の裏付けの手掛かりの名前（記録に出す）。 */
+const RUNNING_CLUES = { chapter: '柱の章', section: '柱の節', text: '柱' };
+
+/** 分ける位置の提案を、記録に出す言葉にする（位置ごとに、候補の訳・手掛かり・順位）。 */
+function suggestionText(order, starts, breaks, ranks) {
+  const cuts = starts.map((index) => {
+    const candidate = breaks[index];
+    if (!candidate) return `${displayLabel(order[index])}（大きさで）`;
+    const clues = [
+      candidate.toc && '目次',
+      candidate.running && RUNNING_CLUES[candidate.running],
+      candidate.restart && '頁番号の戻り',
+    ].filter(Boolean);
+    const rank = ranks[index] === null ? '' : `・順位 ${ranks[index]}`;
+    return `${displayLabel(order[index])}（${breakReason(candidate)}${clues.length ? `・${clues.join('・')}` : ''}${rank}）`;
+  });
+  return `分ける位置の提案 ${starts.length}（${cuts.join('、')}）`;
+}
+
 /** 見出しと読んだ頁・目次とみなした頁を、記録に出す言葉にする（多ければ頭の方だけ）。 */
-function pageNotes(headings, tocs, entries) {
-  const most = 12;
-  const list = (pages, text) => {
+function pageNotes(headings, tocs, entries, runs = []) {
+  const list = (pages, text, most = 12, unit = '頁') => {
     const shown = pages.slice(0, most).map(text).join('、');
-    return pages.length > most ? `${shown} ほか ${pages.length - most} 頁` : shown;
+    return pages.length > most ? `${shown} ほか ${pages.length - most} ${unit}` : shown;
   };
   const notes = [];
   if (headings.length) notes.push(`見出しと読んだ頁 ${headings.length}（${list(headings, (page) => `${page.index + 1} 頁目「${page.heading}」`)}）`);
   if (tocs.length) notes.push(`目次とみなした頁 ${tocs.length}（${list(tocs, (page) => `${page.index + 1} 頁目`)}）`);
   // 目次の項目（章の始まりは、この頁番号の頁にする）。
   if (entries.length) notes.push(`目次の項目 ${entries.length}（${list(entries, (entry) => `「${entry.title}」${entry.page} 頁`)}）`);
+  // 柱（上の余白の文字）は、続けて同じものをまとめ、変わったところだけを出す。
+  const changes = runs.filter((page, k) => k === 0 || page.running !== runs[k - 1].running);
+  if (runs.length) {
+    const shown = list(changes, (page) => `${page.index + 1} 頁目〜「${page.running}」`, 40, '件');
+    notes.push(`柱を読んだ頁 ${runs.length}（変わったところ ${changes.length}: ${shown}）`);
+  }
   return notes.join('、');
 }
 
@@ -844,7 +870,10 @@ async function readFile(file) {
     const headings = file.pages.filter((page) => page.heading);
     const tocs = file.pages.filter((page) => page.toc);
     const entries = file.pages.flatMap((page) => page.tocEntries);
-    if (headings.length || tocs.length || entries.length) log(`「${file.name}」の${pageNotes(headings, tocs, entries)}`);
+    const runs = file.pages.filter((page) => page.running);
+    if (headings.length || tocs.length || entries.length || runs.length) {
+      log(`「${file.name}」の${pageNotes(headings, tocs, entries, runs)}`);
+    }
 
     readProgress.stage(textEnd, 1);
 
@@ -1500,6 +1529,13 @@ function refresh() {
     shown,
     ranks,
   };
+  // 自動で提案した分ける位置と、その訳（変わったときだけ）。提案が思ったところと違う
+  // ときに、どの手掛かりで選んだかを記録から追えるように。
+  const note = manualSplits || !starts.length ? '' : suggestionText(order, starts, breaks, ranks);
+  if (note !== suggestionNote) {
+    suggestionNote = note;
+    if (note) log(note);
+  }
   if (!$('outputName').value.trim() || $('outputName').dataset.suggested === 'true') {
     const suggested = suggestBookName(files.map((file) => file.name));
     $('outputName').value = suggested;

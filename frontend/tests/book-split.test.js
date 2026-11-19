@@ -491,38 +491,119 @@ describe('柱・頁番号・目次の項目を手掛かりにする（breakCandi
     expect(runningHead([{ text: '本文の行です。', y: 0.5 }])).toBe('');
   });
 
-  it('柱の章が変わるところ（手前に柱の無い扉があれば、そこから）を候補にし、章の変わり目は強く、節の変わり目は弱くする', () => {
+  it('柱の章・節の番号が変わるところ（手前に柱の無い扉があれば、そこから）を候補にし、章は節より確かにする', () => {
     const run = (running) => page({ running });
+    // 左の頁に章、右の頁に節の柱が載る本。
     const items = [
       run('第1章 材料'),
       run('1.1 防水材'),
+      run('第1章 材料'),
+      run('1.1 防水材'),
+      run('第1章 材料'),
+      run('1.2 シート'),
       run('第1章 材料'),
       run('1.2 シート'),
       page(), // 第2章の扉（柱が無い）
       run('第2章 施工'),
       run('2.1 下地'),
       run('第2章 施工'),
-      run('2.3 仕上げ'),
+      run('2.1 下地'),
     ];
     const candidates = breakCandidates(items);
-    expect(candidates[4]).toEqual({ kind: 'running', title: '第2章 施工', running: 'chapter' });
-    // 節の柱が新しく出たところは、節の変わり目（弱い手掛かり）。
-    expect(candidates[8]).toEqual({ kind: 'running', title: '2.3 仕上げ', running: 'text' });
     expect(candidates.flatMap((candidate, i) => (candidate ? [[i, candidate.running]] : []))).toEqual([
-      [1, 'text'],
-      [3, 'text'],
-      [4, 'chapter'],
-      [6, 'text'],
-      [8, 'text'],
+      [5, 'section'],
+      [8, 'chapter'],
     ]);
-    // 柱の章の変わり目だけなら章の見出しより弱く（節と同じ）、節の柱の変わり目はファイルの境目と同じ。
-    expect(breakRanks(items, candidates)[4]).toBe(RANKS.section);
-    expect(breakRanks(items, candidates)[8]).toBe(RANKS.file);
-    // 見出しと柱の章の変わり目が重なれば、しおりと同じくらい確か。
-    items[4] = { ...items[4], heading: '第2章 施工' };
+    expect(candidates[8]).toEqual({ kind: 'running', title: '第2章 施工', running: 'chapter' });
+    // 柱の章の変わり目だけなら章の見出しと同じ、節の変わり目は節の見出しと同じ。
+    const ranks = breakRanks(items, candidates);
+    expect([ranks[5], ranks[8]]).toEqual([RANKS.section, RANKS.chapter]);
+    // 見出しと柱の章の変わり目が重なれば、しおりより確か。
+    items[8] = { ...items[8], heading: '第2章 施工' };
     const both = breakCandidates(items);
-    expect(both[4]).toEqual({ kind: 'heading', title: '第2章 施工', running: 'chapter' });
-    expect(breakRanks(items, both)[4]).toBe(RANKS.outline);
+    expect(both[8]).toEqual({ kind: 'heading', title: '第2章 施工', running: 'chapter' });
+    expect(breakRanks(items, both)[8]).toBeLessThan(RANKS.outline);
+  });
+
+  it('柱の番号が戻るところ・1 頁だけ違うところ（OCR の読み違い）は使わない', () => {
+    const run = (running) => page({ running });
+    const items = [
+      run('第2 章 2.1 下地'),
+      run('第2 章 2.1 下地'),
+      run('第8 章 2.1 下地'), // 1 頁だけの読み違い
+      run('第2 章 2.1 下地'),
+      run('第2 章 2.2 仕上げ'),
+      run('第2 章 2.2 仕上げ'),
+      run('第1 章 2.2 仕上げ'), // 戻る
+      run('第2 章 2.2 仕上げ'),
+    ];
+    expect(breakCandidates(items).flatMap((candidate, i) => (candidate ? [[i, candidate.running]] : []))).toEqual([[4, 'section']]);
+  });
+
+  it('柱に章の番号が無くても、節の番号の上の段が変われば章の変わり目。番号の無い柱は文字で比べる', () => {
+    const run = (running) => page({ running });
+    const items = [
+      run('1.1 概要'),
+      run('1.2 材料'),
+      run('1.2 材料'),
+      run('2.1 施工'),
+      run('2.1 施工'),
+      run('付録'),
+      run('付録'),
+      run('索引'),
+      run('索引'),
+    ];
+    expect(breakCandidates(items).flatMap((candidate, i) => (candidate ? [[i, candidate.running]] : []))).toEqual([
+      [1, 'section'],
+      [3, 'chapter'],
+      [5, 'text'],
+      [7, 'text'],
+    ]);
+    // 全角の数字も読む。
+    const wide = [run('第１章 材料'), run('第１章 材料'), run('第２章 施工'), run('第２章 施工')];
+    expect(breakCandidates(wide)[2]).toMatchObject({ running: 'chapter' });
+    // 漢数字の章も数で比べる（第九章 → 第十二章）。
+    const kanji = [run('第九章 材料'), run('第九章 材料'), run('第十二章 施工'), run('第十二章 施工'), run('第十章 施工')];
+    expect(breakCandidates(kanji).flatMap((candidate, i) => (candidate ? [i] : []))).toEqual([2]);
+    // 数にできない章の番号（ローマ数字）は、前に無ければ新しい章。
+    const roman = [run('Chapter iv Walls'), run('Chapter iv Walls'), run('Chapter v Roofs'), run('Chapter v Roofs')];
+    expect(breakCandidates(roman)[2]).toMatchObject({ running: 'chapter' });
+  });
+
+  it('柱の部と章は別に比べ（部が変わると章の番号が戻る本）、章の変わり目は 2 つの段で重ねない', () => {
+    const run = (running) => page({ running });
+    // 左の頁に部、右の頁に章。第2部で章の番号が 1 に戻る。
+    const parts = [run('第1部 総論'), run('第5章 材料'), run('第1部 総論'), run('第5章 材料'), run('第2部 各論'), run('第1章 施工'), run('第2部 各論'), run('第1章 施工')];
+    expect(breakCandidates(parts).flatMap((candidate, i) => (candidate ? [[i, candidate.running]] : []))).toEqual([[4, 'chapter']]);
+    // 右の頁の節（3.1）で章の変わり目を先に見つけたら、次の左の頁の章の番号では重ねない。
+    const sides = [run('第2章 施工'), run('2.5 仕上げ'), run('第2章 施工'), run('2.5 仕上げ'), run('3.1 下地'), run('第3章 点検'), run('3.1 下地'), run('第3章 点検')];
+    expect(breakCandidates(sides).flatMap((candidate, i) => (candidate ? [[i, candidate.running]] : []))).toEqual([[4, 'chapter']]);
+  });
+
+  it('節の番号は、語の始まりの番号だけ（「1.5mm」「Ver 2.0」は節の番号ではない）', () => {
+    const run = (running) => page({ running });
+    const items = [run('防水 Ver 2.0'), run('防水 Ver 2.0'), run('防水 Ver 3.0'), run('防水 Ver 3.0'), run('厚さ 1.5mm'), run('厚さ 1.5mm'), run('厚さ 2.5mm'), run('厚さ 2.5mm')];
+    // 番号の無い柱として、文字で比べる（変わったところは柱の文字の変わり目）。
+    expect(breakCandidates(items).flatMap((candidate, i) => (candidate ? [[i, candidate.running]] : []))).toEqual([
+      [2, 'text'],
+      [4, 'text'],
+      [6, 'text'],
+    ]);
+  });
+
+  it('柱の変わり目が細かすぎれば（本文の行を柱と読んだときなど）、柱の点数を足さない', () => {
+    // 2 頁ごとに節の番号が増える柱（60 頁で 29 か所）。
+    const items = Array.from({ length: 60 }, (_, i) => page({ running: `${1 + (i >> 4)}.${1 + ((i >> 1) % 8)} 本文`, heading: i === 30 ? '第2章 施工' : null }));
+    const ranks = breakRanks(items, breakCandidates(items));
+    expect(ranks[30]).toBe(RANKS.chapter);
+  });
+
+  it('しおりは、手掛かりを足したほかの候補より確かにする', () => {
+    const items = [page(), page({ outline: '第1部' }), page(), page({ heading: '第2章 施工', toc: '第2章 施工' }), page({ running: '第2章 施工' }), page({ running: '第2章 施工' })];
+    items[2] = { ...items[2], running: '第1章 材料' };
+    items[1] = { ...items[1], running: '第1章 材料' };
+    const ranks = breakRanks(items, breakCandidates(items));
+    expect(ranks[1]).toBeLessThan(ranks[3]);
   });
 
   it('本文の頁番号が戻るところと、目次の項目が指す頁も候補にし、点数を足す', () => {
@@ -533,11 +614,6 @@ describe('柱・頁番号・目次の項目を手掛かりにする（breakCandi
     // 頁番号の戻りだけなら節と同じ、目次の項目が指す章は、しおりと同じくらい確か。
     const ranks = breakRanks(items, candidates);
     expect([ranks[2], ranks[4]]).toEqual([RANKS.section, RANKS.outline]);
-  });
-
-  it('細かすぎる柱の変わり目（頁ごとに違う柱を読んだときなど）は使わない', () => {
-    const items = Array.from({ length: 30 }, (_, i) => page({ running: `柱 ${'あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほ'[i]}` }));
-    expect(breakRanks(items, breakCandidates(items)).every((rank) => rank === null)).toBe(true);
   });
 
   it('柱の行の端の頁番号は、いろいろな書き方でも除く', () => {

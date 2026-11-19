@@ -183,8 +183,11 @@ export function chapterHeading(lines) {
   for (const [k, line] of lines.entries()) {
     if (!heads[k] || line.y > 0.6 || line.text.length > HEADING_LENGTH || TOC_ENTRY.test(line.text)) continue;
     const rest = line.text.slice(heads[k]);
-    // 章のあとに節の番号が続く行（「第2 章 2.2.5(1) 棟違い」）は、本文の頁の柱。
-    if (RUNNING_HEAD.test(rest)) continue;
+    // 章のあとに節の番号が続く行（「第2 章 2.2.5(1) 棟違い」）は、本文の頁の柱。OCR で
+    // 「第2 章」と「2.2.5(1) 棟違い」の 2 行に分かれたものも。
+    const below = lines[k + 1];
+    const split = !rest && line.y < MARGIN_ZONE && below && below.y - line.y <= line.h * 2.5 && RUNNING_HEAD.test(below.text);
+    if (RUNNING_HEAD.test(rest) || split) continue;
     const found = few ? line.y >= MARGIN_ZONE && HEADING_END.test(rest) && !PARTICLE.test(rest) : line.h >= large;
     if (!found) continue;
     // 題として続けるのは、すぐ下の大きな字の短い行（見出しや本文の段落は続けない）。
@@ -248,7 +251,7 @@ function coverGuard(items) {
  *
  * @param {{fileKey:string, fileName:string, role:string, outline?:string|null, heading?:string|null, running?:string|null, number?:number|null, toc?:string|null}[]} items
  *   並べた順の頁
- * @returns {({kind:'outline'|'heading'|'file'|'running'|'restart', title:string, chapter?:string|null, toc?:boolean, running?:'chapter'|'text', restart?:boolean}|null)[]}
+ * @returns {({kind:'outline'|'heading'|'file'|'running'|'restart', title:string, chapter?:string|null, toc?:boolean, running?:'chapter'|'section'|'text', restart?:boolean}|null)[]}
  *   ファイルの境目の頁にしおり・見出しもあれば、その名前を chapter に入れる
  */
 export function breakCandidates(items) {
@@ -303,14 +306,17 @@ export function breakCandidates(items) {
     return {
       ...candidate,
       ...(item.toc ? { toc: true } : {}),
-      ...(run ? { running: run.chapter ? 'chapter' : 'text' } : {}),
+      ...(run ? { running: run.level } : {}),
       ...(restart ? { restart: true } : {}),
     };
   });
 }
 
 /** 柱の中の章・部の番号（「第2 章」「Chapter 3」）。柱が章ごとに変わるかを、これで見る。 */
-const CHAPTER_IN_HEAD = /第\s*[0-9一二三四五六七八九十]+\s*[章部編]|(?:chapter|part)\s*(?:[0-9]+|[ivxlc]+\b)/i;
+const CHAPTER_IN_HEAD = /第\s*[0-9一二三四五六七八九十]+\s*章|chapter\s*(?:[0-9]+|[ivxlc]+\b)/i;
+
+/** 柱の部・編の番号（「第2部」「Part 2」）。章とは別に比べる（部が変わると章の番号が 1 に戻る本もあるので）。 */
+const PART_IN_HEAD = /第\s*[0-9一二三四五六七八九十]+\s*[部編]|part\s*(?:[0-9]+|[ivxlc]+\b)/i;
 
 /** 柱の行の端の頁番号（「23」「- 23 -」「p.23」「23頁」。全角の数字も）。 */
 const EDGE_NUMBER = /^[-‐－—–\s]*(?:[pPｐＰ][.．]?\s*)?[\d０-９]{1,4}\s*頁?[-‐－—–]*(?=\s|$)|(?<=^|\s)(?:[-‐－—–]+\s*)?(?:[pPｐＰ][.．]?\s*)?[\d０-９]{1,4}\s*頁?[-‐－—–\s]*$/g;
@@ -318,37 +324,105 @@ const EDGE_NUMBER = /^[-‐－—–\s]*(?:[pPｐＰ][.．]?\s*)?[\d０-９]{1,4
 /** 柱を比べるときに、遡って見る柱のある頁の数（左右の頁で違う柱が交互に載るので）。 */
 const RUNNING_LOOKBACK = 4;
 
+/** 柱の節の番号（「2.2.5(1) 棟違い」の 2.2）。上の 2 段だけで比べる。 */
+// 語の始まりにあり、「2.2.5(1)」のように続いてもよいが、単位などの字が続くもの（「1.5mm」）と
+// 版の番号（「Ver 2.0」）は除く。
+const SECTION_IN_HEAD = /(?<!ver(?:sion)?\.?\s*|[^\s])(\d{1,2})[.．](\d{1,2})(?:[.．]\d+)*(?:\(\d+\)|（\d+）)?(?=\s|$)/i;
+
+const KANJI_DIGITS = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+
+/** 章の番号を数にする（「第2章」「第十二章」「Chapter 3」。読めなければ null）。 */
+function chapterNumber(text) {
+  const digits = text.match(/\d+/);
+  if (digits) return Number(digits[0]);
+  const kanji = text.match(/[一二三四五六七八九十]+/)?.[0];
+  if (!kanji) return null;
+  const [tens, ones] = kanji.includes('十') ? kanji.split('十') : ['', kanji];
+  return (kanji.includes('十') ? (KANJI_DIGITS[tens] ?? 1) * 10 : 0) + (KANJI_DIGITS[ones] ?? 0);
+}
+
 /**
  * 柱が変わるところ（並びの位置 → 新しい柱）。柱は本文の頁の上の余白に載る章・節の
- * 名前で、章が変わると変わる。直前の柱のある頁（RUNNING_LOOKBACK）に無い柱が出たら、
- * そこから新しいまとまり。柱に章の番号があれば、番号で比べる（chapter: true。節の
- * 名前だけが変わるところは、章の変わり目より弱い手掛かり）。柱の無い頁（章の扉・
- * 白紙）が手前にあれば、そこ（3 頁まで）から始める。
+ * 名前で、章・節が変わると変わる。柱に章の番号（「第2 章」）があれば章の番号で、
+ * 節の番号（「2.2.5(1)」の 2.2）があれば節の番号で、どちらも無ければ柱の文字で比べる
+ * （level: 'chapter'・'section'・'text'。この順に確か）。直前の柱のある頁
+ * （RUNNING_LOOKBACK）に無い番号が出たら、そこから新しいまとまり。ただし、番号は前より
+ * 大きくなるときだけ（OCR の読み違いで戻ったように見えるところは使わない）、次の柱の
+ * ある頁（RUNNING_LOOKBACK まで）にも同じ番号が続くときだけ（1 頁だけの読み違いを
+ * 使わない）。柱の無い頁（章の扉・白紙）が手前にあれば、そこ（3 頁まで）から始める。
  *
- * @param {{running?:string}[]} items
- * @returns {Map<number, {text:string, chapter:boolean}>}
+ * @param {{running?:string, heading?:string|null, outline?:string|null}[]} items
+ * @returns {Map<number, {text:string, level:'chapter'|'section'|'text'}>}
  */
 function runningBreaks(items) {
   const keys = items.map((item) => {
-    const text = item.running ?? '';
+    const text = (item.running ?? '').replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0));
     if (!text) return null;
-    const chapter = text.match(CHAPTER_IN_HEAD)?.[0].replace(/\s/g, '');
-    return { key: chapter ?? text, chapter: Boolean(chapter), text };
+    const part = text.match(PART_IN_HEAD)?.[0];
+    const chapter = text.match(CHAPTER_IN_HEAD)?.[0];
+    const section = text.match(SECTION_IN_HEAD);
+    const number = (found) => (found ? chapterNumber(found) ?? found.replace(/\s/g, '') : null);
+    return {
+      text: item.running,
+      part: number(part),
+      chapter: number(chapter),
+      section: section ? Number(section[1]) * 100 + Number(section[2]) : null,
+      // 番号の無い柱（索引・付録など）は、前の頁の柱の文字と比べる。
+      plain: part || chapter || section ? null : text,
+      whole: text,
+    };
   });
+  // その頁から前（後ろ）の、柱のある頁の、ある段の値。
+  const around = (index, step, field) => {
+    const found = [];
+    for (let k = index + step; k >= 0 && k < items.length && found.length < RUNNING_LOOKBACK; k += step) {
+      if (keys[k]?.[field] != null) found.push(keys[k][field]);
+    }
+    return found;
+  };
+  // 前より大きな番号か（数でない番号は、前に無ければ新しいとみなす）。
+  const newer = (value, before) => !before.includes(value) && (typeof value !== 'number' || value > before[0]);
   const found = new Map();
+  // 最後に見つけた章の変わり目（位置と、見つけた段）。左右の頁で章の番号と節の番号が
+  // 交互に載ると、同じ章の変わり目を 2 つの段で続けて見つけるので、重ねない。
+  let chapterAt = { index: -Infinity, field: null };
   for (let index = 1; index < items.length; index++) {
     const own = keys[index];
     if (!own) continue;
-    const before = [];
-    for (let k = index - 1; k >= 0 && before.length < RUNNING_LOOKBACK; k--) if (keys[k]) before.push(keys[k].key);
-    if (!before.length || before.includes(own.key)) continue;
+    let level = null;
+    // 確かな段から比べる（その段が変わっていなければ、次の段で比べる）。
+    for (const [field, name] of [
+      ['part', 'chapter'],
+      ['chapter', 'chapter'],
+      ['section', 'section'],
+      ['plain', 'text'],
+    ]) {
+      const value = own[field];
+      const compare = field === 'plain' ? 'whole' : field;
+      const before = value == null ? [] : around(index, -1, compare);
+      if (!before.length) continue;
+      const after = around(index, 1, compare);
+      if (newer(value, before) && (after.length === 0 || after.includes(value))) {
+        level = name;
+        // 節の番号の上の段が変われば（2.5 → 3.1）、章が変わったところ。
+        if (field === 'section' && Math.floor(value / 100) !== Math.floor(before[0] / 100)) level = 'chapter';
+        // 章の変わり目を、すぐ前にほかの段（章の番号と節の番号）で見つけていれば、重ねない。
+        if (level === 'chapter') {
+          const twice = chapterAt.field !== field && index - chapterAt.index <= RUNNING_LOOKBACK;
+          chapterAt = { index, field };
+          if (twice) level = null;
+        }
+        break;
+      }
+    }
+    if (!level) continue;
     let at = index;
     while (at > 1 && !keys[at - 1] && index - at < 3) {
       at--;
       // 見出し・しおりのある頁（章の扉）で止める（その前の白紙まで戻らない）。
       if (items[at].heading || items[at].outline) break;
     }
-    found.set(at, own);
+    found.set(at, { text: own.text, level });
   }
   return found;
 }
@@ -535,12 +609,12 @@ export function breakRanks(items, candidates) {
   };
   const headings = candidates.map(headingOf);
   // 区切りらしさの点数。候補そのものの点数（しおり 5・部 4・章 3・節 2・ファイルの境目 1・
-  // 柱や頁番号だけの候補 0）に、裏付けの手掛かりを足す（目次の項目が指す +2・柱の章が
-  // 変わる +2・柱が変わる +1・頁番号が戻る +2）。目次の頁の行らしい見出し（すぐ後ろの頁にも
+  // 柱や頁番号だけの候補 0）に、裏付けの手掛かりを足す（目次の項目が指す +2・柱の章の
+  // 番号が変わる +3・節の番号が変わる +2・番号の無い柱が変わる +1・頁番号が戻る +2）。目次の頁の行らしい見出し（すぐ後ろの頁にも
   // 同じか上の階層の見出しがある）は、候補そのものの点数を 1 に下げる。
   // 柱の変わり目が細かすぎれば（本文の行を柱と読んだときなど）、柱は当てにしない（点数に足さない）。
   const runningMarks = candidates.filter((candidate) => candidate?.running).length;
-  const noisyRunning = runningMarks >= DENSE_BREAKS && runningMarks > items.length / 2;
+  const noisyRunning = runningMarks >= DENSE_BREAKS && runningMarks > items.length / 3;
   const scores = candidates.map((candidate, index) => {
     if (!candidate) return null;
     const next = headings[index + 1];
@@ -553,7 +627,7 @@ export function breakRanks(items, candidates) {
     else base = candidate.kind === 'file' ? 1 : 0;
     const bonus =
       (candidate.toc ? 2 : 0) +
-      (noisyRunning ? 0 : candidate.running === 'chapter' ? 2 : candidate.running === 'text' ? 1 : 0) +
+      (noisyRunning ? 0 : RUNNING_SCORE[candidate.running] ?? 0) +
       (candidate.restart ? 2 : 0);
     return Math.max(1, base + bonus);
   });
@@ -568,8 +642,15 @@ export function breakRanks(items, candidates) {
   const count = new Map();
   for (const kind of kinds) if (kind) count.set(kind, (count.get(kind) ?? 0) + 1);
   const dense = (kind) => count.get(kind) >= DENSE_BREAKS && count.get(kind) > items.length / 2;
-  return scores.map((score, index) => (score === null || dense(kinds[index]) ? null : rankOfScore(score)));
+  const ranks = scores.map((score, index) => (score === null || dense(kinds[index]) ? null : rankOfScore(score)));
+  // しおり（作った人が付けたもの）は、手掛かりを足したほかの候補より確かにする。
+  const others = ranks.filter((rank, index) => rank !== null && kinds[index] !== 'outline');
+  const top = Math.min(RANKS.outline, ...others.map((rank) => rank - 1));
+  return ranks.map((rank, index) => (rank !== null && kinds[index] === 'outline' ? Math.min(rank, top) : rank));
 }
+
+/** 柱の変わり目の点数（章の番号 3・節の番号 2・番号の無い柱の文字 1）。 */
+const RUNNING_SCORE = { chapter: 3, section: 2, text: 1 };
 
 /** 順位ごとの点数（しおり 5・部 4・章 3・節 2・ファイルの境目 1）。 */
 const SCORE_OF_RANK = { 1: 5, 2: 4, 3: 3, 4: 2, 5: 1 };

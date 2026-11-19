@@ -3108,6 +3108,39 @@ describe('分ける', () => {
     expect(reasons[5]).toBe('見出し「第3章 床」');
   });
 
+  it('柱を読んだ頁と、分ける位置の提案とその訳を記録に残す', async () => {
+    const heads = ['第1章 1.1 材料', '第1章 1.1 材料', '第1章 1.2 下地', '第1章 1.2 下地', null, '第2章 2.1 施工', '第2章 2.1 施工', '第2章 2.1 施工'];
+    drop([file('本.pdf', pdf(heads.map((head, i) => page(`r${i + 1}`, i + 1, { mb: 10, ...(head ? { head } : { heading: '第2章 施工' }) }))))]);
+    await settled(1);
+    expect(logText()).toContain('柱を読んだ頁 7（変わったところ 3: 1 頁目〜「第1章 1.1 材料」、3 頁目〜「第1章 1.2 下地」、6 頁目〜「第2章 2.1 施工」）');
+    change($('splitMegabytes'), '45');
+    expect(logText()).toContain('分ける位置の提案 1（5 頁（見出し「第2章 施工」・柱の章・順位 0））');
+    change($('splitMegabytes'), '25');
+    expect(logText()).toContain('分ける位置の提案 3（3 頁（柱の変わり目「第1章 1.2 下地」・柱の節・順位 4）、5 頁（見出し「第2章 施工」・柱の章・順位 0）、7 頁（大きさで））');
+    // 手で決めたあとは、提案を出さない（上限を変えれば、提案に戻る）。
+    const before = logText();
+    splitButton('f1:1').click();
+    expect(logText().replace(before, '')).not.toContain('分ける位置の提案');
+    change($('splitMegabytes'), '45');
+    expect(logText().replace(before, '')).toContain('分ける位置の提案 1（');
+  });
+
+  it('分ける位置の提案の訳には、頁番号の戻りも、順位の無い（細かすぎる）候補も出す', async () => {
+    // 章ごとに頁番号を振り直した資料（2 つ目のファイルが 1 頁から）。
+    drop([file('上.pdf', pdf([1, 2, 3].map((n) => page(`a${n}`, n, { mb: 10 })))), file('下.pdf', pdf([1, 2, 3].map((n) => page(`b${n}`, n, { mb: 10 }))))]);
+    await settled(2);
+    change($('splitMegabytes'), '35');
+    expect(logText()).toMatch(/分ける位置の提案 1（[^）]*頁番号の戻り・順位 \d+）/);
+    // 頁ごとに見出しがある（細かすぎる）と、順位は付けない。
+    drop([file('細.pdf', pdf(Array.from({ length: 24 }, (_, i) => page(`d${i + 1}`, i + 1, { mb: 5, heading: `第${i + 1}章` }))))]);
+    await settled(3);
+    expect(logText()).toMatch(/見出し「第\d+章」）/);
+    // 柱の変わったところが多ければ、頭の 40 件まで。
+    drop([file('柱.pdf', pdf(Array.from({ length: 42 }, (_, i) => page(`h${i + 1}`, i + 1, { head: `柱${String.fromCharCode(0x4e00 + i)}` }))))]);
+    await settled(4);
+    expect(logText()).toContain(`40 頁目〜「柱${String.fromCharCode(0x4e00 + 39)}」 ほか 2 件）`);
+  });
+
   it('見出しと読んだ頁が多ければ、記録には頭の方だけを出す', async () => {
     drop([file('本.pdf', pdf(Array.from({ length: 14 }, (_, i) => page(`m${i + 1}`, i + 1, { heading: `第${i + 1}章` }))))]);
     await settled(1);
