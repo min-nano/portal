@@ -436,7 +436,11 @@ describe('breakRanks（区切りの確からしさの順位）', () => {
     // ファイルの境目の頁にしおり・見出しもあれば、その順位（しおりか、見出しの種類）。
     candidates[9] = { kind: 'file', title: 'b.pdf', chapter: 'Chapter 4' };
     expect(breakRanks(items, candidates)[9]).toBe(3);
+    // しおりの題に階層の形があれば、その階層（「Chapter 4」は章）。形が無ければしおりの順位。
     items[9] = { ...items[9], outline: 'Chapter 4' };
+    expect(breakRanks(items, candidates)[9]).toBe(3);
+    candidates[9] = { kind: 'file', title: 'b.pdf', chapter: '付録' };
+    items[9] = { ...items[9], outline: '付録' };
     expect(breakRanks(items, candidates)[9]).toBe(1);
     candidates[9] = { kind: 'heading', title: '第三編' };
     expect(breakRanks(items, candidates)[9]).toBe(2);
@@ -598,12 +602,81 @@ describe('柱・頁番号・目次の項目を手掛かりにする（breakCandi
     expect(ranks[30]).toBe(RANKS.chapter);
   });
 
-  it('しおりは、手掛かりを足したほかの候補より確かにする', () => {
-    const items = [page(), page({ outline: '第1部' }), page(), page({ heading: '第2章 施工', toc: '第2章 施工' }), page({ running: '第2章 施工' }), page({ running: '第2章 施工' })];
+  it('階層の形の無いしおりは、手掛かりを足したほかの候補より確かにする', () => {
+    const items = [page(), page({ outline: '総論' }), page(), page({ heading: '第2章 施工', toc: '第2章 施工' }), page({ running: '第2章 施工' }), page({ running: '第2章 施工' })];
     items[2] = { ...items[2], running: '第1章 材料' };
     items[1] = { ...items[1], running: '第1章 材料' };
     const ranks = breakRanks(items, breakCandidates(items));
     expect(ranks[1]).toBeLessThan(ranks[3]);
+  });
+
+  it('しおりの題が番号を振った項目（「01. マウス操作」）なら節、部・章の形ならその階層にする', () => {
+    // 章の見出しはしおりに無く、節にだけしおりを付けた本（Vectorworks の本）。
+    const items = [
+      page(),
+      page({ heading: 'Chapter 1' }),
+      page({ outline: '01. マウス操作' }),
+      page(),
+      page({ outline: '02. インターフェイス' }),
+      page({ heading: 'Chapter 2' }),
+      page({ outline: '01. 敷地の入力' }),
+      page({ outline: '(2) 通り芯' }),
+      page({ outline: '1-3 間取り' }),
+      page({ outline: '第3章 基本モデル' }),
+      page({ outline: '付録' }),
+    ];
+    const ranks = breakRanks(items, breakCandidates(items));
+    expect(ranks).toEqual([null, RANKS.chapter, RANKS.section, null, RANKS.section, RANKS.chapter, RANKS.section, RANKS.section, RANKS.section, RANKS.chapter, RANKS.outline]);
+    // 本を通して番号を振ったしおり（「1. はじめに」「2. 方法」。番号が繰り返さない）は、章などの区切り。
+    const whole = [page(), page({ outline: '1. はじめに' }), page({ heading: '第2章 補足' }), page({ outline: '2. 方法' })];
+    const wholeRanks = breakRanks(whole, breakCandidates(whole));
+    expect([wholeRanks[1], wholeRanks[3]]).toEqual([RANKS.outline, RANKS.outline]);
+  });
+
+  it('前付け（0 以下の頁番号）から本文（1 頁から）に入るところを、章と同じ確かさの候補にする', () => {
+    const items = [page({ number: -2 }), page({ number: -1 }), page({ number: 0 }), page({ number: 1 }), page({ number: 2 })];
+    const candidates = breakCandidates(items);
+    expect(candidates[3]).toEqual({ kind: 'opening', title: '1 頁', opening: true });
+    expect(breakRanks(items, candidates)[3]).toBe(RANKS.chapter);
+    expect(breakReason(candidates[3])).toBe('本文の始まり「1 頁」');
+    // 手前に番号の無い頁（章の扉）があれば、そこから（見出しのある頁で止める）。
+    const title = [page({ number: 0 }), page(), page(), page({ number: 1 })];
+    expect(breakCandidates(title)[1]).toEqual({ kind: 'opening', title: '1 頁', opening: true });
+    const headed = [page({ number: 0 }), page(), page({ heading: '第1章 総論' }), page(), page({ number: 1 })];
+    expect(breakCandidates(headed)[2]).toMatchObject({ kind: 'heading', opening: true });
+  });
+
+  it('汚れを OCR で読んだような字の少ない柱は、柱として扱わない', () => {
+    const head = (text) => runningHead([{ text, y: 0.03 }]);
+    expect(head('! ● ● . ● ●● ● ●● ● ●●')).toBe('');
+    expect(head('●ー● . ● ● ● . ●ー● ● ●')).toBe('');
+    expect(head('第2 章 木造住宅 屋根')).toBe('第2 章 木造住宅 屋根');
+    // 番号の点・括弧の多い柱、飾りの多い章の柱、1 字の柱は残す。
+    expect(head('1.1.1(1) 壁')).toBe('1.1.1(1) 壁');
+    expect(head('◆◆ 第3章 ◆◆')).toBe('◆◆ 第3章 ◆◆');
+    expect(head('序')).toBe('序');
+  });
+
+  it('OCR で点の落ちた節の番号（22.5 は 2.2.5）は章の番号で読み、日本語が続く番号（2.8.2陸棟）も読む', () => {
+    const run = (running) => page({ running });
+    const items = [
+      run('第2 章 屋根 2.2 下ぶき 2.2.1 ふき方'),
+      run('第2 章 屋根 22.5(2) 棟違い'), // 2.2.5
+      run('第2 章 屋根 2.3 下屋 2.3.1 下ぶき'),
+      run('第2 章 屋根 2.3.2 壁際'),
+      run('第2 章 屋根 2.8.1 片流れ棟'),
+      run('第2 章 屋根 2.8.2陸棟'),
+      run('第2 章 屋根 29.1 庇の下地'), // 2.9.1
+      run('第2 章 屋根 2.9.2 シーリング'),
+    ];
+    expect(breakCandidates(items).flatMap((candidate, i) => (candidate ? [[i, candidate.running]] : []))).toEqual([
+      [2, 'section'],
+      [4, 'section'],
+      [6, 'section'],
+    ]);
+    // 単位の続く数（「1.5倍」「2.5％」）は節の番号ではない（文字で比べる）。
+    const units = [run('荷重 1.5倍 の検討'), run('荷重 1.5倍 の検討'), run('荷重 2.5％'), run('荷重 2.5％')];
+    expect(breakCandidates(units)[2]).toMatchObject({ running: 'text' });
   });
 
   it('本文の頁番号が戻るところと、目次の項目が指す頁も候補にし、点数を足す', () => {

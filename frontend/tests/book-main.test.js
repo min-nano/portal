@@ -3131,13 +3131,22 @@ describe('分ける', () => {
     await settled(2);
     change($('splitMegabytes'), '35');
     expect(logText()).toMatch(/分ける位置の提案 1（[^）]*頁番号の戻り・順位 \d+）/);
+    // 前付け（番号の無い頁が 0 以下に推定される）から本文に入るところ。見出しと重なれば、訳に添える。
+    drop([
+      file(
+        '前付.pdf',
+        pdf([page('c1', null, { mb: 10 }), page('c2', null, { mb: 10 }), page('c3', 1, { mb: 10, heading: '第1章 総論' }), page('c4', 2, { mb: 10 }), page('c5', 3, { mb: 10 })])
+      ),
+    ]);
+    await settled(3);
+    expect(logText()).toMatch(/見出し「第1章 総論」・本文の始まり・順位/);
     // 頁ごとに見出しがある（細かすぎる）と、順位は付けない。
     drop([file('細.pdf', pdf(Array.from({ length: 24 }, (_, i) => page(`d${i + 1}`, i + 1, { mb: 5, heading: `第${i + 1}章` }))))]);
-    await settled(3);
+    await settled(4);
     expect(logText()).toMatch(/見出し「第\d+章」）/);
     // 柱の変わったところが多ければ、頭の 40 件まで。
     drop([file('柱.pdf', pdf(Array.from({ length: 42 }, (_, i) => page(`h${i + 1}`, i + 1, { head: `柱${String.fromCharCode(0x4e00 + i)}` }))))]);
-    await settled(4);
+    await settled(5);
     expect(logText()).toContain(`40 頁目〜「柱${String.fromCharCode(0x4e00 + 39)}」 ほか 2 件）`);
   });
 
@@ -3153,7 +3162,8 @@ describe('分ける', () => {
     await vi.waitFor(() => expect(logText()).toContain('「本_分け方.json」をダウンロードしました'));
     const saved = URL.createObjectURL.mock.calls.at(-1)[0];
     const data = JSON.parse(await saved.text());
-    expect(data).toMatchObject({ version: 1, files: ['本.pdf'], manual: true });
+    expect(data).toMatchObject({ version: 2, files: ['本.pdf'], manual: true });
+    expect(data.pages[0].bytes).toBeGreaterThan(0);
     expect(data.pages.map((p) => p.start)).toEqual([0, 0, 1, 0, 1, 0, 0]);
     expect(data.pages.map((p) => p.suggested)).toEqual([0, 0, 0, 0, 1, 0, 0]);
     expect(data.pages[4]).toMatchObject({

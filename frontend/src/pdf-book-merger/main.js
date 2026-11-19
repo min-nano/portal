@@ -727,6 +727,7 @@ function suggestionText(order, starts, breaks, ranks) {
       candidate.toc && '目次',
       candidate.running && RUNNING_CLUES[candidate.running],
       candidate.restart && '頁番号の戻り',
+      candidate.opening && candidate.kind !== 'opening' && '本文の始まり',
     ].filter(Boolean);
     const rank = ranks[index] === null ? '' : `・順位 ${ranks[index]}`;
     return `${displayLabel(order[index])}（${breakReason(candidate)}${clues.length ? `・${clues.join('・')}` : ''}${rank}）`;
@@ -3204,6 +3205,8 @@ async function saveTrainingData() {
       start: cut.has(index) ? 1 : 0,
       suggested: proposed.has(index) ? 1 : 0,
       features: features[index],
+      // 頁の大きさの見積もり（バイト。上限との兼ね合いを確かめるため）。
+      bytes: items[index].bytes,
       // 手掛かりの文字（読み違いを確かめるため）。
       reason: breaks[index] ? breakReason(breaks[index]) : '',
       running: items[index].running,

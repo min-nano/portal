@@ -14,6 +14,8 @@ describe('pageLayout（頁のレイアウトの特徴）', () => {
     expect(pageLayout(lines)).toEqual({ lines: 3, chars: 15, scale: 4, largestY: 0.3, centered: true, largest: '第2章' });
     // 左に寄った大きな字は、真ん中ではない。
     expect(pageLayout([line('第2章', { x0: 0.05, x1: 0.2, h: 0.04 }), line('本文')]).centered).toBe(false);
+    // 大きな字の行が下の方にあっても拾う。
+    expect(pageLayout([line('本文'), line('第3章', { y: 0.7, h: 0.03 })]).largest).toBe('第3章');
   });
 
   it('行が無ければ（白紙・画像だけの頁）、空の特徴', () => {
@@ -41,7 +43,7 @@ describe('pageFeatures（頁ごとの特徴）', () => {
     ];
     const candidates = breakCandidates(items);
     const features = pageFeatures(items, candidates, breakRanks(items, candidates));
-    expect(FEATURE_VERSION).toBe(1);
+    expect(FEATURE_VERSION).toBe(2);
     expect(features[0]).toMatchObject({ position: 0, body: 0, candidate: 0, rank: 6, numbered: 0, step: 0, blank: 0, bytesBefore: 0 });
     expect(features[3]).toMatchObject({ blank: 1, bytes: 0.1 });
     expect(features[4]).toMatchObject({
@@ -60,6 +62,10 @@ describe('pageFeatures（頁ごとの特徴）', () => {
     });
     expect(features[5]).toMatchObject({ running: 0, step: 1, lines: 0, largestY: 1 });
     expect(features[6].heading).toBe(1);
+    // 本文の始まり（前付けの 0 以下の番号のあと）。
+    const opening = [page({ number: 0 }), page({ number: 1 })];
+    const found = breakCandidates(opening);
+    expect(pageFeatures(opening, found, breakRanks(opening, found))[1].opening).toBe(1);
     expect(features[7]).toMatchObject({ heading: 2, position: 1 });
   });
 

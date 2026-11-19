@@ -10,7 +10,7 @@
 import { headingRank, RANKS } from './split.js';
 
 /** 学ぶためのデータの形の版（特徴を足したり変えたりしたら上げる）。 */
-export const FEATURE_VERSION = 1;
+export const FEATURE_VERSION = 2;
 
 /** 白紙とみなす文字の数（頁番号や、ごみの点を読んだ数文字は白紙のうち）。 */
 const BLANK_CHARS = 8;
@@ -82,6 +82,7 @@ export function pageFeatures(items, candidates, ranks) {
       toc: item.toc ? 1 : 0,
       running: RUNNING_LEVEL[candidate?.running] ?? 0,
       restart: candidate?.restart ? 1 : 0,
+      opening: candidate?.opening ? 1 : 0,
       candidate: candidate ? 1 : 0,
       rank: ranks[index] ?? 6,
       numbered: Number.isFinite(item.number) ? 1 : 0,
