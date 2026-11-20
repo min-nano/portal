@@ -397,8 +397,11 @@ const CHAPTER_IN_HEAD = /第\s*[0-9一二三四五六七八九十]+\s*章|chapte
 /** 柱の部・編の番号（「第2部」「Part 2」）。章とは別に比べる（部が変わると章の番号が 1 に戻る本もあるので）。 */
 const PART_IN_HEAD = /第\s*[0-9一二三四五六七八九十]+\s*[部編]|part\s*(?:[0-9]+|[ivxlc]+\b)/i;
 
-/** 柱の行の端の頁番号（「23」「- 23 -」「p.23」「23頁」。全角の数字も）。 */
-const EDGE_NUMBER = /^[-‐－—–\s]*(?:[pPｐＰ][.．]?\s*)?[\d０-９]{1,4}\s*頁?[-‐－—–]*(?=\s|$)|(?<=^|\s)(?:[-‐－—–]+\s*)?(?:[pPｐＰ][.．]?\s*)?[\d０-９]{1,4}\s*頁?[-‐－—–\s]*$/g;
+/**
+ * 柱の行の端の頁番号（「23」「- 23 -」「p.23」「23頁」。全角の数字も）。末尾の番号は、前の空白を
+ * 1 つ目のかたまりに取る（置き換えるときに残す。後読みは iOS 16.3 以前の Safari が読めないので使わない）。
+ */
+const EDGE_NUMBER = /^[-‐－—–\s]*(?:[pPｐＰ][.．]?\s*)?[\d０-９]{1,4}\s*頁?[-‐－—–]*(?=\s|$)|(^|\s)(?:[-‐－—–]+\s*)?(?:[pPｐＰ][.．]?\s*)?[\d０-９]{1,4}\s*頁?[-‐－—–\s]*$/g;
 
 /** 柱を比べるときに、遡って見る柱のある頁の数（左右の頁で違う柱が交互に載るので）。 */
 const RUNNING_LOOKBACK = 4;
@@ -406,7 +409,23 @@ const RUNNING_LOOKBACK = 4;
 /** 柱の節の番号（「2.2.5(1) 棟違い」の 2.2）。上の 2 段だけで比べる。 */
 // 語の始まりにあり、「2.2.5(1)」のように続いてもよい。OCR で点のあとに空白が入ったもの（「6. 1」）も読む。すぐ後ろにかな・漢字が続いてもよい
 // （「2.8.2陸棟」）が、単位などが続くもの（「1.5mm」「1.5倍」「2.5％」）と版の番号（「Ver 2.0」）は除く。
-const SECTION_IN_HEAD = /(?<!ver(?:sion)?\.?\s*|[^\s])(\d{1,2})[.．] ?(\d{1,2})(?:[.．]\d+)*(?:\(\d+\)|（\d+）)?(?=\s|$|[\u3040-\u30ff\u3400-\u9fff])(?![倍割分秒年月日回個枚台人円点度階])/i;
+// 語の始まりは、前の空白か行の頭を 1 つ目のかたまりに取って確かめる（後読みは iOS 16.3 以前の
+// Safari が読めないので使わない）。版の番号は、合った位置の前の文字で除く（sectionIn）。
+const SECTION_IN_HEAD = /(^|\s)(\d{1,2})[.．] ?(\d{1,2})(?:[.．]\d+)*(?:\(\d+\)|（\d+）)?(?=\s|$|[\u3040-\u30ff\u3400-\u9fff])(?![倍割分秒年月日回個枚台人円点度階])/gi;
+
+/** 版の番号の前の言葉（「Ver 2.0」「version. 3.1」）。 */
+const VERSION_BEFORE = /ver(?:sion)?\.?\s*$/i;
+
+/**
+ * 柱の中の、いちばん前の節の番号（SECTION_IN_HEAD に合い、版の番号でないもの）。
+ * @returns {{major:string, minor:string}|null}
+ */
+function sectionIn(text) {
+  for (const found of text.matchAll(SECTION_IN_HEAD)) {
+    if (!VERSION_BEFORE.test(text.slice(0, found.index + found[1].length))) return { major: found[2], minor: found[3] };
+  }
+  return null;
+}
 
 const KANJI_DIGITS = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
 
@@ -414,11 +433,11 @@ const KANJI_DIGITS = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, �
  * 節の番号を数にする（2.2 → 202）。OCR で点が落ちた番号（「2.2.5」を「22.5」、「4.1.6」を
  * 「41.6」）は、同じ柱の章の番号で始まる 2 桁なら、章の番号と次の桁に分けて読む。
  *
- * @param {RegExpMatchArray} found SECTION_IN_HEAD に合ったもの
+ * @param {{major:string, minor:string}} found sectionIn で見つけた番号
  * @param {number|string|null} chapter 同じ柱の章の番号
  */
 function sectionNumber(found, chapter) {
-  const [major, minor] = [found[1], found[2]];
+  const { major, minor } = found;
   if (typeof chapter === 'number' && major.length === 2 && Number(major) !== chapter && major[0] === String(chapter)) {
     return chapter * 100 + Number(major[1]);
   }
@@ -454,7 +473,7 @@ function runningBreaks(items) {
     if (!text) return null;
     const part = text.match(PART_IN_HEAD)?.[0];
     const chapter = text.match(CHAPTER_IN_HEAD)?.[0];
-    const section = text.match(SECTION_IN_HEAD);
+    const section = sectionIn(text);
     const number = (found) => (found ? chapterNumber(found) ?? found.replace(/\s/g, '') : null);
     return {
       text: item.running,
@@ -532,14 +551,14 @@ function runningBreaks(items) {
 export function runningHead(lines) {
   const text = lines
     .filter((line) => line.y < MARGIN_ZONE && /[^\s\d\-‐－()（）.．・]/.test(line.text))
-    .map((line) => line.text.replace(EDGE_NUMBER, ''))
+    .map((line) => line.text.replace(EDGE_NUMBER, '$1'))
     .join(' ')
     .replace(/\s+/g, ' ')
     .trim();
   // 字・数字が少なければ（スキャンの汚れや絵を OCR で「● ● . ●」と読んだもの）、柱は無いとみなす
   // （章の扉の上の余白の汚れを柱と読むと、柱の変わり目を扉まで遡れない）。
   // 章・節の番号の柱は残す。番号の点・括弧（「1.1.1(1)」）は数えない。
-  if (CHAPTER_IN_HEAD.test(text) || PART_IN_HEAD.test(text) || SECTION_IN_HEAD.test(text)) return text;
+  if (CHAPTER_IN_HEAD.test(text) || PART_IN_HEAD.test(text) || sectionIn(text)) return text;
   const letters = text.replace(/[^\p{L}\p{N}]/gu, '').length;
   const marks = text.replace(/[\s.．()（）・\-‐－]/g, '').length;
   return letters >= 1 && letters >= marks * NOISE_RATIO ? text : '';
