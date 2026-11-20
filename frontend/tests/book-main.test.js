@@ -827,8 +827,38 @@ describe('ファイルを足して並べる', () => {
     expect(gridLabels()).toContain('17 頁');
     change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '1.5');
     expect($('message').textContent).toBe('先頭の頁の番号は整数で入れてください。');
+    // 番号が整数でないまま進み方を選んでも、欄は使っている進み方（11 からの 2 つずつ）に戻す。
+    const invalidStep = fileItem('猫_奇数.pdf').querySelectorAll('.bm-file-controls select')[1];
+    change(invalidStep, '-2');
+    expect(invalidStep.value).toBe('2');
+    expect(gridLabels()).toContain('17 頁');
     change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '');
     expect(gridLabels()).toContain('7 頁');
+
+    // 先頭の番号が空のまま進み方を選んでも、並びは自動のままなので、欄も「自動」に戻す
+    // （行は描き直されないので、何度選んでも戻ること）。
+    const before = gridLabels();
+    for (const value of ['-2', '1']) {
+      const stepField = fileItem('猫_奇数.pdf').querySelectorAll('.bm-file-controls select')[1];
+      change(stepField, value);
+      expect(stepField.value).toBe('');
+      expect($('message').textContent).toBe('進み方を変えるときは、先頭の頁の番号も入れてください。');
+      expect(gridLabels()).toEqual(before);
+    }
+    // 手で決めていないときに整数でない番号を入れても、欄は「自動」に戻す。
+    change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), 'abc');
+    const autoStep = fileItem('猫_奇数.pdf').querySelectorAll('.bm-file-controls select')[1];
+    change(autoStep, '1');
+    expect(autoStep.value).toBe('');
+    expect($('message').textContent).toBe('先頭の頁の番号は整数で入れてください。');
+    expect(gridLabels()).toEqual(before);
+    // 番号を入れれば、選んだ進み方で並ぶ。
+    change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '11');
+    const stepField = fileItem('猫_奇数.pdf').querySelectorAll('.bm-file-controls select')[1];
+    change(stepField, '2');
+    expect(stepField.value).toBe('2');
+    expect($('message').textContent).toBe('');
+    expect(gridLabels()).toContain('17 頁');
   });
 
   it('枝番の付いた頁（加除式の差し替え）を並べ、番号を枝番で直せる', async () => {
