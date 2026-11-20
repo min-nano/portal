@@ -1690,12 +1690,16 @@ function fileControls(file) {
     } else {
       // 部・編などの番号を前に付けた頁番号（2-1）も入れられる（前の段は、そのファイルの頁に付ける）。
       const path = parsePageNumber(value)?.path;
+      // 断るときは描き直さないので、進み方の欄も使っている値に戻す（選んだ値が残ると、並びと食い違う）。
+      const restoreStep = () => (step.value = file.manual ? String(file.manual.step) : '');
       if (!path || !Number.isInteger(path.at(-1))) {
+        restoreStep();
         showMessage('先頭の頁の番号は整数（部・編などの番号を前に付けるなら 2-1 の形）で入れてください。', 'red');
         return;
       }
       // 枝番と読む本では、ハイフンの付いた番号はファイルの先頭にできない（枝番の頁は頁ごとに入れる）。
       if (path.length > 1 && view.depth === 0) {
+        restoreStep();
         showMessage('ハイフンの付いた番号は、「ハイフンで区切った頁番号」で部・編などの番号と読むときだけ入れられます。', 'red');
         return;
       }
@@ -1706,7 +1710,17 @@ function fileControls(file) {
     refresh();
   };
   start.addEventListener('change', apply);
-  step.addEventListener('change', apply);
+  step.addEventListener('change', () => {
+    // 進み方は先頭の番号と組で決める。番号が空なら手で決めたもの（file.manual）は無いままで、
+    // 行の要約（sig）も変わらず描き直されないので、ここで欄を「自動」に戻す
+    // （戻さないと、選んだ進み方が出たまま並びは自動のままになる）。
+    if (!start.value.trim() && step.value) {
+      step.value = '';
+      showMessage('進み方を変えるときは、先頭の頁の番号も入れてください。', 'red');
+      return;
+    }
+    apply();
+  });
   controls.append(startField, stepField);
   const note = el(document, 'span', 'hint', '番号を読み違えているときだけ入れてください（空なら自動）。');
   controls.append(note);
