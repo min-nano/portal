@@ -38,11 +38,10 @@ function file(key, numbers, { role = 'body', manual = null, coverStep = 1 } = {}
   };
 }
 
-/** 12 → { value: 12 }、'57-1' → { value: 57, branch: 1 }。 */
+/** 12 → { path: [12] }、'57-1' → { path: [57, 1] }。 */
 function readValue(value) {
-  if (typeof value === 'number') return { value };
-  const [main, branch] = value.split('-').map(Number);
-  return { value: main, branch };
+  if (typeof value === 'number') return { path: [value] };
+  return { path: value.split('-').map(Number) };
 }
 
 /** 並びの頁の番号（枝番の頁は '57-1'）。 */
@@ -226,7 +225,7 @@ describe('arrangeBook', () => {
 
   it('番号の無いファイルも、頁ごとに手で番号を入れれば本文として並べる（入れていない頁は番号不明）', () => {
     const files = [file('x', [null, null]), file('odd', [1, 3]), file('even', [2, 4])];
-    const order = arrange(files, new Map([['x:0', { number: 2.5 }]]));
+    const order = arrange(files, new Map([['x:0', { path: [2.5] }]]));
 
     expect(order.map((e) => [e.pageKey, e.status])).toEqual([
       ['odd:0', 'detected'],
@@ -237,7 +236,7 @@ describe('arrangeBook', () => {
       ['x:1', 'unknown'],
     ]);
     // 名前で表紙と分かるファイルも同じ。
-    const named = arrange([{ ...files[0], coverByName: true }, ...files.slice(1)], new Map([['x:0', { number: 2.5 }]]));
+    const named = arrange([{ ...files[0], coverByName: true }, ...files.slice(1)], new Map([['x:0', { path: [2.5] }]]));
     expect(named.map((e) => e.pageKey)[2]).toBe('x:0');
   });
 
@@ -272,7 +271,7 @@ describe('arrangeBook', () => {
   it('名前で表紙と見たファイルも、頁ごとに番号を入れれば、残りの頁はその番号から推定する', () => {
     const cover = { ...file('cover', [null, null, null]), coverByName: true };
     const files = [file('odd', [1, 3]), cover, file('even', [2, 4])];
-    const order = arrange(files, new Map([['cover:0', { number: 5 }]]));
+    const order = arrange(files, new Map([['cover:0', { path: [5] }]]));
 
     expect(order.filter((e) => e.fileKey === 'cover').map((e) => e.number)).toEqual([5, 7, 9]);
   });
@@ -307,7 +306,7 @@ describe('arrangeBook', () => {
       ['x:0', 'unplaced'],
       ['x:1', 'unplaced'],
     ]);
-    const fixed = arrange(files, new Map([['x:1', { number: 2.5 }]]));
+    const fixed = arrange(files, new Map([['x:1', { path: [2.5] }]]));
     expect(fixed.map((e) => [e.pageKey, e.number])).toEqual([
       ['odd:0', 1],
       ['even:0', 2],
@@ -349,7 +348,7 @@ describe('arrangeBook', () => {
   });
 
   it('頁ごとに手で直した番号を優先する（小数で間に入れられる）', () => {
-    const order = arrange(book(), new Map([['odd-a:0', { number: 2.5 }]]));
+    const order = arrange(book(), new Map([['odd-a:0', { path: [2.5] }]]));
 
     const at = order.findIndex((e) => e.pageKey === 'odd-a:0');
     expect(order[at]).toMatchObject({ number: 2.5, status: 'manual' });
@@ -360,7 +359,7 @@ describe('arrangeBook', () => {
   it('頁ごとに直した番号から、同じファイルの残りの頁を決め直す', () => {
     // 読み違いだらけの奇数頁の束。1 頁直せば、偶数頁の束の歩幅を借りて残りも並ぶ。
     const files = [file('odd', [15, null, 2, null]), file('even', [2, 4, 6, 8])];
-    const order = arrange(files, new Map([['odd:0', { number: 1 }]]));
+    const order = arrange(files, new Map([['odd:0', { path: [1] }]]));
 
     expect(order.map(labelOf)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(order.filter((e) => e.fileKey === 'odd').map((e) => e.status)).toEqual([
@@ -373,7 +372,7 @@ describe('arrangeBook', () => {
 
   it('ファイルごとに番号を決めたファイルでは、頁ごとに直した番号はその頁だけ', () => {
     const files = [file('odd', [null, null, null], { manual: { start: 1, step: 2 } })];
-    const order = arrange(files, new Map([['odd:0', { number: 7 }]]));
+    const order = arrange(files, new Map([['odd:0', { path: [7] }]]));
 
     expect(order.map(labelOf)).toEqual([3, 5, 7]);
   });
@@ -498,7 +497,7 @@ describe('頁ラベル', () => {
       { ...file('cover', [null, null]), coverByName: true },
       file('body', [null, null, 1, 2, 3]),
     ];
-    const order = buildBookOrder(files, numberFiles(files), new Map([['body:4', { number: 2.5 }]]));
+    const order = buildBookOrder(files, numberFiles(files, new Map([['body:4', { path: [2.5] }]])), new Map([['body:4', { path: [2.5] }]]));
     const ranges = pageLabelRanges(order);
 
     expect(pageLabelTexts(ranges, order.length)).toEqual([
@@ -532,8 +531,25 @@ describe('頁ラベル', () => {
     expect(pageLabelRanges(arrange([file('a', [null])]))).toEqual([]);
   });
 
-  it('部が分かれていれば付けない（通し番号）', () => {
-    expect(pageLabelRanges([{ role: 'body', number: 1, part: 0 }, { role: 'body', number: 1, part: 1 }])).toEqual([]);
+  it('振り直しを推定して部に分けていれば付けない（通し番号）', () => {
+    const order = [
+      { role: 'body', number: 1, part: 0, partLabel: '第 1 部' },
+      { role: 'body', number: 1, part: 1, partLabel: '第 2 部' },
+    ];
+    expect(pageLabelRanges(order)).toEqual([]);
+  });
+
+  it('頁番号の前に刷られた部・編などの番号で分けた部には、その番号を頭に付ける', () => {
+    const order = [
+      { role: 'body', number: 0, prefix: [1], part: 0 },
+      { role: 'body', number: 1, prefix: [1], part: 0 },
+      { role: 'body', number: 2, prefix: [1], part: 0 },
+      { role: 'body', number: 1, prefix: [2], part: 1 },
+      { role: 'body', number: 1, prefix: [2], branch: [1, 2], part: 1 },
+    ];
+    const ranges = pageLabelRanges(order);
+
+    expect(pageLabelTexts(ranges, 5)).toEqual(['1-i', '1-1', '1-2', '2-1', '2-1-1-2']);
   });
 
   it('範囲の無い頁は 1 から数える', () => {
@@ -619,7 +635,7 @@ describe('枝番の頁（加除式の差し替え）', () => {
 
   it('枝番の頁を手で決められる', () => {
     const files = [file('body', [55, 56, null, 58])];
-    const order = arrange(files, new Map([['body:2', { number: 57, branch: 2 }]]));
+    const order = arrange(files, new Map([['body:2', { path: [57, 2] }]]));
 
     expect(order.map(labelOf)).toEqual([55, 56, '57-2', 58]);
     expect(order[2].status).toBe('manual');
@@ -657,11 +673,11 @@ describe('枝番の頁（加除式の差し替え）', () => {
   });
 
   it('枝番の頁の表は奇数側、裏は偶数側', () => {
-    expect([sideOf(56, 1), sideOf(57, 2)]).toEqual(['odd', 'even']);
+    expect([sideOf(56, [1]), sideOf(57, [2]), sideOf(57, [1, 2])]).toEqual(['odd', 'even', 'even']);
   });
 
   it('偶数の番号の枝番は、その番号だけを差し替えたとみなす', () => {
-    const { replaced } = branchLayout([{ number: 55 }, { number: 56, branch: 1 }, { number: 56, branch: 2 }]);
+    const { replaced } = branchLayout([{ number: 55 }, { number: 56, branch: [1] }, { number: 56, branch: [2] }]);
 
     expect([...replaced]).toEqual([[56, 56]]);
   });
