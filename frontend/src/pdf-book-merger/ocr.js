@@ -235,10 +235,10 @@ function cropOf(canvas, box, height, dark) {
  * @returns {Promise<string>} 読めなければ空
  */
 async function readBox(scheduler, canvas, strip, box) {
-  const { best, unsure } = await voteBox(scheduler, canvas, box, false);
-  if (best || !unsure || !hasLightInk(strip, box)) return best;
+  const first = await voteBox(scheduler, canvas, box, false);
+  if (first.best || !first.unsure || !hasLightInk(strip, box)) return first;
   boxesRead++;
-  return (await voteBox(scheduler, canvas, box, true)).best;
+  return voteBox(scheduler, canvas, box, true);
 }
 
 /**
@@ -271,7 +271,8 @@ async function voteBox(scheduler, canvas, box, dark) {
   }
   let best = '';
   for (const [text, score] of votes) if (!best || score > votes.get(best)) best = text;
-  return { best, unsure };
+  // 確信度は、読んだ大きさごとの確信度の平均（ほかの読みになった大きさは 0 と数える）。
+  return { best, unsure, confidence: best ? votes.get(best) / READ_HEIGHTS.length : 0 };
 }
 
 /**
@@ -282,7 +283,8 @@ async function voteBox(scheduler, canvas, box, dark) {
  *
  * @param {{canvas:HTMLCanvasElement, top:number, height:number}} strip
  *   renderMargins の帯（top・height は頁の高さに対する割合）
- * @returns {Promise<{text:string, x0:number, x1:number, y:number, h:number}[]>}
+ * @returns {Promise<{text:string, confidence:number, x0:number, x1:number, y:number, h:number}[]>}
+ *   confidence は確信度（0〜100。読んだ大きさごとの確信度の平均）
  */
 export async function readStrip(strip) {
   const scheduler = await prepareOcr();
@@ -294,13 +296,14 @@ export async function readStrip(strip) {
   const boxes = shortTextBoxes(image);
   boxesRead += boxes.length;
 
-  const texts = await Promise.all(boxes.map((box) => readBox(scheduler, canvas, image, box)));
+  const reads = await Promise.all(boxes.map((box) => readBox(scheduler, canvas, image, box)));
   const items = [];
-  texts.forEach((text, i) => {
+  reads.forEach(({ best: text, confidence }, i) => {
     if (!text) return;
     const box = boxes[i];
     items.push({
       text,
+      confidence: Math.round(confidence),
       x0: box.x0 / width,
       x1: box.x1 / width,
       // 断片の y は基準線（字の下端）の位置。

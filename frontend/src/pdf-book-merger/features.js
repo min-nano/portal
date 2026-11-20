@@ -7,49 +7,42 @@
 //
 // DOM には触らない（テストで縛るため）。
 
-import { MARGIN_ZONE } from './page-numbers.js';
 import { headingRank, RANKS } from './split.js';
 
 /**
  * 学ぶためのデータの形の版（特徴を足したり変えたり、残す文字を変えたりしたら上げる）。
- * 3: 頁の元の文字（余白の帯の行と大きな字の行。sourceLines）を残す。
+ * 4: 頁のすべての文字のかたまり（rawItems）と、余白を OCR で読んだ文字の確信度を残す。
  */
-export const FEATURE_VERSION = 3;
+export const FEATURE_VERSION = 4;
 
-/** 余白の帯の外から残す、大きな字の行の数。 */
-const LARGE_LINES = 6;
-
-/** 残す行の文字の長さの上限。 */
-const LINE_TEXT = 80;
+/** 文字のかたまり 1 つを残す形の項目の並び（JSON の itemFields に書く）。 */
+export const ITEM_FIELDS = ['text', 'x0', 'x1', 'y', 'h'];
 
 /**
- * 区切りの判定の特徴を、あとから求め直せるように残す頁の元の文字（OCR の読み違いも
- * そのまま）。上下の余白の帯の行（柱・頁番号）と、帯の外の大きな字の行（見出し・扉の題）
- * だけで、本文の行は残さない。
+ * 区切りの判定の特徴を、あとから求め直せるように残す頁の文字（PDF の文字情報のかたまり。
+ * OCR の読み違いもそのまま。本文も含む）。行にまとめる前のもので、文字・左右の端・高さの
+ * 中ほど・字の高さ（頁の幅・高さに対する割合）。何百頁ぶん持つので、かたまりごとに
+ * [文字, x0, x1, y, h] の並び（ITEM_FIELDS の順。余白を OCR で読んだものは、後ろに確信度）にし、
+ * 頁ごとに 1 つの文字列にしておく（JSON.parse で戻す）。
  *
- * @param {{text:string, x0:number, x1:number, y:number, h:number}[]} lines 頁の文字を行にまとめたもの
- * @returns {{median:number, lines:{text:string, x0:number, x1:number, y:number, h:number}[]}}
- *   median: 行の高さの中央値（字の大きさを比べるため）。lines は上から順
+ * @param {{text:string, x0:number, x1:number, y:number, h:number, confidence?:number}[]} items
+ * @returns {string}
  */
-export function sourceLines(lines) {
-  const heights = lines.map((line) => line.h).sort((a, b) => a - b);
-  const median = heights.length ? heights[Math.floor((heights.length - 1) / 2)] : 0;
-  const band = (line) => line.y < MARGIN_ZONE || line.y > 1 - MARGIN_ZONE;
-  const large = lines
-    .filter((line) => !band(line) && line.h > median)
-    .sort((a, b) => b.h - a.h)
-    .slice(0, LARGE_LINES);
-  const kept = lines.filter((line) => band(line) || large.includes(line));
-  return {
-    median: round(median),
-    lines: kept.map((line) => ({
-      text: line.text.slice(0, LINE_TEXT),
-      x0: round(line.x0),
-      x1: round(line.x1),
-      y: round(line.y),
-      h: round(line.h),
-    })),
-  };
+export function rawItems(items) {
+  return JSON.stringify(
+    items.map((item) => [
+      item.text,
+      round4(item.x0),
+      round4(item.x1),
+      round4(item.y),
+      round4(item.h),
+      ...(item.confidence === undefined ? [] : [item.confidence]),
+    ])
+  );
+}
+
+function round4(value) {
+  return Math.round(value * 10000) / 10000;
 }
 
 /** 白紙とみなす文字の数（頁番号や、ごみの点を読んだ数文字は白紙のうち）。 */

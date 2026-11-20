@@ -222,6 +222,8 @@ describe('readStrip', () => {
     const items = await reading;
 
     expect(items.map((item) => item.text)).toEqual(['12', '12']);
+    // 確信度は、読んだ 3 通りの大きさの確信度の平均。
+    expect(items.map((item) => item.confidence)).toEqual([90, 90]);
     // かたまりごとに 3 通りの大きさで読む。
     expect(tesseract.scheduler.addJob).toHaveBeenCalledTimes(6);
     expect(boxesReadSoFar()).toBe(2);
@@ -271,6 +273,8 @@ describe('灰色の飾りのある頁番号', () => {
     const items = await reading;
 
     expect(items.map((item) => item.text)).toEqual(['2']);
+    // 確信度は、読み直したときのもの。
+    expect(items[0].confidence).toBe(96);
     expect(tesseract.scheduler.addJob).toHaveBeenCalledTimes(6);
     // 読み直しの 3 回だけ、薄いところを白にしてから読ませる。
     expect(cropContext.putImageData).toHaveBeenCalledTimes(3);
