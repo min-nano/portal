@@ -193,6 +193,12 @@ describe('duplicateIssues', () => {
     // 中身まで同じ頁は、部が違っても同じ頁（同じ束を 2 度入れて、部の始まりと見られたとき）。
     const exact = duplicateIssues(order, [{ a: 'a:0', b: 'b:0', exact: true }], describe_);
     expect([...exact.issues.keys()]).toEqual(['a:0', 'b:0']);
+    // 頁番号の前に刷られた部・編などの番号が違えば（2-1 と 3-1）、中身まで同じでも別の頁。
+    const printed = [
+      entry('a:0', { number: 1, prefix: [2], status: 'detected', part: 0 }),
+      entry('b:0', { number: 1, prefix: [3], status: 'detected', part: 1 }),
+    ];
+    expect(duplicateIssues(printed, [{ a: 'a:0', b: 'b:0', exact: true }], describe_).issues.size).toBe(0);
   });
 
   it('中身まで同じ頁は誤り、似た頁は注意として、互いを挙げる', () => {

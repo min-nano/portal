@@ -141,7 +141,7 @@ describe('mergePdf', () => {
     });
 
     // 結合したあとも、余白の頁番号はそのまま読める。
-    expect(pageNumberCandidates(merged.pages[3].items)[0].value).toBe(3);
+    expect(pageNumberCandidates(merged.pages[3].items)[0].path).toEqual([3]);
 
     // 文書の情報（タイトルは保存名、作成者と言語は本文の最初のファイルから）。
     expect(merged.info.Title).toBe('吾輩は猫である');

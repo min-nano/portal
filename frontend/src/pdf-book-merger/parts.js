@@ -20,22 +20,69 @@
 //
 // 奇数頁と偶数頁の束で部の数が揃わないとき（同じ束を最初から 2 度入れた、
 // など）は、部には分けない（重なりとして指摘される）。DOM には触らない。
+//
+// 頁番号の前に部・編などの番号を刷った本（2-21。page-numbers.js の階層）は、
+// 刷られた前の段ごとに分けてから、それぞれの中で上のように振り直しを探す
+// （前の段は刷られたとおりに並べ、振り直しは推定する）。
 
-import { pageNumberText, sideOf, stripPageNumber } from './page-numbers.js';
+import { comparePaths, pageNumberText, prefixKey, sideOf, stripPageNumber } from './page-numbers.js';
 
 /**
  * @param {{key:string, pages:{key:string, heads?:string[],
  *          signature?:{length:number, hash:string}}[]}[]} files
  *   番号の付いた本文のファイル（一覧の順）
- * @param {Map<string, {step:number|null, pages:{number:number|null}[]}>} numberings
- * @returns {{partOf: Map<string, number>, count: number, mismatch: boolean}}
+ * @param {Map<string, {step:number|null, pages:{number:number|null, branch?:number[], prefix?:number[]}[]}>} numberings
+ * @returns {{partOf: Map<string, number>, count: number, mismatch: boolean, names: string[]}}
  *   partOf: 頁の key → 何部目か（0 から）。count: 部の数。
- *   mismatch: 奇数頁と偶数頁の束で部の数が揃わず、分けるのをやめた
+ *   mismatch: 奇数頁と偶数頁の束で部の数が揃わず、分けるのをやめた（前の段のどれかで）。
+ *   names: 部ごとの呼び名（「第 2 部」）。振り直しを推定して分けた部にだけ付け、刷られた
+ *   前の段で分けた部（頁番号の 2-21 で分かる）は ''
  */
 export function assignParts(files, numberings) {
   const segments = splitSegments(files, numberings);
   markCopies(segments);
 
+  // 刷られた前の段ごとに、振り直しを探す（前の段の無い・分からない頁は '' にまとめ、先頭に）。
+  const groups = new Map();
+  for (const segment of segments) {
+    if (!groups.has(segment.prefixKey)) groups.set(segment.prefixKey, { prefix: segment.prefix, segments: [] });
+    groups.get(segment.prefixKey).segments.push(segment);
+  }
+  const ordered = [...groups.values()].sort((a, b) => comparePaths(a.prefix ?? [], b.prefix ?? []));
+  let mismatch = false;
+  const names = [];
+  for (const group of ordered) {
+    const result = renumbered(group.segments);
+    mismatch ||= result.mismatch;
+    const first = names.length;
+    for (let sub = 0; sub < result.count; sub++) names.push(partLabel(group.prefix, sub, result.count));
+    for (const segment of group.segments) segment.part = first + segment.part;
+  }
+
+  const partOf = new Map();
+  for (const segment of segments) {
+    const part = segment.copyOf ? segment.copyOf.part : segment.part;
+    for (const index of segment.pages) partOf.set(segment.file.pages[index].key, part);
+  }
+  return { partOf, count: names.length, mismatch, names };
+}
+
+/**
+ * 部の呼び名。振り直しを推定して分けた部は「第 2 部」（刷られた前の段の中で分けたなら
+ * 「「2-」の第 2 部」）。刷られた前の段だけで分かる部は ''（頁番号の 2-21 で分かる）。
+ */
+function partLabel(prefix, sub, count) {
+  if (count === 1) return '';
+  return prefix ? `「${prefixKey(prefix)}-」の第 ${sub + 1} 部` : `第 ${sub + 1} 部`;
+}
+
+/**
+ * 刷られた前の段が同じ区間（前の段の無い本では、すべての区間）を、振り直しのところで
+ * 部に分ける。segment.part に、その中で何部目か（0 から）を付ける。
+ *
+ * @returns {{count:number, mismatch:boolean}}
+ */
+function renumbered(segments) {
   const classes = new Map();
   for (const segment of segments) {
     if (segment.copyOf || segment.kind === null) continue;
@@ -52,13 +99,7 @@ export function assignParts(files, numberings) {
   // 1 部だけのことも、両面でスキャンした本の一部の紙だけを片面ずつ撮り直すこともあるので比べない。
   const mismatch = counts.has('odd') && counts.has('even') && counts.get('odd') !== counts.get('even');
   if (mismatch) for (const segment of segments) segment.part = 0;
-
-  const partOf = new Map();
-  for (const segment of segments) {
-    const part = segment.copyOf ? segment.copyOf.part : segment.part;
-    for (const index of segment.pages) partOf.set(segment.file.pages[index].key, part);
-  }
-  return { partOf, count: mismatch ? 1 : count, mismatch };
+  return { count: mismatch ? 1 : count, mismatch };
 }
 
 /**
@@ -79,7 +120,8 @@ function rankByBookOrder(list) {
 
 /**
  * ファイルを、本の順（逆順のファイルは最後の頁から）に読んで、番号が戻る
- * ところで切る。切ったひと続きを「区間」と呼ぶ。
+ * ところと、刷られた前の段（部・編などの番号）が変わるところで切る。切ったひと続きを
+ * 「区間」と呼ぶ。
  */
 function splitSegments(files, numberings) {
   const segments = [];
@@ -91,19 +133,28 @@ function splitSegments(files, numberings) {
     let segment = null;
     let previous = null;
     for (const index of indices) {
-      const { number, branch = null } = pages[index];
+      // ファイルごとに番号を入れたファイルで、頁ごとに入れた番号（その頁だけを変える）は、
+      // ファイルごとの番号で見る（ordering.js）。前の段（部・編などの番号）は入れたとおり。
+      const { base } = pages[index];
+      const page = base ? { ...base, prefix: pages[index].prefix } : pages[index];
+      const { number, branch = null } = page;
       const position = number === null ? null : slotOf(number, branch, step);
-      if (segment === null || (position !== null && previous !== null && position < previous)) {
+      const key = number === null ? null : prefixKey(page.prefix);
+      const turns =
+        position !== null &&
+        ((previous !== null && position < previous) || (segment?.prefixKey != null && key !== segment.prefixKey));
+      if (segment === null || turns) {
         const next = {
           id: segments.length,
           file,
           order,
           step,
           pages: [], // ファイルの中の頁の位置（本の順）
-          pageNumbers: [], // pages と同じ順の番号（番号の無い頁は null）
-          pageBranches: [], // pages と同じ順の枝番（無ければ null）
+          labels: [], // pages と同じ順の頁の番号（number・branch・prefix。番号の無い頁は number が null）
           numbers: [], // 番号のある頁の、並びの上の位置（slotOf）
-          keys: [], // 番号のある頁の番号（枝番の頁は 57-1 の形。重なりを数える）
+          keys: [], // 番号のある頁の番号（2-57-1 の形。重なりを数える）
+          prefixKey: null, // 刷られた前の段（prefixKey。前の段の無い頁は ''）
+          prefix: null,
           prev: segment,
           next: null,
           part: null,
@@ -114,11 +165,12 @@ function splitSegments(files, numberings) {
         segments.push(segment);
       }
       segment.pages.push(index);
-      segment.pageNumbers.push(number);
-      segment.pageBranches.push(branch);
+      segment.labels.push(page);
       if (number !== null) {
+        segment.prefixKey ??= key;
+        segment.prefix ??= page.prefix ?? null;
         segment.numbers.push(position);
-        segment.keys.push(pageNumberText({ number, branch }));
+        segment.keys.push(pageNumberText(page));
         segment.last = { number, branch };
         segment.firstPage ??= { number, branch };
         previous = position;
@@ -140,9 +192,7 @@ function splitSegments(files, numberings) {
     segment.kind = d === 2 ? side : d === 1 ? 'one' : null;
     const heads = segment.pages
       .map((index, i) =>
-        (segment.file.pages[index].heads ?? []).map((head) =>
-          stripPageNumber(head, segment.pageNumbers[i], segment.pageBranches[i])
-        )
+        (segment.file.pages[index].heads ?? []).map((head) => stripPageNumber(head, segment.labels[i]))
       )
       .filter((list) => list.length);
     segment.firstHeads = heads[0] ?? [];
@@ -168,8 +218,8 @@ function markCopies(segments) {
     const texts = [];
     segment.pages.forEach((index, i) => {
       const { signature } = segment.file.pages[index];
-      const number = segment.pageNumbers[i];
-      const key = number === null ? null : pageNumberText({ number, branch: segment.pageBranches[i] });
+      const label = segment.labels[i];
+      const key = label.number === null ? null : pageNumberText(label);
       // 番号だけの白紙のような短い文字は、別の部の同じ番号の頁とも一致しうるので見ない。
       if (signature?.length >= COPY_TEXT && key !== null) texts.push(`${key}|${signature.hash}`);
     });
@@ -207,9 +257,8 @@ function slotOf(number, branch, step) {
  * 次の束が 59 から始まる。
  */
 function comesAfter(from, to) {
-  const { last } = from;
-  const { firstPage } = to;
-  return firstPage.number > last.number || (firstPage.number === last.number && (firstPage.branch ?? 0) > (last.branch ?? 0));
+  const path = ({ number, branch }) => [number, ...(branch ?? [])];
+  return comparePaths(path(to.firstPage), path(from.last)) > 0;
 }
 
 /**
