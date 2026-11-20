@@ -327,7 +327,7 @@ export function breakCandidates(items) {
     }
     openings.set(at, item.number);
   });
-  return items.map((item, index) => {
+  const candidates = items.map((item, index) => {
     if (index === 0 || atCover(index)) return null;
     // 区切りらしさを裏付ける手掛かり（breakRanks で点数に足す）: 目次の項目がこの頁を
     // 指す・柱がここから変わる・頁番号がここで戻る。
@@ -355,6 +355,40 @@ export function breakCandidates(items) {
       ...(opening ? { opening: true } : {}),
     };
   });
+  return toTitlePages(items, candidates, atCover);
+}
+
+/** 扉・白紙とみなす頁の字の数の上限（本文の頁は数百字ある）。 */
+const SPARSE_CHARS = 200;
+
+/** 扉の題とみなす字の高さ（本の頁ごとの行の高さの中央値の、さらに中央値に対する比）。 */
+const TITLE_PAGE_SCALE = 1.8;
+
+/**
+ * 柱のある本で、区切りの手前（3 頁まで）に、柱の無い字の少ない頁が続き、その中に大きな字の
+ * 題のある頁（章の扉）があれば、区切りを扉へ戻す（扉と、扉の裏・白紙は次のまとまりに付ける）。
+ * 題の無い白紙だけなら戻さない（前の章の終わりの白紙は、前のまとまりのもの）。本の先頭まで
+ * 戻れば、区切りにしない。ファイルの境目は動かさない。柱の無い本では、どの頁も柱が無く
+ * 扉と見分けられないので戻さない。
+ */
+function toTitlePages(items, candidates, atCover) {
+  if (items.filter((item) => item.running).length < items.length / 2) return candidates;
+  const medians = items.map((item) => item.layout?.median ?? 0).filter((median) => median > 0).sort((a, b) => a - b);
+  const typical = medians[Math.floor((medians.length - 1) / 2)] ?? Infinity;
+  const sparse = (k) => !items[k].running && (items[k].layout?.chars ?? 0) < SPARSE_CHARS;
+  const titled = (k) => (items[k].layout?.height ?? 0) >= typical * TITLE_PAGE_SCALE;
+  const moved = candidates.slice();
+  candidates.forEach((candidate, index) => {
+    if (!candidate || candidate.kind === 'file') return;
+    let at = index;
+    for (let k = index - 1; k >= 0 && index - k <= 3 && !moved[k] && sparse(k) && (k === 0 || !atCover(k)); k--) {
+      if (titled(k)) at = k;
+    }
+    if (at === index) return;
+    moved[index] = null;
+    if (at > 0) moved[at] = candidate;
+  });
+  return moved;
 }
 
 /** 柱の中の章・部の番号（「第2 章」「Chapter 3」）。柱が章ごとに変わるかを、これで見る。 */
@@ -370,9 +404,9 @@ const EDGE_NUMBER = /^[-‐－—–\s]*(?:[pPｐＰ][.．]?\s*)?[\d０-９]{1,4
 const RUNNING_LOOKBACK = 4;
 
 /** 柱の節の番号（「2.2.5(1) 棟違い」の 2.2）。上の 2 段だけで比べる。 */
-// 語の始まりにあり、「2.2.5(1)」のように続いてもよい。すぐ後ろにかな・漢字が続いてもよい
+// 語の始まりにあり、「2.2.5(1)」のように続いてもよい。OCR で点のあとに空白が入ったもの（「6. 1」）も読む。すぐ後ろにかな・漢字が続いてもよい
 // （「2.8.2陸棟」）が、単位などが続くもの（「1.5mm」「1.5倍」「2.5％」）と版の番号（「Ver 2.0」）は除く。
-const SECTION_IN_HEAD = /(?<!ver(?:sion)?\.?\s*|[^\s])(\d{1,2})[.．](\d{1,2})(?:[.．]\d+)*(?:\(\d+\)|（\d+）)?(?=\s|$|[\u3040-\u30ff\u3400-\u9fff])(?![倍割分秒年月日回個枚台人円点度階])/i;
+const SECTION_IN_HEAD = /(?<!ver(?:sion)?\.?\s*|[^\s])(\d{1,2})[.．] ?(\d{1,2})(?:[.．]\d+)*(?:\(\d+\)|（\d+）)?(?=\s|$|[\u3040-\u30ff\u3400-\u9fff])(?![倍割分秒年月日回個枚台人円点度階])/i;
 
 const KANJI_DIGITS = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
 
@@ -477,7 +511,9 @@ function runningBreaks(items) {
     }
     if (!level) continue;
     let at = index;
-    while (at > 1 && !keys[at - 1] && index - at < 3) {
+    // その頁に見出し・しおりもあれば、ここでは戻さない（見出しと一緒に、扉へ戻す。toTitlePages）。
+    const titled = items[index].heading || items[index].outline;
+    while (!titled && at > 1 && !keys[at - 1] && index - at < 3) {
       at--;
       // 見出し・しおりのある頁（章の扉）で止める（その前の白紙まで戻らない）。
       if (items[at].heading || items[at].outline) break;

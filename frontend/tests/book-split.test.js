@@ -529,6 +529,47 @@ describe('柱・頁番号・目次の項目を手掛かりにする（breakCandi
     expect(breakRanks(items, both)[8]).toBeLessThan(RANKS.outline);
   });
 
+  it('OCR で点のあとに空白が入った節の番号（「6. 1」）も読む', () => {
+    const run = (running) => page({ running });
+    const items = [run('6. 1 許容応力度計算の方法'), run('6. 1 許容応力度計算の方法'), run('6. 2 耐震計算の方法'), run('6. 2 耐震計算の方法')];
+    expect(breakCandidates(items)[2]).toMatchObject({ running: 'section' });
+  });
+
+  it('柱のある本では、区切りの手前の大きな字の題だけの頁（章の扉）とその裏へ区切りを戻す', () => {
+    const layout = (chars, height) => ({ chars, height, median: 0.01 });
+    const body = (running) => page({ running, layout: layout(800, 0.012) });
+    const items = [
+      body('6.1 許容応力度'),
+      body('6.1 許容応力度'),
+      body('6.1 許容応力度'),
+      page({ layout: layout(20, 0.031) }), // 扉（大きな字の題）
+      page({ layout: layout(30, 0.012) }), // 扉の裏（汚れを読んだ数文字）
+      page({ heading: '第7章 基礎', running: '7.1 地盤', layout: layout(700, 0.019) }),
+      body('7.1 地盤'),
+      page({ layout: layout(0, 0) }), // 章の終わりの白紙
+      page({ heading: '第8章 屋根', running: '8.1 屋根', layout: layout(700, 0.019) }),
+      body('8.1 屋根'),
+    ];
+    const candidates = breakCandidates(items);
+    expect(candidates[3]).toMatchObject({ kind: 'heading', title: '第7章 基礎' });
+    expect(candidates[5]).toBeNull();
+    // 題の無い白紙だけなら戻さない（前の章の終わりの白紙は前のまとまりのもの）。
+    expect(candidates[8]).toMatchObject({ kind: 'heading', title: '第8章 屋根' });
+    // 本の先頭まで戻れば、区切りにしない。
+    const first = items.slice(3);
+    expect(breakCandidates(first)[2]).toBeNull();
+    expect(breakCandidates(first).some((candidate) => candidate?.title === '第7章 基礎')).toBe(false);
+    // 字が本文の 1.8 倍に満たなければ、扉の題とはみなさない。
+    const small = items.map((item, i) => (i === 3 ? { ...item, layout: layout(20, 0.015) } : item));
+    expect(breakCandidates(small)[5]).toMatchObject({ kind: 'heading', title: '第7章 基礎' });
+    // 柱の無い本では戻さない（扉と見分けられないので）。
+    const plain = items.map(({ running, ...rest }) => rest);
+    expect(breakCandidates(plain)[5]).toMatchObject({ kind: 'heading', title: '第7章 基礎' });
+    // ファイルの境目は動かさない。
+    const files = items.map((item, i) => ({ ...item, fileKey: i < 5 ? 'a' : 'b', fileName: i < 5 ? 'a.pdf' : 'b.pdf' }));
+    expect(breakCandidates(files)[5]).toMatchObject({ kind: 'file' });
+  });
+
   it('柱の番号が戻るところ・1 頁だけ違うところ（OCR の読み違い）は使わない', () => {
     const run = (running) => page({ running });
     const items = [

@@ -11,7 +11,16 @@ describe('pageLayout（頁のレイアウトの特徴）', () => {
       line('本文の 行です', { y: 0.5 }),
       line('本文の行です', { y: 0.55 }),
     ];
-    expect(pageLayout(lines)).toEqual({ lines: 3, chars: 15, scale: 4, largestY: 0.3, centered: true, largest: '第2章' });
+    expect(pageLayout(lines)).toEqual({
+      lines: 3,
+      chars: 15,
+      scale: 4,
+      height: 0.04,
+      median: 0.01,
+      largestY: 0.3,
+      centered: true,
+      largest: '第2章',
+    });
     // 左に寄った大きな字は、真ん中ではない。
     expect(pageLayout([line('第2章', { x0: 0.05, x1: 0.2, h: 0.04 }), line('本文')]).centered).toBe(false);
     // 大きな字の行が下の方にあっても拾う。
@@ -19,7 +28,7 @@ describe('pageLayout（頁のレイアウトの特徴）', () => {
   });
 
   it('行が無ければ（白紙・画像だけの頁）、空の特徴', () => {
-    expect(pageLayout([])).toEqual({ lines: 0, chars: 0, scale: 0, largestY: null, centered: false, largest: '' });
+    expect(pageLayout([])).toEqual({ lines: 0, chars: 0, scale: 0, height: 0, median: 0, largestY: null, centered: false, largest: '' });
     // 高さの分からない行だけなら、大きさの比は 0。
     expect(pageLayout([line('・', { h: 0 })]).scale).toBe(0);
   });

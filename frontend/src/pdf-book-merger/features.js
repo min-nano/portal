@@ -57,12 +57,15 @@ const LARGEST_TEXT = 40;
  *
  * @param {{text:string, x0:number, x1:number, y:number, h:number}[]} lines 頁の文字を行にまとめたもの
  *   （x・y・h は頁の幅・高さに対する割合）
- * @returns {{lines:number, chars:number, scale:number, largestY:number|null, centered:boolean, largest:string}}
+ * @returns {{lines:number, chars:number, scale:number, height:number, median:number, largestY:number|null,
+ *   centered:boolean, largest:string}}
  *   scale: いちばん大きな字の行の高さと、行の高さの中央値の比（行が無ければ 0）
  */
 export function pageLayout(lines) {
   const chars = lines.reduce((sum, line) => sum + line.text.replace(/\s/g, '').length, 0);
-  if (!lines.length) return { lines: 0, chars, scale: 0, largestY: null, centered: false, largest: '' };
+  if (!lines.length) {
+    return { lines: 0, chars, scale: 0, height: 0, median: 0, largestY: null, centered: false, largest: '' };
+  }
   const heights = lines.map((line) => line.h).sort((a, b) => a - b);
   const median = heights[Math.floor((heights.length - 1) / 2)];
   const largest = lines.reduce((best, line) => (line.h > best.h ? line : best));
@@ -71,6 +74,9 @@ export function pageLayout(lines) {
     lines: lines.length,
     chars,
     scale: round(median > 0 ? largest.h / median : 0),
+    // いちばん大きな字の行の高さと、行の高さの中央値（頁の高さに対する割合。本のほかの頁と比べる）。
+    height: round4(largest.h),
+    median: round4(median),
     largestY: round(largest.y),
     centered: Math.abs(middle - 0.5) < 0.1,
     largest: largest.text.slice(0, LARGEST_TEXT),
