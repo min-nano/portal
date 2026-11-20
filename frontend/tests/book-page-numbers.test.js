@@ -396,6 +396,18 @@ describe('枝番の頁（加除式の差し替え）', () => {
     expect(candidate.score).toBeGreaterThanOrEqual(3);
   });
 
+  it.each([
+    ['57-123', 123],
+    ['57 - 1234', 1234],
+    ['５７－１００', 100],
+  ])('3 桁以上の枝番 %s', (text, number) => {
+    expect(pageNumberCandidates([item(text)])[0]).toMatchObject({ value: 57, branch: number });
+  });
+
+  it('5 桁以上の枝番は頁番号と読まない', () => {
+    expect(pageNumberCandidates([item('57-12345')])).toEqual([]);
+  });
+
   it('枝番の無い番号には branch を付けない', () => {
     expect(pageNumberCandidates([item('57')])[0]).not.toHaveProperty('branch');
     expect(pageNumberCandidates([item('57-0')])).toEqual([]);
@@ -463,6 +475,9 @@ describe('枝番の頁（加除式の差し替え）', () => {
     expect(formatNumber(57, 1)).toBe('57-1');
     expect(parsePageNumber('57-1')).toEqual({ number: 57, branch: 1 });
     expect(parsePageNumber(' ５７－２ ')).toEqual({ number: 57, branch: 2 });
+    expect(parsePageNumber('57-123')).toEqual({ number: 57, branch: 123 });
+    expect(parsePageNumber('57-1234')).toEqual({ number: 57, branch: 1234 });
+    expect(parsePageNumber('57-12345')).toBeNull();
     expect(parsePageNumber('12.5')).toEqual({ number: 12.5 });
     expect(parsePageNumber('-3')).toEqual({ number: -3 });
     expect(parsePageNumber('abc')).toBeNull();

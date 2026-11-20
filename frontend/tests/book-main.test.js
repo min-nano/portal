@@ -859,6 +859,11 @@ describe('ファイルを足して並べる', () => {
     expect(gridLabels()).toEqual([...labels.slice(0, 6), '-57-3 頁', '57-4 頁', '57-5 頁', ...labels.slice(8)]);
     expect(card('57-5 頁').querySelector('.bm-page-number').value).toBe('57-5');
     expect($('problems').textContent).toContain('57-3 頁が見つかりません（枝番の付いた頁）');
+
+    // 3 桁以上の枝番も入れられる。抜けが多ければ 1 枚の札にまとめる。
+    change(card('57-5 頁').querySelector('.bm-page-number'), '57-123');
+    expect(gridLabels()).toEqual([...labels.slice(0, 6), '-57-3 頁', '57-4 頁', '-57-5〜57-122 頁', '57-123 頁', ...labels.slice(8)]);
+    expect($('problems').textContent).toContain('57-3・57-5〜57-122 頁が見つかりません（枝番の付いた頁）');
   });
 
   it('頁を読めなければ、何頁目のどこで止まったかを添えて一覧に残す', async () => {

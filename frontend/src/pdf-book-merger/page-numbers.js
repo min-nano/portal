@@ -40,10 +40,12 @@ export const STEPS = [2, -2, 1, -1];
  */
 // 枝番の区切り（ハイフンの類）。
 const DASH = '[\\-–—−‐‑‒－ー]';
+// 枝番（1 から。番号と同じく 4 桁まで。差し替えの多い頁は 57-123 のように 3 桁以上になる）。
+const BRANCH = '[1-9]\\d{0,3}';
 // 頁番号のまわりの飾り（空白・記号）。柱と頁番号の間の区切りにも使う。
 const DECOR = '[\\s　\\-–—−‐‑‒－ー~〜・.,()（）[\\]［］〔〕<>《》|｜]';
 const STANDALONE = new RegExp(
-  `^${DECOR}*(?:p\\.?|P\\.?|page|ページ|頁)?\\s*(\\d{1,4})(?:\\s*${DASH}\\s*([1-9]\\d?))?\\s*(?:頁|ページ)?${DECOR}*$`
+  `^${DECOR}*(?:p\\.?|P\\.?|page|ページ|頁)?\\s*(\\d{1,4})(?:\\s*${DASH}\\s*(${BRANCH}))?\\s*(?:頁|ページ)?${DECOR}*$`
 );
 
 /** 行の先頭・末尾に付いた番号（柱に頁番号が並んでいる形）。 */
@@ -610,7 +612,7 @@ export function formatNumber(number, branch = null) {
 }
 
 /** 手で直す番号の書き方（12、前付けの -3、間に挟む 12.5、枝番の 57-1）。 */
-const BRANCH_INPUT = new RegExp(`^(\\d{1,4})\\s*${DASH}\\s*([1-9]\\d?)$`);
+const BRANCH_INPUT = new RegExp(`^(\\d{1,4})\\s*${DASH}\\s*(${BRANCH})$`);
 
 /**
  * 手で入れた頁番号を読む。読めなければ null。

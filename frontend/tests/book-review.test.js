@@ -134,12 +134,22 @@ describe('gridItems', () => {
     expect(labels).toEqual(['55', '56', '57-1', '57-2', '-57-3 頁', '57-4', '59', '-60-1 頁', '60-2']);
   });
 
+  it('枝番の抜けが多ければ 1 枚の札にまとめる', () => {
+    const branch = (number, b) => ({ ...body(`${number}-${b}`, number), branch: b });
+    const order = [branch(57, 1), branch(57, 1234), branch(58, 8)];
+    const labels = gridItems(order).map((item) => (item.type === 'missing' ? `-${missingLabel(item)}` : item.entry.pageKey));
+
+    // 7 つ（58-1〜58-7）は MAX_MISSING_CARDS（6）を超えるのでまとめる。
+    expect(labels).toEqual(['57-1', '-57-2〜57-1233 頁', '57-1234', '-58-1〜58-7 頁', '58-8']);
+  });
+
   it('抜けの札の見出し', () => {
     expect(missingLabel({ from: 58, to: 58 })).toBe('58 頁');
     expect(missingLabel({ from: 60, to: 70 })).toBe('60〜70 頁');
     expect(missingLabel({ from: 57, to: 57, branch: 2 })).toBe('57-2 頁');
     expect(missingLabel({ from: 58, to: 58, part: 1 })).toBe('第 2 部 58 頁');
     expect(missingLabel({ from: 57, to: 57, branch: 2, part: 1 })).toBe('第 2 部 57-2 頁');
+    expect(missingLabel({ from: 57, to: 57, branch: 2, branchTo: 9, part: 1 })).toBe('第 2 部 57-2〜57-9 頁');
   });
 });
 

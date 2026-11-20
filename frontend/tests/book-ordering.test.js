@@ -608,6 +608,14 @@ describe('枝番の頁（加除式の差し替え）', () => {
     ]);
   });
 
+  it('抜けた枝番は、続くものをまとめて書く', () => {
+    const problems = checkSequence(arrange([file('odd', [55, '57-1', '57-5', '57-123', 59])]));
+
+    expect(problems.map((p) => p.message)).toContain(
+      '57-2〜57-4・57-6〜57-122 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。'
+    );
+  });
+
   it('枝番の頁で始まる・終わる束は、紙の表と裏を枝番で確かめる', () => {
     const problems = checkSequence(arrange([file('mid', ['57-2', '57-3'])]), { sheets: true });
 
