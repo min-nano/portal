@@ -167,7 +167,8 @@ const MAX_MISSING_CARDS = 6;
  *
  * @param {ReturnType<import('./ordering.js').arrangeBook>['order']} order
  * @returns {({type:'page', entry:object} |
- *   {type:'missing', from:number, to:number, branch?:number, part:number|null})[]}
+ *   {type:'missing', from:number, to:number, branch?:number, branchTo?:number, part:number|null})[]}
+ *   branchTo は、枝番の抜けをまとめた札の最後の枝番。
  */
 export function gridItems(order) {
   const isNumbered = (entry) => entry.role === 'body' && Number.isInteger(entry.number);
@@ -205,8 +206,13 @@ export function gridItems(order) {
         }
       }
       const firstBranch = previous.number === entry.number ? (previous.branch ?? 0) + 1 : 1;
-      for (let b = firstBranch; b < (entry.branch ?? 0); b++) {
-        items.push({ type: 'missing', from: entry.number, to: entry.number, branch: b, part: entry.part });
+      const lastBranch = (entry.branch ?? 0) - 1;
+      const base = { type: 'missing', from: entry.number, to: entry.number, part: entry.part };
+      // 枝番の抜けも、多ければ 1 枚の札にまとめる（57-1 の次に 57-1234 と読み違えても札で埋めない）。
+      if (lastBranch - firstBranch + 1 > MAX_MISSING_CARDS) {
+        items.push({ ...base, branch: firstBranch, branchTo: lastBranch });
+      } else {
+        for (let b = firstBranch; b <= lastBranch; b++) items.push({ ...base, branch: b });
       }
     }
     previous = entry;
@@ -215,9 +221,13 @@ export function gridItems(order) {
   return items;
 }
 
-/** 抜けている頁の札の見出し（58 頁・60〜70 頁・57-2 頁。部が分かれていれば「第 2 部 58 頁」）。 */
+/**
+ * 抜けている頁の札の見出し（58 頁・60〜70 頁・57-2 頁・57-2〜57-9 頁。部が分かれていれば
+ * 「第 2 部 58 頁」）。
+ */
 export function missingLabel(item) {
   const prefix = partPrefix(item.part);
+  if (item.branchTo) return `${prefix}${item.from}-${item.branch}〜${item.from}-${item.branchTo} 頁`;
   if (item.branch) return `${prefix}${item.from}-${item.branch} 頁`;
   return `${prefix}${item.from === item.to ? `${item.from} 頁` : `${item.from}〜${item.to} 頁`}`;
 }

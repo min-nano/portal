@@ -482,12 +482,17 @@ export function checkSequence(order, { sheets = false, mismatch = false } = {}) 
     for (const [number, present] of branches) {
       const absent = [];
       const top = Math.max(...present);
-      for (let b = 1; b < top; b++) if (!present.has(b)) absent.push(`${number}-${b}`);
+      for (let b = 1; b < top; b++) if (!present.has(b)) absent.push(b);
       if (absent.length) {
+        // 続く枝番はまとめる（57-2〜57-9）。読み違えた大きな枝番で、文が長くならないように。
+        const ranges = compressRanges(absent)
+          .split('・')
+          .map((range) => range.split('〜').map((b) => `${number}-${b}`).join('〜'))
+          .join('・');
         problems.push({
           level: 'error',
           kind: 'missing',
-          message: `${prefix}${absent.join('・')} 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。`,
+          message: `${prefix}${ranges} 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。`,
           pageKeys: [],
           ...tag(number),
         });

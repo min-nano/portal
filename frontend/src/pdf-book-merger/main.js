@@ -1850,7 +1850,7 @@ function renderGrid() {
   const seen = new Map(); // 抜けの札の key が重ならないように（番号が前後と合わないと、同じ抜けが 2 度出る）
   for (const item of gridItems(view.order)) {
     if (item.type === 'missing') {
-      const range = `${item.part}:${item.from}-${item.to}${item.branch ? `-${item.branch}` : ''}`;
+      const range = `${item.part}:${item.from}-${item.to}${item.branch ? `-${item.branch}` : ''}${item.branchTo ? `~${item.branchTo}` : ''}`;
       seen.set(range, (seen.get(range) ?? 0) + 1);
       cards.push({ key: `missing:${range}:${seen.get(range)}`, sig: range, build: () => missingCard(item) });
       continue;
