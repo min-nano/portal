@@ -1668,6 +1668,8 @@ function fileControls(file) {
     } else {
       const number = Number(value);
       if (!Number.isInteger(number)) {
+        // 描き直さないので、進み方の欄も使っている値に戻す（選んだ値が残ると、並びと食い違う）。
+        step.value = file.manual ? String(file.manual.step) : '';
         showMessage('先頭の頁の番号は整数で入れてください。', 'red');
         return;
       }
@@ -1678,7 +1680,17 @@ function fileControls(file) {
     refresh();
   };
   start.addEventListener('change', apply);
-  step.addEventListener('change', apply);
+  step.addEventListener('change', () => {
+    // 進み方は先頭の番号と組で決める。番号が空なら手で決めたもの（file.manual）は無いままで、
+    // 行の要約（sig）も変わらず描き直されないので、ここで欄を「自動」に戻す
+    // （戻さないと、選んだ進み方が出たまま並びは自動のままになる）。
+    if (!start.value.trim() && step.value) {
+      step.value = '';
+      showMessage('進み方を変えるときは、先頭の頁の番号も入れてください。', 'red');
+      return;
+    }
+    apply();
+  });
   controls.append(startField, stepField);
   const note = el(document, 'span', 'hint', '番号を読み違えているときだけ入れてください（空なら自動）。');
   controls.append(note);
