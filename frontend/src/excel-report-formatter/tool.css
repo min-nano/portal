@@ -4,28 +4,19 @@
  * ここには書かない。色・余白・字送りは必ず styles/tokens.css の変数を使う
  * （生の値を書かない）。これが「全ツールの見た目がそろっている」ことを
  * 保証している。 */
-/* 部屋ブロック。見出しの行には部屋名と階数・部屋名の欄を残すので、
-   閉じたままでも見分けと修正ができる。 */
-.room {
-  background: var(--surface-sunken);
-}
-
-/* 計測値の表を追いながらでも部屋の見出しが見えるよう、開閉の行ごと貼り付ける
-   （画面上部のヘッダーの下に付ける）。 */
-.room::part(head) {
+/* 部屋は折り畳まない台紙（.card）。計測値の表を追いながらでも部屋の見出しが
+   見えるよう、見出しの行を貼り付ける（画面上部のヘッダーの下に付ける）。 */
+.room-head {
   position: sticky;
   top: calc(var(--header-h) - 1px);
   z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
   background: var(--surface-sunken);
   padding: var(--s-2) 0;
   margin-bottom: var(--s-2);
   border-bottom: 1px solid var(--border);
-}
-
-.room-head {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
 }
 
 .room-title-row {
