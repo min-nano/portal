@@ -119,7 +119,6 @@ describe('写真から読み取る', () => {
       ['1', 'LDK'],
       ['2', '洋室'],
     ]);
-    expect(document.querySelectorAll('.room-title')[1].textContent).toBe('部屋 2（2階 洋室）');
     expect(message().innerText).toBe('物件名を入れました。2 部屋を入れました。');
     expect(message().style.color).toBe('green');
     expect(mocks.releaseReader).toHaveBeenCalledTimes(1);

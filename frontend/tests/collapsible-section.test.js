@@ -62,7 +62,7 @@ describe('portal-section', () => {
 
   it('見出しに並べた操作ボタン・入力欄では開閉しない', () => {
     const node = section(
-      '<div slot="title"><h3>部屋 1</h3><input data-room-field="floor"></div>' +
+      '<div slot="title"><h3>面材 1</h3><input type="text"></div>' +
         '<button type="button" slot="actions">削除</button>'
     );
 
@@ -83,8 +83,8 @@ describe('portal-section', () => {
     const node = section('<h3 slot="title">面材と釘</h3>');
     expect(toggleButton(node).getAttribute('aria-label')).toBe('面材と釘（開閉）');
 
-    node.setAttribute('label', '部屋 1（1階 LDK）');
-    expect(toggleButton(node).getAttribute('aria-label')).toBe('部屋 1（1階 LDK）（開閉）');
+    node.setAttribute('label', '面材 1（構造用合板）');
+    expect(toggleButton(node).getAttribute('aria-label')).toBe('面材 1（構造用合板）（開閉）');
   });
 });
 

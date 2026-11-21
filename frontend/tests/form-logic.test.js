@@ -134,11 +134,13 @@ describe('collectWarnings', () => {
     expect(collectWarnings(data, GROUPS, VALIDATION)).toEqual([]);
   });
 
-  it('部屋番号を警告文に含める', () => {
-    const data = { rooms: [room({ pillar_ud: { select: '―' } }), room({})] };
+  it('警告文では、部屋を階数・部屋名と上からの順番で示す', () => {
+    const data = {
+      rooms: [room({ pillar_ud: { select: '―' } }), { ...room({}), floor: ' 2 ', room_name: '洋室' }],
+    };
     const warnings = collectWarnings(data, GROUPS, VALIDATION);
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('部屋 2');
+    expect(warnings[0]).toContain('2階 洋室（上から 2 つ目の部屋）の「');
   });
 });
 

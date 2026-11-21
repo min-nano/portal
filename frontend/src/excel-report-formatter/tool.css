@@ -4,81 +4,60 @@
  * ここには書かない。色・余白・字送りは必ず styles/tokens.css の変数を使う
  * （生の値を書かない）。これが「全ツールの見た目がそろっている」ことを
  * 保証している。 */
-/* 部屋ブロック。見出しの行には部屋名と階数・部屋名の欄を残すので、
-   閉じたままでも見分けと修正ができる。 */
-.room {
-  background: var(--surface-sunken);
-}
-
-/* 計測値の表を追いながらでも部屋の見出しが見えるよう、開閉の行ごと貼り付ける
-   （画面上部のヘッダーの下に付ける）。 */
-.room::part(head) {
+/* 部屋は折り畳まない台紙（.card）。「部屋 1」のような見出しは置かず、
+   階数・部屋名・削除を 1 行に並べる。計測値の表を追いながらでもどの部屋かが
+   見えるよう、この行を貼り付ける（画面上部のヘッダーの下に付ける）。
+   狭い画面でも折り返さずに部屋名の欄を縮める（2 行に増えると表の前置きが
+   厚くなってしまう）。 */
+.room-head {
   position: sticky;
   top: calc(var(--header-h) - 1px);
   z-index: 10;
-  background: var(--surface-sunken);
-  padding: var(--s-2) 0;
-  margin-bottom: var(--s-2);
-  border-bottom: 1px solid var(--border);
-}
-
-.room-head {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-}
-
-.room-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-2);
-}
-
-.room-title-row h3 {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.room .remove {
-  min-height: 32px;
-  padding: 0 var(--s-3);
-  font-size: var(--fs-xs);
-}
-
-/* 階数・部屋名は 1 行に収める。狭い画面では折り返さずに部屋名の欄を縮める
-   （見出しの行なので、2 行に増えると表の前置きが厚くなってしまう）。 */
-.room-meta {
   display: flex;
   align-items: center;
   gap: var(--s-2);
   flex-wrap: nowrap;
+  background: var(--surface-sunken);
+  /* 上の余白は、貼り付いたときに入力欄が画面上部のヘッダーに触れないためのもの。 */
+  padding: var(--s-1) 0 var(--s-2);
+  border-bottom: 1px solid var(--border);
 }
 
-.room-meta label {
+.room-head label {
   display: inline;
   margin: 0;
   font-size: var(--fs-xs);
   white-space: nowrap;
 }
 
-.room-meta input {
+.room-head input {
   width: auto;
   min-height: 36px;
   padding: var(--s-1) var(--s-2);
+  /* 入力漏れでフォーカスを送ったとき、画面上部のヘッダーに隠れないようにする。 */
+  scroll-margin-top: calc(var(--header-h) + var(--s-2));
 }
 
-.room-meta input[data-room-field='floor'] {
-  width: 4.5em;
+.room-head input[data-room-field='floor'] {
+  width: 3.5em;
   flex: none;
   text-align: center;
 }
 
-.room-meta input[data-room-field='room_name'] {
+.room-head input[data-room-field='room_name'] {
   width: 8em;
-  flex: 0 1 8em;
+  flex: 1 1 8em;
   min-width: 3em;
+}
+
+/* 削除は行の右端に寄せる。 */
+.room .remove {
+  width: auto;
+  flex: none;
+  margin-left: auto;
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
 }
 
 /* 計測値は選択と数値しか入れないので、表形式で縦に詰めてラベルはヘッダー列で
@@ -162,8 +141,8 @@
   margin: 0;
   border-radius: var(--r-sm);
   text-align: center;
-  /* 画面内へ送るとき、貼り付いた部屋の見出しに隠れないようにする。 */
-  scroll-margin-top: calc(var(--header-h) + 72px);
+  /* 画面内へ送るとき、貼り付いた部屋の見出しの行（約 50px）に隠れないようにする。 */
+  scroll-margin-top: calc(var(--header-h) + 60px);
 }
 
 .measure-table select {
