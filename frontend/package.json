@@ -14,8 +14,10 @@
     "@clerk/localizations": "^4.24.4",
     "@clerk/ui": "^1.42.2",
     "@tesseract.js-data/eng": "^1.0.0",
+    "onnxruntime-web": "1.31.1",
     "pdf-lib": "1.17.1",
     "pdfjs-dist": "^6.4.299",
+    "pdfmarkdown-ppocrv5-models": "1.0.0",
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
