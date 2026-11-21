@@ -14,6 +14,9 @@ import { apiGet, apiPostForBlob, apiSendJson } from '../api.js';
 import { pickFile } from '../drive-picker.js';
 import { connectTemplatePreview } from '../template-preview.js';
 import { collectWarnings, selectFocusTarget } from './form-logic.js';
+import { findPropertyName, findRooms, mergeRooms } from './photo-reading.js';
+import { confirmRooms } from './room-dialog.js';
+import { readImageFile, releaseReader } from '../paddle-ocr/client.js';
 
 const TOOL_API = '/api/tools/excel-report-formatter';
 
@@ -170,6 +173,7 @@ function addRoom() {
   // 階数の初期値は innerHTML に埋め込まず、DOM 生成後に value プロパティで設定する
   // （直前の部屋の入力値を HTML 文字列へ連結すると DOM ベースの XSS 経路になるため）。
   wrap.querySelector('[data-room-field="floor"]').value = defaultFloor;
+  return wrap;
 }
 
 function removeRoom(id) {
@@ -206,6 +210,95 @@ function collectFormData() {
     property_name: document.getElementById('property_name').value,
     rooms: rooms,
   };
+}
+
+// --- 写真からの読み取り -----------------------------------------------------
+
+// まだ何も入れていない部屋（部屋名も計測値も無い）。読み取った部屋は、まず
+// ここへ入れる（最初から 1 つある空の部屋を、そのまま使う）。
+function isBlankRoom(roomEl) {
+  if (roomEl.querySelector('[data-room-field="room_name"]').value.trim() !== '') return false;
+  return Array.prototype.every.call(roomEl.querySelectorAll('[data-point]'), function (input) {
+    return input.value === '';
+  });
+}
+
+function blankRooms() {
+  return Array.prototype.filter.call(document.querySelectorAll('#rooms .room'), isBlankRoom);
+}
+
+// 読み取った部屋をいくつ入れられるか（空の部屋 + 雛形の上限までの残り）。
+function roomCapacity() {
+  const total = document.querySelectorAll('#rooms .room').length;
+  return blankRooms().length + Math.max(0, config.max_rooms - total);
+}
+
+// 確定した部屋をフォームに入れる。空の部屋を前から使い、足りなければ追加する。
+function applyRooms(rooms) {
+  const blanks = blankRooms();
+  rooms.forEach(function (room) {
+    const roomEl = blanks.shift() || addRoom();
+    roomEl.querySelector('[data-room-field="floor"]').value = room.floor;
+    roomEl.querySelector('[data-room-field="room_name"]').value = room.name;
+  });
+}
+
+async function readPhotos(files) {
+  const btn = document.getElementById('photoReadBtn');
+  btn.disabled = true;
+  let propertyName = '';
+  const perPhoto = [];
+  try {
+    for (let i = 0; i < files.length; i++) {
+      showMessage(
+        '写真を読んでいます（' + (i + 1) + '/' + files.length + '）…' +
+          (i === 0 ? '初回は読み取りの準備（約 36MB の読み込み）にも時間がかかります。' : ''),
+        '#333'
+      );
+      const items = await readImageFile(files[i]);
+      propertyName = propertyName || findPropertyName(items);
+      perPhoto.push(findRooms(items));
+    }
+  } catch (error) {
+    showMessage('写真を読み取れませんでした: ' + error.message, 'red');
+    return;
+  } finally {
+    // 読み取りのモデルは大きい（メモリを数百 MB 使う）ので、読み終えたら手放す。
+    releaseReader();
+    btn.disabled = false;
+  }
+
+  if (propertyName) document.getElementById('property_name').value = propertyName;
+  const done = propertyName ? '物件名を入れました。' : '';
+  const rooms = mergeRooms(perPhoto);
+  if (rooms.length === 0) {
+    showMessage(
+      done
+        ? done + '部屋は読み取れませんでした（間取り図の写真も選ぶと、部屋も読み取ります）。'
+        : '物件名も部屋も読み取れませんでした。資料の全体が大きく、まっすぐ写るように撮り直してください。',
+      done ? 'green' : 'red'
+    );
+    return;
+  }
+  const confirmed = await confirmRooms(rooms, roomCapacity());
+  if (!confirmed) {
+    showMessage(done + '部屋は入れていません。', '#333');
+    return;
+  }
+  applyRooms(confirmed);
+  showMessage(done + confirmed.length + ' 部屋を入れました。', 'green');
+}
+
+function bindPhotoReading() {
+  const input = document.getElementById('photoInput');
+  document.getElementById('photoReadBtn').addEventListener('click', function () {
+    input.click();
+  });
+  input.addEventListener('change', function () {
+    const files = Array.prototype.slice.call(input.files);
+    input.value = ''; // 同じ写真を選び直しても change が起きるように。
+    if (files.length > 0) readPhotos(files);
+  });
 }
 
 // --- 出力 -------------------------------------------------------------------
@@ -341,6 +434,7 @@ async function prepare() {
   document.getElementById('addRoomBtn').addEventListener('click', addRoom);
   document.getElementById('submitBtn').addEventListener('click', submitForm);
   bindStickyHeadWorkarounds();
+  bindPhotoReading();
 
   // フォーム定義と雛形設定を並行して取得してから、最初の 1 部屋を表示する。
   const [loadedConfig] = await Promise.all([

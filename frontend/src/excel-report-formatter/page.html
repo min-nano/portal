@@ -16,6 +16,14 @@
 </div>
 
 <form id="reportForm" onsubmit="return false;">
+  <!-- 物件のデータシートと間取り図の写真から、物件名と部屋（階・室名）を入れる
+       （photo-reading.js・room-dialog.js）。写真はこの端末の中で読むだけ。 -->
+  <div class="photo-reading">
+    <button type="button" class="secondary" id="photoReadBtn">写真から読み取る</button>
+    <input type="file" id="photoInput" accept="image/*" multiple hidden>
+    <p class="hint">データシートの写真から物件名を、間取り図の写真から部屋（階・室名）を入れます。部屋は一覧で確かめてから入れます。資料は文字が縦向きのまま、正面から大きく撮ってください。写真はこの端末の中で読むだけで、どこにも送りません。</p>
+  </div>
+
   <div class="field field-half">
     <label for="property_name">住宅(物件)名</label>
     <div class="field-row">
