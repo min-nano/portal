@@ -122,7 +122,7 @@ export class PortalSection extends HTMLElement {
 
     this.toggleButton.addEventListener('click', () => this.toggle());
     // 見出しの行はどこを押しても開け閉めできる。ただし操作ボタンや、
-    // 見出しに並べた入力欄（部屋の階数・部屋名）はそのまま使えるようにする。
+    // 見出しに並べた入力欄はそのまま使えるようにする。
     this.head.addEventListener('click', (event) => {
       if (isInteractive(event, this.head)) return;
       this.toggle();
