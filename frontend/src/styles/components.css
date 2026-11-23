@@ -1262,10 +1262,11 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
 
 /* いくつも選ぶとき（.multiple）は、iOS のファイルの選択と同じく行の左に丸を
  * 出し、なぞって続けて選べるようにする。丸の上はどの向きに動かしても選ぶ
- * （touch-action: none）。行のほかの所は、縦に動かし始めれば一覧のスクロール、
- * 横に動かし始めれば選ぶ（pan-y）。長押しのメニューや文字の選択も出さない。 */
+ * （touch-action: none）。行のほかの所は、縦なら一覧の、横なら名前の
+ * スクロール。拡大（ピンチ・続けてのタップ）はさせない（続けて選ぶときに
+ * 画面が拡大されないように）。長押しのメニューや文字の選択も出さない。 */
 .drive-picker.multiple .drive-picker-item {
-  touch-action: pan-y;
+  touch-action: pan-x pan-y;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -1284,8 +1285,9 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   touch-action: none;
 }
 
+/* フォルダの空きは選ぶ所ではないので、スクロールを止めない。 */
 .drive-picker-check.blank {
-  touch-action: pan-y;
+  touch-action: pan-x pan-y;
 }
 
 .drive-picker-check svg {
@@ -1345,9 +1347,35 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
 .drive-picker-name {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* 行の高さいっぱいに広げる（文字の高さだけだと、横にずらすために指を置ける
+   * 所が細すぎる）。文字は縦の真ん中に置く。 */
+  align-self: stretch;
+  display: flex;
+  align-items: center;
   white-space: nowrap;
+  /* 長い名前は省かずに、横にずらして続きを見せる（スマートフォンでは後ろの
+   * 部分を確かめる手段がほかに無い。title のツールチップは出ない）。
+   * スクロールバーは行ごとに出ると邪魔なので隠し、続きがあることは右端を
+   * ぼかして示す（ぼかしの幅は ::after の空きが受け持つので、収まっている
+   * 名前と、末尾までずらした名前の文字にはかからない）。 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 var(--s-4));
+  mask-image: linear-gradient(to left, transparent, #000 var(--s-4));
+}
+
+.drive-picker-name::-webkit-scrollbar {
+  display: none;
+}
+
+/* 末尾の空き（スクロール容器の右の padding は、古い iOS の Safari ではずらせる
+ * 範囲に入らないので、中身として置く。flex の中なので縮まないようにする）。 */
+.drive-picker-name::after {
+  content: '';
+  flex: none;
+  width: var(--s-4);
 }
 
 .drive-picker-date {
