@@ -5,9 +5,17 @@
 // 並ぶこと、撮り直しや 2 度入れを部の始まりと取り違えないことを縛る。
 
 import { describe, expect, it } from 'vitest';
-import { arrangeBook, checkSequence, numberFiles, pageLabelRanges } from '../src/pdf-book-merger/ordering.js';
+import {
+  arrangeBook,
+  bookDepth,
+  checkSequence,
+  hasDashedNumbers,
+  numberFiles,
+  pageLabelRanges,
+  pageLabelTexts,
+} from '../src/pdf-book-merger/ordering.js';
 import { assignParts } from '../src/pdf-book-merger/parts.js';
-import { displayLabel } from '../src/pdf-book-merger/review.js';
+import { displayLabel, gridItems, missingLabel } from '../src/pdf-book-merger/review.js';
 
 /**
  * ファイル 1 つ。numbers は頁ごとに読めた番号（null は読めなかった頁）。
@@ -20,7 +28,7 @@ function file(key, numbers, { heads = [], texts = [], role = 'body', manual = nu
     manual,
     pages: numbers.map((value, index) => ({
       key: `${key}:${index}`,
-      candidates: value === null ? [] : [{ value, score: 3.5, source: 'text', zone: 'bottom' }],
+      candidates: value === null ? [] : [{ path: [value], score: 3.5, source: 'text', zone: 'bottom' }],
       heads: heads[index] ?? [],
       signature: texts[index] ? { length: 40, hash: texts[index] } : { length: 0, hash: '' },
     })),
@@ -231,7 +239,7 @@ describe('部の推定', () => {
   it('枝番の頁から始まる偶数頁の束も、偶数頁の束として部を数える', () => {
     // 第 2 部の偶数頁の束が、枝番の頁 1-2 から始まる（奇数頁の束と見ると、部の数が揃わない）。
     const e2 = file('e2', [null, 2, 4]);
-    e2.pages[0].candidates = [{ value: 1, branch: 2, score: 3.5, source: 'text', zone: 'bottom' }];
+    e2.pages[0].candidates = [{ path: [1, 2], score: 3.5, source: 'text', zone: 'bottom' }];
     const files = [file('o1', [1, 3, 1, 3]), file('e1', [2, 4]), e2];
     const { mismatch, order } = arrange(files);
 
@@ -244,7 +252,7 @@ describe('部の推定', () => {
     const branched = (key, pairs) => {
       const f = file(key, pairs.map(() => null));
       pairs.forEach(([value, branch], i) => {
-        f.pages[i].candidates = [{ value, branch, score: 3.5, source: 'text', zone: 'bottom' }];
+        f.pages[i].candidates = [{ path: [value, branch], score: 3.5, source: 'text', zone: 'bottom' }];
       });
       return f;
     };
@@ -263,7 +271,7 @@ describe('部の推定', () => {
 
   it('部の最初の紙が枝番の頁に差し替えられていても、部の始まりと分かる', () => {
     const files = [file('o1', [1, 3, 5, 7]), file('o2', [null, null, 3, 5]), file('e1', [2, 4, 6, 8]), file('e2', [null, null, 4, 6])];
-    const put = (f, i, value, branch) => (f.pages[i].candidates = [{ value, branch, score: 3.5, source: 'text', zone: 'bottom' }]);
+    const put = (f, i, value, branch) => (f.pages[i].candidates = [{ path: [value, branch], score: 3.5, source: 'text', zone: 'bottom' }]);
     // 第 2 部の 1・2 頁の紙が 1-1〜1-4 に差し替えられた。
     put(files[1], 0, 1, 1);
     put(files[1], 1, 1, 3);
@@ -277,7 +285,7 @@ describe('部の推定', () => {
 
   it('枝番の無い頁がある束は、その頁の番号で奇数頁・偶数頁の束を見分ける（枝番の読み違いに引きずられない）', () => {
     const e1 = file('e1', [null, 2, 4, 6, 8]);
-    e1.pages[0].candidates = [{ value: 2, branch: 1, score: 3.5, source: 'text', zone: 'bottom' }]; // 余白の「2-1」
+    e1.pages[0].candidates = [{ path: [2, 1], score: 3.5, source: 'text', zone: 'bottom' }]; // 余白の「2-1」
     const files = [file('o1', [1, 3, 5, 7, 1, 3]), e1, file('e2', [2, 4])];
     const { mismatch } = arrange(files);
 
@@ -289,7 +297,7 @@ describe('部の推定', () => {
     const withBranches = (key, values) => {
       const f = file(key, values.map((v) => (Array.isArray(v) ? null : v)));
       values.forEach((v, i) => {
-        if (Array.isArray(v)) f.pages[i].candidates = [{ value: v[0], branch: v[1], score: 3.5, source: 'text', zone: 'bottom' }];
+        if (Array.isArray(v)) f.pages[i].candidates = [{ path: [v[0], v[1]], score: 3.5, source: 'text', zone: 'bottom' }];
       });
       return f;
     };
@@ -307,7 +315,7 @@ describe('部の推定', () => {
 
   it('両面の束の枝番の頁（1-1〜1-4）では、部を切らない', () => {
     const f = file('a', [null, null, null, null, 2, 3, 4, 5]);
-    [1, 2, 3, 4].forEach((b, i) => (f.pages[i].candidates = [{ value: 1, branch: b, score: 3.5, source: 'text', zone: 'bottom' }]));
+    [1, 2, 3, 4].forEach((b, i) => (f.pages[i].candidates = [{ path: [1, b], score: 3.5, source: 'text', zone: 'bottom' }]));
     const { order } = arrange([f]);
 
     expect(order.every((e) => e.part === null)).toBe(true);
@@ -318,7 +326,7 @@ describe('部の推定', () => {
     const withBranches = (key, values) => {
       const f = file(key, values.map((v) => (Array.isArray(v) ? null : v)));
       values.forEach((v, i) => {
-        if (Array.isArray(v)) f.pages[i].candidates = [{ value: v[0], branch: v[1], score: 3.5, source: 'text', zone: 'bottom' }];
+        if (Array.isArray(v)) f.pages[i].candidates = [{ path: [v[0], v[1]], score: 3.5, source: 'text', zone: 'bottom' }];
       });
       return f;
     };
@@ -338,7 +346,7 @@ describe('部の推定', () => {
   it('元の頁のあとに足した枝番の頁から始まる束も、前の束の続きにつなぐ', () => {
     // 第 1 部の偶数頁 2, 4, 6 | 6-2, 6-4, 8（6 のあとに足した紙）。第 2 部の偶数頁 2, 4, 6, 8。
     const e2 = file('e2', [null, null, 8]);
-    [2, 4].forEach((b, i) => (e2.pages[i].candidates = [{ value: 6, branch: b, score: 3.5, source: 'text', zone: 'bottom' }]));
+    [2, 4].forEach((b, i) => (e2.pages[i].candidates = [{ path: [6, b], score: 3.5, source: 'text', zone: 'bottom' }]));
     const files = [file('o1', [1, 3, 5, 7, 1, 3, 5, 7]), file('e1', [2, 4, 6]), e2, file('e3', [2, 4, 6, 8])];
     const parts = assignParts(files, numberFiles(files));
 
@@ -348,7 +356,7 @@ describe('部の推定', () => {
   it('偶数の頁の奇数側の枝番の頁（6-1）で終わる束も、次の束（7 から）につなぐ', () => {
     // 第 1 部の奇数頁 1, 3, 5, 6-1（6 のあとに足した紙の表。位置は 7）| 7, 9, 11。第 2 部 1, 3, 5。
     const a = file('a', [1, 3, 5, null]);
-    a.pages[3].candidates = [{ value: 6, branch: 1, score: 3.5, source: 'text', zone: 'bottom' }];
+    a.pages[3].candidates = [{ path: [6, 1], score: 3.5, source: 'text', zone: 'bottom' }];
     const files = [a, file('b', [7, 9, 11]), file('c', [1, 3, 5])];
     const parts = assignParts(files, numberFiles(files));
 
@@ -359,7 +367,7 @@ describe('部の推定', () => {
     const withBranches = (key, values) => {
       const f = file(key, values.map((v) => (Array.isArray(v) ? null : v)));
       values.forEach((v, i) => {
-        if (Array.isArray(v)) f.pages[i].candidates = [{ value: v[0], branch: v[1], score: 3.5, source: 'text', zone: 'bottom' }];
+        if (Array.isArray(v)) f.pages[i].candidates = [{ path: [v[0], v[1]], score: 3.5, source: 'text', zone: 'bottom' }];
       });
       return f;
     };
@@ -475,7 +483,7 @@ describe('部の推定', () => {
   it('頁ごとに手で直した番号も、番号のつながりで部を決める', () => {
     // 番号の無い頁に 3 を入れると、第 2 部の 2 頁の続きになる。
     const files = [file('a', [1, 2, 3, 1, 2]), file('x', [null]), file('b', [4, 5])];
-    const overrides = new Map([['x:0', { number: 3 }]]);
+    const overrides = new Map([['x:0', { path: [3] }]]);
     const { order } = arrangeBook(files, numberFiles(files, overrides), overrides);
 
     expect(labels(order)).toEqual(['0:1', '0:2', '0:3', '1:1', '1:2', '1:3', '1:4', '1:5']);
@@ -483,7 +491,7 @@ describe('部の推定', () => {
     // 読み違えた 1 頁（4 を 1 と読んだ）で部を切らない。直せば 1 部に戻る。
     const misread = [file('c', [1, 2, 3]), file('d', [1]), file('e', [5, 6])];
     expect(arrangeBook(misread, numberFiles(misread)).order.some((e) => e.part === 1)).toBe(true);
-    const fixed = arrangeBook(misread, numberFiles(misread, new Map([['d:0', { number: 4 }]])), new Map([['d:0', { number: 4 }]])).order;
+    const fixed = arrangeBook(misread, numberFiles(misread, new Map([['d:0', { path: [4] }]])), new Map([['d:0', { path: [4] }]])).order;
     expect(fixed.every((e) => e.part === null)).toBe(true);
   });
 
@@ -493,5 +501,214 @@ describe('部の推定', () => {
 
     expect(parts).toMatchObject({ count: 1, mismatch: false });
     expect([...parts.partOf.values()]).toEqual([0, 0, 0]);
+  });
+});
+
+describe('頁番号の前に刷られた部・編などの番号（2-21）', () => {
+  /** ハイフンで区切った番号（'2-21'。null は読めなかった頁）で読めたファイル。 */
+  const printed = (key, labels, options = {}) => {
+    const f = file(key, labels.map(() => null), options);
+    labels.forEach((label, i) => {
+      if (label !== null) {
+        f.pages[i].candidates = [{ path: String(label).split('-').map(Number), score: 3.5, source: 'text', zone: 'bottom' }];
+      }
+    });
+    return f;
+  };
+  /** 本の階層を選んで並べ、確かめる。 */
+  const arrangePrinted = (files, overrides = new Map()) => {
+    const { depth } = bookDepth(files, overrides);
+    const { order, mismatch } = arrangeBook(files, numberFiles(files, overrides, depth), overrides);
+    return { depth, order, problems: checkSequence(order, { sheets: true, mismatch, depth }) };
+  };
+  const text = (e) => (e.number === null ? '?' : [...(e.prefix ?? []), e.number, ...(e.branch ?? [])].join('-'));
+
+  // 第 1 部 1-1〜1-6、第 2 部 2-1〜2-8、第 3 部 3-1〜3-4。束は部をまたぎ、偶数頁は裏返して逆順。
+  const book = () => [
+    printed('o1', ['1-1', '1-3', '1-5', '2-1', '2-3']),
+    printed('o2', ['2-5', '2-7', '3-1', '3-3']),
+    printed('e1', ['3-4', '3-2', '2-8', '2-6']),
+    printed('e2', ['2-4', '2-2', '1-6', '1-4', '1-2']),
+  ];
+
+  it('前の段を部・編などの番号と読み、刷られた順に並べる（部の振り直しの注意は出さない）', () => {
+    const { depth, order, problems } = arrangePrinted(book());
+
+    expect(depth).toBe(1);
+    expect(order.map(text)).toEqual([
+      '1-1', '1-2', '1-3', '1-4', '1-5', '1-6',
+      '2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8',
+      '3-1', '3-2', '3-3', '3-4',
+    ]);
+    expect(order.map((e) => e.part)).toEqual([...Array(6).fill(0), ...Array(8).fill(1), ...Array(4).fill(2)]);
+    expect(order.some((e) => 'partLabel' in e)).toBe(false);
+    expect(problems.map((p) => [p.kind, p.level])).toEqual([['depth', 'info']]);
+    expect(problems[0].message).toContain('（1-1 など）');
+    expect(problems[0].message).toContain('（1-1〜1-6 頁・2-1〜2-8 頁・3-1〜3-4 頁）');
+    expect(displayLabel(order[6])).toBe('2-1 頁');
+    // 部が刷られているので、頁ラベルは部の番号を付けて付ける。
+    expect(pageLabelTexts(pageLabelRanges(order), order.length).slice(5, 8)).toEqual(['1-6', '2-1', '2-2']);
+  });
+
+  it('部の中の抜けは、部の番号を付けて指摘する', () => {
+    const files = book();
+    files[2] = printed('e1', ['3-4', '3-2', '2-8']); // 2-6 が無い
+    const { problems, order } = arrangePrinted(files);
+
+    expect(problems.find((p) => p.kind === 'missing')).toMatchObject({
+      message: '2-6 頁が見つかりません（計 1 頁）。束の入れ忘れ・重送の可能性があります。',
+      number: '1',
+      numbers: [6],
+    });
+    const card = gridItems(order).find((item) => item.type === 'missing');
+    expect(missingLabel(card)).toBe('2-6 頁');
+  });
+
+  it('同じ部の番号が最初に戻れば、その部の中で振り直しを推定して呼び名を付ける', () => {
+    // 「2-」の頁が 2 度 1 から始まる（両面の束）。「3-」の頁はそのまま。
+    const files = [printed('a', ['2-1', '2-2', '2-3', '2-1', '2-2']), printed('b', ['3-1', '3-2'])];
+    const { order, problems } = arrangePrinted(files);
+
+    expect(order.map((e) => [text(e), e.part, e.partLabel ?? ''])).toEqual([
+      ['2-1', 0, '「2-」の第 1 部'],
+      ['2-2', 0, '「2-」の第 1 部'],
+      ['2-3', 0, '「2-」の第 1 部'],
+      ['2-1', 1, '「2-」の第 2 部'],
+      ['2-2', 1, '「2-」の第 2 部'],
+      ['3-1', 2, ''],
+      ['3-2', 2, ''],
+    ]);
+    expect(displayLabel(order[3])).toBe('「2-」の第 2 部 2-1 頁');
+    const parts = problems.find((p) => p.kind === 'parts');
+    expect(parts.message).toContain('3 部に分けて並べました（「2-」の第 1 部 2-1〜2-3 頁・「2-」の第 2 部 2-1〜2-2 頁・3-1〜3-2 頁）');
+    expect(problems.find((p) => p.kind === 'depth').message).not.toContain('〜');
+    expect(pageLabelRanges(order)).toEqual([]);
+  });
+
+  it('部の番号の付いた本で、部の番号を読めなかった束は先頭に置いて知らせ、1 頁直せば部に入る', () => {
+    const files = [...book(), printed('again', [5, 7])]; // 2-5・2-7 を撮り直した束（部の番号を読めなかった）
+    const { order, problems } = arrangePrinted(files);
+
+    expect(order.slice(0, 2).map(text)).toEqual(['5', '7']);
+    expect(problems.find((p) => p.kind === 'no-prefix')).toMatchObject({
+      level: 'warn',
+      pageKeys: ['again:0', 'again:1'],
+    });
+    const overrides = new Map([['again:0', { path: [2, 5] }]]);
+    const fixed = arrangePrinted(files, overrides);
+    expect(fixed.order.filter((e) => e.fileKey === 'again').map(text)).toEqual(['2-5', '2-7']);
+    expect(fixed.problems.some((p) => p.kind === 'no-prefix')).toBe(false);
+  });
+
+  it('前付けの部の番号の無い頁は、例に挙げない', () => {
+    const files = [printed('a', [null, '2-1', '2-3', '2-5']), printed('b', ['2-6', '2-4', '2-2'])];
+    const { order, problems } = arrangePrinted(files);
+
+    expect(order[0]).toMatchObject({ prefix: [2], number: -1 });
+    expect(problems.find((p) => p.kind === 'depth').message).toContain('（2-1 など）');
+  });
+
+  it('前の段の無い頁（前付けなど）は、部の番号の付いた頁より前に置く', () => {
+    const files = [
+      printed('a', [1, 2, 3]),
+      printed('b', ['1-1', '1-2', '1-3', '1-4', '1-5']),
+      printed('c', ['2-1', '2-2', '2-3', '2-4', '2-5']),
+    ];
+    const { depth, order } = arrangePrinted(files);
+
+    expect(depth).toBe(1);
+    expect(order.map(text)).toEqual(['1', '2', '3', '1-1', '1-2', '1-3', '1-4', '1-5', '2-1', '2-2', '2-3', '2-4', '2-5']);
+    expect(order.map((e) => e.part)).toEqual([0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2]);
+    // 一覧の順によらない。
+    expect(arrangePrinted([...files].reverse()).order.map(text)).toEqual(order.map(text));
+  });
+
+  it('加除式の本の枝番の頁は、これまでどおり枝番として並べる', () => {
+    const files = [printed('o', [51, 53, 55, '57-1', '57-3', 59]), printed('e', [60, '57-4', '57-2', 56, 54, 52])];
+    const { depth, order, problems } = arrangePrinted(files);
+
+    expect(depth).toBe(0);
+    expect(order.map(text)).toEqual(['51', '52', '53', '54', '55', '56', '57-1', '57-2', '57-3', '57-4', '59', '60']);
+    expect(problems.map((p) => p.kind)).toEqual(['replaced']);
+  });
+
+  it('部・編の番号の付いた本の枝番の頁と、その抜け・差し替え・紙の表裏', () => {
+    const files = [
+      printed('o', ['2-51', '2-53', '2-55', '2-57-1', '2-57-5', '2-59']),
+      printed('e', ['2-57-2', '2-56', '2-54', '2-52']),
+    ];
+    const { order, problems } = arrangePrinted(files);
+
+    expect(order.map(text)).toEqual(['2-51', '2-52', '2-53', '2-54', '2-55', '2-56', '2-57-1', '2-57-2', '2-57-5', '2-59']);
+    expect(problems.map((p) => [p.kind, p.message])).toEqual([
+      ['missing', '2-57-3・2-57-4 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。'],
+      ['replaced', '2-57〜2-58 頁は無く、枝番の付いた頁（2-57-1〜2-57-5）があります。差し替えられた頁とみなしました。'],
+      ['sheet-end', '最後の頁が奇数（2-59 頁）です。その裏（2-60 頁）が欠けていないか確かめてください（裏が白紙でスキャンしていない場合は問題ありません）。'],
+      ['depth', expect.stringContaining('（2-51 など）')],
+    ]);
+  });
+
+  it('入れ子の枝番の頁で始まり・終わる束の、紙の表裏', () => {
+    // 枝番と読む（階層 0）。
+    const files = [printed('a', ['57-1-2', '57-1-3'])];
+    const { order } = arrangeBook(files, numberFiles(files));
+    const problems = checkSequence(order, { sheets: true });
+
+    expect(problems.map((p) => p.message)).toEqual([
+      '57-1-1 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。',
+      '57 頁は無く、枝番の付いた頁（57-1）があります。差し替えられた頁とみなしました。',
+      '最初の頁が偶数（57-1-2 頁）です。その表（57-1-1 頁）が欠けていないか確かめてください。',
+      '最後の頁が奇数（57-1-3 頁）です。その裏（57-1-4 頁）が欠けていないか確かめてください（裏が白紙でスキャンしていない場合は問題ありません）。',
+    ]);
+  });
+
+  it('ハイフンで区切った番号があるか（階層を選ぶ欄を出すか）', () => {
+    expect(hasDashedNumbers(book())).toBe(true);
+    expect(hasDashedNumbers([printed('a', [1, 3])])).toBe(false);
+    expect(hasDashedNumbers([printed('a', [1, null])], new Map([['a:1', { path: [2, 3] }]]))).toBe(true);
+    expect(hasDashedNumbers([printed('a', [1, null])], new Map([['a:1', { path: [3] }]]))).toBe(false);
+    // 弱い候補（柱の末尾の番号など）は見ない。
+    const weak = printed('w', [null]);
+    weak.pages[0].candidates = [{ path: [2, 3], score: 2, source: 'text', zone: 'top' }];
+    expect(hasDashedNumbers([weak])).toBe(false);
+  });
+
+  it('ファイルごとに番号を入れたファイル・名前で表紙と見たファイルは、階層を選ぶ手掛かりにしない', () => {
+    const manual = printed('m', ['2-1', '2-3', '2-5'], { manual: { start: 1, step: 2 } });
+    const cover = { ...printed('c', ['2-1', '2-3', '2-5']), coverByName: true };
+    expect(bookDepth([manual, cover, printed('x', [1, 3, 5])]).depth).toBe(0);
+    expect(bookDepth([printed('x', ['2-1', '2-3', '2-5'])]).depth).toBe(1);
+  });
+
+  it('ファイルごとに入れた番号の前の段（入れなければ読み取った前の段）と、頁ごとの番号', () => {
+    const files = [
+      printed('a', ['2-1', '2-3', '2-5'], { manual: { start: 7, step: 2 } }),
+      printed('b', [null, null], { manual: { start: 1, step: 2, prefix: [3] } }),
+      printed('c', ['2-2', '2-4', '2-6']),
+    ];
+    const overrides = new Map([
+      ['a:2', { path: [11] }],
+      ['b:1', { path: [4, 9] }],
+    ]);
+    const { order } = arrangePrinted(files, overrides);
+
+    expect(order.map((e) => `${e.fileKey}:${text(e)}:${e.status}`)).toEqual([
+      'c:2-2:detected', 'c:2-4:detected', 'c:2-6:detected',
+      'a:2-7:manual', 'a:2-9:manual', 'a:2-11:manual',
+      'b:3-1:manual',
+      'b:4-9:manual',
+    ]);
+    // 枝番と読む本（階層 0）では、入れた前の段を使わない（読み方を選び直したとき）。
+    expect(numberFiles([files[1]], new Map(), 0).get('b').pages.map(text)).toEqual(['1', '3']);
+    // 前の段を入れず、読み取った前の段も無ければ、付けない。
+    const unread = [printed('u', [null, null], { manual: { start: 3, step: 2 } })];
+    expect(numberFiles(unread, new Map(), 1).get('u').pages.map(text)).toEqual(['3', '5']);
+    // 前の段の分からない本（階層 0）では、ファイルごとの番号に前の段を付けない。
+    const plain = [printed('p', [null, null], { manual: { start: 5, step: 1 } })];
+    const numbered = numberFiles(plain, new Map([['p:1', { path: [6, 1] }]]), 0);
+    expect(numbered.get('p').pages.map((page) => [page.number, page.prefix, page.branch])).toEqual([
+      [5, undefined, undefined],
+      [6, undefined, [1]],
+    ]);
   });
 });

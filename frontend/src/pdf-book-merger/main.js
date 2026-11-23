@@ -39,8 +39,10 @@ import { blobStash, openStash } from './stash.js';
 import { CRASH_LOG_LINES, createCrashLog } from './crash-log.js';
 import {
   arrangeBook,
+  bookDepth,
   checkSequence,
   guessRole,
+  hasDashedNumbers,
   isCoverName,
   nameRank,
   numberFiles,
@@ -55,6 +57,7 @@ import {
   pageNumberCandidates,
   pageNumberText,
   parsePageNumber,
+  pathText,
   readMargin,
   sideOf,
   unsettledPages,
@@ -110,12 +113,17 @@ const DOWNLOAD_BUDGET = 64 * 1024 * 1024;
 let nextKey = 1;
 /** 選んだファイル（画面の並び順）。中身は addFiles() を参照。 */
 const files = [];
-/** 頁ごとに手で直した番号（頁の key → 番号）。 */
+/** 頁ごとに手で直した番号（頁の key → parsePageNumber の形）。 */
 const overrides = new Map();
+/**
+ * ハイフンで区切った頁番号の読み方（階層）。'auto' は本の頁番号のつながりから選ぶ
+ * （ordering.js の bookDepth）。数字は前の段の数（0 は 57-1 を枝番、1 は 2-21 を「2-」の 21 頁と読む）。
+ */
+let depthMode = 'auto';
 /** 同じ頁らしい組を探す（前に見比べた頁どうしは見比べ直さない）。 */
 const findDuplicates = createDuplicateFinder();
 /** 最後に組み立てた並びと指摘。 */
-let view = { order: [], problems: [], issues: new Map(), numberings: new Map(), places: new Map(), anyNumbered: false };
+let view = { order: [], problems: [], issues: new Map(), numberings: new Map(), places: new Map(), depth: 0, anyNumbered: false };
 /** 結合した PDF と検証の結果。並びが変わったら捨てる。 */
 let merged = null;
 /** 結合と検証の途中か（その間は、拡大表示のために PDF を開かない）。 */
@@ -1272,6 +1280,16 @@ function setAllRoles(value) {
 
 // --- 並べて確かめる ----------------------------------------------------------
 
+/**
+ * ハイフンで区切った頁番号の読み方の欄。そうした番号を読んだ（入れた）ときだけ出し
+ * （手で選んだあとは、選び直せるよう出したまま）、「自動」には自動で選ぶ読み方（auto）を添える。
+ */
+function renderDepth(ready, auto) {
+  $('depthField').hidden = depthMode === 'auto' && !hasDashedNumbers(ready, overrides);
+  const chosen = $('depthMode').querySelector(`option[value="${auto}"]`);
+  $('depthMode').querySelector('option[value="auto"]').textContent = `自動（${chosen.textContent}）`;
+}
+
 function readyFiles() {
   return files.filter((file) => file.status === 'ready');
 }
@@ -1292,12 +1310,15 @@ function describePage(entry) {
 /** 並びと指摘を組み立て直し、画面を描き直す。結合した PDF は捨てる。 */
 function refresh() {
   const ready = readyFiles();
-  const numberings = numberFiles(ready, overrides);
+  const auto = bookDepth(ready, overrides).depth;
+  const depth = depthMode === 'auto' ? auto : Number(depthMode);
+  renderDepth(ready, auto);
+  const numberings = numberFiles(ready, overrides, depth);
   const { order, mismatch, places } = arrangeBook(ready, numberings, overrides);
   const sheets = ready.some(
     (file) => places.get(file.key) === 'numbered' && Math.abs(numberings.get(file.key).step ?? 0) === 2
   );
-  const problems = checkSequence(order, { sheets, mismatch });
+  const problems = checkSequence(order, { sheets, mismatch, depth: depthMode === 'auto' ? depth : 0 });
   const { textless, problem } = textCoverage(order, pageOf);
   if (problem) problems.push(problem);
 
@@ -1324,7 +1345,7 @@ function refresh() {
     textless
   );
 
-  view = { order, problems, issues, numberings, places, anyNumbered: [...places.values()].includes('numbered') };
+  view = { order, problems, issues, numberings, places, depth, anyNumbered: [...places.values()].includes('numbered') };
   if (!$('outputName').value.trim() || $('outputName').dataset.suggested === 'true') {
     const suggested = suggestBookName(files.map((file) => file.name));
     $('outputName').value = suggested;
@@ -1350,7 +1371,7 @@ function mergeKey() {
     outputName(),
     ...view.order.map(
       (entry) =>
-        `${entry.pageKey}|${entry.role}|${entry.number}|${entry.branch ?? ''}|${entry.role === 'body' ? '' : entry.status}|${entry.part}`
+        `${entry.pageKey}|${entry.role}|${entry.number}|${entry.branch ?? ''}|${entry.prefix ?? ''}|${entry.role === 'body' ? '' : entry.status}|${entry.part}|${entry.partLabel ?? ''}`
     ),
   ].join('\n');
 }
@@ -1640,8 +1661,9 @@ function fileControls(file) {
   start.type = 'text';
   start.inputMode = 'numeric';
   start.size = 5;
-  start.placeholder = numbering?.pages[0]?.number?.toString() ?? '自動';
-  start.value = file.manual ? String(file.manual.start) : '';
+  const first = numbering?.pages[0];
+  start.placeholder = first && first.number !== null ? pageNumberText(first) : '自動';
+  start.value = file.manual ? pathText([...(file.manual.prefix ?? []), file.manual.start]) : '';
   startField.append(start);
 
   const stepField = el(document, 'label', 'bm-inline');
@@ -1666,15 +1688,23 @@ function fileControls(file) {
     if (!value) {
       file.manual = null;
     } else {
-      const number = Number(value);
-      if (!Number.isInteger(number)) {
-        // 描き直さないので、進み方の欄も使っている値に戻す（選んだ値が残ると、並びと食い違う）。
-        step.value = file.manual ? String(file.manual.step) : '';
-        showMessage('先頭の頁の番号は整数で入れてください。', 'red');
+      // 部・編などの番号を前に付けた頁番号（2-1）も入れられる（前の段は、そのファイルの頁に付ける）。
+      const path = parsePageNumber(value)?.path;
+      // 断るときは描き直さないので、進み方の欄も使っている値に戻す（選んだ値が残ると、並びと食い違う）。
+      const restoreStep = () => (step.value = file.manual ? String(file.manual.step) : '');
+      if (!path || !Number.isInteger(path.at(-1))) {
+        restoreStep();
+        showMessage('先頭の頁の番号は整数（部・編などの番号を前に付けるなら 2-1 の形）で入れてください。', 'red');
+        return;
+      }
+      // 枝番と読む本では、ハイフンの付いた番号はファイルの先頭にできない（枝番の頁は頁ごとに入れる）。
+      if (path.length > 1 && view.depth === 0) {
+        restoreStep();
+        showMessage('ハイフンの付いた番号は、「ハイフンで区切った頁番号」で部・編などの番号と読むときだけ入れられます。', 'red');
         return;
       }
       const chosen = Number(step.value) || numbering?.step || 2;
-      file.manual = { start: number, step: chosen };
+      file.manual = { start: path.at(-1), step: chosen, ...(path.length > 1 ? { prefix: path.slice(0, -1) } : {}) };
     }
     showMessage('');
     refresh();
@@ -1958,7 +1988,7 @@ function numberEditor(entry, name, { jump }) {
   // 指摘の項目の中にも同じ頁が並ぶので、読み上げでどちらの欄か分かるようにする。
   input.setAttribute('aria-label', title);
   input.placeholder = entry.number === null ? '番号' : pageNumberText(entry);
-  const initial = overrides.has(entry.pageKey) ? pageNumberText(overrides.get(entry.pageKey)) : '';
+  const initial = overrides.has(entry.pageKey) ? pathText(overrides.get(entry.pageKey).path) : '';
   input.value = initial;
   let warned = false; // 正しくない番号の断りを出した
 
@@ -1982,7 +2012,7 @@ function numberEditor(entry, name, { jump }) {
     const value = input.value.trim();
     const number = parsePageNumber(value);
     if (value && !number) {
-      showMessage('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。', 'red');
+      showMessage('番号は数字（枝番や部・編などの番号の付いた頁は 57-1・2-21 の形）で入れてください。', 'red');
       warned = true;
       return false;
     }
@@ -2511,6 +2541,11 @@ function wireUp() {
   }
   $('bulkRole').addEventListener('change', (event) => {
     if (event.target.value) setAllRoles(event.target.value);
+  });
+  $('depthMode').addEventListener('change', (event) => {
+    depthMode = event.target.value;
+    log(`ハイフンで区切った頁番号の読み方を「${event.target.selectedOptions[0].textContent}」にしました`);
+    refresh();
   });
   $('outputName').addEventListener('input', () => {
     $('outputName').dataset.suggested = 'false';
