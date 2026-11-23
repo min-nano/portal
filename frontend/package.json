@@ -10,9 +10,9 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@clerk/clerk-js": "^6.43.1",
-    "@clerk/localizations": "^4.24.8",
-    "@clerk/ui": "^1.42.6",
+    "@clerk/clerk-js": "^6.46.1",
+    "@clerk/localizations": "^4.26.1",
+    "@clerk/ui": "^1.44.1",
     "@tesseract.js-data/eng": "^1.0.0",
     "pdf-lib": "1.17.1",
     "pdfjs-dist": "^6.5.438",
