@@ -1347,6 +1347,11 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
 .drive-picker-name {
   flex: 1;
   min-width: 0;
+  /* 行の高さいっぱいに広げる（文字の高さだけだと、横にずらすために指を置ける
+   * 所が細すぎる）。文字は縦の真ん中に置く。 */
+  align-self: stretch;
+  display: flex;
+  align-items: center;
   white-space: nowrap;
   /* 長い名前は省かずに、横にずらして続きを見せる（スマートフォンでは後ろの
    * 部分を確かめる手段がほかに無い。title のツールチップは出ない）。
@@ -1366,10 +1371,10 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
 }
 
 /* 末尾の空き（スクロール容器の右の padding は、古い iOS の Safari ではずらせる
- * 範囲に入らないので、中身として置く）。 */
+ * 範囲に入らないので、中身として置く。flex の中なので縮まないようにする）。 */
 .drive-picker-name::after {
   content: '';
-  display: inline-block;
+  flex: none;
   width: var(--s-4);
 }
 
