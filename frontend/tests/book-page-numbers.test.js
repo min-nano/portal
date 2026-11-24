@@ -55,6 +55,17 @@ describe('normalizeDigits / groupLines', () => {
     expect(lines.map((line) => line.text)).toEqual(['本文', '12']);
   });
 
+  it('同じ文字を少しずらして重ね書きしたもの（太字に見せる刷り方）は 1 度だけ読む', () => {
+    const bold = [0, 0.001, 0.002].map((dx) => ({ text: '3-14', x0: 0.48 + dx, x1: 0.52 + dx, y: 0.95, h: 0.012 }));
+    expect(groupLines(bold).map((line) => line.text)).toEqual(['3-14']);
+    // 並んだ同じ文字（「11」の 1 文字ずつの断片）は重ね書きではない。
+    const digits = [
+      { text: '1', x0: 0.49, x1: 0.5, y: 0.95, h: 0.01 },
+      { text: '1', x0: 0.5, x1: 0.51, y: 0.95, h: 0.01 },
+    ];
+    expect(groupLines(digits).map((line) => line.text)).toEqual(['11']);
+  });
+
   it('字の間が開いていれば区切る（柱と頁番号をくっつけない）', () => {
     const [line] = groupLines([
       { text: '第3章 運動の法則', x0: 0.1, x1: 0.4, y: 0.05, h: 0.012 },

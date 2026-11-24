@@ -112,7 +112,12 @@ export function groupLines(items) {
     const parts = line.items.slice().sort((a, b) => a.x0 - b.x0);
     let text = '';
     let right = null;
+    let last = null;
     for (const part of parts) {
+      // 同じ文字を少しずらして重ね書きしたもの（太字に見せる刷り方。文字情報には 3 度入る）は
+      // 1 度だけ読む（「3-14」が「3-143-143-14」にならないように）。
+      if (last && String(part.text) === String(last.text) && part.x0 < (last.x0 + last.x1) / 2) continue;
+      last = part;
       // 字の間が開いていれば区切る（柱の文字と頁番号をくっつけないため）。
       if (right !== null && part.x0 - right > Math.max(line.h, 0.004) * 0.6) text += ' ';
       text += String(part.text);
