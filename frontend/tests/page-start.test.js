@@ -119,7 +119,7 @@ describe('startPage', () => {
 
   it('使えないアカウントだと分かったら、その理由を出す', async () => {
     hideStaffOnlyForExternalUsers.mockRejectedValue(
-      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403 })
+      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403, code: 'account_not_allowed' })
     );
     const onError = vi.fn();
 
@@ -132,7 +132,7 @@ describe('startPage', () => {
   it('使えないアカウントには、理由の欄だけを残して画面を片付ける（API を呼ばないツールも使わせない）', async () => {
     app().insertAdjacentHTML('afterbegin', '<button id="mergeBtn">結合</button>');
     hideStaffOnlyForExternalUsers.mockRejectedValue(
-      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403 })
+      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403, code: 'account_not_allowed' })
     );
 
     startPage({ prepare: async () => {} });
@@ -147,7 +147,7 @@ describe('startPage', () => {
 
   it('準備の途中で断られたと分かっても、理由を出すのは準備が終わってから', async () => {
     hideStaffOnlyForExternalUsers.mockRejectedValue(
-      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403 })
+      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403, code: 'account_not_allowed' })
     );
     let finishPreparing;
     const prepare = vi.fn(() => new Promise((resolve) => { finishPreparing = resolve; }));

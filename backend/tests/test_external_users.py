@@ -102,6 +102,28 @@ def test_the_drive_file_list_is_refused(external_client, drive):
     assert drive.delegated_emails == []
 
 
+def test_an_account_on_neither_list_is_refused_with_a_code(anon_client, monkeypatch):
+    """どちらの許可リストにも無いアカウントは、目印（code）付きの 403 で断る。"""
+
+    def refuse(authorization):
+        raise AuthError("このアプリは許可されたアカウント専用です。", 403, "account_not_allowed")
+
+    monkeypatch.setattr(portal_sdk.clerk_auth, "user_from_authorization_header", refuse)
+
+    resp = anon_client.get("/api/me", headers={"Authorization": "Bearer x"})
+
+    assert resp.status_code == 403
+    assert resp.json() == {
+        "error": "このアプリは許可されたアカウント専用です。",
+        "code": "account_not_allowed",
+    }
+
+
+def test_other_failures_carry_no_code(external_client):
+    # 目印は、それを付けた失敗にだけ載る（ほかの 403 は本文が error だけ）。
+    assert external_client.put("/api/site", json={}).json() == {"error": STAFF_ONLY}
+
+
 def test_site_settings_cannot_be_changed_by_external_users(external_client, drive):
     resp = external_client.put("/api/site", json={"title": "乗っ取り"})
 

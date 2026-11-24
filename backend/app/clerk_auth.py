@@ -50,11 +50,16 @@ _jwk_clients: dict[str, PyJWKClient] = {}
 _jwk_lock = threading.Lock()
 
 
+# どちらの許可リストにも無いアカウント。画面はこの目印で見分け、ツールを
+# 閉じて理由を出す（ほかの 403——プロキシなど——と取り違えないため）。
+ACCOUNT_NOT_ALLOWED = "account_not_allowed"
+
+
 class AuthError(PortalError):
     """認証・認可の失敗。status は HTTP ステータスコード。"""
 
-    def __init__(self, message: str, status: int = 401):
-        super().__init__(message, status)
+    def __init__(self, message: str, status: int = 401, code: str | None = None):
+        super().__init__(message, status, code)
 
 
 @dataclass(frozen=True)
@@ -153,7 +158,9 @@ def verify_token(token: str) -> User:
     email_domain = email.rpartition("@")[2].lower()
     if email_domain not in [d.lower() for d in domains]:
         raise AuthError(
-            f"このアプリは許可されたアカウント専用です（{email} は利用できません）。", 403
+            f"このアプリは許可されたアカウント専用です（{email} は利用できません）。",
+            403,
+            ACCOUNT_NOT_ALLOWED,
         )
 
     return User(email=email, external=False)

@@ -56,12 +56,20 @@ describe('hideStaffOnlyForExternalUsers', () => {
   it('どちらの許可リストにも無いアカウント（403）は、理由を投げる', async () => {
     const refused = Object.assign(
       new Error('このアプリは許可されたアカウント専用です（someone@gmail.com は利用できません）。'),
-      { status: 403 }
+      { status: 403, code: 'account_not_allowed' }
     );
     apiGet.mockRejectedValue(refused);
 
     await expect(hideStaffOnlyForExternalUsers()).rejects.toBe(refused);
     expect(document.documentElement.dataset.account).toBeUndefined();
+  });
+
+  it('目印の無い 403（プロキシなど）は、使えないアカウントとは見なさない', async () => {
+    apiGet.mockRejectedValue(
+      Object.assign(new Error('サーバーエラーが発生しました (HTTP 403)。'), { status: 403 })
+    );
+
+    expect(await hideStaffOnlyForExternalUsers()).toBe(false);
   });
 
   it('5xx は一時的かもしれないので、何もしない（画面を閉じない）', async () => {

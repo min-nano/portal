@@ -140,6 +140,8 @@ def test_email_outside_allowed_domain_is_403():
     with pytest.raises(AuthError) as e:
         clerk_auth.verify_token(make_token(email="someone@gmail.com"))
     assert e.value.status == 403
+    # 画面が、ほかの 403 と取り違えずに見分けるための目印。
+    assert e.value.code == clerk_auth.ACCOUNT_NOT_ALLOWED
 
 
 def test_listed_external_email_is_let_in_as_external(monkeypatch):

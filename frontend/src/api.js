@@ -19,14 +19,17 @@ async function authorizedFetch(path, options = {}) {
 async function raiseForError(resp) {
   if (resp.ok) return;
   let message = `サーバーエラーが発生しました (HTTP ${resp.status})。`;
+  let code;
   try {
     const body = await resp.json();
     if (body && body.error) message = body.error;
+    if (body && typeof body.code === 'string') code = body.code;
   } catch {
     // JSON でないエラー応答（プロキシ等）はそのまま既定メッセージを使う。
   }
   // 呼び出し側が、待てば通りうる失敗（5xx など）かを見分けられるように。
-  throw Object.assign(new Error(message), { status: resp.status });
+  // code はサーバーが種類を名乗った失敗だけに付く（使えないアカウントなど）。
+  throw Object.assign(new Error(message), { status: resp.status, code });
 }
 
 /**

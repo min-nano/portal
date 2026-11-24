@@ -51,8 +51,11 @@ app.add_middleware(
 )
 
 
-def _error_response(status: int, message: str) -> JSONResponse:
-    return JSONResponse(status_code=status, content={"error": message})
+def _error_response(status: int, message: str, code: str | None = None) -> JSONResponse:
+    content = {"error": message}
+    if code:
+        content["code"] = code
+    return JSONResponse(status_code=status, content=content)
 
 
 @app.exception_handler(PortalError)
@@ -62,7 +65,7 @@ async def _portal_error_handler(_request: Request, exc: PortalError):
     土台もツールも同じ形（message + status）で失敗を伝えるので、ハンドラは
     これ 1 つで足りる。ツールが増えてもここは増えない。
     """
-    return _error_response(exc.status, str(exc))
+    return _error_response(exc.status, str(exc), exc.code)
 
 
 @app.exception_handler(Exception)
