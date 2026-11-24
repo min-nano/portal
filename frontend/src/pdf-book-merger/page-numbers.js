@@ -65,6 +65,8 @@ const STANDALONE = new RegExp(
   `^${DECOR}*(?:p\\.?|P\\.?|page|ページ|頁)?\\s*(${LABEL})\\s*(?:頁|ページ)?${DECOR}*$`
 );
 const DASHES = new RegExp(DASH);
+/** 頁番号の形だけの文字（57・3-14）。 */
+const NUMBER_ONLY = new RegExp(`^${LABEL}$`);
 
 /** ハイフンで区切った頁番号を、数字の列にする（「2 - 21」→ [2, 21]）。 */
 function splitLabel(text) {
@@ -111,14 +113,27 @@ export function groupLines(items) {
   }
 
   return lines.map((line) => {
-    const parts = line.items;
+    const parts = line.items.slice().sort((a, b) => a.x0 - b.x0);
     let text = '';
     let right = null;
-    for (const char of withoutOverprint(parts, line.h)) {
+    let last = null;
+    const gap = Math.max(line.h, 0.004) * 0.6;
+    for (const part of parts) {
+      if (last && String(part.text) === String(last.text)) {
+        // 同じ文字を少しずらして重ね書きしたもの（太字に見せる刷り方。文字情報には 3 度入る）は
+        // 1 度だけ読む（「3-14」が「3-143-143-14」にならないように）。
+        if (part.x0 < (last.x0 + last.x1) / 2) continue;
+        // 間を空けずに並んだ同じ頁番号も 1 度だけ読む。貼り込んだ図などが、見えない（切り抜かれた）
+        // 頁番号を、本物の頁番号のすぐ隣に持ち込んでいることがある（「3-14」が「3-143-14」に
+        // ならないように）。1 文字の断片（OCR の「1」「1」）は、並んだ数字なので除かない。
+        const label = normalizeDigits(part.text).trim();
+        if (label.length > 1 && NUMBER_ONLY.test(label) && part.x0 - last.x1 <= gap) continue;
+      }
+      last = part;
       // 字の間が開いていれば区切る（柱の文字と頁番号をくっつけないため）。
-      if (right !== null && char.x0 - right > Math.max(line.h, 0.004) * 0.6) text += ' ';
-      text += char.text;
-      right = char.x1;
+      if (right !== null && part.x0 - right > gap) text += ' ';
+      text += String(part.text);
+      right = part.x1;
     }
     return {
       text: normalizeDigits(text).replace(/\s+/g, ' ').trim(),
@@ -128,48 +143,6 @@ export function groupLines(items) {
       h: line.h,
     };
   });
-}
-
-/**
- * 1 行の断片を 1 文字ずつに分けて左から並べ、重ね書きした文字を除く。
- *
- * 同じ文字を少しずらして重ね書きしたもの（太字に見せる刷り方）は、文字情報に何度も入る。
- * 重ねた写しが同じ区切りの断片になるとは限らない（「3-」を 3 度、「14」を 3 度書くと、
- * pdf.js は最後の「3-」と最初の「14」を 1 つの断片「3-14」にする）ので、断片どうしではなく
- * 文字どうしで比べ、ほかの断片の同じ文字とほぼ同じ所にある文字を 1 度だけ読む
- * （「3-14」が「3-143-14」にならないように）。断片の中の文字の位置は、断片の幅を
- * 字数で等分して見積もる。
- *
- * @param {{text:string, x0:number, x1:number}[]} parts
- * @param {number} h 行の文字の高さ
- * @returns {{text:string, x0:number, x1:number}[]}
- */
-function withoutOverprint(parts, h) {
-  const chars = parts.flatMap((part, index) => {
-    const text = [...String(part.text)];
-    const width = (part.x1 - part.x0) / text.length;
-    return text.map((char, i) => {
-      const x0 = part.x0 + width * i;
-      return { text: char, x0, x1: x0 + width, center: x0 + width / 2, part: index };
-    });
-  });
-  chars.sort((a, b) => a.center - b.center);
-  // 重ね書きと見た文字も残しておき、次の写しと比べる（少しずつずらした 3 度目の写しは、
-  // 1 度目からは離れていても 2 度目には近い）。
-  for (const [index, char] of chars.entries()) {
-    // 細いほうの文字の幅の 7 割（幅の分からない断片でも、字の高さの 1 割）より近い同じ文字は
-    // 重ね書き。隣に並んだ同じ文字（「11」）は、ちょうど 1 文字ぶん離れている（細いほうで測るのは、
-    // 幅を等分して見積もるので、全角の字を含む断片の文字は広く見積もられるため）。
-    const width = char.x1 - char.x0;
-    for (let i = index - 1; i >= 0 && char.center - chars[i].center < Math.max(width * 0.7, h * 0.1); i--) {
-      const other = chars[i];
-      const near = Math.max(Math.min(width, other.x1 - other.x0) * 0.7, h * 0.1);
-      if (other.part !== char.part && other.text === char.text && char.center - other.center < near) {
-        char.overprint = true;
-      }
-    }
-  }
-  return chars.filter((char) => !char.overprint);
 }
 
 /** 頁番号の置き場所らしさ（上下の端・外側の角・中央）。 */
