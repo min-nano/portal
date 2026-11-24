@@ -163,7 +163,8 @@ describe('startPage', () => {
     );
   });
 
-  it('外部ユーザーが社内専用のツールを開いたら、画面の中身を隠す', async () => {
+  it('外部ユーザーが社内専用のツールを開いたら、画面の中身を隠す（答えを待たずに）', async () => {
+    hideStaffOnlyForExternalUsers.mockReturnValue(new Promise(() => {})); // /api/me はまだ
     const refused = Object.assign(new Error('この機能は社内アカウント専用です。'), {
       status: 403,
       code: 'staff_only',

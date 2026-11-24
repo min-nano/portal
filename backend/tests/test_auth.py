@@ -204,12 +204,14 @@ def test_nobody_gets_in_when_the_staff_domain_is_unset(monkeypatch):
         assert "ALLOWED_EMAIL_DOMAINS" in str(e.value)
 
 
-def test_listed_external_email_gets_in_even_without_the_staff_domain(monkeypatch):
-    # 外部ユーザーの許可は、社内ドメインの設定と関わらない（できることが少ない側）。
+def test_listed_external_email_is_refused_too_when_the_staff_domain_is_unset(monkeypatch):
+    # 設定の漏れなので、外部ユーザーも含めて誰も通さない（README のとおり）。
     monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", "")
     monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "partner@gmail.com")
 
-    assert clerk_auth.verify_token(make_token(email="partner@gmail.com")).external
+    with pytest.raises(AuthError) as e:
+        clerk_auth.verify_token(make_token(email="partner@gmail.com"))
+    assert e.value.status == 500
 
 
 def test_azp_check_skipped_when_unset(monkeypatch):

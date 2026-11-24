@@ -89,6 +89,8 @@ export function startPage({
       // アカウントだと分かれば、そちらを出す（「待てば通る」と思わせない）。
       // 待つのは少しだけ（答えが遅いときに、準備の失敗を出すのを遅らせない）。
       // それより遅れて断りが届いたら、そのときに画面を閉じて理由を出し直す。
+      // 準備の失敗そのものが断りなら、待たずにそのまま出す。
+      if (CLOSING_CODES.has(error.code)) throw error;
       const refused = await settledWithin(refusal, REFUSAL_GRACE_MS);
       if (!refused) refusal.then((late) => late && refuse(late));
       throw refused ?? error;
@@ -112,8 +114,16 @@ export function startPage({
 const REFUSAL_GRACE_MS = 2000;
 
 /** promise の結果を、ms 以内に出れば返す（出なければ null）。 */
-function settledWithin(promise, ms) {
-  return Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(null), ms))]);
+async function settledWithin(promise, ms) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

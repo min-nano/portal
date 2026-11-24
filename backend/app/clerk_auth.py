@@ -144,11 +144,6 @@ def verify_token(token: str) -> User:
             '{"email": "{{user.primary_email_address}}"} を設定してください。'
         )
 
-    # 個別に許可した外部アカウントは、ドメインの判定より先に見る。社内の
-    # ドメインに当たる場合でも外部として扱う（できることが少ない側に倒す）。
-    if email.lower() in [e.lower() for e in config.allowed_external_emails()]:
-        return User(email=email, external=True)
-
     # 社内ドメインが未設定なら、誰も通さない（設定の漏れとして 500）。以前は
     # 判定を飛ばして全員を通していたが、外部ユーザーのために確認コードでの
     # サインインを有効にすると、どのメールアドレスでもここまで来られるので、
@@ -156,6 +151,11 @@ def verify_token(token: str) -> User:
     domains = config.allowed_email_domains()
     if not domains:
         raise AuthError("サーバーの認証設定（ALLOWED_EMAIL_DOMAINS）が未設定です。", 500)
+
+    # 個別に許可した外部アカウントは、ドメインの判定より先に見る。社内の
+    # ドメインに当たる場合でも外部として扱う（できることが少ない側に倒す）。
+    if email.lower() in [e.lower() for e in config.allowed_external_emails()]:
+        return User(email=email, external=True)
     local_part, _, email_domain = email.lower().rpartition("@")
     # 社内ドメインでも、+ を含むアドレス（サブアドレス）は社内ユーザーにしない。
     # Workspace のアドレスには + を使えないので社員は困らない一方、Clerk の
