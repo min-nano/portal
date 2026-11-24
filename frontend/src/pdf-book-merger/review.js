@@ -71,6 +71,13 @@ export function pageIssues(order, problems, scanIssues, textless = new Set()) {
       });
     } else if (entry.status === 'unknown') {
       add(entry.pageKey, { kind: 'unknown', level: 'error', message: '頁番号を決められません' });
+    } else if (entry.status === 'unplaced' && entry.number !== null) {
+      // 前の段（部・編などの番号）の無い頁で、前後の部から置き場所を決められなかった（ordering.js）。
+      add(entry.pageKey, {
+        kind: 'section-unplaced',
+        level: 'error',
+        message: '部・編などの番号が無く、前後の部の並びが食い違うので置き場所を決められません',
+      });
     } else if (entry.status === 'unplaced') {
       add(entry.pageKey, {
         kind: 'unplaced',

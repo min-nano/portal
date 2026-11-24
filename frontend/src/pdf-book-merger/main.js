@@ -123,7 +123,7 @@ let depthMode = 'auto';
 /** 同じ頁らしい組を探す（前に見比べた頁どうしは見比べ直さない）。 */
 const findDuplicates = createDuplicateFinder();
 /** 最後に組み立てた並びと指摘。 */
-let view = { order: [], problems: [], issues: new Map(), numberings: new Map(), places: new Map(), anyNumbered: false };
+let view = { order: [], problems: [], issues: new Map(), numberings: new Map(), places: new Map(), depth: 0, anyNumbered: false };
 /** 結合した PDF と検証の結果。並びが変わったら捨てる。 */
 let merged = null;
 /** 結合と検証の途中か（その間は、拡大表示のために PDF を開かない）。 */
@@ -1312,8 +1312,8 @@ function refresh() {
   const ready = readyFiles();
   const auto = bookDepth(ready, overrides).depth;
   renderDepth(ready, auto);
-  // 自動なら、ファイルごとに選ぶ（巻ごとに頁番号の付け方が違う本もあるので）。
-  const numberings = numberFiles(ready, overrides, depthMode === 'auto' ? 'auto' : Number(depthMode), auto);
+  const depth = depthMode === 'auto' ? auto : Number(depthMode);
+  const numberings = numberFiles(ready, overrides, depth);
   const { order, mismatch, places } = arrangeBook(ready, numberings, overrides);
   const sheets = ready.some(
     (file) => places.get(file.key) === 'numbered' && Math.abs(numberings.get(file.key).step ?? 0) === 2
@@ -1345,7 +1345,7 @@ function refresh() {
     textless
   );
 
-  view = { order, problems, issues, numberings, places, anyNumbered: [...places.values()].includes('numbered') };
+  view = { order, problems, issues, numberings, places, depth, anyNumbered: [...places.values()].includes('numbered') };
   if (!$('outputName').value.trim() || $('outputName').dataset.suggested === 'true') {
     const suggested = suggestBookName(files.map((file) => file.name));
     $('outputName').value = suggested;
@@ -1698,8 +1698,7 @@ function fileControls(file) {
         return;
       }
       // 枝番と読む本では、ハイフンの付いた番号はファイルの先頭にできない（枝番の頁は頁ごとに入れる）。
-      // 自動では、ファイルごとに選んだ読み方で見る。
-      if (path.length > 1 && numbering.depth === 0) {
+      if (path.length > 1 && view.depth === 0) {
         restoreStep();
         showMessage('ハイフンの付いた番号は、「ハイフンで区切った頁番号」で部・編などの番号と読むときだけ入れられます。', 'red');
         return;

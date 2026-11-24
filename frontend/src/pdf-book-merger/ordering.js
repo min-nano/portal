@@ -21,7 +21,6 @@ import {
   comparePaths,
   inferFileNumbers,
   interpret,
-  normalizeDigits,
   manualFileNumbers,
   pageNumberText,
   pathText,
@@ -142,24 +141,20 @@ export function guessRole(name, pages) {
  * @param {{key:string, role:string, manual:?{start:number,step:number,prefix?:number[]},
  *          pages:{key:string, candidates:object[]}[]}[]} files
  * @param {Map<string, {path:number[]}>} [overrides] 頁ごとに手で決めた番号（parsePageNumber の形）
- * @param {number|'auto'} [depth] ハイフンで区切った頁番号の階層。'auto' はファイルごとに選ぶ
- *   （fileDepth。別々に出された巻を集めた本は、巻ごとに頁番号の付け方が違うことがあるので）
- * @param {number} [book] 'auto' のときの本の階層（bookDepth。求め済みなら渡す）
- * @returns {Map<string, ReturnType<typeof inferFileNumbers> & {depth:number}>} depth はそのファイルの階層
+ * @param {number} [depth] ハイフンで区切った頁番号の階層（本全体で 1 つ。bookDepth）
+ * @returns {Map<string, ReturnType<typeof inferFileNumbers>>}
  */
-export function numberFiles(files, overrides = new Map(), depth = 0, book = undefined) {
+export function numberFiles(files, overrides = new Map(), depth = 0) {
   const result = new Map();
   const body = files.filter((file) => file.role === 'body');
-  book ??= depth === 'auto' ? bookDepth(files, overrides).depth : depth;
-  const depths = new Map(body.map((file) => [file.key, depth === 'auto' ? fileDepth(file, overrides, book) : depth]));
   const infer = (file, step) =>
     inferFileNumbers(byName(file) ? file.pages.map(() => []) : file.pages.map((page) => page.candidates), {
       step,
-      depth: depths.get(file.key),
+      depth,
       fixed: file.pages.map((page) => overrides.get(page.key)),
     });
   for (const file of body) {
-    result.set(file.key, file.manual ? manualNumbers(file, infer, overrides, depths.get(file.key)) : infer(file));
+    result.set(file.key, file.manual ? manualNumbers(file, infer, overrides, depth) : infer(file));
   }
 
   const weights = new Map(STEPS.map((step) => [step, 0]));
@@ -181,22 +176,8 @@ export function numberFiles(files, overrides = new Map(), depth = 0, book = unde
       result.set(file.key, infer(file, prior));
     }
   }
-  if (Math.max(0, ...depths.values()) > 0) {
-    for (const file of body) namePrefix(file, result.get(file.key));
-    frontMatter(body, result);
-  }
-  for (const file of body) result.get(file.key).depth = depths.get(file.key);
+  if (depth > 0) frontMatter(body, result);
   return result;
-}
-
-/**
- * ファイルの、ハイフンで区切った頁番号の階層。そのファイルの頁だけで選び（chooseDepth）、
- * 決められなければ（ハイフンで区切った番号が無い、点が並ぶ）本の階層（bookDepth）にする。
- */
-function fileDepth(file, overrides, book) {
-  const { depth, scores } = chooseDepth([dataOf(file, overrides)]);
-  const best = Math.max(...scores);
-  return scores.filter((score) => score === best).length === 1 ? depth : book;
 }
 
 /** 階層を選ぶのに使う、ファイルの頁の候補と手で入れた番号。 */
@@ -205,42 +186,6 @@ function dataOf(file, overrides) {
     candidates: file.pages.map((page) => page.candidates),
     fixed: file.pages.map((page) => overrides.get(page.key) ?? null),
   };
-}
-
-// ファイル名の「第 7 部」「第七編」「第３章」。
-const NAMED_PART = /第\s*([0-9０-９]+|[一二三四五六七八九十]+)\s*[部編章]/g;
-const KANJI_DIGITS = '〇一二三四五六七八九';
-
-/** 漢数字（九十九まで）を数にする。 */
-function kanjiNumber(text) {
-  const [tens, ones] = text.includes('十') ? text.split('十') : ['', text];
-  const value = (digit) => KANJI_DIGITS.indexOf(digit);
-  return (text.includes('十') ? (tens ? value(tens) : 1) * 10 : 0) + (ones ? value(ones) : 0);
-}
-
-/**
- * ファイル名から、部・編などの番号を 1 つだけ読む（「第７部」→ 7）。無いか、いくつもある
- * （「第1部から第4部」）なら null。
- *
- * @param {string} name
- */
-export function partFromName(name) {
-  const found = new Set(
-    [...String(name ?? '').matchAll(NAMED_PART)].map(([, n]) => (/[0-9０-９]/.test(n) ? Number(normalizeDigits(n)) : kanjiNumber(n)))
-  );
-  return found.size === 1 ? [...found][0] : null;
-}
-
-/**
- * 部・編などの番号を頁番号に刷っていない巻（別々に出された巻を集めた本で、その巻だけ 1, 2, 3 …
- * と刷ってある）は、ファイル名の「第７部」を前の段にする（無ければ前付けとして先頭に置き、
- * checkSequence が知らせる）。頁のどれかに前の段があるファイルは変えない。
- */
-function namePrefix(file, numbering) {
-  const numbered = numbering.pages.filter((page) => page.number !== null);
-  const part = partFromName(file.name);
-  if (part === null || numbered.length === 0 || numbered.some((page) => page.prefix)) return;
-  for (const page of numbered) page.prefix = [part];
 }
 
 /**
@@ -327,8 +272,8 @@ function manualNumbers(file, infer, overrides, depth) {
  * 本のハイフンで区切った頁番号の階層（page-numbers.js の chooseDepth）を、本文のファイルの
  * 頁の候補と手で入れた番号から選ぶ。ファイルごとに番号を入れたファイル、名前で表紙と
  * 見て番号を見ないファイル、ハイフンで区切った番号の無いファイルは数えない。
- * 階層はファイルごとに選び（numberFiles の 'auto'）、これはファイルだけでは決められないときと、
- * 画面の「自動」の括弧に使う。
+ * ハイフンで区切った番号の無いファイル（1, 2, 3 … とだけ刷った巻）を数えると、どの階層でも
+ * 段の足りない番号ばかりになって、部の番号を付けた束まで枝番と読んでしまうため。
  *
  * @param {{key:string, role:string, manual:?object, coverByName?:boolean,
  *          pages:{key:string, candidates:object[]}[]}[]} files
@@ -338,8 +283,6 @@ function manualNumbers(file, infer, overrides, depth) {
 export function bookDepth(files, overrides = new Map()) {
   return chooseDepth(
     files
-      // ハイフンで区切った番号の無い巻（その巻だけ 1, 2, 3 … と刷ってある）は、どの階層でも
-      // 段の足りない番号ばかりになるので数えない（ファイルごとに階層を選ぶ。fileDepth）。
       .filter((file) => file.role === 'body' && !file.manual && !byName(file) && hasDashedNumbers([file], overrides))
       .map((file) => dataOf(file, overrides))
   );
@@ -467,8 +410,8 @@ export function placeFiles(files, numberings, overrides = new Map()) {
  *   places: ReturnType<typeof placeFiles>,
  * }}
  *   branch は枝番、prefix は前の段（部・編などの番号）で、あるときだけ。part は何部目か
- *   （0 から。部が 1 つなら null）。partLabel は、振り直しを推定して分けた部の呼び名
- *   （「第 2 部」。刷られた前の段で分かる部には付けない）。
+ *   （0 から。部が 1 つなら null）。partLabel は部の呼び名（「第 2 部」「「5-」の後」。刷られた
+ *   前の段で分かる部には付けない）。section は、前の段の無い頁を前後の部から置いた部の頁。
  *   mismatch は、番号の振り直しが束の種類（奇数頁・偶数頁）ごとに揃わず、部に分けるのを
  *   やめたとき。
  */
@@ -532,10 +475,12 @@ export function arrangeBook(files, numberings, overrides = new Map()) {
           number,
           ...(branch ? { branch } : {}),
           ...(prefix ? { prefix } : {}),
-          status,
+          // 前後の部から置き場所を決められなかった、前の段の無い頁（parts.js の placeSections）。
+          status: parts.unplaced.has(page.key) ? 'unplaced' : status,
           read,
           part,
           ...(partLabel ? { partLabel } : {}),
+          ...(parts.sections.has(part) ? { section: true } : {}),
           fileOrder,
           seq: body.length,
         })
@@ -608,13 +553,25 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
       pageKeys: unknown.map((item) => item.pageKey),
     });
   }
-  const unplaced = body.filter((item) => item.status === 'unplaced');
+  const unplaced = body.filter((item) => item.status === 'unplaced' && item.number === null);
   if (unplaced.length) {
     problems.push({
       level: 'error',
       kind: 'unplaced',
       message: `頁番号の無いファイルが本文のファイルの間にあり、置き場所を決められない頁が ${unplaced.length} 頁あります（本文の最後に並べてあります）。一覧で本文のファイルより上（先頭に置く）か下（末尾に置く）へ動かすか、ファイルの「先頭の頁の番号」を入れてください。`,
       pageKeys: unplaced.map((item) => item.pageKey),
+    });
+  }
+
+  // 前の段の無い頁で、前後の部から置き場所を決められなかったもの（前に「3-」、後ろに「2-」が
+  // あるなど。束が一覧で入れ替わっているか、部をまたいで逆順に並んでいる）。
+  const sectionless = body.filter((item) => item.status === 'unplaced' && item.number !== null);
+  if (sectionless.length) {
+    problems.push({
+      level: 'error',
+      kind: 'section-unplaced',
+      message: `部・編などの番号の無い頁が ${sectionless.length} 頁あり、一覧で前後にある部の並びが食い違うので、置き場所を決められません（本文の最後に「置き場所不明」として並べてあります）。一覧で前後の部の束のあいだへ動かすか、この部分は別に結合してください。部の中の頁なら、どれか 1 頁の番号を「2-21」の形で直してください。`,
+      pageKeys: sectionless.map((item) => item.pageKey),
     });
   }
 
@@ -632,8 +589,9 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
   for (const part of [...parts.keys()].sort((a, b) => a - b)) {
     const numbered = parts.get(part);
     // 部の頁は、どれも同じ前の段（部・編などの番号）を持つ。
-    const { partLabel = '', prefix = null } = numbered[0];
-    renumbered ||= Boolean(partLabel);
+    const { partLabel = '', prefix = null, section = false } = numbered[0];
+    // 振り直しを推定して分けた部（前の段の無い頁を置いた部は数えない）。
+    renumbered ||= Boolean(partLabel) && !section;
     const label = partLabel ? `${partLabel}の ` : '';
     const head = prefix ? `${pathText(prefix)}-` : '';
     // 確認の画面の項目を見分けるもの（部が分かれていれば部も入れる）。
@@ -755,14 +713,16 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
       pageKeys: [],
     });
   }
-  // 部・編などの番号の付いた本で、前の段を読めなかった頁（ファイルの中のどの頁にも前の段が
-  // 無いと、前付けとして本文の先頭に置かれる。文字情報が前の段を落とした束など）。
-  const unprefixed = depth > 0 && example ? body.filter((item) => item.number !== null && !item.prefix) : [];
+  // 部・編などの番号の付いた本で、前の段の無い頁（部の番号を刷っていない巻、文字情報が前の段を
+  // 落とした束など）。本の順で前後にある部から置いた（parts.js の placeSections）ことを知らせる。
+  const unprefixed =
+    depth > 0 && example ? body.filter((item) => item.number !== null && !item.prefix && item.status !== 'unplaced') : [];
   if (unprefixed.length) {
+    const places = [...new Set(unprefixed.map((item) => item.partLabel || '前付け'))];
     problems.push({
       level: 'warn',
       kind: 'no-prefix',
-      message: `部・編などの番号を読めなかった頁が ${unprefixed.length} 頁あり、本文の先頭（前付け）に置きました。部の中の頁なら、どれか 1 頁の番号を「2-21」の形で直してください（同じファイルの残りの頁も、その部の頁になります）。`,
+      message: `部・編などの番号の無い頁が ${unprefixed.length} 頁あり、一覧で前後にある部の頁から置き場所を決めました（${places.join('・')}）。部の中の頁なら、どれか 1 頁の番号を「2-21」の形で直してください（同じファイルの残りの頁も、その部の頁になります）。`,
       pageKeys: unprefixed.map((item) => item.pageKey),
     });
   }

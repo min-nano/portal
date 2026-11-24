@@ -23,7 +23,8 @@
 //
 // 頁番号の前に部・編などの番号を刷った本（2-21。page-numbers.js の階層）は、
 // 刷られた前の段ごとに分けてから、それぞれの中で上のように振り直しを探す
-// （前の段は刷られたとおりに並べ、振り直しは推定する）。
+// （前の段は刷られたとおりに並べ、振り直しは推定する）。前の段の無い頁（部の番号を
+// 刷っていない巻など）は、本の順で前後にある部から置き場所を決める（placeSections）。
 
 import { comparePaths, pageNumberText, prefixKey, sideOf, stripPageNumber } from './page-numbers.js';
 
@@ -32,48 +33,138 @@ import { comparePaths, pageNumberText, prefixKey, sideOf, stripPageNumber } from
  *          signature?:{length:number, hash:string}}[]}[]} files
  *   番号の付いた本文のファイル（一覧の順）
  * @param {Map<string, {step:number|null, pages:{number:number|null, branch?:number[], prefix?:number[]}[]}>} numberings
- * @returns {{partOf: Map<string, number>, count: number, mismatch: boolean, names: string[]}}
+ * @returns {{partOf: Map<string, number>, count: number, mismatch: boolean, names: string[],
+ *   sections: Set<number>, unplaced: Set<string>}}
  *   partOf: 頁の key → 何部目か（0 から）。count: 部の数。
  *   mismatch: 奇数頁と偶数頁の束で部の数が揃わず、分けるのをやめた（前の段のどれかで）。
- *   names: 部ごとの呼び名（「第 2 部」）。振り直しを推定して分けた部にだけ付け、刷られた
- *   前の段で分けた部（頁番号の 2-21 で分かる）は ''
+ *   names: 部ごとの呼び名（「第 2 部」「「5-」の後」）。刷られた前の段だけで分かる部
+ *   （頁番号の 2-21 で分かる）は ''。
+ *   sections: 前の段の無い頁を、前後の部から置いた部（placeSections）。
+ *   unplaced: 前後の部から置き場所を決められなかった頁の key
  */
 export function assignParts(files, numberings) {
   const segments = splitSegments(files, numberings);
   markCopies(segments);
+  placeSections(segments);
 
-  // 刷られた前の段ごとに、振り直しを探す（前の段の無い・分からない頁は '' にまとめ、先頭に）。
+  // 刷られた前の段ごと（と、前の段の無い頁を置いたところごと）に、振り直しを探す。
   const groups = new Map();
   for (const segment of segments) {
-    if (!groups.has(segment.prefixKey)) groups.set(segment.prefixKey, { prefix: segment.prefix, segments: [] });
-    groups.get(segment.prefixKey).segments.push(segment);
+    const { key } = segment.place;
+    if (!groups.has(key)) groups.set(key, { ...segment.place, segments: [] });
+    groups.get(key).segments.push(segment);
   }
-  const ordered = [...groups.values()].sort((a, b) => comparePaths(a.prefix ?? [], b.prefix ?? []));
+  const ordered = [...groups.values()].sort((a, b) => comparePaths(a.sort, b.sort));
+  const printed = segments.some((segment) => segment.prefix);
   let mismatch = false;
   const names = [];
+  const sections = new Set();
   for (const group of ordered) {
     const result = renumbered(group.segments);
     mismatch ||= result.mismatch;
     const first = names.length;
-    for (let sub = 0; sub < result.count; sub++) names.push(partLabel(group.prefix, sub, result.count));
+    for (let sub = 0; sub < result.count; sub++) {
+      if (group.kind !== 'printed' && printed) sections.add(names.length);
+      names.push(partLabel(group, sub, result.count, printed));
+    }
     for (const segment of group.segments) segment.part = first + segment.part;
   }
 
   const partOf = new Map();
+  const unplaced = new Set();
   for (const segment of segments) {
     const part = segment.copyOf ? segment.copyOf.part : segment.part;
-    for (const index of segment.pages) partOf.set(segment.file.pages[index].key, part);
+    for (const index of segment.pages) {
+      const { key } = segment.file.pages[index];
+      partOf.set(key, part);
+      if (segment.place.kind === 'unplaced') unplaced.add(key);
+    }
   }
-  return { partOf, count: names.length, mismatch, names };
+  return { partOf, count: names.length, mismatch, names, sections, unplaced };
 }
 
 /**
- * 部の呼び名。振り直しを推定して分けた部は「第 2 部」（刷られた前の段の中で分けたなら
- * 「「2-」の第 2 部」）。刷られた前の段だけで分かる部は ''（頁番号の 2-21 で分かる）。
+ * 部の呼び名。
+ *
+ *   刷られた前の段で分かる部               ''（振り直しで分けたなら「「2-」の第 2 部」）
+ *   前の段の無い本の、振り直しで分けた部   「第 2 部」
+ *   前の段の無い頁を、「5-」の部の後に置いた「「5-」の後」（振り直しで分けたなら「（2 つ目）」を添える）
+ *   前の段の無い頁を、本の先頭に置いた     ''（振り直しで分けたなら「前付け（2 つ目）」）
+ *   置き場所を決められなかった             「置き場所不明」
  */
-function partLabel(prefix, sub, count) {
+function partLabel(group, sub, count, printed) {
+  const nth = count === 1 ? '' : `（${sub + 1} つ目）`;
+  if (group.kind === 'after') return `「${prefixKey(group.prefix)}-」の後${nth}`;
+  if (group.kind === 'unplaced') return `置き場所不明${nth}`;
   if (count === 1) return '';
-  return prefix ? `「${prefixKey(prefix)}-」の第 ${sub + 1} 部` : `第 ${sub + 1} 部`;
+  if (group.kind === 'printed') return `「${prefixKey(group.prefix)}-」の第 ${sub + 1} 部`;
+  return printed ? `前付け${nth}` : `第 ${sub + 1} 部`;
+}
+
+/**
+ * 区間の置き場所（segment.place）を決める。
+ *
+ * 前の段（部・編などの番号）のある区間は、その前の段の部に置く。前の段の無い区間（部の番号を
+ * 刷っていない巻・目次など）は、ファイルを部の区切りとはみなさず（束は部をまたいでスキャン
+ * するので）、本の順で前後にある前の段のある頁から置き場所を決める。前後は、同じファイルの
+ * 中の前後の区間を先に見て、無ければ一覧で前後のファイル（いちばん近いもの）を見る。
+ *
+ *   前に「5-」の頁があり、後ろの頁が「5-」より後の部か、無い  → 「5-」の部の後に、新しいまとまりとして
+ *   前に前の段のある頁が無い                                  → 本の先頭（前付け）
+ *   前に「5-」、後ろに「5-」以前の部の頁がある                → 置き場所を決められない（本文の最後に）
+ *
+ * 前の段の無い本では、すべての区間を 1 つのまとまりにする（これまでどおり）。
+ */
+function placeSections(segments) {
+  const printed = segments.some((segment) => segment.prefix);
+  // 一覧の位置を本の順に揃える（裏返した偶数頁の束は、一覧で下にあるほど本の前）。束の種類
+  // （奇数頁・偶数頁・両面）ごとに揃えるので、前後のファイルは同じ種類の束から探す。
+  const kinds = new Map();
+  for (const segment of segments) {
+    if (segment.kind === null) continue;
+    if (!kinds.has(segment.kind)) kinds.set(segment.kind, []);
+    kinds.get(segment.kind).push(segment);
+  }
+  for (const list of kinds.values()) rankByBookOrder(list);
+  for (const segment of segments) {
+    if (segment.prefix) {
+      segment.place = { key: segment.prefixKey, kind: 'printed', prefix: segment.prefix, sort: [...segment.prefix, 0] };
+      continue;
+    }
+    const before = printed ? nearPrefix(segment, segments, -1) : null;
+    const after = before ? nearPrefix(segment, segments, 1) : null;
+    if (!before) {
+      segment.place = { key: '', kind: 'front', prefix: null, sort: [] };
+    } else if (after && comparePaths(after, before) <= 0) {
+      segment.place = { key: 'unplaced', kind: 'unplaced', prefix: null, sort: [Infinity] };
+    } else {
+      const key = `after:${prefixKey(before)}`;
+      segment.place = { key, kind: 'after', prefix: before, sort: [...before, 1] };
+    }
+  }
+}
+
+/**
+ * 区間の前（direction -1）か後ろ（1）で、いちばん近い前の段のある頁の前の段。同じファイルの
+ * 中の区間を先に見て、無ければ本の順でいちばん近い、前の段のある頁を含むファイルの前の段
+ * （前なら最も後の部、後ろなら最も前の部）。本の順は、同じ種類の束の中で、一覧の位置を
+ * 本の順に揃えたもの（rank。歩幅の分からない区間は一覧の位置）。無ければ null。
+ */
+function nearPrefix(segment, segments, direction) {
+  for (let other = direction < 0 ? segment.prev : segment.next; other; other = direction < 0 ? other.prev : other.next) {
+    if (other.prefix) return other.prefix;
+  }
+  const at = (other) => (segment.kind === null ? other.order : other.rank);
+  const others = segments.filter(
+    (other) =>
+      other.prefix &&
+      (segment.kind === null || other.kind === segment.kind) &&
+      Math.sign(at(other) - at(segment)) === direction
+  );
+  if (others.length === 0) return null;
+  const nearest = direction < 0 ? Math.max(...others.map(at)) : Math.min(...others.map(at));
+  const prefixes = others.filter((other) => at(other) === nearest).map((other) => other.prefix).sort(comparePaths);
+  return direction < 0 ? prefixes.at(-1) : prefixes[0];
 }
 
 /**
