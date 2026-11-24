@@ -59,8 +59,9 @@ export function startPage({
   begin().catch((error) => {
     // 待っても出てこないので、読み込み中の表示は終わりにして理由を出す。
     finishPageLoading();
-    // 準備が使えないアカウントとして断られたなら、画面の中身も隠す。
-    if (error.code === ACCOUNT_NOT_ALLOWED) closeApp();
+    // 使えないアカウント・社内専用のツールとして断られたなら、画面の中身も隠す
+    // （出しておいても、どのボタンも同じ理由で断られるだけ）。
+    if (CLOSING_CODES.has(error.code)) closeApp();
     onError(error.message);
   });
 
@@ -94,8 +95,11 @@ export function startPage({
   }
 }
 
-/** 使えないアカウント（バックエンドが付ける目印。account.js も同じものを見る）。 */
-const ACCOUNT_NOT_ALLOWED = 'account_not_allowed';
+/**
+ * 画面を閉じる断り（バックエンドが付ける目印）。使えないアカウント
+ * （account.js も同じものを見る）と、外部ユーザーが社内専用のツールを開いたとき。
+ */
+const CLOSING_CODES = new Set(['account_not_allowed', 'staff_only']);
 
 /**
  * 画面（#app）の中身を、理由の欄（#message）だけ残して隠す。

@@ -79,10 +79,14 @@ def require_user(authorization: str | None = Header(default=None)) -> User:
     return clerk_auth.user_from_authorization_header(authorization)
 
 
+# 社内専用のものを外部ユーザーが使おうとした（画面はこの目印で、ツールを閉じる）。
+STAFF_ONLY = "staff_only"
+
+
 def ensure_internal(user: User, message: str) -> User:
     """外部ユーザーなら message で断る（403）。社内ユーザーはそのまま返す。"""
     if user.external:
-        raise clerk_auth.AuthError(message, 403)
+        raise clerk_auth.AuthError(message, 403, STAFF_ONLY)
     return user
 
 

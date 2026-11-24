@@ -156,8 +156,12 @@ def verify_token(token: str) -> User:
     domains = config.allowed_email_domains()
     if not domains:
         raise AuthError("サーバーの認証設定（ALLOWED_EMAIL_DOMAINS）が未設定です。", 500)
-    email_domain = email.rpartition("@")[2].lower()
-    if email_domain not in [d.lower() for d in domains]:
+    local_part, _, email_domain = email.lower().rpartition("@")
+    # 社内ドメインでも、+ を含むアドレス（サブアドレス）は社内ユーザーにしない。
+    # Workspace のアドレスには + を使えないので社員は困らない一方、Clerk の
+    # テストモード（開発インスタンスは既定でオン）では、+clerk_test を含む
+    # アドレスがメールを受け取らずに固定のコードで通ってしまうため。
+    if email_domain not in [d.lower() for d in domains] or "+" in local_part:
         raise AuthError(
             f"このアプリは許可されたアカウント専用です（{email} は利用できません）。",
             403,

@@ -162,6 +162,18 @@ describe('startPage', () => {
     );
   });
 
+  it('外部ユーザーが社内専用のツールを開いたら、画面の中身を隠す', async () => {
+    const refused = Object.assign(new Error('この機能は社内アカウント専用です。'), {
+      status: 403,
+      code: 'staff_only',
+    });
+
+    startPage({ prepare: async () => Promise.reject(refused) });
+    await settle();
+
+    expect(app().hasAttribute('data-closed')).toBe(true);
+  });
+
   it('ほかの理由で準備に失敗したときは、画面を閉じない（理由を出すだけ）', async () => {
     startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')) });
     await settle();

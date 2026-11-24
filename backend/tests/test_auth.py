@@ -159,6 +159,24 @@ def test_staff_accounts_are_not_external(monkeypatch):
     assert clerk_auth.verify_token(make_token()).external is False
 
 
+def test_external_emails_may_be_listed_one_per_line(monkeypatch):
+    # リポジトリ変数に 1 行に 1 つずつ書いても読める。
+    monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "\n partner@gmail.com\nother@example.org ,\n")
+
+    assert clerk_auth.verify_token(make_token(email="partner@gmail.com")).external
+    assert clerk_auth.verify_token(make_token(email="other@example.org")).external
+
+
+@pytest.mark.parametrize("email", ["x+clerk_test@example.co.jp", "Tester+a@Example.co.jp"])
+def test_subaddresses_in_the_staff_domain_are_refused(email):
+    # Clerk のテストモードでは +clerk_test のアドレスがメール無しで通る。
+    # Workspace のアドレスに + は無いので、社内ドメインでは + を通さない。
+    with pytest.raises(AuthError) as e:
+        clerk_auth.verify_token(make_token(email=email))
+    assert e.value.status == 403
+    assert e.value.code == clerk_auth.ACCOUNT_NOT_ALLOWED
+
+
 def test_listing_one_address_does_not_open_its_domain(monkeypatch):
     # gmail.com のアドレスを 1 つ許しても、gmail.com の他のアカウントは入れない。
     monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "partner@gmail.com")

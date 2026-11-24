@@ -59,7 +59,7 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
 
 **外部ユーザーのサインインの方法。** 社員は今までどおり Google でサインインし、外部ユーザーは **Clerk の「メールアドレス＋確認コード」** でサインインします（「1. Clerk」）。Google の OAuth クライアントの同意画面は **「内部」のまま** にします（本番・開発インスタンスとも）。
 
-社内ユーザーかどうかは**メールアドレスのドメインだけ**で決め、社内ユーザーの Drive には、そのアドレスの社員になりかわってアクセスします。この判定が正しいのは、**社内ドメインのアドレスでサインインできるのが、その Workspace のアカウントの持ち主だけ**のときです。
+社内ユーザーかどうかは**メールアドレスのドメインだけ**で決め（ただし `+` を含むアドレスは社内ユーザーにしない。Workspace のアドレスに `+` は無い）、社内ユーザーの Drive には、そのアドレスの社員になりかわってアクセスします。この判定が正しいのは、**社内ドメインのアドレスでサインインできるのが、その Workspace のアカウントの持ち主だけ**のときです。
 
 * **Google ログイン**は、同意画面が「内部」なので Workspace のアカウントしか通りません（社内ドメインのアドレスを持つ個人の Google アカウント、いわゆる[競合アカウント](https://support.google.com/accounts/answer/181526)も通らない）。
 * **確認コード**は、そのアドレス宛てのメールで届きます。つまり、**そのアドレスに届くメールを読める人なら誰でも**、そのアドレスの社員としてサインインできます。Clerk は同じメールアドレスへのサインインを 1 人のユーザーにまとめ、セッショントークンにも Backend API にも「どの方法でサインインしたか」は出てこないので、ポータルの側ではこれを見分けられません（[セッショントークン](https://clerk.com/docs/guides/sessions/session-tokens)・[Session](https://clerk.com/docs/reference/backend/types/backend-session)）。
@@ -620,7 +620,7 @@ firebase.json                 # Hosting 設定（/api/** → Cloud Run リライ
      ```json
      {"email": "{{user.primary_email_address}}"}
      ```
-   - 組織外のアカウント（外部ユーザー）も使わせる場合は、**Email address** をサインインの手段に加え、**Verification code**（確認コード）で確かめるようにする（パスワードは使わない）。Google の OAuth クライアントの同意画面は「内部」のまま変えない。**有効にする前に、「外部ユーザー（組織外のアカウント）」の表にある Workspace の設定（社外への自動転送の禁止など）を満たしておく**（確認コードは、そのアドレス宛てのメールを読める人なら誰でも受け取れるため）。
+   - 組織外のアカウント（外部ユーザー）も使わせる場合は、**Email address** をサインインの手段に加え、**Verification code**（確認コード）で確かめるようにする（パスワードは使わない）。Google の OAuth クライアントの同意画面は「内部」のまま変えない。**開発インスタンスでは Settings の Test mode をオフにする**（既定でオン。オンだと `+clerk_test` を含むアドレスがメールを受け取らずに固定のコード `424242` で通る。社内ドメインの `+` 付きアドレスはバックエンドも断るが、二重に塞ぐ）。**有効にする前に、「外部ユーザー（組織外のアカウント）」の表にある Workspace の設定（社外への自動転送の禁止など）を満たしておく**（確認コードは、そのアドレス宛てのメールを読める人なら誰でも受け取れるため）。
 3. API Keys から **Publishable Key** を控える。本番（`pk_live_...`）はリポジトリ変数 `CLERK_PUBLISHABLE_KEY`、開発（`pk_test_...`）は `CLERK_PUBLISHABLE_KEY_TEST` に設定する（ローカル開発ではどちらかを `VITE_CLERK_PUBLISHABLE_KEY` として渡す）。
 4. 本番ドメイン（Firebase Hosting の URL / カスタムドメイン）を本番インスタンスに登録する。開発インスタンスにはプレビュー URL のパターン（後述の「PR プレビュー」参照）を Allowed origins に登録する。
 
@@ -801,7 +801,7 @@ gcloud run deploy portal-api \
 | `CLERK_ISSUER` | 許可する Clerk の Frontend API URL（JWT の `iss`。カンマ区切りで複数可）。本番サービスには **本番インスタンスのみ**（プレビューは PR ごとの別サービスが開発インスタンスを受け持つ） | `CLERK_PUBLISHABLE_KEY` から導出 |
 | `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り、`*` ワイルドカード可） | `CANONICAL_HOST`（設定時のみ）と `SITE_ID` から組み立て。`https://<カスタムドメイン>,https://<サイトID>.web.app` |
 | `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り）。ここに当たるアカウントが社内ユーザー。**必須**（未設定だと誰もサインインできない。判定を飛ばすと組織外のアカウントまで社内ユーザーになるため。ローカル開発でも渡す） | 同名のリポジトリ変数 |
-| `ALLOWED_EXTERNAL_EMAILS` | （任意）個別に利用を許可する組織外のメールアドレス（カンマ区切り）。ここに当たるアカウントは外部ユーザー（Drive を使わない機能だけ）。社内のドメインのアドレスを書いた場合も外部ユーザーとして扱う | 同名のリポジトリ変数。未設定なら渡さない |
+| `ALLOWED_EXTERNAL_EMAILS` | （任意）個別に利用を許可する組織外のメールアドレス（カンマ・空白・改行のどれで区切ってもよい）。ここに当たるアカウントは外部ユーザー（Drive を使わない機能だけ）。社内のドメインのアドレスを書いた場合も外部ユーザーとして扱う | 同名のリポジトリ変数。未設定なら渡さない |
 | `DWD_SERVICE_ACCOUNT_EMAIL` | 代理トークンに使う SA のメール（省略時は ADC から推定） | `RUNTIME_SA_EMAIL` |
 | `SETTINGS_CHANNEL_PATH` | 共有設定を置くチャンネルの Firestore ドキュメントパス。**未設定だと development チャンネルを指す**（「共有設定（Firestore）」参照） | `static-channels/production` 固定（環境の別はワークフローが決めるので変数にしない） |
 | `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。既定 `(default)` | 同名のリポジトリ変数。未設定なら渡さない |
@@ -869,7 +869,7 @@ Hosting は `https://<サイトID>.firebaseapp.com` でも同じアプリを配�
 | `RUNTIME_SA_EMAIL` | Cloud Run のランタイム SA のメール。サービスのランタイム SA と `DWD_SERVICE_ACCOUNT_EMAIL` に渡す | 両方 |
 | `SITE_ID` | Hosting のサイト ID。許可オリジン（本番は `https://<サイトID>.web.app` 等、プレビューは `https://<サイトID>--pr-<番号>-*.web.app`）の組み立てに使う | 両方 |
 | `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り）。**必須**（未設定だとデプロイが止まり、バックエンドも誰も通さない） | 両方 |
-| `ALLOWED_EXTERNAL_EMAILS` | （任意）個別に利用を許可する組織外のメールアドレス（カンマ区切り）。「外部ユーザー（組織外のアカウント）」参照。未設定なら外部ユーザーはいない | 両方 |
+| `ALLOWED_EXTERNAL_EMAILS` | （任意）個別に利用を許可する組織外のメールアドレス（カンマ・空白・改行のどれで区切ってもよい）。「外部ユーザー（組織外のアカウント）」参照。未設定なら外部ユーザーはいない | 両方 |
 | `CLERK_PUBLISHABLE_KEY` | Clerk Publishable Key（**本番インスタンス** `pk_live_...`）。本番ビルドに埋め込み、バックエンドの `CLERK_ISSUER` もここから導出する | 本番 |
 | `CLERK_PUBLISHABLE_KEY_TEST` | Clerk Publishable Key（**開発インスタンス** `pk_test_...`）。プレビュービルドに埋め込み、プレビュー用バックエンドの `CLERK_ISSUER` もここから導出する | プレビュー |
 | `CANONICAL_HOST` | 本番のカスタムドメイン（例 `portal.example.com`）。`.web.app` へのアクセスをここへリダイレクトし、許可オリジンにも加える。未設定ならどちらも行わない | 本番 |

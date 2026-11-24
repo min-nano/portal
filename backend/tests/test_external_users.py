@@ -70,7 +70,7 @@ def test_every_route_of_a_staff_only_tool_refuses_external_users(external_client
         path = route.path.replace("{file_id}", "x")
         resp = external_client.request(method, path)
         assert resp.status_code == 403, f"{method} {path}"
-        assert resp.json() == {"error": STAFF_ONLY}
+        assert resp.json() == {"error": STAFF_ONLY, "code": "staff_only"}
 
 
 def test_staff_only_tools_stay_open_to_staff(client):
@@ -90,7 +90,7 @@ def test_reading_drive_from_an_open_tool_is_refused(external_client, drive):
     resp = external_client.get("/api/tools/pdf-book-merger/files/scan-1")
 
     assert resp.status_code == 403
-    assert resp.json() == {"error": DRIVE_ONLY_FOR_STAFF}
+    assert resp.json() == {"error": DRIVE_ONLY_FOR_STAFF, "code": "staff_only"}
     assert drive.delegated_emails == []  # なりかわりを頼む前に断っている
 
 
@@ -98,7 +98,7 @@ def test_the_drive_file_list_is_refused(external_client, drive):
     resp = external_client.get("/api/drive/items")
 
     assert resp.status_code == 403
-    assert resp.json() == {"error": DRIVE_ONLY_FOR_STAFF}
+    assert resp.json() == {"error": DRIVE_ONLY_FOR_STAFF, "code": "staff_only"}
     assert drive.delegated_emails == []
 
 
@@ -119,9 +119,9 @@ def test_an_account_on_neither_list_is_refused_with_a_code(anon_client, monkeypa
     }
 
 
-def test_other_failures_carry_no_code(external_client):
-    # 目印は、それを付けた失敗にだけ載る（ほかの 403 は本文が error だけ）。
-    assert external_client.put("/api/site", json={}).json() == {"error": STAFF_ONLY}
+def test_other_failures_carry_no_code(client):
+    # 目印は、それを付けた失敗にだけ載る（ほかの失敗は本文が error だけ）。
+    assert client.put("/api/site", json={}).json() == {"error": "設定の内容が不正です。"}
 
 
 def test_site_settings_cannot_be_changed_by_external_users(external_client, drive):
@@ -140,6 +140,7 @@ def test_every_kind_of_delegation_refuses_external_users(drive, delegate):
     with pytest.raises(AuthError) as error:
         getattr(portal_sdk, delegate)(User(email=EXTERNAL_EMAIL, external=True))
     assert error.value.status == 403
+    assert error.value.code == "staff_only"
     assert str(error.value) == DRIVE_ONLY_FOR_STAFF
     assert drive.delegated_emails == drive.write_emails == []
 

@@ -9,10 +9,16 @@
 """
 
 import os
+import re
 
 
 def _csv(name: str) -> list[str]:
     return [v.strip() for v in os.environ.get(name, "").split(",") if v.strip()]
+
+
+def _words(name: str) -> list[str]:
+    """カンマ・空白・改行のどれで区切っても読める一覧（人が並べて書くもの）。"""
+    return [v for v in re.split(r"[\s,]+", os.environ.get(name, "")) if v]
 
 
 def clerk_issuers() -> list[str]:
@@ -55,7 +61,7 @@ def allowed_external_emails() -> list[str]:
     ドメインではなくアドレスで指定するのは、gmail.com のような共有の
     ドメインを丸ごと許すことにならないようにするため。
     """
-    return _csv("ALLOWED_EXTERNAL_EMAILS")
+    return _words("ALLOWED_EXTERNAL_EMAILS")
 
 
 def delegated_sa_email() -> str:

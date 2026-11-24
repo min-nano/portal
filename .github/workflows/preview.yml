@@ -134,8 +134,11 @@ jobs:
           env_vars="$env_vars;DWD_SERVICE_ACCOUNT_EMAIL=${{ vars.RUNTIME_SA_EMAIL }}"
           env_vars="$env_vars;SETTINGS_CHANNEL_PATH=preview-channels/pr-$PR"
           # 任意。組織外のアカウントを個別に許可するときだけ（本番と同じ変数）。
-          if [ -n "$ALLOWED_EXTERNAL_EMAILS" ]; then
-            env_vars="$env_vars;ALLOWED_EXTERNAL_EMAILS=$ALLOWED_EXTERNAL_EMAILS"
+          # 1 行に 1 つずつ書いてもよいよう、空白・改行・; をカンマにそろえる
+          # （改行や ; が残ると、環境変数の受け渡しの書式が壊れる）。
+          external_emails=$(printf '%s' "$ALLOWED_EXTERNAL_EMAILS" | tr -s '[:space:];' ',' | sed 's/^,//; s/,$//')
+          if [ -n "$external_emails" ]; then
+            env_vars="$env_vars;ALLOWED_EXTERNAL_EMAILS=$external_emails"
           fi
           gcloud run deploy "portal-api-pr-$PR" \
             --source backend \
