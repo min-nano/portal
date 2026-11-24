@@ -25,6 +25,7 @@ import {
   stripPageNumber,
   unsettledPages,
 } from '../src/pdf-book-merger/page-numbers.js';
+import { textItems } from '../src/pdf-book-merger/text-layer.js';
 
 /** 頁に対する割合で置いた文字の断片。 */
 function item(text, { x = 0.5, y = 0.95, h = 0.012, w = 0.02 } = {}) {
@@ -63,6 +64,28 @@ describe('normalizeDigits / groupLines', () => {
       { text: '1', x0: 0.5, x1: 0.51, y: 0.95, h: 0.01 },
     ];
     expect(groupLines(digits).map((line) => line.text)).toEqual(['11']);
+  });
+
+  it('間を空けずに並んだ同じ頁番号（貼り込んだ図の持ち込んだ、見えない頁番号）は 1 度だけ読む', () => {
+    // 「伝統的な軸組構法…マニュアル（第 3 版）」の 3-14 頁の下の余白（pdf.js の getTextContent そのまま）。
+    // 本物の 3-14 のほかに、少し大きく 2 pt 上に、真上に重なる 3-14 と、すぐ左に接する 3-14 がある。
+    const content = {
+      items: [
+        { str: '3-14', transform: [9.12, 0, 0, 9.12, 289.014, 37.419], width: 18.078 },
+        { str: '3-14', transform: [9.168, 0, 0, 9.081, 270.565, 39.365], width: 18.174 },
+        { str: '3-14', transform: [9.168, 0, 0, 9.081, 289.788, 39.365], width: 18.174 },
+      ],
+    };
+    const viewport = { width: 595.2755, height: 841.8898, transform: [1, 0, 0, -1, 0, 841.8898] };
+    expect(groupLines(textItems(content, viewport)).map((line) => line.text)).toEqual(['3-14']);
+
+    const at = (text, x0, x1) => ({ text, x0, x1, y: 0.95, h: 0.012 });
+    // 全角の数字の頁番号も同じ。
+    expect(groupLines([at('３-１４', 0.45, 0.48), at('３-１４', 0.48, 0.51)]).map((line) => line.text)).toEqual(['3-14']);
+    // 間の空いた同じ番号は、区切って読む（番号の行にはならない）。
+    expect(groupLines([at('57', 0.3, 0.32), at('57', 0.6, 0.62)]).map((line) => line.text)).toEqual(['57 57']);
+    // 頁番号の形でない文字は、接して並んでいてもそのまま読む。
+    expect(groupLines([at('ab', 0.3, 0.32), at('ab', 0.32, 0.34)]).map((line) => line.text)).toEqual(['abab']);
   });
 
   it('字の間が開いていれば区切る（柱と頁番号をくっつけない）', () => {

@@ -65,6 +65,8 @@ const STANDALONE = new RegExp(
   `^${DECOR}*(?:p\\.?|P\\.?|page|ページ|頁)?\\s*(${LABEL})\\s*(?:頁|ページ)?${DECOR}*$`
 );
 const DASHES = new RegExp(DASH);
+/** 頁番号の形だけの文字（57・3-14）。 */
+const NUMBER_ONLY = new RegExp(`^${LABEL}$`);
 
 /** ハイフンで区切った頁番号を、数字の列にする（「2 - 21」→ [2, 21]）。 */
 function splitLabel(text) {
@@ -115,13 +117,21 @@ export function groupLines(items) {
     let text = '';
     let right = null;
     let last = null;
+    const gap = Math.max(line.h, 0.004) * 0.6;
     for (const part of parts) {
-      // 同じ文字を少しずらして重ね書きしたもの（太字に見せる刷り方。文字情報には 3 度入る）は
-      // 1 度だけ読む（「3-14」が「3-143-143-14」にならないように）。
-      if (last && String(part.text) === String(last.text) && part.x0 < (last.x0 + last.x1) / 2) continue;
+      if (last && String(part.text) === String(last.text)) {
+        // 同じ文字を少しずらして重ね書きしたもの（太字に見せる刷り方。文字情報には 3 度入る）は
+        // 1 度だけ読む（「3-14」が「3-143-143-14」にならないように）。
+        if (part.x0 < (last.x0 + last.x1) / 2) continue;
+        // 間を空けずに並んだ同じ頁番号も 1 度だけ読む。貼り込んだ図などが、見えない（切り抜かれた）
+        // 頁番号を、本物の頁番号のすぐ隣に持ち込んでいることがある（「3-14」が「3-143-14」に
+        // ならないように）。1 文字の断片（OCR の「1」「1」）は、並んだ数字なので除かない。
+        const label = normalizeDigits(part.text).trim();
+        if (label.length > 1 && NUMBER_ONLY.test(label) && part.x0 - last.x1 <= gap) continue;
+      }
       last = part;
       // 字の間が開いていれば区切る（柱の文字と頁番号をくっつけないため）。
-      if (right !== null && part.x0 - right > Math.max(line.h, 0.004) * 0.6) text += ' ';
+      if (right !== null && part.x0 - right > gap) text += ' ';
       text += String(part.text);
       right = part.x1;
     }
