@@ -24,7 +24,7 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
 
 1. **Clerk セッション JWT の検証**（バックエンド）
    - Clerk の JWKS で署名を検証し、`exp` / `iss` / `azp` を確認して、トークンからユーザーの **メールアドレス** を取り出す。
-   - 許可ドメイン（`ALLOWED_EMAIL_DOMAINS`）以外のアカウントは 403。
+   - 許可ドメイン（`ALLOWED_EMAIL_DOMAINS`）のアカウントは**社内ユーザー**、個別に許可したアドレス（`ALLOWED_EXTERNAL_EMAILS`）は**外部ユーザー**。どちらでもないアカウントは 403。外部ユーザーにできることは下の「外部ユーザー（組織外のアカウント）」。
 2. **代理アクセストークン（domain-wide delegation）**
    - 確認したメールアドレスのユーザーとして、サービスアカウントが **読み取り専用スコープ** (`drive.readonly`) の代理トークンを取得し、Workspace の Drive API を呼ぶ。
    - つまり雛形の取得は常に **本人の Drive 権限の範囲内** で行われる。雛形にアクセス権の無いユーザーは、サインインできても雛形を読めない（GAS 版と同じ UX・同じ境界）。
@@ -33,7 +33,37 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
 
 全利用者共通の設定（雛形フォルダ ID・ファイル名。GAS 版のスクリプトプロパティ相当。ポータルの名前とロゴ）は **Firestore** に保存します。人が直接編集できる Drive 上の JSON ファイルと違い、管理ユーザーの誤操作で設定が壊れるリスクがなく、アクセスはランタイム SA の IAM（`roles/datastore.user`）だけで完結します。delegation のスコープも広げません。保存先は環境（チャンネル）ごとに分かれています（「共有設定（Firestore）」参照）。
 
-認証の要らない API は `/api/healthz` と、ポータルの名前とロゴを読む `GET /api/site` だけです（サインイン画面のヘッダーにも出すため。以前は同じものをビルド時に静的な HTML へ埋め込んで配っていたので、読める範囲は変わっていません）。書き換え（`PUT /api/site`）はサインインが要ります（「サイトの設定（ポータルの名前とロゴ）」参照）。
+#### 外部ユーザー（組織外のアカウント）
+
+組織外の Google アカウント（例 `someone@gmail.com`）も、**アドレスを 1 つずつ** `ALLOWED_EXTERNAL_EMAILS` に挙げれば使えます。ドメインではなくアドレスで許すのは、`gmail.com` のような共有のドメインを丸ごと開けないためです。
+
+外部ユーザーには代理アクセス（domain-wide delegation）が効きません（Workspace の外のアカウントにはなりかわれない）。そこで、**Drive を使わない機能だけ**を使わせます。手元のファイルを読み、画面の中や Cloud Run で編集したものをダウンロードする、という使い方です。本人の Google アカウントの Drive 権限（OAuth トークン）を預かって使う方式は採りませんでした（制限付きスコープの審査・同意画面の警告・トークンの保管が要り、そこまでの必要がないため）。
+
+| | 社内ユーザー | 外部ユーザー |
+| --- | --- | --- |
+| 必要壁量 計算ツール | ✅ | ✅（Drive を使わない） |
+| PDF 結合ツール | ✅ | ✅ 手元のファイルだけ（「Drive から選ぶ」は出さない） |
+| 現況検査レポート・構造計算安全証明書・面材張り大壁 | ✅ | ❌（雛形の読み込みか保存に Drive を使う） |
+| Drive のファイル選択（`/api/drive/items`） | ✅ | ❌ |
+| ポータルの名前とロゴの変更（`PUT /api/site`）・雛形の設定 | ✅ | ❌（全員に効く設定なので社内だけ） |
+
+**断るのはサーバーです。** 次の 3 か所で、外部ユーザーには 403 を返します。
+
+* **ツールは既定で社内専用。** `Tool(external_users=True)` を名乗ったツールだけを外部ユーザーにも開き、それ以外のツールはルートすべてに `require_internal_user` を掛けて載せます（`main.py`）。ルートを 1 本ずつ守るのではないので、ルートを足しても掛け忘れません。新しいツールも、名乗るまでは社内専用です。
+* **Drive の入口は代理アクセスの手前で断る。** 開いたツールの中でも、Drive を使う入口（PDF 結合の Drive の PDF、ファイル選択の一覧）は、`portal_sdk.delegated_session` などが、なりかわりを頼む前に断ります。
+* **全員共通の設定の書き換え**（`PUT /api/site`）は `require_internal_user`。雛形の設定は社内専用のツールの中にあるので、上の 1 つ目で断られます。
+
+**画面は見せ方だけを合わせます。** サインインの後に `/api/me`（`{"email", "external"}`）を読み、外部ユーザーなら `<html data-account="external">` にして、`data-staff-only` を付けた入口（社内専用ツールのカード、「Drive から選ぶ」、「設定」メニュー）を CSS でまとめて隠します（`frontend/src/account.js`）。答えは待たずに画面を出すので、社内ユーザーが Cloud Run の起動待ちを被ることはありません。外部ユーザーには、答えが届いた時点で入口が消えます。社内専用のツールのページを直接開いた場合は、ツールの準備（`/config`）が「この機能は社内アカウント専用です。」で断られ、その理由が画面に出ます。
+
+画面とバックエンドの名乗り（`tool.js` の `externalUsers` と `Tool.external_users`）がそろっていることは、`backend/tests/test_external_users.py` が確かめます。
+
+**Google 側の設定。** 外部ユーザーがサインインするには、Clerk（本番インスタンス）が使う Google OAuth クライアントの同意画面が **「外部」** になっている必要があります（「内部」だと、組織外のアカウントは Google のところで止まる）。求める権限は名前とメールアドレスだけなので、制限付きスコープの審査は要りません。変えると、次の点が変わります（「1. Clerk」参照）。
+
+* **どの Google アカウントでも Clerk のサインインまでは通る**ようになり、止めるのはバックエンドの許可判定だけになります（Clerk にユーザーも作られる）。Clerk の Restrictions（Allowlist）で、社内ドメインと許可したアドレスに絞っておくと二重の守りになります。
+* 公開状態が「テスト」のままだと、登録したテストユーザーしか入れません。「本番」にします。
+* 社内ユーザーから見ると**第三者のアプリ**になります。Workspace の管理コンソールで、設定されていない第三者アプリへのアクセスを制限していると社内ユーザーまで入れなくなるので、切り替える前に、API の制御でこのクライアントを「信頼できる」にしておきます。
+
+認証の要らない API は `/api/healthz` と、ポータルの名前とロゴを読む `GET /api/site` だけです（サインイン画面のヘッダーにも出すため。以前は同じものをビルド時に静的な HTML へ埋め込んで配っていたので、読める範囲は変わっていません）。書き換え（`PUT /api/site`）はサインインが要り、社内ユーザーだけができます（「サイトの設定（ポータルの名前とロゴ）」参照）。
 
 ```
 ブラウザ (Firebase Hosting)
@@ -359,7 +389,7 @@ pdf.js には、PDF の外にあるデータ——**CMap・標準フォント・
 * **名前**: 60 文字まで。空にすると「社内ポータル」になります。
 * **ロゴ**: **PNG か SVG**、256KB まで。画像そのものを **base64** にして Firestore のドキュメントに入れます（Cloud Storage などの置き場所を別に持たないため。上限は base64 にしても Firestore のドキュメントの上限 1 MiB に余裕を持って収まる大きさです）。種類は申告やファイル名ではなく中身（PNG の署名・SVG の `<svg>` 要素）でサーバーが決めます。縦横比を保ったまま 24px の枠に収めて出します。未設定なら、これまでどおりの小さな四角です。
 * **SVG の安全**: 画面はロゴを `<img>` の `data:` URL として描きます。`<img>` で読み込んだ SVG はスクリプトを動かさないので、SVG の中に何が書かれていても画面の中では実行されません（SVG を単独の文書として、このポータルのオリジンで配ることもしていません）。
-* **書き換えられる人**: サインインできる人（許可ドメインのアカウント）なら誰でも。雛形の設定と同じ扱いです。
+* **書き換えられる人**: 社内ユーザー（許可ドメインのアカウント）なら誰でも。雛形の設定と同じ扱いです。外部ユーザーには「設定」のメニューを出さず、API も 403 で断ります（「外部ユーザー（組織外のアカウント）」）。
 
 保存先は共有設定と同じチャンネルの下の `site_settings/site` です（「共有設定（Firestore）」参照。`backend/app/site_settings.py`）。API は `GET /api/site`（**サインイン不要**。サインイン画面のヘッダーにも出すため）と `PUT /api/site`（サインインが要る）です。
 
@@ -395,7 +425,7 @@ pdf.js には、PDF の外にあるデータ——**CMap・標準フォント・
 
 **ツールの準備（2 段目）**
 
-* **バックエンドを先に起こしておく。** 2 段目は「`/config` → wasm」という直列の並びで、その先頭が **Cloud Run のインスタンス起動待ち**を丸ごと被ります（常時起動のインスタンスは置いていません）。そこで `startPage()` は、サインインの確認を始めるのと同時に、認証の要らない `/api/healthz` を投げます（`api.js` の `warmUpApi()`）。Clerk とやり取りしているあいだに起動が済むので、その分が待ち時間から消えます。失敗しても構いません（起きていなければ、続く `/config` が普通に起こします）。
+* **バックエンドを先に起こしておく。** 2 段目は「`/config` → wasm」という直列の並びで、その先頭が **Cloud Run のインスタンス起動待ち**を丸ごと被ります（常時起動のインスタンスは置いていません）。そこで `startPage()` は、サインインの確認を始めるのと同時に、認証の要らない `/api/healthz` を投げます（`api.js` の `warmUpApi()`）。Clerk とやり取りしているあいだに起動が済むので、その分が待ち時間から消えます。失敗しても構いません（起きていなければ、続く `/config` が普通に起こします）。トップページも、外部ユーザーかを聞く `/api/me`（答えは待たない。「外部ユーザー（組織外のアカウント）」）のために同じく起こします。
 * **計算実装（wasm）を gzip で配る。** 直列の並びの最後にある取得で、そのままだと 221 kB あります。受け取れる相手には gzip で送って **85 kB**（39%）にします。縮めたものは起動時に 1 度だけ作って持っておき、リクエストごとに縮め直しません（`backend/app/nail_core.py` の `wasm_gzip()` と `portal_sdk.py` の `wasm_response()`）。URL に中身のハッシュが付いているので、2 回目からはブラウザのキャッシュから読まれます。
 
 > それでも足りない場合、次の一手は Cloud Run の最小インスタンス数を 1 にすること（起動待ちが完全に消える代わりに、常時課金になります）です。
@@ -411,6 +441,8 @@ pdf.js には、PDF の外にあるデータ——**CMap・標準フォント・
 | --- | --- | --- |
 | 画面 | `frontend/src/<id>/tool.js`（id・名前・説明・絵・ページ・入口・CSS） | `frontend/tools.config.js` → `tools-plugin.js` がページとツール一覧を組み立てる |
 | API | `backend/app/tools/<id>.py` の `TOOL = Tool(...)`（id・名前・ルーター） | `backend/app/tools/__init__.py` → `main.py` が `/api/tools/<id>` へ載せる |
+
+外部ユーザー（組織外のアカウント）にも使わせるツールは、画面の `externalUsers: true` と API の `external_users=True` の両方で名乗ります。名乗らないツールは社内専用です（「外部ユーザー（組織外のアカウント）」）。
 
 ツールを増やす・減らすときに触るのは、この 2 つの一覧だけです。`vite.config.js` にも
 `index.html` にも `main.py` にもツールの名前は出てきません。
@@ -469,6 +501,7 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   src/site-settings.js        # ポータルの名前とロゴを出す（端末に覚えた値を先に出し、/api/site から読み直す）
   src/site-settings-dialog.js # サイトの設定画面（アカウントのメニューの「設定」から開く）
   src/auth.js                 # Clerk（サインインゲート・トークン取得。サインイン画面は必要になってから読む）
+  src/account.js              # 外部ユーザーに社内専用の入口（data-staff-only）を見せない
   src/clerk-frontend-api.js   # Publishable Key から Clerk の接続先を取り出す（preconnect 用）
   src/api.js                  # Bearer 付き fetch ラッパー（バックエンドの起こし方も）
   src/core.js                 # 計算実装（wasm）の読み込みと呼び出し（ツール共通）
@@ -571,6 +604,7 @@ firebase.json                 # Hosting 設定（/api/** → Cloud Run リライ
      ```json
      {"email": "{{user.primary_email_address}}"}
      ```
+   - 組織外のアカウント（外部ユーザー）も使わせる場合は、本番インスタンスの Google 接続に使っている OAuth クライアントの同意画面を「外部」にする。変わること（社内ユーザーが第三者アプリの制限に掛からないようにする準備を含む）は「外部ユーザー（組織外のアカウント）」参照。
 3. API Keys から **Publishable Key** を控える。本番（`pk_live_...`）はリポジトリ変数 `CLERK_PUBLISHABLE_KEY`、開発（`pk_test_...`）は `CLERK_PUBLISHABLE_KEY_TEST` に設定する（ローカル開発ではどちらかを `VITE_CLERK_PUBLISHABLE_KEY` として渡す）。
 4. 本番ドメイン（Firebase Hosting の URL / カスタムドメイン）を本番インスタンスに登録する。開発インスタンスにはプレビュー URL のパターン（後述の「PR プレビュー」参照）を Allowed origins に登録する。
 
@@ -750,7 +784,8 @@ gcloud run deploy portal-api \
 | --- | --- | --- |
 | `CLERK_ISSUER` | 許可する Clerk の Frontend API URL（JWT の `iss`。カンマ区切りで複数可）。本番サービスには **本番インスタンスのみ**（プレビューは PR ごとの別サービスが開発インスタンスを受け持つ） | `CLERK_PUBLISHABLE_KEY` から導出 |
 | `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り、`*` ワイルドカード可） | `CANONICAL_HOST`（設定時のみ）と `SITE_ID` から組み立て。`https://<カスタムドメイン>,https://<サイトID>.web.app` |
-| `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り） | 同名のリポジトリ変数 |
+| `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り）。ここに当たるアカウントが社内ユーザー。**必須**（未設定だと誰もサインインできない。判定を飛ばすと組織外のアカウントまで社内ユーザーになるため。ローカル開発でも渡す） | 同名のリポジトリ変数 |
+| `ALLOWED_EXTERNAL_EMAILS` | （任意）個別に利用を許可する組織外のメールアドレス（カンマ区切り）。ここに当たるアカウントは外部ユーザー（Drive を使わない機能だけ）。社内のドメインのアドレスを書いた場合も外部ユーザーとして扱う | 同名のリポジトリ変数。未設定なら渡さない |
 | `DWD_SERVICE_ACCOUNT_EMAIL` | 代理トークンに使う SA のメール（省略時は ADC から推定） | `RUNTIME_SA_EMAIL` |
 | `SETTINGS_CHANNEL_PATH` | 共有設定を置くチャンネルの Firestore ドキュメントパス。**未設定だと development チャンネルを指す**（「共有設定（Firestore）」参照） | `static-channels/production` 固定（環境の別はワークフローが決めるので変数にしない） |
 | `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。既定 `(default)` | 同名のリポジトリ変数。未設定なら渡さない |
@@ -818,6 +853,7 @@ Hosting は `https://<サイトID>.firebaseapp.com` でも同じアプリを配�
 | `RUNTIME_SA_EMAIL` | Cloud Run のランタイム SA のメール。サービスのランタイム SA と `DWD_SERVICE_ACCOUNT_EMAIL` に渡す | 両方 |
 | `SITE_ID` | Hosting のサイト ID。許可オリジン（本番は `https://<サイトID>.web.app` 等、プレビューは `https://<サイトID>--pr-<番号>-*.web.app`）の組み立てに使う | 両方 |
 | `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り） | 両方 |
+| `ALLOWED_EXTERNAL_EMAILS` | （任意）個別に利用を許可する組織外のメールアドレス（カンマ区切り）。「外部ユーザー（組織外のアカウント）」参照。未設定なら外部ユーザーはいない | 両方 |
 | `CLERK_PUBLISHABLE_KEY` | Clerk Publishable Key（**本番インスタンス** `pk_live_...`）。本番ビルドに埋め込み、バックエンドの `CLERK_ISSUER` もここから導出する | 本番 |
 | `CLERK_PUBLISHABLE_KEY_TEST` | Clerk Publishable Key（**開発インスタンス** `pk_test_...`）。プレビュービルドに埋め込み、プレビュー用バックエンドの `CLERK_ISSUER` もここから導出する | プレビュー |
 | `CANONICAL_HOST` | 本番のカスタムドメイン（例 `portal.example.com`）。`.web.app` へのアクセスをここへリダイレクトし、許可オリジンにも加える。未設定ならどちらも行わない | 本番 |
@@ -1067,6 +1103,7 @@ Node.js は **24**（同梱の npm 11）を使います。CI・プレビュー�
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 CLERK_ISSUER=https://xxxx.clerk.accounts.dev \
+ALLOWED_EMAIL_DOMAINS=example.co.jp \
 GOOGLE_APPLICATION_CREDENTIALS=~/keys/portal-api-dev.json \
 .venv/bin/uvicorn app.main:app --reload --port 8080
 # SETTINGS_CHANNEL_PATH は未設定でよい。既定の development チャンネル

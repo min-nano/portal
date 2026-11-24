@@ -40,11 +40,22 @@ def clerk_authorized_parties() -> list[str]:
 def allowed_email_domains() -> list[str]:
     """利用を許可する Workspace のメールドメイン（例: example.co.jp）。
 
-    未設定の場合はドメイン検証をスキップするが、その場合でも代理アクセス
-    （domain-wide delegation）は Workspace 外のユーザーには発行されないため、
-    Drive へのアクセスはドメイン内ユーザーに限られる。
+    ここに当たるアカウントが社内ユーザー。**必須**で、未設定なら誰も
+    サインインできない（clerk_auth が 500 を返す）。判定を飛ばして全員を
+    通すと、組織外のアカウントまで社内ユーザー扱いになるため。
     """
     return _csv("ALLOWED_EMAIL_DOMAINS")
+
+
+def allowed_external_emails() -> list[str]:
+    """個別に利用を許可する組織外のメールアドレス（例: someone@gmail.com）。
+
+    ここに載ったアカウントは外部ユーザーとして扱い、Drive を使わない機能
+    （手元のファイルを読み、編集したものをダウンロードする）だけを許す。
+    ドメインではなくアドレスで指定するのは、gmail.com のような共有の
+    ドメインを丸ごと許すことにならないようにするため。
+    """
+    return _csv("ALLOWED_EXTERNAL_EMAILS")
 
 
 def delegated_sa_email() -> str:

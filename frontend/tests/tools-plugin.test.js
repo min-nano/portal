@@ -248,12 +248,12 @@ describe('トップページのツール一覧', () => {
       expect(html).toContain(`<span class="name">${tool.name}</span>`);
       expect(html).toContain(`<p class="desc">${tool.description.trim()}</p>`);
     }
-    expect(html.match(/<li>/g)).toHaveLength(tools.length);
+    expect(html.match(/<li[ >]/g)).toHaveLength(tools.length);
   });
 
   it('絵はカードの中へそのまま埋め込み、読み上げからは外す', () => {
     const html = toolListHtml(tools);
-    const cards = html.split('<li>').slice(1);
+    const cards = html.split(/<li[ >]/).slice(1);
     tools.forEach((tool, i) => {
       const svg = readFileSync(resolve(tool.dir, tool.icon), 'utf8').trim();
       // 埋め込むときに字下げが付くので、1 行目（<svg …>）で見る。
@@ -270,6 +270,28 @@ describe('トップページのツール一覧', () => {
     expect(() => toolListHtml([withoutIcon])).toThrow(
       `${tools[0].id} のマニフェストに icon`
     );
+  });
+
+  it('外部ユーザーにも使わせると名乗っていないツールは、社内専用の印を付ける', () => {
+    const { dir, icon } = tools[0];
+    const html = toolListHtml([
+      { id: 'staff', name: '社内', description: 'a', dir, icon },
+      { id: 'open', name: '外部も', description: 'b', dir, icon, externalUsers: true },
+    ]);
+    const [staff, open] = html.split(/<li[ >]/).slice(1);
+    expect(html.split('<li')[1].startsWith(' data-staff-only>')).toBe(true);
+    expect(staff).toContain('/tools/staff/');
+    expect(html.split('<li')[2].startsWith('>')).toBe(true);
+    expect(open).toContain('/tools/open/');
+  });
+
+  it('Drive を使わないツールだけが、外部ユーザーにも名乗る', () => {
+    // バックエンドの Tool(external_users=True) と同じ顔ぶれ
+    // （backend/tests/test_external_users.py が両側をそろえる）。
+    expect(tools.filter((tool) => tool.externalUsers).map((tool) => tool.id)).toEqual([
+      'wall-quantity-calculator',
+      'pdf-book-merger',
+    ]);
   });
 
   it('並び順は tools.config.js のとおり', () => {
@@ -297,7 +319,7 @@ describe('Vite プラグイン', () => {
       `<ul class="tool-list">${TOOL_LIST_MARKER}</ul>`
     );
     expect(html).not.toContain(TOOL_LIST_MARKER);
-    expect(html.match(/<li>/g)).toHaveLength(tools.length);
+    expect(html.match(/<li[ >]/g)).toHaveLength(tools.length);
     expect(html).toContain('<span class="tool-icon" aria-hidden="true">');
   });
 

@@ -54,6 +54,7 @@ jobs:
           SITE_ID: '${{ vars.SITE_ID }}'
           CANONICAL_HOST: '${{ vars.CANONICAL_HOST }}'
           ALLOWED_EMAIL_DOMAINS: '${{ vars.ALLOWED_EMAIL_DOMAINS }}'
+          ALLOWED_EXTERNAL_EMAILS: '${{ vars.ALLOWED_EXTERNAL_EMAILS }}'
           RUNTIME_SA_EMAIL: '${{ vars.RUNTIME_SA_EMAIL }}'
           FIRESTORE_DATABASE: '${{ vars.FIRESTORE_DATABASE }}'
         run: |
@@ -78,6 +79,10 @@ jobs:
           env_vars="$env_vars;ALLOWED_EMAIL_DOMAINS=$ALLOWED_EMAIL_DOMAINS"
           env_vars="$env_vars;DWD_SERVICE_ACCOUNT_EMAIL=$RUNTIME_SA_EMAIL"
           env_vars="$env_vars;SETTINGS_CHANNEL_PATH=static-channels/production"
+          # 任意。組織外のアカウントを個別に許可するときだけ設定する（README「外部ユーザー」）。
+          if [ -n "$ALLOWED_EXTERNAL_EMAILS" ]; then
+            env_vars="$env_vars;ALLOWED_EXTERNAL_EMAILS=$ALLOWED_EXTERNAL_EMAILS"
+          fi
           # 任意。既定の "(default)" 以外を使う場合だけリポジトリ変数を設定する。
           if [ -n "$FIRESTORE_DATABASE" ]; then
             env_vars="$env_vars;FIRESTORE_DATABASE=$FIRESTORE_DATABASE"

@@ -208,7 +208,7 @@ def drive(monkeypatch):
 @pytest.fixture
 def client(drive):
     """認証済みユーザー（TEST_EMAIL）としてアクセスするテストクライアント。"""
-    main.app.dependency_overrides[main.require_user] = lambda: User(email=TEST_EMAIL)
+    main.app.dependency_overrides[main.require_user] = lambda: User(email=TEST_EMAIL, external=False)
     with TestClient(main.app, raise_server_exceptions=False) as c:
         yield c
     main.app.dependency_overrides.clear()
@@ -219,3 +219,17 @@ def anon_client(drive):
     """認証をバイパスしない（Authorization ヘッダーが実際に検証される）クライアント。"""
     with TestClient(main.app, raise_server_exceptions=False) as c:
         yield c
+
+
+EXTERNAL_EMAIL = "partner@gmail.com"
+
+
+@pytest.fixture
+def external_client(drive):
+    """外部ユーザー（ALLOWED_EXTERNAL_EMAILS で個別に許可した組織外のアカウント）。"""
+    main.app.dependency_overrides[main.require_user] = lambda: User(
+        email=EXTERNAL_EMAIL, external=True
+    )
+    with TestClient(main.app, raise_server_exceptions=False) as c:
+        yield c
+    main.app.dependency_overrides.clear()

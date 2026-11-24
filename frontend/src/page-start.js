@@ -13,7 +13,8 @@
 //   3. ポータルの名前とロゴを出す（前回の値をすぐ出して、裏で読み直す。
 //      サインインの確認を待たない。サインイン画面のヘッダーにも出すため）
 //   4. サインインの確認。未サインインなら、サインイン画面を出して終わり。
-//      サインイン済みなら、アカウントのメニューの「設定」をつなぐ
+//      サインイン済みなら、アカウントのメニューの「設定」をつなぎ、外部
+//      ユーザーなら社内専用の入口を隠す（答えは待たない。account.js）
 //   5. 待っているものを言い換えて（サインインの確認 → ツールの準備）、
 //      そのページの準備を走らせる
 //   6. 準備が終わったら画面を出す。**画面を出すのは「入力できるように
@@ -24,6 +25,7 @@
 // （ツールは画面の中の #message、トップページはサインインゲート）、
 // onError に任せる。
 
+import { hideStaffOnlyForExternalUsers } from './account.js';
 import { warmUpApi } from './api.js';
 import { requireSignIn } from './auth.js';
 import { redirectToCanonicalHost } from './canonical-host.js';
@@ -68,10 +70,20 @@ export function startPage({
     const clerk = await requireSignIn();
     if (!clerk) return; // サインイン画面を表示中。
     connectSiteSettingsMenu();
+    // 答えは待たない。使えないアカウントだと分かったら理由を出すが、出すのは
+    // 画面を出した後（組み立て途中の画面を見せない）。準備のほうが先に失敗
+    // したら、そちらの理由を出す（同じアカウントなら、準備も同じ理由で断られる）。
+    const refusal = hideStaffOnlyForExternalUsers().then(
+      () => null,
+      (error) => error
+    );
 
     if (preparing) setPageLoadingLabel(preparing);
     if (prepare) await prepare(clerk);
     showApp();
+
+    const refused = await refusal;
+    if (refused) onError(refused.message);
   }
 }
 

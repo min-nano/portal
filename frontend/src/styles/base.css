@@ -17,6 +17,12 @@
   display: none !important;
 }
 
+/* 外部ユーザー（組織外のアカウント）には、社内専用の入口を見せない
+   （src/account.js。断るのはサーバーで、これは見せ方だけ）。 */
+:root[data-account='external'] [data-staff-only] {
+  display: none !important;
+}
+
 /* iOS Safari は、ビューポートより広い塊（横スクロールする表など）の中の
    文字を勝手に大きくする（自動テキスト拡大）。判定の行だけ文字が飛び抜けて
    大きくなってしまうので、拡大は行わせない。指でのピンチ拡大は妨げない。 */

@@ -13,16 +13,22 @@
      （他サイト向けに発行されたトークンの流用を防ぐ。PR プレビューの URL は
      デプロイごとに変わるため fnmatch 形式のワイルドカードを許可する）
   5. email クレームの存在
-  6. メールドメインが ALLOWED_EMAIL_DOMAINS に含まれること
+  6. メールアドレスが ALLOWED_EXTERNAL_EMAILS に載っている（外部ユーザー）か、
+     メールドメインが ALLOWED_EMAIL_DOMAINS に含まれる（社内ユーザー）こと
 
 email は Clerk の既定のセッショントークンには含まれないため、Clerk
 ダッシュボードの Sessions → Customize session token で
 
     {"email": "{{user.primary_email_address}}"}
 
-を設定しておく必要がある（README 参照）。ここで得たメールアドレスが、
-そのまま Workspace API の代理アクセス（domain-wide delegation）の
-impersonate 対象になる。
+を設定しておく必要がある（README 参照）。社内ユーザーでは、ここで得た
+メールアドレスがそのまま Workspace API の代理アクセス（domain-wide
+delegation）の impersonate 対象になる。
+
+外部ユーザー（組織外の Google アカウント）は、代理アクセスが効かない
+（Workspace の外のアカウントにはなりかわれない）ため、Drive を使わない
+機能だけを使える。Drive を使う入口と全員共通の設定の書き換えは
+portal_sdk が断る（README「外部ユーザー」）。
 """
 
 import fnmatch
@@ -54,6 +60,10 @@ class AuthError(PortalError):
 @dataclass(frozen=True)
 class User:
     email: str
+    # 組織外のアカウント（ALLOWED_EXTERNAL_EMAILS で個別に許可したもの）か。
+    # False だと Drive の代理アクセスまで通るので、既定値は置かない（作る側が
+    # 必ず決める。書き忘れた User が黙って社内ユーザーになることがないように）。
+    external: bool
 
 
 def _signing_key_for(token: str, issuer: str):
@@ -129,15 +139,24 @@ def verify_token(token: str) -> User:
             '{"email": "{{user.primary_email_address}}"} を設定してください。'
         )
 
-    domains = config.allowed_email_domains()
-    if domains:
-        email_domain = email.rpartition("@")[2].lower()
-        if email_domain not in [d.lower() for d in domains]:
-            raise AuthError(
-                f"このアプリは社内アカウント専用です（{email} は利用できません）。", 403
-            )
+    # 個別に許可した外部アカウントは、ドメインの判定より先に見る。社内の
+    # ドメインに当たる場合でも外部として扱う（できることが少ない側に倒す）。
+    if email.lower() in [e.lower() for e in config.allowed_external_emails()]:
+        return User(email=email, external=True)
 
-    return User(email=email)
+    # 社内ドメインが未設定なら、誰も通さない（設定の漏れとして 500）。以前は
+    # 判定を飛ばして全員を通していたが、同意画面を「外部」にするとどの Google
+    # アカウントでもここまで来られるので、全員が社内ユーザー扱いになってしまう。
+    domains = config.allowed_email_domains()
+    if not domains:
+        raise AuthError("サーバーの認証設定（ALLOWED_EMAIL_DOMAINS）が未設定です。", 500)
+    email_domain = email.rpartition("@")[2].lower()
+    if email_domain not in [d.lower() for d in domains]:
+        raise AuthError(
+            f"このアプリは許可されたアカウント専用です（{email} は利用できません）。", 403
+        )
+
+    return User(email=email, external=False)
 
 
 def user_from_authorization_header(authorization: str | None) -> User:

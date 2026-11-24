@@ -68,6 +68,7 @@ def auth_env(monkeypatch):
         "CLERK_AUTHORIZED_PARTIES", f"{FRONTEND_ORIGIN},{PREVIEW_ORIGIN_PATTERN}"
     )
     monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", "example.co.jp")
+    monkeypatch.delenv("ALLOWED_EXTERNAL_EMAILS", raising=False)
     monkeypatch.setattr(
         clerk_auth, "_signing_key_for", lambda token, issuer: _PUBLIC_PEM
     )
@@ -141,11 +142,54 @@ def test_email_outside_allowed_domain_is_403():
     assert e.value.status == 403
 
 
-def test_domain_check_skipped_when_unset(monkeypatch):
+def test_listed_external_email_is_let_in_as_external(monkeypatch):
+    monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "partner@gmail.com, Other@Example.org")
+
+    user = clerk_auth.verify_token(make_token(email="partner@gmail.com"))
+    assert user == clerk_auth.User(email="partner@gmail.com", external=True)
+    # 大文字小文字は区別しない（Clerk とリポジトリ変数の書き方の違いで弾かない）。
+    assert clerk_auth.verify_token(make_token(email="other@example.ORG")).external
+
+
+def test_staff_accounts_are_not_external(monkeypatch):
+    monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "partner@gmail.com")
+
+    assert clerk_auth.verify_token(make_token()).external is False
+
+
+def test_listing_one_address_does_not_open_its_domain(monkeypatch):
+    # gmail.com のアドレスを 1 つ許しても、gmail.com の他のアカウントは入れない。
+    monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "partner@gmail.com")
+
+    with pytest.raises(AuthError) as e:
+        clerk_auth.verify_token(make_token(email="someone@gmail.com"))
+    assert e.value.status == 403
+
+
+def test_a_listed_address_in_the_staff_domain_is_treated_as_external(monkeypatch):
+    # 両方に当たるときは、できることが少ない側（外部）に倒す。
+    monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "tester@example.co.jp")
+
+    assert clerk_auth.verify_token(make_token()).external is True
+
+
+def test_nobody_gets_in_when_the_staff_domain_is_unset(monkeypatch):
+    # 判定を飛ばすと、組織外のアカウントまで社内ユーザーとして通ってしまう。
     monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", "")
 
-    user = clerk_auth.verify_token(make_token(email="someone@gmail.com"))
-    assert user.email == "someone@gmail.com"
+    for email in ("someone@gmail.com", "tester@example.co.jp"):
+        with pytest.raises(AuthError) as e:
+            clerk_auth.verify_token(make_token(email=email))
+        assert e.value.status == 500
+        assert "ALLOWED_EMAIL_DOMAINS" in str(e.value)
+
+
+def test_listed_external_email_gets_in_even_without_the_staff_domain(monkeypatch):
+    # 外部ユーザーの許可は、社内ドメインの設定と関わらない（できることが少ない側）。
+    monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", "")
+    monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "partner@gmail.com")
+
+    assert clerk_auth.verify_token(make_token(email="partner@gmail.com")).external
 
 
 def test_azp_check_skipped_when_unset(monkeypatch):

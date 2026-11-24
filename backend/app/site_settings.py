@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from . import settings_store
 from .clerk_auth import User
 from .errors import PortalError
-from .portal_sdk import json_body, require_user
+from .portal_sdk import json_body, require_internal_user
 
 #: 表示名の長さの上限（ヘッダーは 1 行に収め、長ければ … で切る）。
 MAX_TITLE_LENGTH = 60
@@ -150,8 +150,11 @@ def get_site(response: Response):
 
 
 @router.put("")
-async def put_site(request: Request, user: User = Depends(require_user)):
-    """設定画面からの保存。表示名とロゴをまとめて置き換える。"""
+async def put_site(request: Request, user: User = Depends(require_internal_user)):
+    """設定画面からの保存。表示名とロゴをまとめて置き換える。
+
+    全員に効く設定なので、書き換えられるのは社内ユーザーだけ（外部ユーザーは 403）。
+    """
     body = await json_body(request)
     # 本文が読めないまま空で上書きしてしまわないよう、表示名の欄は必須にする
     # （空文字は「既定の名前に戻す」という正当な指定）。

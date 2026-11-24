@@ -21,6 +21,7 @@ const requireSignIn = vi.fn();
 const warmUpApi = vi.fn();
 const showSite = vi.fn();
 const connectSiteSettingsMenu = vi.fn();
+const hideStaffOnlyForExternalUsers = vi.fn();
 
 vi.mock('../src/canonical-host.js', () => ({
   redirectToCanonicalHost: () => redirectToCanonicalHost(),
@@ -30,6 +31,9 @@ vi.mock('../src/auth.js', () => ({
   getSessionToken: async () => 'token',
 }));
 vi.mock('../src/api.js', () => ({ warmUpApi: () => warmUpApi() }));
+vi.mock('../src/account.js', () => ({
+  hideStaffOnlyForExternalUsers: () => hideStaffOnlyForExternalUsers(),
+}));
 vi.mock('../src/site-settings.js', () => ({
   showSite: () => showSite(),
   connectSiteSettingsMenu: () => connectSiteSettingsMenu(),
@@ -60,6 +64,7 @@ function app() {
 beforeEach(() => {
   document.body.innerHTML = PAGE;
   vi.clearAllMocks();
+  hideStaffOnlyForExternalUsers.mockResolvedValue(false);
   redirectToCanonicalHost.mockReturnValue(false);
   requireSignIn.mockResolvedValue(CLERK);
 });
@@ -112,6 +117,51 @@ describe('startPage', () => {
     expect(connectSiteSettingsMenu).toHaveBeenCalledTimes(1);
   });
 
+  it('使えないアカウントだと分かったら、その理由を出す', async () => {
+    hideStaffOnlyForExternalUsers.mockRejectedValue(
+      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403 })
+    );
+    const onError = vi.fn();
+
+    startPage({ onError });
+    await settle();
+
+    expect(onError).toHaveBeenCalledWith('このアプリは許可されたアカウント専用です。');
+  });
+
+  it('準備の途中で断られたと分かっても、理由を出すのは準備が終わってから', async () => {
+    hideStaffOnlyForExternalUsers.mockRejectedValue(
+      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403 })
+    );
+    let finishPreparing;
+    const prepare = vi.fn(() => new Promise((resolve) => { finishPreparing = resolve; }));
+    const onError = vi.fn(() => expect(app().hidden).toBe(false));
+
+    startPage({ prepare, onError });
+    await settle();
+    // 組み立て途中の画面は出さない（理由もまだ出さない）。
+    expect(app().hidden).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+
+    finishPreparing();
+    await settle();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith('このアプリは許可されたアカウント専用です。');
+  });
+
+  it('サインインしたら、外部ユーザーかを確かめに行くが、答えは待たない', async () => {
+    // 答えが返らないままでも、画面は出る（社内ユーザーに起動待ちを被せない）。
+    hideStaffOnlyForExternalUsers.mockReturnValue(new Promise(() => {}));
+    const prepare = vi.fn(async () => {});
+
+    startPage({ prepare });
+    await settle();
+
+    expect(hideStaffOnlyForExternalUsers).toHaveBeenCalledTimes(1);
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(app().hidden).toBe(false);
+  });
+
   it('未サインインのときも名前とロゴは出すが、「設定」はつながない', async () => {
     requireSignIn.mockResolvedValue(null);
 
@@ -120,6 +170,7 @@ describe('startPage', () => {
 
     expect(showSite).toHaveBeenCalledTimes(1);
     expect(connectSiteSettingsMenu).not.toHaveBeenCalled();
+    expect(hideStaffOnlyForExternalUsers).not.toHaveBeenCalled();
   });
 
   it('バックエンドを使わないページでは起こさない', async () => {
