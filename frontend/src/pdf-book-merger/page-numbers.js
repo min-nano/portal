@@ -824,7 +824,8 @@ export function formatNumber(number, branch = null, prefix = null) {
 }
 
 /** 手で入れるハイフンで区切った番号（57-1・2-21・2-2-21-3）。 */
-const LABEL_INPUT = new RegExp(`^${LABEL}$`);
+// 手で入れるときは、日付と取り違えるおそれが無いので、2 段目からの 0（部の扉の 1-0）も受け付ける。
+const LABEL_INPUT = new RegExp(`^\\d{1,4}(?:\\s*${DASH}\\s*(?:0|[1-9]\\d{0,3})){0,${MAX_LEVELS - 1}}$`);
 
 /**
  * 手で入れた頁番号を読む。読めなければ null。12、前付けの -3、間に挟む 12.5、

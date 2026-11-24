@@ -583,6 +583,14 @@ describe('頁番号の前に刷られた部・編などの番号（2-21）', () 
     // まとまりの番号を頭に付けた頁ラベルを付ける。
     expect(pageLabelTexts(pageLabelRanges(order), order.length)).toEqual(['2-1', '2-2', '2-3', '4-2-1', '4-2-2', '3-1', '3-2']);
   });
+  it('部の扉の頁は、手で 1-0 と入れられ、その部の頭に並ぶ', () => {
+    // 両面の束。第 3 部の扉を「1-7」と読み違えた（目次の行の番号を拾った、など）。
+    const files = [printed('a', ['2-5', '2-6', '2-7', '2-8', '1-7', '3-1', '3-2', '3-3'])];
+    const { order } = arrangePrinted(files, new Map([['a:4', { path: [3, 0] }]]));
+
+    expect(order.map(displayLabel)).toEqual(['2-5 頁', '2-6 頁', '2-7 頁', '2-8 頁', '3-0 頁', '3-1 頁', '3-2 頁', '3-3 頁']);
+  });
+
   it('部の番号の付いた本で、部の番号を読めなかった束は一覧の前後の部から置いて知らせ、1 頁直せば部に入る', () => {
     const files = [...book(), printed('again', [5, 7])]; // 2-5・2-7 を撮り直した束（部の番号を読めなかった）
     const { order, problems } = arrangePrinted(files);

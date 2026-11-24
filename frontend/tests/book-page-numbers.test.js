@@ -493,6 +493,9 @@ describe('枝番の頁（加除式の差し替え）', () => {
     expect(parsePageNumber('57-1')).toEqual({ path: [57, 1] });
     expect(parsePageNumber(' ５７－２ ')).toEqual({ path: [57, 2] });
     expect(parsePageNumber('2-2-21-3')).toEqual({ path: [2, 2, 21, 3] });
+    // 手で入れるときは、2 段目からの 0（部の扉の 1-0）も受け付ける（読み取りでは日付と取り違えないよう拾わない）。
+    expect(parsePageNumber('1-0')).toEqual({ path: [1, 0] });
+    expect(parsePageNumber('1-05')).toBeNull();
     expect(parsePageNumber('12')).toEqual({ path: [12] });
     expect(parsePageNumber('12.5')).toEqual({ path: [12.5] });
     expect(parsePageNumber('-3')).toEqual({ path: [-3] });
