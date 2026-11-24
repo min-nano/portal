@@ -337,6 +337,12 @@ function change(element, value) {
   element.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
+/** 頁の番号の欄に番号を打って Enter で確定する。 */
+function renumber(input, value) {
+  input.value = value;
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+}
+
 /** 一覧の札の見出し（抜けの札は「-n」）。 */
 function gridLabels() {
   return [...document.querySelectorAll('#pageGrid > li')].map((card) =>
@@ -480,10 +486,10 @@ describe('ファイルを足して並べる', () => {
     // 読めたとおりの番号を手で入れても、読み取りの内訳は変わらない。違う番号なら数えない。
     const details = () => fileItem('猫_奇数.pdf').querySelector('.bm-file-details').textContent;
     const number = (key) => document.querySelector(`#pageGrid [data-page-key="${key}"] .bm-page-number`);
-    change(number('f1:2'), '5');
+    renumber(number('f1:2'), '5');
     expect(details()).toBe('4 頁のうち番号を読めた頁 4（うち画像から 1）');
-    change(number('f1:2'), '');
-    change(number('f1:3'), '9');
+    renumber(number('f1:2'), '');
+    renumber(number('f1:3'), '9');
     expect(details()).toBe('4 頁のうち番号を読めた頁 3（うち画像から 1）');
   });
 
@@ -855,23 +861,136 @@ describe('ファイルを足して並べる', () => {
 
     // 1 頁を 4.5 に動かす（4 頁と 5 頁の間へ）。
     const first = document.querySelector('#pageGrid [data-page-key="f1:0"] .bm-page-number');
-    change(first, '4.5');
+    renumber(first, '4.5');
     expect(gridLabels().slice(2, 8)).toEqual(['2 頁', '3 頁', '4 頁', '4と5の間 頁', '5 頁', '6 頁']);
     // 1 頁が動いたので、最初の頁が偶数（2 頁）になった。
     expect($('problems').textContent).toContain('最初の頁が偶数（2 頁）です。');
 
-    // 数字でなければ断る。
-    change(document.querySelector('#pageGrid [data-page-key="f1:1"] .bm-page-number'), 'abc');
-    expect($('message').textContent).toBe('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。');
+    // 欄は見出しの中に隠れていて、「修正」を押すとその場で番号と入れ替わる。欄には手で入れた
+    // 番号だけを入れ、いまの番号は見本に出す。
+    expect(first.isConnected).toBe(false); // 番号を直した頁のカードは作り直している
+    expect(document.querySelector('#pageGrid [data-page-key="f1:0"] .bm-page-number').value).toBe('4.5');
+    const grid = (key, selector) => document.querySelector(`#pageGrid [data-page-key="${key}"] ${selector}`);
+    const key = (target, init) => target.dispatchEvent(new KeyboardEvent('keydown', init));
+    const third = grid('f1:1', '.bm-page-number');
+    const name = grid('f1:1', '.bm-page-label strong');
+    const edit = grid('f1:1', '.bm-page-edit');
+    expect(edit.getAttribute('aria-label')).toBe('3 頁 の番号を直す');
+    expect(third.placeholder).toBe('3');
+    expect(third.hidden).toBe(true);
+    // 押し始めではフォーカスを移さない。
+    const press = new MouseEvent('mousedown', { cancelable: true });
+    edit.dispatchEvent(press);
+    expect(press.defaultPrevented).toBe(true);
+    edit.click();
+    expect([name.hidden, edit.hidden, third.hidden]).toEqual([true, true, false]);
+    expect(document.activeElement).toBe(third);
+
+    // 数字でなければ断り、Enter では開いたまま（打ち直さずに直せる）。
+    renumber(third, 'abc');
+    expect($('message').textContent).toBe('番号は数字（枝番や部・編などの番号の付いた頁は 57-1・2-21 の形）で入れてください。');
+    expect(third.hidden).toBe(false);
+    expect(third.value).toBe('abc');
+    // Esc は元に戻して閉じ、断りも消して、「修正」にフォーカスを戻す。
+    key(third, { key: 'Escape' });
+    expect(third.value).toBe('');
+    expect($('message').textContent).toBe('');
+    expect([name.hidden, edit.hidden, third.hidden]).toEqual([false, false, true]);
+    expect(document.activeElement).toBe(edit);
+    // 外を押したときは、正しくない番号なら元に戻して閉じる。
+    edit.click();
+    third.value = 'abc';
+    third.blur();
+    expect($('message').textContent).toBe('番号は数字（枝番や部・編などの番号の付いた頁は 57-1・2-21 の形）で入れてください。');
+    expect([third.value, third.hidden]).toEqual(['', true]);
+    // 別のアプリ・タブへ移っただけなら、開いたまま。
+    edit.click();
+    third.value = '9';
+    third.dispatchEvent(new FocusEvent('blur')); // 欄はフォーカスを持ったまま
+    expect([third.value, third.hidden]).toEqual(['9', false]);
+    // 日本語入力の変換を確かめる Enter では閉じない。番号を変えずに閉じても描き直さない。
+    third.focus();
+    third.value = '';
+    key(third, { key: 'a' });
+    key(third, { key: 'Enter', isComposing: true });
+    key(third, { key: 'Enter', keyCode: 229 });
+    expect(third.hidden).toBe(false);
+    key(third, { key: 'Enter' });
+    expect(third.hidden).toBe(true);
+    expect(third.isConnected).toBe(true);
+
+    // 推定した番号をそのまま打つと、確かな番号になる（「手入力」）。Enter で確定すると、
+    // 作り直したカードの「修正」にフォーカスが移る。
+    edit.click();
+    renumber(third, '3');
+    expect(grid('f1:1', '.bm-status').textContent).toBe('手入力');
+    expect(document.activeElement).toBe(grid('f1:1', '.bm-page-edit'));
+
+    // 欄を開いたまま別の頁の「修正」を押すと、先に確定してから、その頁の欄を開く（確定で
+    // 作り直したカードでも）。
+    grid('f1:2', '.bm-page-edit').click();
+    grid('f1:2', '.bm-page-number').value = '5';
+    grid('f1:3', '.bm-page-edit').click();
+    expect(grid('f1:2', '.bm-status').textContent).toBe('手入力');
+    expect(grid('f1:3', '.bm-page-number').hidden).toBe(false);
+    expect(document.activeElement).toBe(grid('f1:3', '.bm-page-number'));
+    // ほかの欄（保存名など）にいるときに「修正」を押しても、その欄は確定しない。
+    $('outputName').focus();
+    grid('f1:3', '.bm-page-edit').click();
+    expect(document.activeElement).toBe(grid('f1:3', '.bm-page-number'));
+    // 番号を変えずに閉じただけなら、番号と関わりの無い知らせは消さない。
+    $('message').textContent = 'ほかの知らせ';
+    key(grid('f1:3', '.bm-page-number'), { key: 'Escape' });
+    expect($('message').textContent).toBe('ほかの知らせ');
+    // 描き直しで外されたカードの欄は、blur が届いても確定しない。
+    grid('f1:3', '.bm-page-edit').click();
+    const removed = grid('f1:3', '.bm-page-number');
+    removed.value = '99';
+    removed.closest('li').remove();
+    removed.dispatchEvent(new FocusEvent('blur'));
+    expect(removed.hidden).toBe(false);
+    renumber(grid('f1:1', '.bm-page-number'), '');
+    expect(grid('f1:3', '.bm-status').textContent).not.toBe('手入力');
+    renumber(grid('f1:2', '.bm-page-number'), '');
 
     // ファイルの先頭の番号を手で決める（奇数頁の束を 11 から）。
     const startField = fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]');
     change(startField, '11');
     expect(gridLabels()).toContain('17 頁');
     change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '1.5');
-    expect($('message').textContent).toBe('先頭の頁の番号は整数で入れてください。');
+    expect($('message').textContent).toBe('先頭の頁の番号は整数（部・編などの番号を前に付けるなら 2-1 の形）で入れてください。');
+    // 番号が整数でないまま進み方を選んでも、欄は使っている進み方（11 からの 2 つずつ）に戻す。
+    const invalidStep = fileItem('猫_奇数.pdf').querySelectorAll('.bm-file-controls select')[1];
+    change(invalidStep, '-2');
+    expect(invalidStep.value).toBe('2');
+    expect(gridLabels()).toContain('17 頁');
     change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '');
     expect(gridLabels()).toContain('7 頁');
+
+    // 先頭の番号が空のまま進み方を選んでも、並びは自動のままなので、欄も「自動」に戻す
+    // （行は描き直されないので、何度選んでも戻ること）。
+    const before = gridLabels();
+    for (const value of ['-2', '1']) {
+      const stepField = fileItem('猫_奇数.pdf').querySelectorAll('.bm-file-controls select')[1];
+      change(stepField, value);
+      expect(stepField.value).toBe('');
+      expect($('message').textContent).toBe('進み方を変えるときは、先頭の頁の番号も入れてください。');
+      expect(gridLabels()).toEqual(before);
+    }
+    // 手で決めていないときに整数でない番号を入れても、欄は「自動」に戻す。
+    change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), 'abc');
+    const autoStep = fileItem('猫_奇数.pdf').querySelectorAll('.bm-file-controls select')[1];
+    change(autoStep, '1');
+    expect(autoStep.value).toBe('');
+    expect($('message').textContent).toBe('先頭の頁の番号は整数（部・編などの番号を前に付けるなら 2-1 の形）で入れてください。');
+    expect(gridLabels()).toEqual(before);
+    // 番号を入れれば、選んだ進み方で並ぶ。
+    change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '11');
+    const stepField = fileItem('猫_奇数.pdf').querySelectorAll('.bm-file-controls select')[1];
+    change(stepField, '2');
+    expect(stepField.value).toBe('2');
+    expect($('message').textContent).toBe('');
+    expect(gridLabels()).toContain('17 頁');
   });
 
   it('枝番の付いた頁（加除式の差し替え）を並べ、番号を枝番で直せる', async () => {
@@ -890,6 +1009,8 @@ describe('ファイルを足して並べる', () => {
     const labels = ['53 頁', '54 頁', '55 頁', '56 頁', '57-1 頁', '57-2 頁', '57-3 頁', '57-4 頁', '59 頁', '60 頁', '61 頁', '62 頁'];
     expect(gridLabels()).toEqual(labels);
     expect(fileItem('法令_奇数.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 53, 55, 57-1, 57-3, 59, 61)');
+    // 前後に枝番の無い頁があるので、枝番と読む。
+    expect($('problems').textContent).not.toContain('部・編などの番号、');
     expect($('problems').textContent).toContain('57〜58 頁は無く、枝番の付いた頁（57-1〜57-4）があります。');
     expect($('problems').textContent).not.toContain('見つかりません');
 
@@ -898,10 +1019,43 @@ describe('ファイルを足して並べる', () => {
       [...document.querySelectorAll('#pageGrid .bm-page')].find(
         (li) => li.querySelector('.bm-page-label strong')?.textContent === label
       );
-    change(card('57-3 頁').querySelector('.bm-page-number'), '57-5');
+    renumber(card('57-3 頁').querySelector('.bm-page-number'), '57-5');
     expect(gridLabels()).toEqual([...labels.slice(0, 6), '-57-3 頁', '57-4 頁', '57-5 頁', ...labels.slice(8)]);
     expect(card('57-5 頁').querySelector('.bm-page-number').value).toBe('57-5');
     expect($('problems').textContent).toContain('57-3 頁が見つかりません（枝番の付いた頁）');
+  });
+
+  it('部・編などの番号を頁番号の前に置いた本（2-21）は、前後のつながりから部の番号と読む', async () => {
+    drop([
+      file('部_奇数.pdf', pdf([page('o11', '1-1'), page('o13', '1-3'), page('o21', '2-1'), page('o23', '2-3'), page('o25', '2-5')])),
+      file('部_偶数.pdf', pdf([page('e26', '2-6'), page('e24', '2-4'), page('e22', '2-2'), page('e14', '1-4'), page('e12', '1-2')])),
+    ]);
+    await settled(2);
+
+    const labels = ['1-1 頁', '1-2 頁', '1-3 頁', '1-4 頁', '2-1 頁', '2-2 頁', '2-3 頁', '2-4 頁', '2-5 頁', '2-6 頁'];
+    expect(gridLabels()).toEqual(labels);
+    // 読み方を選ぶ欄は無い（場所ごとに前後の頁から選ぶ）。
+    expect($('depthMode')).toBeNull();
+    expect(fileItem('部_奇数.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 1-1, 1-3, 2-1, 2-3, 2-5)');
+    expect($('problems').textContent).toContain('「1-」を部・編などの番号、1 を頁番号と読み');
+    expect($('problems').textContent).toContain('読み方は場所ごとに前後の頁から選んでいます');
+    expect($('problems').textContent).not.toContain('見つかりません');
+    expect($('problems').textContent).not.toContain('部に分けて並べました');
+
+    // 先頭の頁の番号は、部の番号を付けて入れられる。
+    const startField = () => fileItem('部_奇数.pdf').querySelector('.bm-file-controls input[type="text"]');
+    expect(startField().placeholder).toBe('1-1');
+    change(startField(), '3-1');
+    // 奇数頁の束が「3-」の 1〜9 頁になり、もとの 1-1 頁などは抜けになる。
+    expect(gridLabels().slice(-9)).toEqual(['3-1 頁', '-3-2 頁', '3-3 頁', '-3-4 頁', '3-5 頁', '-3-6 頁', '3-7 頁', '-3-8 頁', '3-9 頁']);
+    expect(gridLabels()).not.toContain('1-1 頁');
+    expect(startField().value).toBe('3-1');
+    // 頁ごとの番号も、部の番号を付けて直せる。
+    const card = [...document.querySelectorAll('#pageGrid .bm-page')].find(
+      (li) => li.querySelector('.bm-page-label strong')?.textContent === '3-1 頁'
+    );
+    renumber(card.querySelector('.bm-page-number'), '1-1');
+    expect(gridLabels()[0]).toBe('1-1 頁');
   });
 
   it('頁を読めなければ、何頁目のどこで止まったかを添えて一覧に残す', async () => {
@@ -1910,7 +2064,7 @@ describe('確かめる', () => {
     expect(pages()).toEqual(['3 頁']);
 
     // 項目の中で番号を直して描き直しても、開いたまま、頁も残る。
-    change(details.querySelector('.bm-page-number'), '3');
+    renumber(details.querySelector('.bm-page-number'), '3');
     expect(details.isConnected).toBe(true);
     expect(details.open).toBe(true);
     expect(pages()).toEqual(['3 頁']);
@@ -1919,10 +2073,10 @@ describe('確かめる', () => {
     // 重い指摘（重なり）は上に出る。頁の無い指摘（抜け）は開かない。
     // （手で入れた番号から前後の頁の番号が決め直されないように、最初と最後の頁も入れておく）
     const number = (key) => document.querySelector(`#pageGrid [data-page-key="${key}"] .bm-page-number`);
-    change(number('f1:0'), '1');
-    change(number('f1:3'), '7');
-    change(number('f1:2'), '7');
-    change(number('f1:1'), '7');
+    renumber(number('f1:0'), '1');
+    renumber(number('f1:3'), '7');
+    renumber(number('f1:2'), '7');
+    renumber(number('f1:1'), '7');
     const labels = () =>
       [...document.querySelectorAll('#problems > li')].map((li) => (li.querySelector('summary') ?? li).textContent);
     expect(labels()).toEqual([
@@ -1938,7 +2092,9 @@ describe('確かめる', () => {
     expect(pagesIn(duplicate)).toEqual(['7 頁', '7 頁', '7 頁']);
 
     // 項目の中で直して数が変わっても、項目は作り直さず、文と頁だけ変わる。
-    change(duplicate.querySelector('[data-page-key="f1:1"] .bm-page-number'), '3');
+    // （項目から外れた頁は、Enter で閉じたらすべての頁の一覧のその頁の「修正」にフォーカスを移す）
+    renumber(duplicate.querySelector('[data-page-key="f1:1"] .bm-page-number'), '3');
+    expect(document.activeElement).toBe(document.querySelector('#pageGrid [data-page-key="f1:1"] .bm-page-edit'));
     expect(document.querySelector('#problems details')).toBe(duplicate);
     expect(duplicate.open).toBe(true);
     expect(duplicate.querySelector('summary').textContent).toBe(
@@ -1962,20 +2118,26 @@ describe('確かめる', () => {
     }
 
     // 直して消えた項目の開閉は忘れる（また出ても閉じている）。
-    change(number('f1:2'), '');
+    // （一覧の欄を開いたまま項目の中の「修正」を押し、確定でその頁が項目から外れたら、何も開かない）
+    document.querySelector('#pageGrid [data-page-key="f1:2"] .bm-page-edit').click();
+    number('f1:2').value = '';
+    const stale = duplicate.querySelector('[data-page-key="f1:2"]');
+    stale.querySelector('.bm-page-edit').click();
+    expect(document.activeElement).toBe(document.body);
+    expect(stale.querySelector('.bm-page-number').hidden).toBe(true);
     expect(labels()).toEqual(['向きが他と違う頁が 1 頁あります。']);
-    change(number('f1:2'), '7');
+    renumber(number('f1:2'), '7');
     const again = document.querySelector('#problems details');
     expect(again.open).toBe(false);
     expect(document.querySelectorAll('#problems details')[1].open).toBe(true);
 
     // 開いた直後、toggle が届く前に描き直しても、頁は toggle で並べる。
     again.open = true;
-    change(number('f1:0'), '1');
+    renumber(number('f1:0'), '1');
     expect(pagesIn(again)).toEqual([]);
     await flush();
     expect(pagesIn(again)).toEqual(['7 頁', '7 頁']);
-    change(number('f1:0'), '');
+    renumber(number('f1:0'), '');
 
     // 開いた直後、toggle が届く前に項目が消えても、後から届いた toggle は何もしない
     // （また出たときに閉じていて、開けば頁が並ぶ）。
@@ -1983,16 +2145,16 @@ describe('確かめる', () => {
     await flush();
     const gone = document.querySelector('#problems details');
     gone.open = true;
-    change(number('f1:2'), '');
+    renumber(number('f1:2'), '');
     await flush();
-    change(number('f1:2'), '7');
+    renumber(number('f1:2'), '7');
     const back = document.querySelector('#problems details');
     expect(back).not.toBe(gone);
     expect(back.open).toBe(false);
     back.open = true;
     await flush();
     expect(pagesIn(back)).toEqual(['7 頁', '7 頁']);
-    change(number('f1:2'), '');
+    renumber(number('f1:2'), '');
 
     // 項目の中の頁も、押すと拡大する。
     details.querySelector('.bm-thumb').click();
@@ -2155,7 +2317,7 @@ describe('結合と検証', () => {
     expect($('logText').textContent).toContain('「猫.pdf」をダウンロードしました');
   });
 
-  it('部ごとに頁番号が振り直されていれば部に分けて並べ、頁ラベルは付けない（通し番号）', async () => {
+  it('部ごとに頁番号が振り直されていれば分けて並べ、2 つ目からはまとまりの番号を付ける（頁ラベルも）', async () => {
     drop([
       file('本_1.pdf', pdf([page('a1', 1), page('a2', 2), page('a3', 3), page('a4', 4)])),
       file('本_2.pdf', pdf([page('a5', 5), page('a6', 6), page('b1', 1), page('b2', 2), page('b3', 3)])), // 第 2 部の始まりをまたぐ
@@ -2164,22 +2326,24 @@ describe('結合と検証', () => {
     await settled(3);
 
     expect(gridLabels()).toEqual([
-      ...[1, 2, 3, 4, 5, 6].map((n) => `第 1 部 ${n} 頁`),
-      '第 2 部 1 頁',
-      '第 2 部 2 頁',
-      '第 2 部 3 頁',
-      '-第 2 部 4 頁',
-      '第 2 部 5 頁',
-      '第 2 部 6 頁',
+      ...[1, 2, 3, 4, 5, 6].map((n) => `1-${n} 頁`),
+      '2-1 頁',
+      '2-2 頁',
+      '2-3 頁',
+      '-2-4 頁',
+      '2-5 頁',
+      '2-6 頁',
     ]);
-    expect($('problems').textContent).toContain('第 2 部の 4 頁が見つかりません');
-    expect($('problems').textContent).toContain('本文を 2 部に分けて並べました（第 1 部 1〜6 頁・第 2 部 1〜6 頁）');
+    expect($('problems').textContent).toContain('2-4 頁が見つかりません');
+    expect($('problems').textContent).toContain('（1-1〜1-6 頁・2-1〜2-6 頁）');
+    // ファイルの一覧の要約にも、並びの確認と同じ番号（まとまりの番号つき）を出す。
+    expect(fileItem('本_2.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 1-5, 1-6, 2-1, 2-2, 2-3)');
 
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
-    expect(mocks.mergePdf.mock.calls[0][0].labels).toEqual([]);
+    expect(mocks.mergePdf.mock.calls[0][0].labels).toContainEqual({ start: 6, style: 'D', prefix: '2-', first: 1 });
     expect($('verifyResult').className).toBe('bm-verify ok');
-    expect($('verifyResult').textContent).toContain('頁ラベル（ビューアーに出る頁番号）: 付けていません（通し番号）');
+    expect($('verifyResult').textContent).toContain('頁ラベル（ビューアーに出る頁番号）: 本の頁番号と一致');
   });
 
   it('iPhone では、共有シートに渡せない大きさの PDF は、ダウンロードに保存し、そう記録に残す', async () => {
@@ -3339,7 +3503,7 @@ describe('分ける', () => {
     expect(splitMarks()).toEqual(['2 頁:ここから 2 つ目のファイル', '5 頁:ここから 3 つ目のファイル']);
     expect(splitButton('f2:1').textContent).toBe('分けない');
     // 番号を直して並びが変わっても、手で決めた位置は頁に付いていく。
-    change(document.querySelector('[data-page-key="f2:1"] .bm-page-number'), '5.5');
+    renumber(document.querySelector('[data-page-key="f2:1"] .bm-page-number'), '5.5');
     // （直した番号を確かなものとして、ほかの頁の番号も推定し直す）
     expect(gridLabels()).toEqual(['表紙', '表紙', '2 頁', '3 頁', '4 頁', '5 頁', '5と6の間 頁', '6 頁']);
     expect(splitMarks()).toEqual(['5 頁:ここから 2 つ目のファイル', '5と6の間 頁:ここから 3 つ目のファイル']);
@@ -3444,6 +3608,12 @@ describe('分ける', () => {
     change($('splitMegabytes'), '');
     expect(splitMarks()).toEqual([]);
     expect($('splitNote').textContent).toContain('1 ファイルにまとめます（上限がありません）');
+    // 本文が無いので、頁ラベルは付けない（結合した PDF の通し番号になる）。分けても同じ。
+    change($('splitMegabytes'), '250');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    expect($('verifyResult').textContent).toContain('頁ラベル（ビューアーに出る頁番号）: 付けていません（通し番号）');
+    expect($('verifyResult').className).toBe('bm-verify ok');
   });
 
   it('しおりの項目と、続けてつないだファイルの境目も、分ける位置の候補にする', async () => {

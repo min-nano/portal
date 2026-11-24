@@ -1,12 +1,12 @@
-fastapi>=0.162.0,<1
+fastapi>=0.165.0,<1
 uvicorn[standard]>=0.54.0,<1
 openpyxl==3.1.5
 # 構造計算安全証明書（PDF）の読み書き。pdfminer.six は文字の座標取得（○ を
 # 付ける位置の特定と、既存 PDF の解析）に、pypdf は ○ の重ね合わせと文書情報の
 # 読み書きに使う。python-multipart は PDF アップロードの受け取りに必要。
-pypdf>=6.21.4,<7
+pypdf>=7.1.1,<8
 pdfminer.six>=20260107
-python-multipart>=0.0.33,<1
+python-multipart>=0.0.34,<1
 # 釘配列諸定数の計算は Rust で書いた唯一の実装（core/）を wasm として動かす。
 # 画面（ブラウザ）が動かすのとまったく同じ .wasm をサーバも読み込むため、
 # 計算の実装が 2 つに分かれない（README「計算の一元管理（Rust → wasm）」参照）。
@@ -17,6 +17,6 @@ wasmtime>=50.0.1,<51
 # 「その PDF で実際に使った文字だけ」を切り出して埋め込むために使う。
 fonttools>=4.68.0,<5
 PyJWT[crypto]>=2.15.1,<3
-google-auth>=2.62.0,<3
+google-auth>=2.62.2,<3
 google-cloud-firestore>=2.34.1,<3
 requests>=2.34.2,<3

@@ -30,12 +30,21 @@ describe('displayLabel', () => {
     expect(displayLabel({ role: 'back', status: 'listed' })).toBe('番号なし');
     expect(displayLabel(body('a', 12))).toBe('12 頁');
     expect(displayLabel(body('a', null, 'unknown'))).toBe('番号不明');
-    expect(displayLabel({ ...body('a', 57), branch: 1 })).toBe('57-1 頁');
+    expect(displayLabel({ ...body('a', 57), branch: [1] })).toBe('57-1 頁');
   });
 
-  it('部が分かれていれば、部を添える', () => {
-    expect(displayLabel({ ...body('a', 3), part: 1 })).toBe('第 2 部 3 頁');
+  it('頁番号が戻ったところで分けたまとまりの頁は、まとまりの番号を頭に付ける', () => {
+    expect(displayLabel({ ...body('a', 3), part: 1, section: [2] })).toBe('2-3 頁');
+    expect(displayLabel({ ...body('a', 30), prefix: [4], part: 1, section: [6] })).toBe('6-4-30 頁');
     expect(displayLabel({ ...body('a', 3), part: null })).toBe('3 頁');
+  });
+
+  it('頁番号の前に刷られた部・編などの番号は、頁番号に付けて書く', () => {
+    expect(displayLabel({ ...body('a', 21), prefix: [2], part: 1 })).toBe('2-21 頁');
+    expect(displayLabel({ ...body('a', 21), prefix: [2, 2], branch: [3] })).toBe('2-2-21-3 頁');
+    expect(displayLabel({ ...body('a', 0), prefix: [2] })).toBe('2-0 頁');
+    expect(displayLabel({ ...body('a', -1), prefix: [2] })).toBe('2-前付(-1) 頁');
+    expect(displayLabel({ ...body('a', 16.5), prefix: [2] })).toBe('2-16と2-17の間 頁');
   });
 });
 
@@ -43,7 +52,7 @@ describe('pageIssues', () => {
   it('番号の決まり方・並びの指摘・スキャンの検査・文字情報を、頁ごとにまとめる', () => {
     const order = [
       body('a', 1),
-      body('b', 2, 'conflict', { value: 8 }),
+      body('b', 2, 'conflict', { path: [2, 8] }),
       body('c', 3, 'uncertain'),
       body('d', null, 'unknown'),
       body('e', null, 'unplaced'),
@@ -59,7 +68,7 @@ describe('pageIssues', () => {
     const issues = pageIssues(order, problems, scan, new Set(['d']));
 
     expect(issues.get('a').map((i) => [i.kind, i.level])).toEqual([['duplicate', 'error']]);
-    expect(issues.get('b')[0].message).toBe('読み取った番号（8）が前後の並びと合いません');
+    expect(issues.get('b')[0].message).toBe('読み取った番号（2-8）が前後の並びと合いません');
     expect(issues.get('b').map((i) => [i.kind, i.level])).toEqual([
       ['conflict', 'warn'],
       ['cover-numbers', 'warn'],
@@ -119,7 +128,7 @@ describe('gridItems', () => {
   });
 
   it('枝番の頁に差し替えられた番号には札を挟まず、枝番の抜けには枝番の札を挟む', () => {
-    const branch = (number, b) => ({ ...body(`${number}-${b}`, number), branch: b });
+    const branch = (number, b) => ({ ...body(`${number}-${b}`, number), branch: [b] });
     const order = [
       body('55', 55),
       body('56', 56),
@@ -134,12 +143,48 @@ describe('gridItems', () => {
     expect(labels).toEqual(['55', '56', '57-1', '57-2', '-57-3 頁', '57-4', '59', '-60-1 頁', '60-2']);
   });
 
+  it('入れ子の枝番の抜けも段ごとに挟む（下の段の枝番の頁に差し替えられた枝番の頁には挟まない）', () => {
+    const page = (...path) => ({
+      ...body(path.join('-'), path[0]),
+      ...(path.length > 1 ? { branch: path.slice(1) } : {}),
+    });
+    const order = [
+      page(57, 1, 1), // 57-1 は 57-1-1・57-1-2 に差し替えられた（奇数なので裏の 57-2 も）
+      page(57, 1, 2),
+      page(57, 3), // 57-2 は差し替えられた
+      page(57, 4),
+      page(57, 4, 2), // 57-4-1 が無い
+      page(57, 6, 2), // 57-5・57-6-1 が無い
+    ];
+    const labels = gridItems(order).map((item) => (item.type === 'missing' ? `-${missingLabel(item)}` : item.entry.pageKey));
+
+    expect(labels).toEqual(['57-1-1', '57-1-2', '57-3', '57-4', '-57-4-1 頁', '57-4-2', '-57-5 頁', '-57-6-1 頁', '57-6-2']);
+  });
+
+  it('抜けの札は、前の頁の部・前の段を引き継ぐ', () => {
+    const order = [
+      { ...body('a', 1), prefix: [2], part: 1 },
+      { ...body('b', 3), prefix: [2], part: 1 },
+    ];
+
+    expect(gridItems(order)[1]).toEqual({ type: 'missing', from: 2, to: 2, prefix: [2], part: 1 });
+    const renumbered = [
+      { ...body('a', 1), part: 1, section: [2] },
+      { ...body('b', 3), part: 1, section: [2] },
+    ];
+    expect(missingLabel(gridItems(renumbered)[1])).toBe('2-2 頁');
+  });
+
   it('抜けの札の見出し', () => {
     expect(missingLabel({ from: 58, to: 58 })).toBe('58 頁');
     expect(missingLabel({ from: 60, to: 70 })).toBe('60〜70 頁');
-    expect(missingLabel({ from: 57, to: 57, branch: 2 })).toBe('57-2 頁');
-    expect(missingLabel({ from: 58, to: 58, part: 1 })).toBe('第 2 部 58 頁');
-    expect(missingLabel({ from: 57, to: 57, branch: 2, part: 1 })).toBe('第 2 部 57-2 頁');
+    expect(missingLabel({ from: 57, to: 57, branch: [2] })).toBe('57-2 頁');
+    expect(missingLabel({ from: 58, to: 58, part: 1, section: [2] })).toBe('2-58 頁');
+    expect(missingLabel({ from: 57, to: 57, branch: [2], part: 1, section: [6], prefix: [4] })).toBe('6-4-57-2 頁');
+    expect(missingLabel({ from: 60, to: 70, part: 1, section: [6], prefix: [4] })).toBe('6-4-60〜6-4-70 頁');
+    expect(missingLabel({ from: 58, to: 58, prefix: [2] })).toBe('2-58 頁');
+    expect(missingLabel({ from: 60, to: 70, prefix: [2] })).toBe('2-60〜2-70 頁');
+    expect(missingLabel({ from: 57, to: 57, branch: [1, 2], prefix: [2] })).toBe('2-57-1-2 頁');
   });
 });
 

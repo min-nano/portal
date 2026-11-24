@@ -49,13 +49,17 @@ export function collectWarnings(formData, measurementGroups, validation) {
 
   const warnings = [];
   (formData.rooms || []).forEach(function (room, i) {
-    const label = '部屋 ' + (i + 1);
+    // 画面に部屋の番号は出ていないので、階数・部屋名で示す（同じ名前の部屋が
+    // あっても取り違えないよう、上から何番目かも添える）。
+    const label =
+      room.floor.trim() + '階 ' + room.room_name.trim() +
+      '（上から ' + (i + 1) + ' つ目の部屋）';
     const measurements = room.measurements || {};
     measurementGroups.forEach(function (g) {
       g.points.forEach(function (p) {
         const data = measurements[p.key] || {};
         const select = data.select;
-        const where = label + ' の「' + g.group + ' ' + p.label + '」';
+        const where = label + 'の「' + g.group + ' ' + p.label + '」';
 
         // 柱など、必ず選択させたい計測点が未選択。
         if (

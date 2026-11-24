@@ -19,9 +19,11 @@
 // ここから返すのはファイルの ID・名前・種類だけ。
 //
 // いくつも選ぶ（pickFiles）こともできる。押すたびに選ぶ・外すが切り替わり、
-// 選んだものはフォルダを移っても残る。iOS のファイルの選択と同じく、行を
-// なぞれば続けて選べる（左の丸の上はどの向きでも、行のほかの所は横に動かし
-// 始めれば。縦に動かし始めたときは一覧のスクロール）。
+// 選んだものはフォルダを移っても残る。iOS のファイルの選択と同じく、左の丸を
+// なぞれば続けて選べる（マウスは行のどこからでも）。
+//
+// 長い名前は、名前を横にずらすと続きが見える（スマートフォンでは省略された
+// 後ろの部分を確かめる手段がほかに無いため。広い画面では title でも見える）。
 
 import { apiGet } from './api.js';
 import { el } from './components/form-field.js';
@@ -407,6 +409,9 @@ function openPicker(options) {
     button.dataset.id = item.id;
     if (!item.folder) button.setAttribute('aria-pressed', String(picked.has(item.id)));
     const name = el(doc, 'span', 'drive-picker-name', item.name);
+    // 名前は横にずらせる（スクロール容器）が、Tab では止まらない（Chrome は
+    // スクロール容器を Tab で止まる所にする。行のボタンの中に止まる所を作らない）。
+    name.tabIndex = -1;
     const date = el(doc, 'span', 'drive-picker-date', formatDate(item.modifiedTime));
     if (options.multiple) button.append(checkMark(doc, item.folder));
     button.append(icon(doc, item.folder ? 'folder' : 'file'), name, date);
@@ -650,13 +655,17 @@ function openPicker(options) {
         if (drag?.active || !event.isPrimary || event.button !== 0) return;
         const row = event.target.closest('.drive-picker-item');
         if (!row || row.driveItem.folder) return;
+        // 指は丸の上からだけなぞる（丸の上は CSS でスクロールを止めてある）。
+        // 行のほかの所は、縦なら一覧の、横なら名前のスクロール（ブラウザに任せる）。
+        const mouse = event.pointerType === 'mouse';
+        if (!mouse && !event.target.closest('.drive-picker-check')) {
+          stopDrag();
+          return;
+        }
         drag = {
           pointerId: event.pointerId,
           pointerType: event.pointerType,
-          mouse: event.pointerType === 'mouse',
-          // 丸の上では、どの向きに動かしてもなぞり始める（CSS でスクロールを
-          // 止めてある）。
-          onCheck: Boolean(event.target.closest('.drive-picker-check')),
+          mouse,
           row,
           x0: event.clientX,
           y0: event.clientY,
@@ -682,10 +691,7 @@ function openPicker(options) {
         const dx = Math.abs(event.clientX - drag.x0);
         const dy = Math.abs(event.clientY - drag.y0);
         if (Math.max(dx, dy) < DRAG_START_PX[drag.mouse ? 'mouse' : 'touch']) return;
-        // 指で丸の外を縦に動かし始めたのは、一覧のスクロール（ブラウザに任せる。
-        // 横に動かし始めたときは、CSS の touch-action: pan-y でスクロールしない）。
-        if (drag.mouse || drag.onCheck || dx > dy) startDrag();
-        else stopDrag();
+        startDrag();
       });
       // 離したのは、一覧の外でも受ける（なぞり始める前は一覧で捕まえていない）。
       on(doc, 'pointerup', (event) => {

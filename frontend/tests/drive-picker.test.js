@@ -749,25 +749,50 @@ describe('なぞって選ぶ', () => {
     await picking;
   });
 
-  it('丸の外は、横に動かし始めればなぞって選び、縦に動かし始めればスクロールに任せる', async () => {
+  it('指は丸の外からはなぞらない（縦は一覧の、横は名前のスクロールに任せる）', async () => {
     respond(five);
     const picking = pickFiles({});
     await flush();
     layOut();
 
-    // 縦に動かし始めた（一覧のスクロール）。
+    // 縦に動かした（一覧のスクロール）。
     pointer(nameOf('1.pdf'), 'pointerdown', { x: 100, y: rowY(0) });
     pointer(nameOf('1.pdf'), 'pointermove', { x: 102, y: rowY(0) + 20 });
     pointer(nameOf('1.pdf'), 'pointermove', { x: 102, y: rowY(3) });
     pointer(nameOf('1.pdf'), 'pointercancel', { x: 102, y: rowY(3) });
     expect(pressed()).toEqual([]);
 
-    // 横に動かし始めてから縦へ。
+    // 横に動かした（名前のスクロール）。そのまま縦へ動かしても選ばない。
     pointer(nameOf('2.pdf'), 'pointerdown', { x: 100, y: rowY(1) });
-    pointer(nameOf('2.pdf'), 'pointermove', { x: 120, y: rowY(1) + 2 });
-    pointer(nameOf('2.pdf'), 'pointermove', { x: 120, y: rowY(3) });
-    pointer(nameOf('2.pdf'), 'pointerup', { x: 120, y: rowY(3) });
+    pointer(nameOf('2.pdf'), 'pointermove', { x: 60, y: rowY(1) + 2 });
+    pointer(nameOf('2.pdf'), 'pointermove', { x: 60, y: rowY(3) });
+    pointer(nameOf('2.pdf'), 'pointerup', { x: 60, y: rowY(3) });
+    expect(pressed()).toEqual([]);
+
+    // 丸の上からなら、横に動かし始めてもなぞって選ぶ。
+    pointer(check('2.pdf'), 'pointerdown', { x: 20, y: rowY(1) });
+    pointer(check('2.pdf'), 'pointermove', { x: 40, y: rowY(1) + 2 });
+    pointer(check('2.pdf'), 'pointermove', { x: 40, y: rowY(3) });
+    pointer(check('2.pdf'), 'pointerup', { x: 40, y: rowY(3) });
     expect(pressed()).toEqual(['2.pdf', '3.pdf']);
+    // 名前は横にずらせるが、Tab では止まらない。
+    expect(nameOf('1.pdf').tabIndex).toBe(-1);
+
+    button('キャンセル').click();
+    await picking;
+  });
+
+  it('離したのを取り逃したあと、指で丸の外を押したら、前のなぞりは捨てる', async () => {
+    respond(five);
+    const picking = pickFiles({});
+    await flush();
+    layOut();
+
+    pointer(nameOf('1.pdf'), 'pointerdown', { x: 100, y: rowY(0), kind: 'mouse' });
+    // 離したのが届かないまま、指で名前に触れてスクロールした。
+    pointer(nameOf('2.pdf'), 'pointerdown', { x: 100, y: rowY(1) });
+    pointer(nameOf('2.pdf'), 'pointermove', { x: 100, y: rowY(3), kind: 'mouse' });
+    expect(pressed()).toEqual([]);
 
     button('キャンセル').click();
     await picking;
