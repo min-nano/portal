@@ -869,7 +869,8 @@ Hosting は `https://<サイトID>.firebaseapp.com` でも同じアプリを配�
 | `RUNTIME_SA_EMAIL` | Cloud Run のランタイム SA のメール。サービスのランタイム SA と `DWD_SERVICE_ACCOUNT_EMAIL` に渡す | 両方 |
 | `SITE_ID` | Hosting のサイト ID。許可オリジン（本番は `https://<サイトID>.web.app` 等、プレビューは `https://<サイトID>--pr-<番号>-*.web.app`）の組み立てに使う | 両方 |
 | `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り）。**必須**（未設定だとデプロイが止まり、バックエンドも誰も通さない） | 両方 |
-| `ALLOWED_EXTERNAL_EMAILS` | （任意）個別に利用を許可する組織外のメールアドレス（カンマ・空白・改行のどれで区切ってもよい）。「外部ユーザー（組織外のアカウント）」参照。未設定なら外部ユーザーはいない | 両方 |
+| `ALLOWED_EXTERNAL_EMAILS_PREVIEW` | （任意）PR プレビューで外部ユーザーとして許可するアドレス。プレビューにはまだレビューされていないコードが載るので、本番の `ALLOWED_EXTERNAL_EMAILS` は渡さず、試す人のアドレスだけをここに置く。未設定ならプレビューに外部ユーザーはいない | プレビュー |
+| `ALLOWED_EXTERNAL_EMAILS` | （任意）個別に利用を許可する組織外のメールアドレス（カンマ・空白・改行のどれで区切ってもよい）。「外部ユーザー（組織外のアカウント）」参照。未設定なら外部ユーザーはいない | 本番 |
 | `CLERK_PUBLISHABLE_KEY` | Clerk Publishable Key（**本番インスタンス** `pk_live_...`）。本番ビルドに埋め込み、バックエンドの `CLERK_ISSUER` もここから導出する | 本番 |
 | `CLERK_PUBLISHABLE_KEY_TEST` | Clerk Publishable Key（**開発インスタンス** `pk_test_...`）。プレビュービルドに埋め込み、プレビュー用バックエンドの `CLERK_ISSUER` もここから導出する | プレビュー |
 | `CANONICAL_HOST` | 本番のカスタムドメイン（例 `portal.example.com`）。`.web.app` へのアクセスをここへリダイレクトし、許可オリジンにも加える。未設定ならどちらも行わない | 本番 |
@@ -958,7 +959,7 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 
 プレビューを動かすための前提:
 
-1. **Clerk 開発インスタンス** にも本番と同じ設定を行う（Google のみ有効化・セッショントークンの `email` クレーム）。開発インスタンスは既定で任意のオリジンからの利用を許可するため、プレビュー URL のための追加設定は通常不要。オリジンを明示的に制限したい場合のみ、**Allowed origins** を Backend API で設定する（ダッシュボードに UI は無い。渡した配列で全置換される点に注意）:
+1. **Clerk 開発インスタンス** にも本番と同じ設定を行う（Google のみ有効化・セッショントークンの `email` クレーム。外部ユーザーをプレビューでも試すなら、確認コードの有効化と **Test mode のオフ**も。「1. Clerk」）。開発インスタンスは既定で任意のオリジンからの利用を許可するため、プレビュー URL のための追加設定は通常不要。オリジンを明示的に制限したい場合のみ、**Allowed origins** を Backend API で設定する（ダッシュボードに UI は無い。渡した配列で全置換される点に注意）:
    ```bash
    curl -X PATCH https://api.clerk.com/v1/instance \
      -H "Authorization: Bearer <開発インスタンスの Secret Key (sk_test_...)>" \

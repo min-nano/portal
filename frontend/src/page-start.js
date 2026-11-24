@@ -82,7 +82,13 @@ export function startPage({
     );
 
     if (preparing) setPageLoadingLabel(preparing);
-    if (prepare) await prepare(clerk);
+    try {
+      if (prepare) await prepare(clerk);
+    } catch (error) {
+      // 準備が別の理由（起動待ちの 503 など）で先に失敗しても、使えない
+      // アカウントだと分かれば、そちらを出す（「待てば通る」と思わせない）。
+      throw (await refusal) ?? error;
+    }
     showApp();
 
     const refused = await refusal;
@@ -110,6 +116,8 @@ const CLOSING_CODES = new Set(['account_not_allowed', 'staff_only']);
  */
 function closeApp() {
   document.getElementById('app').dataset.closed = '';
+  // #app の外に開いているもの（頁の拡大表示など）も閉じる。
+  for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
 }
 
 /**

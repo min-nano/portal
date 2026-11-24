@@ -125,15 +125,17 @@ jobs:
         # Clerk JWT 検証で行うため、JWT が無ければ 401 で弾かれる。
         #
         # 値にカンマ（複数指定）を含むため、区切り文字を ; に変える ^;^ 記法を使う。
+        # 外部ユーザーは、プレビュー専用の変数だけを渡す（本番の一覧は渡さない。
+        # プレビューには、まだレビューされていないコードが載るため）。
         env:
-          ALLOWED_EXTERNAL_EMAILS: '${{ vars.ALLOWED_EXTERNAL_EMAILS }}'
+          ALLOWED_EXTERNAL_EMAILS: '${{ vars.ALLOWED_EXTERNAL_EMAILS_PREVIEW }}'
         run: |
           env_vars="CLERK_ISSUER=$CLERK_ISSUER_TEST"
           env_vars="$env_vars;CLERK_AUTHORIZED_PARTIES=https://${{ vars.SITE_ID }}--pr-$PR-*.web.app"
           env_vars="$env_vars;ALLOWED_EMAIL_DOMAINS=${{ vars.ALLOWED_EMAIL_DOMAINS }}"
           env_vars="$env_vars;DWD_SERVICE_ACCOUNT_EMAIL=${{ vars.RUNTIME_SA_EMAIL }}"
           env_vars="$env_vars;SETTINGS_CHANNEL_PATH=preview-channels/pr-$PR"
-          # 任意。組織外のアカウントを個別に許可するときだけ（本番と同じ変数）。
+          # 任意。プレビューで外部ユーザーを試すときだけ（ALLOWED_EXTERNAL_EMAILS_PREVIEW）。
           # 1 行に 1 つずつ書いてもよいよう、空白・改行・; をカンマにそろえる
           # （改行や ; が残ると、環境変数の受け渡しの書式が壊れる）。
           external_emails=$(printf '%s' "$ALLOWED_EXTERNAL_EMAILS" | tr -s '[:space:];' ',' | sed 's/^,//; s/,$//')

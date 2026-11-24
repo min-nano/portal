@@ -147,7 +147,8 @@ describe('startPage', () => {
   });
 
   it('準備が使えないアカウントとして断られたら、画面の中身も隠す', async () => {
-    hideStaffOnlyForExternalUsers.mockReturnValue(new Promise(() => {}));
+    // /api/me は断りを返さなかった（準備のほうが断られた）。
+    hideStaffOnlyForExternalUsers.mockResolvedValue(false);
     const refused = Object.assign(new Error('このアプリは許可されたアカウント専用です。'), {
       status: 403,
       code: 'account_not_allowed',
@@ -172,6 +173,44 @@ describe('startPage', () => {
     await settle();
 
     expect(app().hasAttribute('data-closed')).toBe(true);
+  });
+
+  it('準備が別の理由で先に失敗しても、使えないアカウントならそちらを出す', async () => {
+    hideStaffOnlyForExternalUsers.mockRejectedValue(
+      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), {
+        status: 403,
+        code: 'account_not_allowed',
+      })
+    );
+    const coldStart = Object.assign(new Error('サーバーエラーが発生しました (HTTP 503)。'), {
+      status: 503,
+    });
+
+    startPage({ prepare: async () => Promise.reject(coldStart) });
+    await settle();
+
+    expect(app().hasAttribute('data-closed')).toBe(true);
+    expect(document.getElementById('message').textContent).toBe(
+      'このアプリは許可されたアカウント専用です。'
+    );
+  });
+
+  it('画面を閉じるときは、#app の外に開いているダイアログも閉じる', async () => {
+    document.body.insertAdjacentHTML('beforeend', '<dialog id="preview" open></dialog>');
+    const preview = document.getElementById('preview');
+    preview.close = vi.fn(() => preview.removeAttribute('open'));
+    hideStaffOnlyForExternalUsers.mockRejectedValue(
+      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), {
+        status: 403,
+        code: 'account_not_allowed',
+      })
+    );
+
+    startPage({ prepare: async () => {} });
+    await settle();
+
+    expect(preview.close).toHaveBeenCalledTimes(1);
+    expect(preview.hasAttribute('open')).toBe(false);
   });
 
   it('ほかの理由で準備に失敗したときは、画面を閉じない（理由を出すだけ）', async () => {
