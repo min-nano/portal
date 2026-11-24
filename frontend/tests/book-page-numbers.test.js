@@ -65,6 +65,30 @@ describe('normalizeDigits / groupLines', () => {
     expect(groupLines(digits).map((line) => line.text)).toEqual(['11']);
   });
 
+  it('重ね書きの写しが別の区切りの断片になっていても、1 度だけ読む', () => {
+    // 「3-」を 3 度、「14」を 3 度ずらして書くと、pdf.js は最後の「3-」と最初の「14」を
+    // 1 つの断片にする（実際の pdf.js が返す断片の並び）。
+    const at = (text, x0, width) => ({ text, x0, x1: x0 + width, y: 0.95, h: 0.012 });
+    const split = [
+      at('3-', 0.4834, 0.0147),
+      at('3-', 0.4826, 0.0147),
+      at('3-14', 0.4818, 0.0315),
+      at('14', 0.4973, 0.0168),
+      at('14', 0.4981, 0.0168),
+    ];
+    expect(groupLines(split).map((line) => line.text)).toEqual(['3-14']);
+    // 4 分の 1 字ずつずらした写し（3 度目は 1 度目から半字離れる）。
+    const shifted = [0, 0.004, 0.008].map((dx) => at('3-14', 0.48 + dx, 0.032));
+    expect(groupLines(shifted).map((line) => line.text)).toEqual(['3-14']);
+    // 幅の分からない断片（x0 = x1）でも、ほぼ同じ所に書いた写しは 1 度だけ読む。
+    const zeroWidth = [0, 0.0005].map((dx) => at('3-14', 0.48 + dx, 0));
+    expect(groupLines(zeroWidth).map((line) => line.text)).toEqual(['3-14']);
+    // 隣の断片の同じ文字は、全角の字を含んで広く見積もられた断片でも、重ね書きではない。
+    expect(groupLines([at('12', 0.46, 0.008), at('2頁頁頁', 0.468, 0.048)]).map((line) => line.text)).toEqual(['122頁頁頁']);
+    // 1 つの断片の中で続く同じ文字（「1-11」の「11」）は、重ね書きではない。
+    expect(groupLines([at('1-11', 0.48, 0.032)]).map((line) => line.text)).toEqual(['1-11']);
+  });
+
   it('字の間が開いていれば区切る（柱と頁番号をくっつけない）', () => {
     const [line] = groupLines([
       { text: '第3章 運動の法則', x0: 0.1, x1: 0.4, y: 0.05, h: 0.012 },
