@@ -2306,6 +2306,8 @@ describe('結合と検証', () => {
     ]);
     expect($('problems').textContent).toContain('2-4 頁が見つかりません');
     expect($('problems').textContent).toContain('（1-1〜1-6 頁・2-1〜2-6 頁）');
+    // ファイルの一覧の要約にも、並びの確認と同じ番号（まとまりの番号つき）を出す。
+    expect(fileItem('本_2.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 1-5, 1-6, 2-1, 2-2, 2-3)');
 
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));

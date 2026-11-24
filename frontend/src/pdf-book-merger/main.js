@@ -123,7 +123,16 @@ let depthMode = 'auto';
 /** 同じ頁らしい組を探す（前に見比べた頁どうしは見比べ直さない）。 */
 const findDuplicates = createDuplicateFinder();
 /** 最後に組み立てた並びと指摘。 */
-let view = { order: [], problems: [], issues: new Map(), numberings: new Map(), places: new Map(), depth: 0, anyNumbered: false };
+let view = {
+  order: [],
+  problems: [],
+  issues: new Map(),
+  numberings: new Map(),
+  places: new Map(),
+  sections: new Map(),
+  depth: 0,
+  anyNumbered: false,
+};
 /** 結合した PDF と検証の結果。並びが変わったら捨てる。 */
 let merged = null;
 /** 結合と検証の途中か（その間は、拡大表示のために PDF を開かない）。 */
@@ -1345,7 +1354,9 @@ function refresh() {
     textless
   );
 
-  view = { order, problems, issues, numberings, places, depth, anyNumbered: [...places.values()].includes('numbered') };
+  // 頁ごとの、頁番号が戻ったところで分けたまとまりの番号（ファイルの一覧の要約にも付ける）。
+  const sections = new Map(order.filter((entry) => entry.section).map((entry) => [entry.pageKey, entry.section]));
+  view = { order, problems, issues, numberings, places, sections, depth, anyNumbered: [...places.values()].includes('numbered') };
   if (!$('outputName').value.trim() || $('outputName').dataset.suggested === 'true') {
     const suggested = suggestBookName(files.map((file) => file.name));
     $('outputName').value = suggested;
@@ -1601,7 +1612,9 @@ function fileMeta(file) {
   const details = [];
   const place = view.places.get(file.key);
   if (place === 'numbered') {
-    details.push(`頁番号: ${numberingSequence(view.numberings.get(file.key))}`);
+    // 並びの確認と同じく、頁番号が戻ったところで分けたまとまりの番号（6-）も付ける。
+    const sections = file.pages.map((page) => view.sections.get(page.key));
+    details.push(`頁番号: ${numberingSequence(view.numberings.get(file.key), sections)}`);
     if (file.manual) details.push('手入力');
   } else {
     details.push(`${file.pages.length} 頁`);

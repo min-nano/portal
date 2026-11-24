@@ -769,10 +769,13 @@ export function manualFileNumbers(count, start, step, prefix = null) {
  *   途中で飛ぶ                 → 1, 3, 5...17, 19, 31, 33, 35...47, 49
  *   枝番の頁を挟む             → 51, 53, 55, 57-1, 57-3, 59, 61
  *   部の番号の付いた頁         → 1-77, 1-79, 2-1, 2-3, 2-5
+ *   分けたまとまりの頁         → 5-123, 5-124, 6-1-1, 6-1-3（並びの確認と同じ、まとまりの番号つき）
  *
  * @param {{step:number|null, pages:{number:number|null, branch?:number[], prefix?:number[]}[]}} numbering
+ * @param {(number[]|null|undefined)[]} [sections] 頁ごとの、頁番号が戻ったところで分けたまとまりの
+ *   番号（ordering.js の arrangeBook。頭に「6-」と付ける）
  */
-export function numberingSequence(numbering) {
+export function numberingSequence(numbering, sections = []) {
   const { step, pages } = numbering;
   // 歩幅をほかの束から借りても、番号の候補が 1 つも無ければ番号は決まらない。
   if (step === null || step === undefined || pages.every((page) => page.number === null)) {
@@ -780,10 +783,11 @@ export function numberingSequence(numbering) {
   }
   // 枝番の頁は、それだけで 1 つの並びにする（前後の番号とは続けない）。前の段が変われば並べ直す。
   const runs = [];
-  for (const page of pages) {
+  pages.forEach((page, index) => {
     const { number, branch } = page;
-    const key = prefixKey(page.prefix);
-    const label = pageNumberText(page);
+    const section = sections[index] ?? null;
+    const key = `${prefixKey(section)}|${prefixKey(page.prefix)}`;
+    const label = `${section ? `${pathText(section)}-` : ''}${pageNumberText(page)}`;
     const run = runs.at(-1);
     if (!branch && run && run.key === key && number === run.last + step) {
       run.labels.push(label);
@@ -791,7 +795,7 @@ export function numberingSequence(numbering) {
     } else {
       runs.push({ key, labels: [label], last: branch ? NaN : number });
     }
-  }
+  });
   return runs
     .map(({ labels }) =>
       labels.length <= 5

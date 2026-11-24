@@ -756,6 +756,15 @@ describe('ハイフンで区切った頁番号の階層（枝番か、部・編�
     expect([sideOf(57, [1, 1]), sideOf(57, [1, 2]), sideOf(null), sideOf(2.5)]).toEqual(['odd', 'even', null, null]);
   });
 
+  it('番号の付き方の要約にも、頁番号が戻ったところで分けたまとまりの番号を付ける', () => {
+    const numbering = inferFileNumbers(pages('5-123', '5-124', '1-1', '1-2', '1-3'), { depth: 1 });
+    const sections = [undefined, undefined, [6], [6], [6]];
+
+    expect(numberingSequence(numbering, sections)).toBe('5-123, 5-124, 6-1-1, 6-1-2, 6-1-3');
+    // まとまりが変われば並べ直す（番号が続いていても）。
+    expect(numberingSequence(inferFileNumbers(pages(1, 2, 3, 4), { depth: 0 }), [undefined, undefined, [2], [2]])).toBe('1, 2, 2-3, 2-4');
+  });
+
   it('手で決めたファイルの番号にも、前の段を付ける', () => {
     expect(manualFileNumbers(2, 1, 2, [3]).pages.map(pageNumberText)).toEqual(['3-1', '3-3']);
   });
