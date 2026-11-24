@@ -195,6 +195,23 @@ describe('startPage', () => {
     );
   });
 
+  it('使えないアカウントかの答えが遅いときは、待たずに準備の失敗を出す', async () => {
+    vi.useFakeTimers();
+    try {
+      hideStaffOnlyForExternalUsers.mockReturnValue(new Promise(() => {})); // 答えが来ない
+      const onError = vi.fn();
+
+      startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')), onError });
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(onError).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onError).toHaveBeenCalledWith('通信に失敗しました。');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('画面を閉じるときは、#app の外に開いているダイアログも閉じる', async () => {
     document.body.insertAdjacentHTML('beforeend', '<dialog id="preview" open></dialog>');
     const preview = document.getElementById('preview');

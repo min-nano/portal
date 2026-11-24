@@ -87,7 +87,8 @@ export function startPage({
     } catch (error) {
       // 準備が別の理由（起動待ちの 503 など）で先に失敗しても、使えない
       // アカウントだと分かれば、そちらを出す（「待てば通る」と思わせない）。
-      throw (await refusal) ?? error;
+      // 待つのは少しだけ（答えが遅いときに、準備の失敗を出すのを遅らせない）。
+      throw (await settledWithin(refusal, REFUSAL_GRACE_MS)) ?? error;
     }
     showApp();
 
@@ -99,6 +100,14 @@ export function startPage({
       onError(refused.message);
     }
   }
+}
+
+/** 準備が失敗したとき、使えないアカウントかの答えを待つ時間の上限。 */
+const REFUSAL_GRACE_MS = 2000;
+
+/** promise の結果を、ms 以内に出れば返す（出なければ null）。 */
+function settledWithin(promise, ms) {
+  return Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(null), ms))]);
 }
 
 /**
