@@ -16,7 +16,7 @@ import {
   pageLabelTexts,
 } from '../src/pdf-book-merger/ordering.js';
 import { assignParts } from '../src/pdf-book-merger/parts.js';
-import { displayLabel, gridItems, missingLabel, pageIssues } from '../src/pdf-book-merger/review.js';
+import { displayLabel, gridItems, missingLabel } from '../src/pdf-book-merger/review.js';
 
 /**
  * ファイル 1 つ。numbers は頁ごとに読めた番号（null は読めなかった頁）。
