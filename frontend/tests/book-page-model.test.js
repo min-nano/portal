@@ -75,6 +75,28 @@ describe('featureVectors（頁ごとの特徴）', () => {
     expect(measurePages([page])[0]).toMatchObject({ shallowestDepth: 2, shallowestY: 0.5 });
   });
 
+  it('頁番号の構造（版 5）があれば、頁番号・前付け・部と前の段の変わり目をそこから求める', () => {
+    const numbered = (number, extra = {}) => ({
+      label: 'ラベルは見ない',
+      bytes: 1,
+      items: body,
+      numbering: { role: 'body', number, prefix: null, part: null, ...extra },
+    });
+    const rows = featureVectors([
+      { ...numbered(null), numbering: { role: 'front', number: null, prefix: null, part: null } },
+      numbered(1, { part: 0, prefix: [1] }),
+      numbered(2),
+      numbered(1, { part: 1, prefix: [2] }),
+      numbered(2, { part: 1, prefix: [2] }),
+    ]);
+    const at = (row, name) => row[FEATURE_NAMES.indexOf(name)];
+    expect(rows.map((row) => at(row, 'front'))).toEqual([1, 0, 0, 0, 0]);
+    // 部・前の段の分からない頁（2 頁目）は飛ばして比べる。
+    expect(rows.map((row) => at(row, 'partChange'))).toEqual([0, 0, 0, 1, 0]);
+    expect(rows.map((row) => at(row, 'prefixChange'))).toEqual([0, 0, 0, 1, 0]);
+    expect(rows.map((row) => at(row, 'numberRestart'))).toEqual([0, 0, 0, 1, 0]);
+  });
+
   it('大きさの分からない頁・行の無い頁があっても測れる', () => {
     // 日本語だけの行も、最初の行として見る。
     const title = measurePages([{ label: '1 頁', bytes: 1, items: [line('保有水平耐力計算等の構造計算', 0.3, 0.03), line('6.1 許容', 0.5)] }]);

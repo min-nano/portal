@@ -79,8 +79,10 @@ function median(values) {
 /**
  * 頁ごとに測った数（特徴を組み立てる元）。
  *
- * @param {{items:Array<[string, number, number, number, number]>, bytes:number, label:string}[]} pages
- *   学習データの頁（items は [文字, x0, x1, y, h]。座標は頁の幅・高さに対する割合）
+ * @param {{items:Array<[string, number, number, number, number]>, bytes:number, label:string,
+ *   numbering?:{role:string, number:number|null, prefix:number[]|null, part:number|null}}[]} pages
+ *   学習データの頁（items は [文字, x0, x1, y, h]。座標は頁の幅・高さに対する割合。numbering は
+ *   頁番号の構造で、版 5 から）
  */
 export function measurePages(pages) {
   const lines = pages.map((page) =>
@@ -102,7 +104,9 @@ export function measurePages(pages) {
       return !best || depth < best.depth ? { depth, line } : best;
     }, null);
     const head = lines[index].filter((line) => line.y <= BAND).map((line) => line.text).join(' ');
-    const number = Number(page.label.match(/^-?\d+/)?.[0] ?? NaN);
+    // 頁番号の構造（版 5 から。それより前は、頁のラベルの頭の数を頁番号とする）。
+    const numbering = page.numbering;
+    const number = numbering ? (numbering.number ?? NaN) : Number(page.label.match(/^-?\d+/)?.[0] ?? NaN);
     return {
       blank: chars < 8 ? 1 : 0,
       lines: Math.log1p(ls.length),
@@ -122,7 +126,10 @@ export function measurePages(pages) {
       // 柱の番号（頁番号を除いた、柱の中の番号らしい形）。章・節が変わると変わる。
       headNumber: headNumbers(head),
       headGrams: bigrams(head),
-      front: /^(?:前付|表紙)/.test(page.label) ? 1 : 0,
+      front: (numbering ? numbering.role === 'front' : /^(?:前付|表紙)/.test(page.label)) ? 1 : 0,
+      // 何部目か・前の段（部・編・章などの番号）。変わるところは、本の番号の構造の区切り。
+      part: numbering?.part ?? null,
+      prefix: numbering?.prefix ? numbering.prefix.join('-') : null,
       number,
       bytes: Math.log((page.bytes || typicalBytes) / typicalBytes),
     };
@@ -154,6 +161,8 @@ export const FEATURE_NAMES = [
   'headEmpty',
   'front',
   'numberRestart',
+  'partChange',
+  'prefixChange',
   'bytes',
   'prevBlank',
   'prevLargest',
@@ -199,11 +208,18 @@ export function featureVectors(pages) {
   const changes = measures.map((_, index) => headChange(measures, index));
   const numbersNew = measures.map((_, index) => headNumberNew(measures, index));
   let lastNumber = null;
+  let lastPart = null;
+  let lastPrefix = null;
   return measures.map((m, index) => {
     const prev = measures[index - 1];
     const next = measures[index + 1];
     const restart = Number.isFinite(m.number) && lastNumber !== null && m.number < lastNumber ? 1 : 0;
     if (Number.isFinite(m.number)) lastNumber = m.number;
+    // 前の、部・前の段の分かる頁から変わったか（分からない頁は飛ばして比べる）。
+    const partChange = m.part !== null && lastPart !== null && m.part !== lastPart ? 1 : 0;
+    const prefixChange = m.prefix !== null && lastPrefix !== null && m.prefix !== lastPrefix ? 1 : 0;
+    if (m.part !== null) lastPart = m.part;
+    if (m.prefix !== null) lastPrefix = m.prefix;
     const depthIs = (depth, value) => (value === depth ? 1 : 0);
     return [
       m.blank,
@@ -229,6 +245,8 @@ export function featureVectors(pages) {
       m.headGrams.size ? 0 : 1,
       m.front,
       restart,
+      partChange,
+      prefixChange,
       m.bytes,
       prev ? prev.blank : 1,
       prev ? prev.largest : 0,

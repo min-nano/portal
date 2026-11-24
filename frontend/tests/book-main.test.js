@@ -3328,7 +3328,9 @@ describe('分ける', () => {
     await vi.waitFor(() => expect(logText()).toContain('「本_分け方.json」をダウンロードしました'));
     const saved = URL.createObjectURL.mock.calls.at(-1)[0];
     const data = JSON.parse(await saved.text());
-    expect(data).toMatchObject({ version: 4, files: ['本.pdf'], manual: true, itemFields: ['text', 'x0', 'x1', 'y', 'h'] });
+    expect(data).toMatchObject({ version: 5, files: ['本.pdf'], manual: true, itemFields: ['text', 'x0', 'x1', 'y', 'h'] });
+    // 頁番号の構造（部が 1 つの本では、何部目か・前の段は無い）。
+    expect(data.pages[2].numbering).toEqual({ role: 'body', number: 3, prefix: null, branch: null, part: null, section: null });
     // 頁の文字のかたまり（本文も）。余白を OCR で読んでいなければ ocrItems は空。
     expect(data.pages[2].items.map(([text]) => text)).toContain('第1章 1.2 下地');
     expect(data.pages[4].items).toContainEqual(['第2章 施工', 0.3, 0.7, 0.3, 0.04]);

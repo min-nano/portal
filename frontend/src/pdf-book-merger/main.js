@@ -3320,6 +3320,16 @@ async function saveTrainingData() {
       // 頁の文字のかたまり（読み違いもそのまま。特徴の求め方を変えたら、ここから求め直す）。
       items: JSON.parse(pageOf(order[index]).rawItems),
       ocrItems: JSON.parse(pageOf(order[index]).ocrItems ?? '[]'),
+      // 頁番号の構造（並べたときに決めたもの）: 配置、部の中の頁番号、前の段（部・編・章などの
+      // 番号）、枝番、何部目か、番号を振り直したまとまり。無いものは null。
+      numbering: {
+        role: entry.role,
+        number: entry.number,
+        prefix: entry.prefix ?? null,
+        branch: entry.branch ?? null,
+        part: entry.part ?? null,
+        section: entry.section ?? null,
+      },
     })),
   };
   const text = JSON.stringify(data);

@@ -12,8 +12,9 @@ import { headingRank, RANKS } from './split.js';
 /**
  * 学ぶためのデータの形の版（特徴を足したり変えたり、残す文字を変えたりしたら上げる）。
  * 4: 頁のすべての文字のかたまり（rawItems）と、余白を OCR で読んだ文字の確信度を残す。
+ * 5: 頁番号の構造（numbering。配置・部の中の頁番号・前の段・枝番・何部目か・振り直したまとまり）を残す。
  */
-export const FEATURE_VERSION = 4;
+export const FEATURE_VERSION = 5;
 
 /** 文字のかたまり 1 つを残す形の項目の並び（JSON の itemFields に書く）。 */
 export const ITEM_FIELDS = ['text', 'x0', 'x1', 'y', 'h'];

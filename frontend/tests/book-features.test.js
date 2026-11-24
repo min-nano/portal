@@ -69,7 +69,7 @@ describe('pageFeatures（頁ごとの特徴）', () => {
     ];
     const candidates = breakCandidates(items);
     const features = pageFeatures(items, candidates, breakRanks(items, candidates));
-    expect(FEATURE_VERSION).toBe(4);
+    expect(FEATURE_VERSION).toBe(5);
     expect(features[0]).toMatchObject({ position: 0, body: 0, candidate: 0, rank: 6, numbered: 0, step: 0, blank: 0, bytesBefore: 0 });
     expect(features[3]).toMatchObject({ blank: 1, bytes: 0.1 });
     expect(features[4]).toMatchObject({
