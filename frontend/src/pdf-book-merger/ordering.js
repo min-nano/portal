@@ -427,7 +427,7 @@ export function placeFiles(files, numberings, overrides = new Map()) {
  * }}
  *   branch は枝番、prefix は前の段（部・編などの番号）で、あるときだけ。part は何部目か
  *   （0 から。部が 1 つなら null）。section は、頁番号が部の初めに戻ったところで分けた
- *   まとまりの番号（[6]。頁は「6-4-30」と書く。sectionSlash は「6/4-30」と区切る（markSlashes）。刷られた番号のまま並ぶまとまりには付けない）。
+ *   まとまりの番号（[6]。頁は「6-4-30」と書く。刷られた番号のまま並ぶまとまりには付けない）。
  *   mismatch は、番号の振り直しが束の種類（奇数頁・偶数頁）ごとに揃わず、部に分けるのを
  *   やめたとき。
  */
@@ -502,7 +502,6 @@ export function arrangeBook(files, numberings, overrides = new Map()) {
     });
   });
 
-  markSlashes(body);
   body.sort((a, b) => {
     // 番号の決まらない頁は本文の最後に（並べようが無いので、目立つところへ）。
     if (a.number === null || b.number === null) {
@@ -700,7 +699,7 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
     problems.push({
       level: 'warn',
       kind: 'parts',
-      message: `頁番号が部の初めに戻ったところで本文を分け、本の順ですぐ前の頁の後に並べました（${ranges.join('・')}）。分けたまとまりの頁は、前のまとまりの番号に 1 を足した番号を 1 つ上の階層として頭に付け、「6-4-30 頁」のように書きます（刷られたほかの頁の番号と重なるときだけ「6/4-30 頁」と区切ります）。部の分かれていない本なら、同じ束を最初から 2 度入れていないか確かめてください。`,
+      message: `番号のつながらないところ（頁番号が部の初めに戻ったところ・部の番号の無い頁）で本文を分け、本の順ですぐ前の頁の後に並べました（${ranges.join('・')}）。分けたまとまりの頁は、まとまりの番号を 1 つ上の階層として頭に付け、「6-4-30 頁」のように書きます（本の先頭のまとまりは 0、刷られた部のすぐ前のまとまりはその部の 0 で「6-0-1 頁」）。部の分かれていない本なら、同じ束を最初から 2 度入れていないか確かめてください。`,
       pageKeys: [],
     });
   }
@@ -714,20 +713,6 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
       kind: 'depth',
       message: `ハイフンで区切った頁番号（${pageNumberText(example)} など）は、前後の頁とのつながりから、「${pathText(example.prefix)}-」を部・編などの番号、${example.number} を頁番号と読み、その順に並べました${several && !sectioned ? `（${ranges.join('・')}）` : ''}。枝番の付いた頁なら、一覧の上の「ハイフンで区切った頁番号」で読み方を選び直してください。`,
       pageKeys: [],
-    });
-  }
-  // 部・編などの番号の付いた本で、前の段の無い頁を本の先頭（前付け）に置いた（本の順で前に頁の
-  // ある前の段の無い頁は、分けたまとまりとして「parts」で知らせる）。
-  const unprefixed =
-    depth > 0 && example
-      ? body.filter((item) => item.number !== null && !item.prefix && !item.section)
-      : [];
-  if (unprefixed.length) {
-    problems.push({
-      level: 'warn',
-      kind: 'no-prefix',
-      message: `部・編などの番号の無い頁が ${unprefixed.length} 頁あり、本の順で前に頁が無いので、本文の先頭（前付け）に置きました。部の中の頁なら、どれか 1 頁の番号を「2-21」の形で直してください（同じファイルの残りの頁も、その部の頁になります）。`,
-      pageKeys: unprefixed.map((item) => item.pageKey),
     });
   }
   if (mismatch) {
@@ -785,34 +770,13 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
 }
 
 /**
- * まとまりの番号を「-」でつなぐと、刷られたほかの頁（まとまりの番号の無い頁）の番号と重なる
- * まとまりに、sectionSlash を付ける（「/」で区切る）。枝番の頁のある本（加除式）では、「-」の
- * 後ろは枝番と読めるので、すべてのまとまりを「/」で区切る（2-15 を 2 頁の枝番 15 と読ませない）。
- */
-function markSlashes(body) {
-  const printed = new Set(body.filter((item) => !item.section && item.number !== null).map((item) => pageNumberText(item)));
-  const branched = body.some((item) => item.branch);
-  const clash = new Set(
-    body
-      .filter(
-        (item) =>
-          item.section && item.number !== null && (branched || printed.has(`${pathText(item.section)}-${pageNumberText(item)}`))
-      )
-      .map((item) => item.part)
-  );
-  for (const item of body) if (clash.has(item.part)) item.sectionSlash = true;
-}
-
-/**
  * 頁番号が戻ったところで分けたまとまりの頭。まとまりの番号を 1 つ上の階層として「-」で
- * つなぐ（[6] → "6-"。頁は 6-4-30）。そうすると刷られたほかの頁の番号と重なるまとまりだけ
- * 「/」で区切る（sectionSlash。3-2-1 が第 3 部 2 頁の枝番 1 と重なるなら 3/2-1）。無ければ ''。
+ * つなぐ（[6] → "6-"。頁は 6-4-30。前書きの [6, 0] → "6-0-"。頁は 6-0-1）。無ければ ''。
  *
- * @param {{section?:number[], sectionSlash?:boolean}} item 頁か抜けの札
+ * @param {{section?:number[]}} item 頁か抜けの札
  */
 export function sectionHead(item) {
-  if (!item.section) return '';
-  return `${pathText(item.section)}${item.sectionSlash ? '/' : '-'}`;
+  return item.section ? `${pathText(item.section)}-` : '';
 }
 
 /**

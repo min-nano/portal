@@ -77,12 +77,21 @@ export function assignParts(files, numberings) {
 /**
  * まとまり（刷られた前の段と、その中の振り直し）を本の順に並べ、番号を付ける。
  *
- * 刷られた前の段の、本の順で最初のまとまりは、刷られた番号のまま並べる（4-30 頁）。それ以外
- * （頁番号が部の初めに戻ったところから先・前の段の無い頁）は、ファイルを部の区切りとは
- * みなさず（束は部をまたいでスキャンするので）、本の順ですぐ前にある頁のまとまりの後に置き、
- * 前のまとまりの番号に 1 を足した番号を付ける（第 5 部の後なら 6。頁は「6-4-30」）。
- * スキャンした束の頁は飛び飛びにはならないので、近くの頁が並ぶように区切る。
- * 本の順で前に頁が無ければ、本の先頭（前付け）に置く。
+ * 刷られた前の段の、本の順で最初のまとまりは、刷られた番号のまま並べる（4-30 頁。前の段が
+ * そのまとまりの番号）。それ以外（頁番号が部の初めに戻ったところから先・前の段の無い頁）は、
+ * ファイルを部の区切りとはみなさず（束は部をまたいでスキャンするので）、本の順ですぐ前にある
+ * 頁のまとまりの後に置き、番号を付けて 1 つ上の階層として頭に付ける（頁は「6-4-30」）。
+ * スキャンした束の頁は飛び飛びにはならないので、近くの頁が並ぶように区切る。番号は、
+ *
+ *   本の順で前に頁が無い（本の先頭）        0（前の段の無い本では 1。「0-1」「0-3-1」。0 が刷られた
+ *                                           部（目次を 0- にした）で使われていれば、下の前書きと
+ *                                           同じく、すぐ後ろの部の 0）
+ *   前の段の無い頁で、別の刷られた部の     その部の 0（「6-0-1」。6-1 の前に並ぶ）
+ *   すぐ前（部の前書き）
+ *   それ以外                                前の番号に 1 を足し、刷られた部の番号と重なれば
+ *                                           さらに足したもの（第 5 部の後なら 6）
+ *
+ * 分けたまとまりの続き（1- の章のあとの 2- の章）は、同じ番号のまま。
  *
  * @returns {{order:object[], sections:Map<object, number[]>}}
  */
@@ -115,7 +124,14 @@ function arrangeUnits(units, segments) {
 
   const order = [];
   const sections = new Map();
-  let top = printed ? 0 : 1; // 前付け（前の段の無い本では、最初のまとまり）の番号
+  const first = printed ? 0 : 1; // 本の先頭のまとまりの番号
+  const tops = new Set(main.map((unit) => unit.prefix[0])); // 刷られた部の番号
+  let top = first;
+  const fresh = () => {
+    let n = top + 1;
+    while (tops.has(n)) n++;
+    return n;
+  };
   const visit = (unit) => {
     if (order.includes(unit)) return;
     order.push(unit);
@@ -125,12 +141,21 @@ function arrangeUnits(units, segments) {
       if (order.includes(next)) continue;
       // 分けたまとまりの続き（1- の章のあとの 2- の章）は、同じまとまりの番号のまま。
       const continues = sections.has(unit) && unit.prefix && next.prefix && comparePaths(next.prefix, unit.prefix) > 0;
-      sections.set(next, continues ? sections.get(unit) : [top + 1]);
+      // 前の段の無いまとまりで、すぐ後ろが別の刷られた部なら、その部の前書き（その部の 0）。
+      // その部は、前のまとまりより後の部（一覧で部の並びが前後しているときは前書きとみなさない）。
+      const after = next.prefix ? null : successor(next, segments);
+      const preface = main.includes(after) && after.prefix[0] > (sections.get(unit)?.[0] ?? unit.prefix[0]);
+      sections.set(next, continues ? sections.get(unit) : preface ? [...after.prefix, 0] : [fresh()]);
       visit(next);
     }
   };
-  // 前付け（前の段の無い本では、本の最初のまとまり）は番号を付けない。
-  for (const unit of front) visit(unit);
+  for (const unit of front) {
+    // 先頭の番号が刷られた部で使われている（目次を 0- の部にした）ときは、すぐ後ろの刷られた
+    // 部の前書きにする（その目次の前の頁は 0-0-1）。
+    const after = tops.has(first) && !unit.prefix ? successor(unit, segments) : null;
+    sections.set(unit, main.includes(after) ? [...after.prefix, 0] : [first]);
+    visit(unit);
+  }
   for (const unit of main) visit(unit);
   // 前の頁をたどると元に戻るまとまりがあっても、頁を落とさないよう最後に置く（番号は付けない
   // ので、刷られた番号が重なれば重なりとして指摘される）。
@@ -183,6 +208,28 @@ function predecessor(unit, segments) {
   // そのファイルの、本の順で最後の区間（ファイルの中の区間は、本の順に next でつながる）。
   const near = before.filter((other) => at(other) === nearest);
   return near.find((other) => !near.includes(other.next)).unit;
+}
+
+/**
+ * まとまりの、本の順ですぐ後ろにある頁のまとまり（predecessor の逆）。まとまりの最後の区間
+ * （いちばん後の位置で始まるもの）の、同じファイルの中の次の区間を先に見て、無ければ本の順で
+ * いちばん近い後ろのファイルの最初の区間。無ければ null。
+ */
+function successor(unit, segments) {
+  const last = unit.segments.reduce((a, b) => (comparePaths(b.position, a.position) > 0 ? b : a));
+  if (last.next) return last.next.unit;
+  const at = (segment) => (last.kind === null ? segment.order : segment.rank);
+  const after = segments.filter(
+    (other) =>
+      other.unit !== unit &&
+      other.file.key !== last.file.key &&
+      (last.kind === null || other.kind === last.kind) &&
+      at(other) > at(last)
+  );
+  if (after.length === 0) return null;
+  const nearest = Math.min(...after.map(at));
+  const near = after.filter((other) => at(other) === nearest);
+  return near.find((other) => !near.includes(other.prev)).unit;
 }
 
 /** 区間の rank（一覧の位置を本の順に揃えたもの）を、束の種類ごとに付ける。 */

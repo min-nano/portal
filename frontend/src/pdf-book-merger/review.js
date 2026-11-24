@@ -178,8 +178,8 @@ export function gridItems(order) {
   let previous = null;
   // 抜けの札の部（前の頁と同じ部）。
   const where = () => {
-    const { part, prefix, section, sectionSlash } = previous;
-    return { part, ...(prefix ? { prefix } : {}), ...(section ? { section } : {}), ...(sectionSlash ? { sectionSlash } : {}) };
+    const { part, prefix, section } = previous;
+    return { part, ...(prefix ? { prefix } : {}), ...(section ? { section } : {}) };
   };
   const missing = (from, to) => {
     if (to - from + 1 > MAX_MISSING_CARDS) {

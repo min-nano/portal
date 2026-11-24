@@ -173,9 +173,6 @@ describe('gridItems', () => {
       { ...body('b', 3), part: 1, section: [2] },
     ];
     expect(missingLabel(gridItems(renumbered)[1])).toBe('2-2 頁');
-    // 「/」で区切るまとまり（sectionSlash）も引き継ぐ。
-    const slashed = renumbered.map((entry) => ({ ...entry, sectionSlash: true }));
-    expect(missingLabel(gridItems(slashed)[1])).toBe('2/2 頁');
   });
 
   it('抜けの札の見出し', () => {

@@ -2296,7 +2296,7 @@ describe('結合と検証', () => {
     await settled(3);
 
     expect(gridLabels()).toEqual([
-      ...[1, 2, 3, 4, 5, 6].map((n) => `${n} 頁`),
+      ...[1, 2, 3, 4, 5, 6].map((n) => `1-${n} 頁`),
       '2-1 頁',
       '2-2 頁',
       '2-3 頁',
@@ -2305,7 +2305,7 @@ describe('結合と検証', () => {
       '2-6 頁',
     ]);
     expect($('problems').textContent).toContain('2-4 頁が見つかりません');
-    expect($('problems').textContent).toContain('（1〜6 頁・2-1〜2-6 頁）');
+    expect($('problems').textContent).toContain('（1-1〜1-6 頁・2-1〜2-6 頁）');
 
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
