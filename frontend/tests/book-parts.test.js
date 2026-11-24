@@ -12,6 +12,7 @@ import {
   numberFiles,
   pageLabelRanges,
   pageLabelTexts,
+  withoutSection,
 } from '../src/pdf-book-merger/ordering.js';
 import { assignParts } from '../src/pdf-book-merger/parts.js';
 import { displayLabel, gridItems, missingLabel } from '../src/pdf-book-merger/review.js';
@@ -873,6 +874,27 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
     const { order } = arrangeBook(files, numberFiles(files, new Map()));
     expect(order.filter((e) => e.fileKey === 'e2').every((e) => !e.section)).toBe(true);
     expect(order.filter((e) => e.fileKey === 'e1').every((e) => pathText(e.section) === '6')).toBe(true);
+  });
+
+  it('手で入れた番号の頭のまとまりの番号は除く（頁の見出しのとおり 6-4-33 と入れても 4-33）', () => {
+    const page = { section: [6], prefix: [4], number: 32 };
+    expect(withoutSection({ path: [6, 4, 33] }, page)).toEqual({ path: [4, 33] });
+    // 刷られたとおりの番号・段の数の違う番号・頭の違う番号は、そのまま。
+    expect(withoutSection({ path: [4, 33] }, page)).toEqual({ path: [4, 33] });
+    expect(withoutSection({ path: [6, 4, 33, 1] }, page)).toEqual({ path: [6, 4, 33, 1] });
+    expect(withoutSection({ path: [5, 4, 33] }, page)).toEqual({ path: [5, 4, 33] });
+    // まとまりの無い頁・番号の決まらない頁も、そのまま。
+    expect(withoutSection({ path: [6, 4, 33] }, { prefix: [4], number: 32 })).toEqual({ path: [6, 4, 33] });
+    expect(withoutSection({ path: [6, 33] }, { section: [6], number: null })).toEqual({ path: [6, 33] });
+    // 枝番の頁は、枝番の段も数える。
+    expect(withoutSection({ path: [7, 57, 1] }, { section: [7], number: 57, branch: [2] })).toEqual({ path: [57, 1] });
+  });
+
+  it('部の頁と読む本で、前の段の違う枝番を手で入れても番号を決められる', () => {
+    const files = [volume('p', run(4, 6, 25)), volume('q', ['4-31', '4-32', null, '4-34'])];
+    const overrides = new Map([['q:2', { path: [6, 4, 33] }]]);
+    const entry = arrangeBook(files, numberFiles(files, overrides), overrides).order.find((e) => e.pageKey === 'q:2');
+    expect(entry).toMatchObject({ prefix: [6], number: 4, branch: [33], status: 'manual' });
   });
 
   it('1 頁だけ読めたファイルは、ほかのファイルでハイフンで区切って読めた頁のいちばん多い読み方で読む', () => {

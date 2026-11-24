@@ -48,6 +48,7 @@ import {
   pageLabelTexts,
   ROLE_NAMES,
   ROLES,
+  withoutSection,
 } from './ordering.js';
 import {
   mergeCandidates,
@@ -2008,7 +2009,7 @@ function numberEditor(entry, name, { jump }) {
     if (warned || value !== initial) showMessage('');
     warned = false;
     if (value === initial) return true;
-    if (number) overrides.set(entry.pageKey, number);
+    if (number) overrides.set(entry.pageKey, withoutSection(number, entry));
     else overrides.delete(entry.pageKey);
     refresh();
     return true;

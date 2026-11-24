@@ -579,7 +579,10 @@ export function inferFileNumbers(candidates, options = {}) {
   const readAt = (index, state) => {
     let best = null;
     for (const c of readings[index][state.k]) {
-      if (!fits(c.prefix, state.prefix)) continue;
+      // 手で入れた枝番の頁・間に挟む頁は、入れた前の段のまま並びから外すので、並びの前の段と
+      // 合わなくてもよい（合わないと、どの状態も取れずに番号を決められない）。
+      const outside = c.source === 'manual' && (c.branch || !Number.isInteger(c.value));
+      if (!outside && !fits(c.prefix, state.prefix)) continue;
       let score;
       let kind;
       if (c.source === 'manual' && !c.branch && !Number.isInteger(c.value)) {

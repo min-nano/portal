@@ -799,6 +799,23 @@ export function sectionHead(item) {
 }
 
 /**
+ * 手で入れた番号から、頭に付けたまとまりの番号を除く。まとまりの番号は刷られた番号ではない
+ * （6-4-30 頁の 6）ので、頁の見出しのとおり 6-4-33 と入れても、刷られた 4-33 と同じに読む。
+ * 頭がまとまりの番号と同じで、残りの段の数がいまの番号と同じときだけ除く。
+ *
+ * @param {{path:number[]}} number parsePageNumber の形
+ * @param {{section?:number[], number:number|null, prefix?:number[], branch?:number[]}} entry 直す頁
+ */
+export function withoutSection(number, entry) {
+  const { section } = entry;
+  if (!section || entry.number === null) return number;
+  const levels = (entry.prefix?.length ?? 0) + 1 + (entry.branch?.length ?? 0);
+  const head = number.path.slice(0, section.length);
+  if (number.path.length !== section.length + levels || pathText(head) !== pathText(section)) return number;
+  return { ...number, path: number.path.slice(section.length) };
+}
+
+/**
  * [1,2,3,7,9,10] → "1〜3・7・9〜10"。head は番号の頭に付ける前の段（"2-" なら "2-1〜2-3・2-7"）。
  *
  * @param {number[]} numbers
