@@ -53,6 +53,7 @@ import {
 import {
   mergeCandidates,
   numberingSequence,
+  numberText,
   pageNumberCandidates,
   pageNumberText,
   parsePageNumber,
@@ -1683,10 +1684,12 @@ function fileControls(file) {
       file.manual = null;
     } else {
       // 部・編などの番号を前に付けた頁番号（2-1）も入れられる（前の段は、そのファイルの頁に付ける）。
-      const path = parsePageNumber(value)?.path;
+      const parsed = parsePageNumber(value);
+      const path = parsed?.path;
       // 断るときは描き直さないので、進み方の欄も使っている値に戻す（選んだ値が残ると、並びと食い違う）。
       const restoreStep = () => (step.value = file.manual ? String(file.manual.step) : '');
-      if (!path || !Number.isInteger(path.at(-1))) {
+      // ローマ数字（前付け）は、頁ごとにだけ入れられる。
+      if (!path || parsed.roman || !Number.isInteger(path.at(-1))) {
         restoreStep();
         showMessage('先頭の頁の番号は整数（部・編などの番号を前に付けるなら 2-1 の形）で入れてください。', 'red');
         return;
@@ -1975,8 +1978,9 @@ function numberEditor(entry, name, { jump }) {
   input.enterKeyHint = 'done';
   // 指摘の項目の中にも同じ頁が並ぶので、読み上げでどちらの欄か分かるようにする。
   input.setAttribute('aria-label', title);
-  input.placeholder = entry.number === null ? '番号' : pageNumberText(entry);
-  const initial = overrides.has(entry.pageKey) ? pathText(overrides.get(entry.pageKey).path) : '';
+  // ローマ数字の並びで i より前に推定した頁（前付0）は、その書き方では入れられないので出さない。
+  input.placeholder = entry.number === null || (entry.roman && entry.number < 1) ? '番号' : pageNumberText(entry);
+  const initial = overrides.has(entry.pageKey) ? numberText(overrides.get(entry.pageKey)) : '';
   input.value = initial;
   let warned = false; // 正しくない番号の断りを出した
 
@@ -2000,7 +2004,7 @@ function numberEditor(entry, name, { jump }) {
     const value = input.value.trim();
     const number = parsePageNumber(value);
     if (value && !number) {
-      showMessage('番号は数字（枝番や部・編などの番号の付いた頁は 57-1・2-21 の形）で入れてください。', 'red');
+      showMessage('番号は数字（枝番や部・編などの番号の付いた頁は 57-1・2-21、前付けのローマ数字は ii の形）で入れてください。', 'red');
       warned = true;
       return false;
     }

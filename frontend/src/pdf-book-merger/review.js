@@ -4,7 +4,7 @@
 // 有無を、頁ごとの「確認が要ること」にまとめる。DOM には触らない。
 
 import { branchLayout, sectionHead } from './ordering.js';
-import { formatNumber, pathText } from './page-numbers.js';
+import { formatNumber, numberText, pageNumberText, pathText } from './page-numbers.js';
 import { TEXT_QUALITY_MESSAGE } from './text-quality.js';
 
 /** 番号の決まり方の見出し（頁の下に小さく出す）。 */
@@ -27,7 +27,7 @@ export function displayLabel(entry) {
   if (entry.role === 'front') return '表紙';
   if (entry.role === 'back') return '裏表紙';
   if (entry.number === null) return '番号不明';
-  return `${sectionHead(entry)}${formatNumber(entry.number, entry.branch, entry.prefix)} 頁`;
+  return `${sectionHead(entry)}${formatNumber(entry.number, entry.branch, entry.prefix, entry.roman)} 頁`;
 }
 
 /**
@@ -51,7 +51,7 @@ export function pageIssues(order, problems, scanIssues, textless = new Set()) {
       add(entry.pageKey, {
         kind: 'conflict',
         level: 'warn',
-        message: `読み取った番号（${pathText(entry.read.path)}）が前後の並びと合いません`,
+        message: `読み取った番号（${numberText(entry.read)}）が前後の並びと合いません`,
       });
     } else if (entry.status === 'uncertain') {
       add(entry.pageKey, {
@@ -180,8 +180,8 @@ export function gridItems(order) {
   let previous = null;
   // 抜けの札の部（前の頁と同じ部）。
   const where = () => {
-    const { part, prefix, section } = previous;
-    return { part, ...(prefix ? { prefix } : {}), ...(section ? { section } : {}) };
+    const { part, prefix, section, roman } = previous;
+    return { part, ...(prefix ? { prefix } : {}), ...(section ? { section } : {}), ...(roman ? { roman } : {}) };
   };
   // first から last の手前までのうち、抜けているものを、続くところごとに札にする
   // （card(最初, 最後) が札。続く数が MAX_MISSING_CARDS を超えたら 1 枚にまとめる）。
@@ -245,9 +245,14 @@ export function gridItems(order) {
 
 /**
  * 抜けている頁の札の見出し（58 頁・60〜70 頁・57-2 頁・57-2〜57-30 頁。前の段のある頁は
- * 「2-58 頁」「2-60〜2-70 頁」、頁番号が戻ったところで分けたまとまりなら「6-4-30 頁」）。
+ * 「2-58 頁」「2-60〜2-70 頁」、頁番号が戻ったところで分けたまとまりなら「6-4-30 頁」、ローマ数字の
+ * 頁なら「iii 頁」「iii〜ix 頁」）。
  */
 export function missingLabel(item) {
+  if (item.roman) {
+    const [from, to] = [item.from, item.to].map((number) => pageNumberText({ number, roman: true }));
+    return from === to ? `${from} 頁` : `${from}〜${to} 頁`;
+  }
   const head = `${sectionHead(item)}${item.prefix ? `${pathText(item.prefix)}-` : ''}`;
   if (item.branch) {
     const label = `${head}${pathText([item.from, ...item.branch])}`;

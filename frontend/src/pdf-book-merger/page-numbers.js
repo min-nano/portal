@@ -37,6 +37,10 @@
 // 枝番の頁は一定の歩幅の並びに乗らないので、読めた枝番をそのまま使い、
 // 並びの推定からは外す（枝番の頁の前後で番号が飛んでもよいものとする）。
 // 枝番は頁の branch（数字の列）に、前の段は prefix（数字の列）に持ち、無い頁には付けない。
+//
+// 前付け（まえがき・目次）は、ローマ数字（i, ii, iii …）で頁番号を刷ることが多い。ローマ数字の
+// 番号は、値（ii は 2）を path に、ローマ数字であることを roman に持ち、アラビア数字の番号とは
+// 別の並び（本文より前に置く。ordering.js）として推定する（ii の次の頁が 3 でも、並びは続かない）。
 
 /** 頁の上下の、頁番号を探す帯の高さ（頁の高さに対する割合）。 */
 export const MARGIN_ZONE = 0.14;
@@ -65,6 +69,82 @@ const STANDALONE = new RegExp(
   `^${DECOR}*(?:p\\.?|P\\.?|page|ページ|頁)?\\s*(${LABEL})\\s*(?:頁|ページ)?${DECOR}*$`
 );
 const DASHES = new RegExp(DASH);
+
+/** 頁番号として受け付けるローマ数字の値の上限（cccxcix。前付けにはこれで足りる）。 */
+const MAX_ROMAN = 399;
+/**
+ * ローマ数字だけの行（前後の飾りは STANDALONE と同じ）。大文字・小文字は問わない（OCR は x と X、
+ * v と V を取り違える）。
+ */
+const ROMAN_LINE = new RegExp(`^${DECOR}*([ivxlc]+)${DECOR}*$`, 'i');
+/** 大文字の I と小文字の l だけの行（数字の 1 と形の似た字）。 */
+const ONES_LINE = new RegExp(`^${DECOR}*([Il]{1,3})${DECOR}*$`);
+
+/** 小文字のローマ数字（i, ii, …, xiv。PDF の頁ラベルの /r と同じ書き方）。 */
+export function romanNumeral(number) {
+  const table = [
+    [1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'],
+    [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i'],
+  ];
+  let rest = number;
+  let text = '';
+  for (const [value, letters] of table) {
+    while (rest >= value) {
+      text += letters;
+      rest -= value;
+    }
+  }
+  return text;
+}
+
+// ローマ数字の字の値（読むときに使う。MAX_ROMAN より大きい d・m は読まない）。
+const ROMAN_VALUES = { i: 1, v: 5, x: 10, l: 50, c: 100 };
+
+/**
+ * ローマ数字（ii・XIV）の値。正しい書き方（iiii や vv、il でない）で、1〜MAX_ROMAN のものだけ。
+ * 読めなければ null。
+ *
+ * @param {string} text
+ */
+export function parseRoman(text) {
+  const letters = text.toLowerCase();
+  let value = 0;
+  for (let i = 0; i < letters.length; i++) {
+    const current = ROMAN_VALUES[letters[i]];
+    const next = ROMAN_VALUES[letters[i + 1]] ?? 0;
+    value += current < next ? -current : current;
+  }
+  // 書き直して同じになるものだけ（「iiii」「vv」「il」のような書き方は、字の読み違いかもしれない）。
+  return value <= MAX_ROMAN && romanNumeral(value) === letters ? value : null;
+}
+
+// 1 字で 1 つの数を表すローマ数字（Ⅱ・ⅱ。和文の書体にある）と、全角の英字。
+const ROMAN_FORMS = /[\u2160-\u216b\u2170-\u217b\uff21-\uff3a\uff41-\uff5a]/g;
+
+/** ローマ数字の字（Ⅱ・ⅱ・全角のＩ）を、半角の英字へ（Ⅻ → XII）。 */
+export function normalizeRoman(text) {
+  return text.replace(ROMAN_FORMS, (c) => {
+    const code = c.charCodeAt(0);
+    if (code >= 0xff21) return String.fromCharCode(code - 0xfee0);
+    const upper = romanNumeral((code % 0x10) + 1).toUpperCase();
+    return code >= 0x2170 ? upper.toLowerCase() : upper;
+  });
+}
+
+/** I と l だけの行（1・11・111 の読み違いかもしれないもの）なら、その数字の値。そうでなければ null。 */
+function looksLikeOnes(text) {
+  const match = text.match(ONES_LINE);
+  return match ? Number('1'.repeat(match[1].length)) : null;
+}
+
+/**
+ * ローマ数字だけの行なら、その値（読めなければ null）。l・c の 1 字だけ（50・100）は読まない
+ * （前付けがそこまで続くことはまず無く、l は 1 の読み違いのことが多い）。
+ */
+function romanLine(text) {
+  const match = normalizeRoman(text).match(ROMAN_LINE);
+  return match && !/^[lc]$/i.test(match[1]) ? parseRoman(match[1]) : null;
+}
 
 /** ハイフンで区切った頁番号を、数字の列にする（「2 - 21」→ [2, 21]）。 */
 function splitLabel(text) {
@@ -154,6 +234,17 @@ function numbersInLine(line) {
   if (standalone) {
     return [{ path: splitLabel(standalone[1]), score: 3, y: line.y, left: line.x0, right: line.x1 }];
   }
+  const roman = romanLine(line.text);
+  const ones = looksLikeOnes(line.text);
+  if (roman !== null || ones !== null) {
+    const at = { score: 3, y: line.y, left: line.x0, right: line.x1 };
+    return [
+      ...(roman === null ? [] : [{ path: [roman], roman: true, ...at }]),
+      // I・II・l・ll は 1・11 の読み違いかもしれない（OCR の字の候補にローマ数字の字を足したので）。
+      // 数字の読みも候補にして、どちらが合うかは並びで決める。
+      ...(ones === null ? [] : [{ path: [ones], ...at }]),
+    ];
+  }
   const leading = line.text.match(LEADING);
   const trailing = line.text.match(TRAILING);
   return [
@@ -176,8 +267,8 @@ const LINE_COLUMN = 0.02;
  * まずならない）。
  */
 function isLineNumber(number, numbers) {
-  // ハイフンで区切った番号（57-1）は行番号ではない。
-  if (number.path.length > 1 || number.path[0] % 5 !== 0) return false;
+  // ハイフンで区切った番号（57-1）とローマ数字は行番号ではない。
+  if (number.roman || number.path.length > 1 || number.path[0] % 5 !== 0) return false;
   const sameColumn = (other) =>
     (number.left !== null && other.left !== null && Math.abs(number.left - other.left) <= LINE_COLUMN) ||
     (number.right !== null && other.right !== null && Math.abs(number.right - other.right) <= LINE_COLUMN);
@@ -224,7 +315,7 @@ function candidatesOf(groupedLines, source) {
   // 行番号の列は頁全体から見る（帯の中だけでは、続きの行番号が見えない）。
   const fives = lines
     .flatMap(({ numbers }) => numbers)
-    .filter((number) => number.path.length === 1 && number.path[0] % 5 === 0);
+    .filter((number) => !number.roman && number.path.length === 1 && number.path[0] % 5 === 0);
   const found = new Map();
   for (const { line, numbers } of lines) {
     const zone = line.y < MARGIN_ZONE ? 'top' : line.y > 1 - MARGIN_ZONE ? 'bottom' : null;
@@ -234,10 +325,11 @@ function candidatesOf(groupedLines, source) {
       const { path } = number;
       if (path.some((value) => value < 1 || value > MAX_PAGE_NUMBER) || isLineNumber(number, fives)) continue;
       const score = number.score + placementScore(line);
-      // 同じ番号でも、ハイフンの後ろが違えば別の候補。
-      const key = path.join('-');
+      // 同じ番号でも、ハイフンの後ろが違えば（ローマ数字かどうかが違っても）別の候補。
+      const key = candidateKey(number);
       const previous = found.get(key);
-      if (!previous || previous.score < score) found.set(key, { path, score, source, zone });
+      const roman = number.roman ? { roman: true } : {};
+      if (!previous || previous.score < score) found.set(key, { path, ...roman, score, source, zone });
     }
   }
   return [...found.values()].sort(byScore);
@@ -254,11 +346,16 @@ function candidatesOf(groupedLines, source) {
 export function mergeCandidates(first, second) {
   const found = new Map();
   for (const candidate of [...first, ...second]) {
-    const key = candidate.path.join('-');
+    const key = candidateKey(candidate);
     const previous = found.get(key);
     if (!previous || previous.score <= candidate.score) found.set(key, candidate);
   }
   return [...found.values()].sort(byScore);
+}
+
+/** 候補を見分ける文字列（ローマ数字の ii は「r2」、アラビア数字の 2 は「2」）。 */
+function candidateKey(candidate) {
+  return `${candidate.roman ? 'r' : ''}${candidate.path.join('-')}`;
 }
 
 /** 候補の順（点数の高いもの、同じなら番号の小さいもの）。 */
@@ -308,7 +405,7 @@ const PAGE_WORD = new RegExp(`^${DECOR}*(?:pages?|p\\.?)\\s*\\d{1,4}${DECOR}*$`,
  * 「1.2」のような節の番号だけの柱は残す。
  */
 function pageWordsOnly(text) {
-  return STANDALONE.test(text) || PAGE_OF.test(text) || PAGE_WORD.test(text);
+  return STANDALONE.test(text) || PAGE_OF.test(text) || PAGE_WORD.test(text) || romanLine(text) !== null;
 }
 
 /**
@@ -342,8 +439,9 @@ function headsOf(lines) {
  */
 export function stripPageNumber(head, page) {
   let text = head;
-  // 整数の番号だけ（小数の「.」を正規表現に入れない）。
-  if (page && Number.isInteger(page.number)) {
+  // 整数の番号だけ（小数の「.」を正規表現に入れない）。ローマ数字の頁（前付け）は、柱から番号を
+  // 落とさない（部を決める parts.js には渡さない頁なので）。
+  if (page && !page.roman && Number.isInteger(page.number)) {
     const full = labelPath(page);
     for (const path of page.prefix ? [full, full.slice(page.prefix.length)] : [full]) {
       const [start, end] = numberPatterns(path);
@@ -391,9 +489,17 @@ export function interpret(path, depth = 0) {
   };
 }
 
-/** 読んだ番号（interpret の形）を、頁の番号の形（number・branch・prefix）にする。無い段は付けない。 */
-function labelOf({ prefix, value, branch }) {
-  return { number: value, ...(branch ? { branch } : {}), ...(prefix ? { prefix } : {}) };
+/**
+ * 読んだ番号（interpret の形）を、頁の番号の形（number・branch・prefix・roman）にする。無い段は
+ * 付けない。
+ */
+function labelOf({ prefix, value, branch, roman }) {
+  return { number: value, ...(branch ? { branch } : {}), ...(prefix ? { prefix } : {}), ...romanOf({ roman }) };
+}
+
+/** ローマ数字の番号なら { roman: true }、そうでなければ {}（頁や候補に足す）。 */
+export function romanOf(number) {
+  return number.roman ? { roman: true } : {};
 }
 
 /** 頁の番号を、ハイフンで区切った番号の列に戻す（2-57-1 → [2, 57, 1]）。 */
@@ -447,6 +553,8 @@ export function detectStep(candidates, breaks = new Set()) {
       for (const first of anchored[a].list) {
         for (const second of anchored[b].list) {
           if (!fits(first.prefix, second.prefix) && !fits(second.prefix, first.prefix)) continue;
+          // ローマ数字の番号とアラビア数字の番号は、別の並び。
+          if (Boolean(first.roman) !== Boolean(second.roman)) continue;
           const step = (second.value - first.value) / distance;
           if (votes.has(step)) {
             votes.set(step, votes.get(step) + Math.min(first.score, second.score));
@@ -532,8 +640,13 @@ const SHORT_CONFLICT_WEIGHT = 0.5;
  */
 export function inferFileNumbers(candidates, options = {}) {
   const fixed = candidates.map((_, index) => options.fixed?.[index] ?? null);
+  // 隣の頁と同じ値のローマ数字は頁番号ではない（部の見出しの「Ⅱ」のように、どの頁にも刷られた
+  // しるし）。並びの手掛かりにも、食い違いにもしない。
+  const romans = candidates.map((list) => new Set(list.flatMap((c) => (c.roman ? [c.path[0]] : []))));
+  const repeated = (c, index) => c.roman && (romans[index - 1]?.has(c.path[0]) || romans[index + 1]?.has(c.path[0]));
+  const usable = candidates.map((list, index) => list.filter((c) => !repeated(c, index)));
   let levels = 1;
-  for (const list of candidates) for (const c of list) levels = Math.max(levels, c.path.length);
+  for (const list of usable) for (const c of list) levels = Math.max(levels, c.path.length);
   for (const manual of fixed) if (manual) levels = Math.max(levels, manual.path.length);
   const depths = Array.from({ length: Math.min(levels, (options.maxDepth ?? Infinity) + 1) }, (_, d) => d);
   // 頁ごと・読み方ごとの、読んだ候補（手で入れた番号は、点の高い 1 つの候補にする）。
@@ -541,12 +654,14 @@ export function inferFileNumbers(candidates, options = {}) {
   // （入れた 2-5 の次の頁が 7 とだけ読めても、2-5 を枝番と読んで 7 頁へ続けない）。
   const hint = options.depthHint;
   const manualAt = (path, depth) => hint === undefined || path.length <= hint || depth === hint;
-  const readings = candidates.map((list, index) =>
+  const readings = usable.map((list, index) =>
     depths.map((depth) => {
       const manual = fixed[index];
       if (!manual) return list.map((c) => ({ ...c, ...interpret(c.path, depth) }));
       if (!manualAt(manual.path, depth)) return [];
-      return [{ ...interpret(manual.path, depth), path: manual.path, score: MANUAL_SCORE, source: 'manual' }];
+      return [
+        { ...interpret(manual.path, depth), path: manual.path, ...romanOf(manual), score: MANUAL_SCORE, source: 'manual' },
+      ];
     })
   );
   // 頁の位置。間に挟む頁（手で入れた 12.5）は数えない（前後の頁を飛ばさない）。
@@ -559,20 +674,22 @@ export function inferFileNumbers(candidates, options = {}) {
   const step = options.step ?? stepOf(readings.filter((_, index) => !between[index]), depths);
   if (step === null) return unknownOrSingle(readings, fixed, candidates, Math.min(hint ?? 0, depths.length - 1));
 
-  // 状態 = 読み方・前の段・ずれ。並びに乗る（枝番の無い、整数の）候補が示すものだけ。
+  // 状態 = 読み方・前の段・ずれと、ローマ数字の並びか。並びに乗る（枝番の無い、整数の）候補が
+  // 示すものだけ。
   const found = new Map();
   readings.forEach((byDepth, index) =>
     byDepth.forEach((list, k) => {
       for (const c of list) {
         if (c.branch || !Number.isInteger(c.value)) continue;
         const offset = c.value - step * position[index];
-        const key = `${k}|${prefixKey(c.prefix)}|${offset}`;
-        if (!found.has(key)) found.set(key, { k, prefix: c.prefix ?? null, offset });
+        const roman = Boolean(c.roman);
+        const key = `${k}|${roman ? 'r' : ''}${prefixKey(c.prefix)}|${offset}`;
+        if (!found.has(key)) found.set(key, { k, prefix: c.prefix ?? null, offset, roman });
       }
     })
   );
   // 並びに乗る候補が無ければ（枝番の頁だけ）、番号の無い状態を読み方ごとに 1 つ置く。
-  if (found.size === 0) depths.forEach((_, k) => found.set(`${k}`, { k, prefix: null, offset: null }));
+  if (found.size === 0) depths.forEach((_, k) => found.set(`${k}`, { k, prefix: null, offset: null, roman: false }));
   const states = [...found.values()];
 
   /** 頁 index を状態 state で読んだときの、いちばん点の高い読み（無ければ null）。 */
@@ -583,14 +700,22 @@ export function inferFileNumbers(candidates, options = {}) {
       // 合わなくてもよい（合わないと、どの状態も取れずに番号を決められない）。
       const outside = c.source === 'manual' && (c.branch || !Number.isInteger(c.value));
       if (!outside && !fits(c.prefix, state.prefix)) continue;
+      // 枝番の頁・間に挟む頁は、数字の並びの中にだけある（ローマ数字の前付けの並びのまま、その後ろの
+      // 1-1, 1-2 を枝番と読まない）。
+      if (state.roman && (c.branch || !Number.isInteger(c.value))) continue;
       let score;
       let kind;
       if (c.source === 'manual' && !c.branch && !Number.isInteger(c.value)) {
         [score, kind] = [c.score, 'between'];
       } else if (c.branch) {
         [score, kind] = [c.source === 'manual' ? c.score : c.score * BRANCH_WEIGHT, 'branch'];
-      } else if (state.offset !== null && c.value === state.offset + step * position[index]) {
-        const short = c.prefix === null && depths[state.k] > 0;
+      } else if (
+        state.offset !== null &&
+        Boolean(c.roman) === state.roman &&
+        c.value === state.offset + step * position[index]
+      ) {
+        // ローマ数字の番号は、前の段を刷らないので、段の足りない番号とはしない。
+        const short = c.prefix === null && !c.roman && depths[state.k] > 0;
         [score, kind] = [short && c.source !== 'manual' ? c.score * SHORT_WEIGHT : c.score, 'main'];
       } else {
         continue;
@@ -605,7 +730,7 @@ export function inferFileNumbers(candidates, options = {}) {
     if (read) return read.score;
     if (fixed[index]) return -Infinity;
     const depth = depths[state.k];
-    const short = readings[index][state.k].filter((c) => c.score >= STRONG_SCORE && c.path.length <= depth);
+    const short = readings[index][state.k].filter((c) => c.score >= STRONG_SCORE && !c.roman && c.path.length <= depth);
     return short.length ? -SHORT_CONFLICT_WEIGHT * Math.max(...short.map((c) => c.score)) : 0;
   };
   // 枝番の頁として読んだ状態の次は、ずれを費用なしで切り替えてよい。
@@ -660,10 +785,11 @@ export function inferFileNumbers(candidates, options = {}) {
     }
     if (state.offset === null) return { number: null, status: 'unknown', read: null };
     const number = state.offset + step * position[index];
-    if (fixed[index]) return { number, ...statePrefix, status: 'manual', read: matchingRead(read.c, list, state) };
-    if (read) return { number, ...statePrefix, status: 'detected', read: read.c };
+    const label = { number, ...statePrefix, ...romanOf(state) };
+    if (fixed[index]) return { ...label, status: 'manual', read: matchingRead(read.c, list, state) };
+    if (read) return { ...label, status: 'detected', read: read.c };
     const strong = readings[index][state.k].find((c) => c.score >= STRONG_SCORE) || null;
-    return { number, ...statePrefix, status: strong ? 'conflict' : 'inferred', read: strong };
+    return { ...label, status: strong ? 'conflict' : 'inferred', read: strong };
   });
 
   markUncertainGaps(pages, chosen);
@@ -697,6 +823,7 @@ function matchingRead(manual, list, state = null) {
   const prefix = manual.prefix ?? state?.prefix ?? null;
   for (const c of list) {
     const read = { ...c, ...interpret(c.path, depth) };
+    if (Boolean(read.roman) !== Boolean(manual.roman)) continue;
     if (read.value === manual.value && samePath(read.branch, manual.branch) && fits(read.prefix, prefix)) return read;
   }
   return null;
@@ -804,7 +931,7 @@ export function numberingSequence(numbering, sections = []) {
   pages.forEach((page, index) => {
     const { number, branch } = page;
     const section = sections[index] ?? null;
-    const key = `${prefixKey(section)}|${prefixKey(page.prefix)}`;
+    const key = `${prefixKey(section)}|${prefixKey(page.prefix)}|${page.roman ? 'r' : ''}`;
     const label = `${section ? `${pathText(section)}-` : ''}${pageNumberText(page)}`;
     const run = runs.at(-1);
     if (!branch && run && run.key === key && number === run.last + step) {
@@ -825,14 +952,17 @@ export function numberingSequence(numbering, sections = []) {
 
 /**
  * 頁番号の表示。前付け（0 以下）は「前付」と分かるようにする（前の段のある 0 頁は 2-0 のまま）。
- * 枝番は 57-1、前の段のある頁は 2-21・2-57-1 の形。
+ * 枝番は 57-1、前の段のある頁は 2-21・2-57-1 の形。ローマ数字の頁は ii の形（i より前に推定した
+ * 頁は、アラビア数字の前付けと同じく「前付(0)」）。
  *
  * @param {number|null} number
  * @param {number[]|null} [branch]
  * @param {number[]|null} [prefix]
+ * @param {boolean} [roman]
  */
-export function formatNumber(number, branch = null, prefix = null) {
+export function formatNumber(number, branch = null, prefix = null, roman = false) {
   if (number === null || number === undefined) return '?';
+  if (roman) return number >= 1 ? romanNumeral(number) : `前付(${number})`;
   const head = prefix ? `${pathText(prefix)}-` : '';
   if (branch) return `${head}${pathText([number, ...branch])}`;
   if (!Number.isInteger(number)) return `${head}${Math.floor(number)}と${head}${Math.ceil(number)}の間`;
@@ -847,16 +977,18 @@ const LABEL_INPUT = new RegExp(`^\\d{1,4}(?:\\s*${DASH}\\s*(?:0|[1-9]\\d{0,3})){
 
 /**
  * 手で入れた頁番号を読む。読めなければ null。12、前付けの -3、間に挟む 12.5、
- * ハイフンで区切った 57-1・2-21 の形。ハイフンのどの段が頁番号かは、本の階層で
- * 決める（interpret）。
+ * ハイフンで区切った 57-1・2-21、ローマ数字の ii・XIV の形。ハイフンのどの段が頁番号かは、
+ * 本の階層で決める（interpret）。
  *
  * @param {string} text
- * @returns {{path:number[]}|null}
+ * @returns {{path:number[], roman?:true}|null}
  */
 export function parsePageNumber(text) {
   const value = normalizeDigits(text).trim();
   if (!value) return null;
   if (LABEL_INPUT.test(value)) return { path: splitLabel(value) };
+  const roman = romanLine(value);
+  if (roman !== null) return { path: [roman], roman: true };
   const number = Number(value);
   return Number.isFinite(number) ? { path: [number] } : null;
 }
@@ -866,9 +998,18 @@ export function pathText(path) {
   return path.join('-');
 }
 
-/** 頁の番号を、ハイフンで区切って書く（2-57-1。前付けや小数も数字のまま）。 */
+/**
+ * 頁の番号を、ハイフンで区切って書く（2-57-1。前付けや小数も数字のまま）。ローマ数字の頁は ii
+ * （i より前に推定した頁は「前付0」。アラビア数字の 0 と見分ける）。
+ */
 export function pageNumberText(page) {
+  if (page.roman) return page.number >= 1 ? romanNumeral(page.number) : `前付${page.number}`;
   return pathText(labelPath(page));
+}
+
+/** 手で入れた番号・読み取った候補（{path, roman}）を、入力欄に入れる形で書く（57-1・ii）。 */
+export function numberText(number) {
+  return number.roman ? romanNumeral(number.path[0]) : pathText(number.path);
 }
 
 /**

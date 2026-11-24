@@ -238,7 +238,7 @@ export function duplicateIssues(order, pairs, describe) {
     if (entry.role !== 'body' || entry.status !== 'detected') return null;
     // 前の段（部・編などの番号）の違う頁は、番号が同じでも別の頁。中身まで同じ頁は、番号が戻った
     // ところで分けたまとまり（6/）が違っても同じ頁（同じ束を 2 度入れて、分けたまとまりと見られた）。
-    const number = pageNumberText({ prefix: entry.prefix, number: entry.number });
+    const number = pageNumberText({ prefix: entry.prefix, number: entry.number, roman: entry.roman });
     return exact ? number : `${entry.part ?? 0}:${number}`;
   };
   const issues = new Map();
