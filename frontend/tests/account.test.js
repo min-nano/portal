@@ -61,7 +61,8 @@ describe('hideStaffOnlyForExternalUsers', () => {
     apiGet.mockRejectedValue(refused);
 
     await expect(hideStaffOnlyForExternalUsers()).rejects.toBe(refused);
-    expect(document.documentElement.dataset.account).toBeUndefined();
+    // 社内専用の入口（「設定」など）も隠す。
+    expect(document.documentElement.dataset.account).toBe('refused');
   });
 
   it('目印の無い 403（プロキシなど）は、使えないアカウントとは見なさない', async () => {
@@ -93,6 +94,10 @@ describe('hideStaffOnlyForExternalUsers', () => {
     expect([shown('staff'), shown('open')]).toEqual([true, true]);
 
     document.documentElement.dataset.account = 'external';
+    expect([shown('staff'), shown('open')]).toEqual([false, true]);
+
+    // 使えないアカウントにも見せない。
+    document.documentElement.dataset.account = 'refused';
     expect([shown('staff'), shown('open')]).toEqual([false, true]);
     style.remove();
   });

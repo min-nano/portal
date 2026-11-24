@@ -90,7 +90,7 @@ def test_reading_drive_from_an_open_tool_is_refused(external_client, drive):
     resp = external_client.get("/api/tools/pdf-book-merger/files/scan-1")
 
     assert resp.status_code == 403
-    assert resp.json() == {"error": DRIVE_ONLY_FOR_STAFF, "code": "staff_only"}
+    assert resp.json() == {"error": DRIVE_ONLY_FOR_STAFF, "code": "drive_staff_only"}
     assert drive.delegated_emails == []  # なりかわりを頼む前に断っている
 
 
@@ -98,7 +98,7 @@ def test_the_drive_file_list_is_refused(external_client, drive):
     resp = external_client.get("/api/drive/items")
 
     assert resp.status_code == 403
-    assert resp.json() == {"error": DRIVE_ONLY_FOR_STAFF, "code": "staff_only"}
+    assert resp.json() == {"error": DRIVE_ONLY_FOR_STAFF, "code": "drive_staff_only"}
     assert drive.delegated_emails == []
 
 
@@ -140,7 +140,7 @@ def test_every_kind_of_delegation_refuses_external_users(drive, delegate):
     with pytest.raises(AuthError) as error:
         getattr(portal_sdk, delegate)(User(email=EXTERNAL_EMAIL, external=True))
     assert error.value.status == 403
-    assert error.value.code == "staff_only"
+    assert error.value.code == "drive_staff_only"  # 画面はツールを閉じない
     assert str(error.value) == DRIVE_ONLY_FOR_STAFF
     assert drive.delegated_emails == drive.write_emails == []
 

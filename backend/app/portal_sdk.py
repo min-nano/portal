@@ -79,14 +79,17 @@ def require_user(authorization: str | None = Header(default=None)) -> User:
     return clerk_auth.user_from_authorization_header(authorization)
 
 
-# 社内専用のものを外部ユーザーが使おうとした（画面はこの目印で、ツールを閉じる）。
+# 外部ユーザーへの断りの目印。STAFF_ONLY（社内専用のツール・操作）なら画面は
+# ツールを閉じ、DRIVE_STAFF_ONLY（開いたツールの中の Drive の入口）なら閉じない
+# （手元のファイルを使う機能は、そのまま使えるため）。
 STAFF_ONLY = "staff_only"
+DRIVE_STAFF_ONLY = "drive_staff_only"
 
 
-def ensure_internal(user: User, message: str) -> User:
+def ensure_internal(user: User, message: str, code: str = STAFF_ONLY) -> User:
     """外部ユーザーなら message で断る（403）。社内ユーザーはそのまま返す。"""
     if user.external:
-        raise clerk_auth.AuthError(message, 403, STAFF_ONLY)
+        raise clerk_auth.AuthError(message, 403, code)
     return user
 
 
@@ -319,12 +322,15 @@ class Template:
 # 効かない。外部ユーザーには、なりかわりを頼む前にここで断る（外部ユーザーにも
 # 使わせるツールの中の、Drive を使う入口はすべてここを通る）。
 
-_DRIVE_INTERNAL_ONLY = "Google ドライブを使う機能は社内アカウント専用です。"
+def _drive_user(user: User) -> User:
+    return ensure_internal(
+        user, "Google ドライブを使う機能は社内アカウント専用です。", DRIVE_STAFF_ONLY
+    )
 
 
 def delegated_session(user: User):
     """本人の代理で Drive を**読む**セッション。"""
-    return google_drive.delegated_session(ensure_internal(user, _DRIVE_INTERNAL_ONLY).email)
+    return google_drive.delegated_session(_drive_user(user).email)
 
 
 def delegated_read_token(user: User):
@@ -333,14 +339,12 @@ def delegated_read_token(user: User):
     ブラウザへ渡してよいのは、Cloud Run を通さずに大きなファイルを Drive から
     直接読むときだけ（PDF の結合）。google_drive.delegated_read_token を参照。
     """
-    return google_drive.delegated_read_token(ensure_internal(user, _DRIVE_INTERNAL_ONLY).email)
+    return google_drive.delegated_read_token(_drive_user(user).email)
 
 
 def delegated_write_session(user: User):
     """本人の代理で Drive を**読み書きする**セッション。"""
-    return google_drive.delegated_write_session(
-        ensure_internal(user, _DRIVE_INTERNAL_ONLY).email
-    )
+    return google_drive.delegated_write_session(_drive_user(user).email)
 
 
 # --- PDF を Drive へ保存する（証明書・計算書の共通処理） ----------------------

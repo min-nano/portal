@@ -53,7 +53,7 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
 * **Drive の入口は代理アクセスの手前で断る。** 開いたツールの中でも、Drive を使う入口（PDF 結合の Drive の PDF、ファイル選択の一覧）は、`portal_sdk.delegated_session` などが、なりかわりを頼む前に断ります。
 * **全員共通の設定の書き換え**（`PUT /api/site`）は `require_internal_user`。雛形の設定は社内専用のツールの中にあるので、上の 1 つ目で断られます。
 
-**画面は見せ方だけを合わせます。** サインインの後に `/api/me`（`{"email", "external"}`）を読み、外部ユーザーなら `<html data-account="external">` にして、`data-staff-only` を付けた入口（社内専用ツールのカード、「Drive から選ぶ」、「設定」メニュー）を CSS でまとめて隠します（`frontend/src/account.js`）。答えは待たずに画面を出すので、社内ユーザーが Cloud Run の起動待ちを被ることはありません。外部ユーザーには、答えが届いた時点で入口が消えます。社内専用のツールのページを直接開いた場合は、ツールの準備（`/config`）が「この機能は社内アカウント専用です。」で断られ、その理由が画面に出ます。
+**画面は見せ方だけを合わせます。** サインインの後に `/api/me`（`{"email", "external"}`）を読み、外部ユーザーなら `<html data-account="external">`（どちらの許可リストにも無いアカウントなら `"refused"`）にして、`data-staff-only` を付けた入口（社内専用ツールのカード、「Drive から選ぶ」、「設定」メニュー）を CSS でまとめて隠します（`frontend/src/account.js`）。答えは待たずに画面を出すので、社内ユーザーが Cloud Run の起動待ちを被ることはありません。外部ユーザーには、答えが届いた時点で入口が消えます。社内専用のツールのページを直接開いた場合は、ツールの準備（`/config`）が「この機能は社内アカウント専用です。」で断られ、その理由が画面に出ます。
 
 画面とバックエンドの名乗り（`tool.js` の `externalUsers` と `Tool.external_users`）がそろっていることは、`backend/tests/test_external_users.py` が確かめます。
 

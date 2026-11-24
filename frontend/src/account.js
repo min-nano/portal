@@ -32,7 +32,11 @@ export async function hideStaffOnlyForExternalUsers(doc = document) {
   try {
     account = await apiGet('/api/me');
   } catch (error) {
-    if (error?.code === 'account_not_allowed') throw error; // 使えないアカウント。
+    if (error?.code === 'account_not_allowed') {
+      // 使えないアカウント。社内専用の入口（「設定」など）も隠してから投げる。
+      doc.documentElement.dataset.account = 'refused';
+      throw error;
+    }
     return false; // 隠せないだけ（使えば、サーバーが理由を添えて断る）。
   }
   if (account?.external !== true) return false;
