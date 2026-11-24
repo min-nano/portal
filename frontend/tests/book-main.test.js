@@ -14,7 +14,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 // vitest は frontend/ で動く（jsdom では import.meta.url が file: にならない）。
 const SRC = resolve('src/pdf-book-merger');
@@ -29,6 +29,12 @@ function pdf(pages, extra = {}) {
   return encoder.encode(`%PDF-${JSON.stringify({ pages, ...extra })}`);
 }
 const specOf = (bytes) => JSON.parse(decoder.decode(bytes).slice('%PDF-'.length));
+
+/**
+ * JPEG 1 枚の頁として見つかったもの（scan-images.js の findScanImages の形）。
+ * JPEG の大きさは mb（MB）。分ける位置の提案に使う。
+ */
+const scanOf = (id, mb = 0) => ({ jpeg: id, images: [{ jpeg: { length: mb * 1024 * 1024 } }] });
 
 /**
  * 本文の頁。ocr: 文字情報には無く、画像からだけ読める番号。misread: 文字情報に
@@ -79,7 +85,6 @@ const mocks = vi.hoisted(() => ({
   writeMergedPdf: vi.fn(),
   openStash: vi.fn(),
   openOptions: [],
-  cleanups: 0,
   releasePdfWorker: vi.fn(),
 }));
 
@@ -113,15 +118,27 @@ vi.mock('../src/pdf-book-merger/stash.js', async (importOriginal) => ({
   ...(await importOriginal()),
   openStash: (...args) => mocks.openStash(...args),
 }));
-vi.mock('../src/pdf-book-merger/merge.js', () => ({
-  mergePdf: (...args) => mocks.mergePdf(...args),
-  writeMergedPdf: (...args) => mocks.writeMergedPdf(...args),
+// 分けたファイル（parts）を同時に書き出す結合は、偽物では 1 つずつ（mergePdf・
+// writeMergedPdf の偽物を、分けたファイルごとに呼ぶ）。
+vi.mock('../src/pdf-book-merger/merge.js', () => {
+  const each = (merge) => async ({ parts, ...options }) => {
+    const results = [];
+    for (const part of parts) results.push(await merge({ ...options, ...part }));
+    return results;
+  };
+  return {
+  mergePdfs: each((...args) => mocks.mergePdf(...args)),
+  writeMergedPdfs: each((...args) => mocks.writeMergedPdf(...args)),
   // 結合した PDF の頁の「描くもの」の指紋。壊れた頁（corrupt）だけ違う指紋になる。
-  pageDigests: async (bytes) =>
-    JSON.parse(new TextDecoder().decode(bytes).slice('%PDF-'.length)).pages.map((p) =>
+  // pageDigestsGate を置くと、それが済むまで待つ（検証の途中で並びを変えるテスト）。
+  pageDigests: async (bytes) => {
+    await mocks.pageDigestsGate;
+    return JSON.parse(new TextDecoder().decode(bytes).slice('%PDF-'.length)).pages.map((p) =>
       p.corrupt ? 'broken' : `d-${p.id}`
-    ),
-}));
+    );
+  },
+  };
+});
 
 // pdf.js の偽物。頁の仕様から、文字情報・測定用の画像・縮小画像を作る。
 vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
@@ -135,9 +152,6 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
         spec,
         numPages: spec.pages.length,
         getPageLabels: async () => spec.labels ?? null,
-        cleanup: async () => {
-          mocks.cleanups++;
-        },
         getMetadata: async () => {
           if (spec.metadataBroken) throw new Error('metadata');
           return { info: { Title: spec.title ?? '', ...spec.info } };
@@ -145,14 +159,21 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
       };
     },
     redrawnSafely: (doc) => doc.spec.redrawn === true,
+    // しおり（頁の位置 → 項目の名前）。spec.outline に [位置, 名前] を並べる。
+    readOutline: async (doc) => new Map(doc.spec.outline ?? []),
     readPageText: async (doc, index) => {
       const p = doc.spec.pages[index];
       if (p.broken) throw new Error(p.broken);
       return {
         size: p.size ?? { width: 364, height: 515 },
+        // heading: 章の扉の見出し（上の方の大きな字）。toc: 目次の頁（「目次」の題の行）。
         items: [
           ...(p.misread ? bottomNumber(p.misread) : p.number && !p.ocr ? bottomNumber(p.number) : []),
           ...(p.head ? [{ text: p.head, x0: 0.6, x1: 0.88, y: 0.05, h: 0.012 }] : []),
+          ...(p.heading ? [{ text: p.heading, x0: 0.3, x1: 0.7, y: 0.3, h: 0.04 }] : []),
+          ...(p.toc ? [{ text: '目次', x0: 0.4, x1: 0.6, y: 0.1, h: 0.04 }] : []),
+          // tocLines: 目次の項目の行（「第2章 壁 4」）。
+          ...(p.tocLines ?? []).map((text, k) => ({ text, x0: 0.1, x1: 0.9, y: 0.2 + k * 0.05, h: 0.015 })),
         ],
         signature: { length: p.noText ? 0 : 12, hash: `h-${p.id}` },
         // 頁の文字情報（文字情報の確かめと、同じ頁の見比べに使う）。
@@ -166,6 +187,15 @@ vi.mock('../src/pdf-book-merger/pdf-source.js', () => {
     closePdf: (...args) => mocks.closePdf(...args),
     releaseCanvas: () => {},
     releasePdfWorker: () => mocks.releasePdfWorker(),
+    // 書体を手放した回数。spec.fontReleases に、文字情報を読む前（拡大表示などで先に
+    // 手放した分）・読み終えたとき・頁を描き終えたときの回数を並べる。
+    keepFewFonts: (doc) => {
+      doc.keepFewFonts = true;
+    },
+    fontReleases: async (doc) => {
+      doc.releaseCalls = (doc.releaseCalls ?? 0) + 1;
+      return doc.spec.fontReleases?.[doc.releaseCalls - 1] ?? 0;
+    },
   };
 });
 
@@ -341,6 +371,8 @@ beforeAll(async () => {
     // ブラウザと同じく、close は後から届く。
     setTimeout(() => this.dispatchEvent(new Event('close')), 0);
   };
+  Element.prototype.scrollIntoView ??= function scrollIntoView() {};
+  Element.prototype.setPointerCapture ??= function setPointerCapture() {};
 });
 
 beforeEach(async () => {
@@ -353,11 +385,13 @@ beforeEach(async () => {
   // 保存領域は、はじめは使えない（メモリに持つ）。使うテストは fakeStash に替える。
   mocks.openStash.mockResolvedValue(null);
   mocks.openOptions.length = 0;
-  mocks.cleanups = 0;
+  mocks.pageDigestsGate = null;
   mocks.releasePdfWorker.mockReset();
   mocks.releasePdfWorker.mockReturnValue(true);
   mocks.readStrip.mockImplementation(async (strip) =>
-    strip.zone === 'bottom' && strip.page.ocr ? [{ text: String(strip.page.number), x0: 0.48, x1: 0.52, y: 0.95, h: 0.012 }] : []
+    strip.zone === 'bottom' && strip.page.ocr
+      ? [{ text: String(strip.page.number), confidence: 88, x0: 0.48, x1: 0.52, y: 0.95, h: 0.012 }]
+      : []
   );
   mocks.renderPreview.mockResolvedValue('blob:preview');
   // 頁の仕様に jpeg: false と書いた頁のほかは、JPEG 1 枚の頁として見つかる。
@@ -365,7 +399,8 @@ beforeEach(async () => {
     const pages = specOf(bytes).pages;
     const fallback = pages.filter((p) => p.jpeg === false).length;
     return {
-      scans: pages.map((p) => (p.jpeg === false ? null : { jpeg: p.id })),
+      // JPEG の大きさは、頁の仕様の mb（MB）。分ける位置の提案に使う。
+      scans: pages.map((p) => (p.jpeg === false ? null : scanOf(p.id, p.mb))),
       softMasks: pages.map((p) => p.softMasks ?? 0),
       reasons: new Map(fallback ? [['画像の上に図形を描いている', fallback]] : []),
       example: fallback ? '2 頁目: 画像 1 枚（DCTDecode 100×140 DeviceGray 8bit）' : '',
@@ -563,10 +598,18 @@ describe('ファイルを足して並べる', () => {
     await settled(2);
     expect(gridLabels()).toEqual(['1 頁', '2 頁', '3 頁', '-4〜19 頁', '20 頁', '21 頁', '22 頁']);
     const kept = [...document.querySelectorAll('#pageGrid > li')].slice(0, 3);
+    // ファイルの境目（20 頁の前）で 2 つに分け、後ろのファイルを選んでおく。
+    selectPart(0);
+    editorButton('このファイルの中の区切りの候補（無ければ真ん中）で 2 つに分ける').click();
+    expect(partItems()).toHaveLength(2);
+    selectPart(1);
+    expect(editor()).not.toBeNull();
 
     fileItem('後.pdf').querySelector('button[aria-label="このファイルを削除"]').click();
 
     expect(gridLabels()).toEqual(['1 頁', '2 頁', '3 頁']);
+    // 選んでいた頁が本から外れたら、選ぶのをやめる。
+    expect(editor()).toBeNull();
     expect([...document.querySelectorAll('#pageGrid > li')]).toEqual(kept);
   });
 
@@ -1472,7 +1515,7 @@ describe('ファイルを足して並べる', () => {
     // 画像から番号を読む頁（5 頁）の余白も、その頁の JPEG から、同じ展開で描く。
     expect(mocks.renderMargins).not.toHaveBeenCalled();
     const marginCalls = mocks.renderPageImage.mock.calls.filter(([, , , options]) => options?.margins);
-    expect(marginCalls.map(([doc, index, scan]) => [doc.spec.pages[index].id, scan])).toEqual([['o5', { jpeg: 'o5' }]]);
+    expect(marginCalls.map(([doc, index, scan]) => [doc.spec.pages[index].id, scan])).toEqual([['o5', scanOf('o5')]]);
     expect(gridLabels()).toContain('5 頁');
 
     // 拡大表示は pdf.js で描く。
@@ -1561,7 +1604,7 @@ describe('ファイルを足して並べる', () => {
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalled());
     // 写しの JPEG は残していないので、1 度だけ調べ直して、その JPEG で描く。
     expect(mocks.findScanImages).toHaveBeenCalledTimes(2);
-    expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o5' });
+    expect(mocks.renderMargins.mock.calls[0][2]).toEqual(scanOf('o5'));
   });
 
   it('あとからの OCR が終わっても、拡大表示で開いている文書は閉じない', async () => {
@@ -1614,9 +1657,9 @@ describe('ファイルを足して並べる', () => {
     // （多い頁は粗く描く）。
     const calls = mocks.renderPageImage.mock.calls.map(([, index, scan, options]) => [index, scan, options]);
     expect(calls.sort((a, b) => a[0] - b[0])).toEqual([
-      [0, { jpeg: 'o1' }, { margins: false, softMasks: 0 }],
+      [0, scanOf('o1'), { margins: false, softMasks: 0 }],
       [1, null, { margins: true, softMasks: 8 }],
-      [2, { jpeg: 'o5' }, { margins: false, softMasks: 0 }],
+      [2, scanOf('o5'), { margins: false, softMasks: 0 }],
     ]);
     expect(document.querySelector('#pageGrid [data-page-key="f1:1"] img').src).toBe('blob:pdfjs-o3');
     $('logBox').open = true;
@@ -1791,7 +1834,7 @@ describe('ファイルを足して並べる', () => {
     );
     expect(mocks.renderMargins).toHaveBeenCalledTimes(1);
     // 調べたときの JPEG を使う（PDF 全体を読み直さない）。
-    expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o5' });
+    expect(mocks.renderMargins.mock.calls[0][2]).toEqual(scanOf('o5'));
     expect(mocks.findScanImages).toHaveBeenCalledTimes(2);
     await vi.waitFor(() => expect(fileItem('猫_表紙.pdf').textContent).not.toContain('余白を読み取り中'));
   });
@@ -1834,7 +1877,19 @@ describe('ファイルを足して並べる', () => {
     await vi.waitFor(() => expect(mocks.renderMargins).toHaveBeenCalledTimes(40));
     // 調べたときの JPEG（ファイルの一部を指すだけ）で描く。
     expect(mocks.findScanImages).toHaveBeenCalledTimes(1);
-    expect(mocks.renderMargins.mock.calls[0][2]).toEqual({ jpeg: 'o1' });
+    expect(mocks.renderMargins.mock.calls[0][2]).toEqual(scanOf('o1'));
+  });
+
+  it('頁ごとに別の書体を持つ PDF で書体を手放したら、その回数を記録に出す', async () => {
+    // 手放す頃合いは pdf-source.js が決める（book-pdf-fallback.test.js）。
+    drop([file('頁ごとの書体.pdf', pdf([page('q1', 1), page('q2', 2)], { fontReleases: [1, 3, 6] })), file('猫_奇数.pdf', pdf(ODD))]);
+    await settled(2);
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    // 文字情報を読むときと、頁を描くときに手放した回数を分けて出す（読む前の 1 回は除く）。
+    expect($('logText').textContent).toContain('番号が見つかった頁 2、頁ごとに書体が違うので、読んだ書体を 2 回手放しました）');
+    expect($('logText').textContent).toContain('頁ごとに書体が違うので、描いた頁の書体を 3 回手放しました');
+    expect($('logText').textContent.match(/書体を \d+ 回手放しました/g)).toHaveLength(2);
   });
 
   it('ソフトマスクの多い頁は、粗く描き、余白を OCR しない（あとから本文に変えても）', async () => {
@@ -2385,8 +2440,9 @@ describe('結合と検証', () => {
     expect(text).toContain('結合を始めます（2 ファイル・8 頁、結合した PDF は Blob にしてページの外に置きます（保存領域を使えない: Context not access storage）、');
     expect(text).toContain('Blob に書き出し');
     expect(text).toContain('検証: pdf.js で開きました');
-    // 検証では、1 頁読むたびに pdf.js の文書に溜めたもの（書体など）を捨てる。
-    expect(mocks.cleanups).toBe(8);
+    // 検証では、新しい書体を持ち込んだ頁を読むたびに書体を手放す（book-pdf-fallback.test.js）。
+    const closed = mocks.closePdf.mock.calls.map(([doc]) => doc).filter(Boolean);
+    expect(closed.filter((doc) => doc.keepFewFonts).map((doc) => doc.spec.pages.length)).toEqual([8]);
     // 検証を終えたら、pdf.js の worker ごと止めて、結合した PDF の写しを返す。
     expect(mocks.releasePdfWorker).toHaveBeenCalledTimes(1);
     expect(text).toContain('検証: pdf.js の worker を止めて、結合した PDF の写しを手放しました');
@@ -2748,5 +2804,1079 @@ describe('結合と検証', () => {
   it('結合した PDF はダウンロードするだけで、Drive へ保存するボタンは無い', () => {
     expect($('saveDriveBtn')).toBeNull();
     expect(document.querySelector('portal-save-dialogs')).toBeNull();
+  });
+});
+
+// --- 分ける ----------------------------------------------------------------------
+
+/** 章の見出しのある両面の本（頁ごとに 10 MB）。表紙は別のファイル。 */
+const CHAPTERS = [
+  page('p1', 1, { mb: 10 }),
+  page('p2', 2, { mb: 10 }),
+  page('p3', 3, { mb: 10, heading: '第2章 壁' }),
+  page('p4', 4, { mb: 10 }),
+  page('p5', 5, { mb: 10, heading: '第3章 床' }),
+  page('p6', 6, { mb: 10 }),
+];
+
+async function addChapters() {
+  drop([file('本_本文.pdf', pdf(CHAPTERS)), file('本_表紙.pdf', pdf(COVER))]);
+  await settled(2);
+}
+
+/** 頁の一覧の札のうち、新しいファイルを始める頁の印。 */
+function splitMarks() {
+  return [...document.querySelectorAll('#pageGrid .bm-split-mark')].map(
+    (mark) => `${mark.closest('li').querySelector('.bm-page-label strong').textContent}:${mark.textContent}`
+  );
+}
+
+/** 一覧の、選んだファイルの上下に出す欄（境目の帯と、2 つに分けるボタン）。どれも無ければ null。 */
+function editor() {
+  return document.querySelector('#splitPlan > .bm-part-editor, #splitPlan > .bm-part-tools') ? $('splitPlan') : null;
+}
+
+/** 動かす欄のボタン（説明の文で探す）。 */
+function editorButton(label) {
+  return editor().querySelector(`button[aria-label="${label}"]`);
+}
+
+/** 動かす欄の、始まり（0）か終わり（1）の境目の訳。 */
+function edgeReason(which) {
+  return $('splitPlan').querySelector(`[data-edge="${['始まり', '終わり'][which]}"] .bm-edge-reason`)?.textContent ?? '';
+}
+
+/** 一覧のファイルの行を押す（選ぶ・閉じる）。 */
+function selectPart(k) {
+  partItems()[k].querySelector('.bm-part-select').click();
+}
+
+/** 一覧の、分けたファイルの行。 */
+function partItems() {
+  return [...document.querySelectorAll('#splitPlan > .bm-part')];
+}
+
+/** 頁の札の「ここから分ける」「分けない」。 */
+function splitButton(pageKey) {
+  return document.querySelector(`#pageGrid [data-page-key="${pageKey}"] .bm-split-toggle button`);
+}
+
+function logText() {
+  $('logBox').open = true;
+  $('logBox').dispatchEvent(new Event('toggle'));
+  return $('logText').textContent;
+}
+
+/** ZIP の中のファイルの名前（目録から読む）。 */
+async function zipNames(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const view = new DataView(bytes.buffer);
+  const end = bytes.length - 22;
+  let at = view.getUint32(end + 16, true);
+  const names = [];
+  for (let k = 0; k < view.getUint16(end + 10, true); k++) {
+    const length = view.getUint16(at + 28, true);
+    names.push(decoder.decode(bytes.subarray(at + 46, at + 46 + length)));
+    at += 46 + length;
+  }
+  return names;
+}
+
+describe('分ける', () => {
+  it('上限に収まれば分けず、上限を超えたら章の見出しで分ける位置を提案する（表紙は最初のファイルに）', async () => {
+    // 上限の既定は 40 MB・頁数は上限なし。
+    expect($('splitMegabytes').value).toBe('40');
+    expect($('splitPages').value).toBe('');
+    // この本（約 60 MB）が収まる上限にする。
+    change($('splitMegabytes'), '100');
+    await addChapters();
+    expect(splitMarks()).toEqual([]);
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（上限に収まります）');
+    // 1 ファイルにまとめるときも、その大きさと上限に対する棒を出す。
+    expect(partItems().map((item) => item.textContent)).toEqual(['本.pdf: 表紙〜6 頁（8 頁・約 60.0 MB）']);
+    expect(partItems()[0].querySelector('.bm-part-bar').title).toBe('上限の 60%');
+    // 候補には理由を添える。
+    expect(document.querySelector('[data-page-key="f2:2"] .bm-split-reason').textContent).toBe('見出し「第2章 壁」');
+    // 先頭の頁では分けられない。
+    expect(splitButton('f1:0')).toBeNull();
+
+    change($('splitMegabytes'), '25');
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル', '5 頁:ここから 3 つ目のファイル']);
+    expect($('splitNote').textContent).toContain('3 ファイルに分けます（上限を超えるので、確からしい区切りから順に）');
+    expect(partItems().map((item) => item.textContent)).toEqual([
+      '本_1.pdf: 表紙〜2 頁（4 頁・約 20.0 MB）',
+      '本_2_第2章 壁.pdf: 3 頁〜4 頁（2 頁・約 20.0 MB・見出し「第2章 壁」から）',
+      '本_3_第3章 床.pdf: 5 頁〜6 頁（2 頁・約 20.0 MB・見出し「第3章 床」から）',
+    ]);
+    // 上限は覚えておく（次に開いたときも同じ上限）。
+    expect(JSON.parse(localStorage.getItem('pdf-book-merger:split-limits-2'))).toEqual({ megabytes: 25, pages: null });
+
+    // 頁数の上限も守る（表紙の後ろでは分けない）。
+    change($('splitPages'), '3');
+    expect(splitMarks()).toEqual(['2 頁:ここから 2 つ目のファイル', '3 頁:ここから 3 つ目のファイル', '5 頁:ここから 4 つ目のファイル']);
+
+    // 名前を変えると、分けたファイルの名前も変わる。
+    $('outputName').value = '犬.pdf';
+    $('outputName').dispatchEvent(new Event('input'));
+    expect($('splitPlan').textContent).toContain('犬_4_第3章 床.pdf: 5 頁〜6 頁');
+
+    // 上限を空にすると分けない。
+    change($('splitMegabytes'), '');
+    change($('splitPages'), '');
+    expect(splitMarks()).toEqual([]);
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（上限がありません）');
+  });
+
+  it('見出しでは自動で分けず、区切りの候補として前後の頁を並べ、選べば見出しの名前を添えて分ける', async () => {
+    // この本（約 60 MB）が収まる上限にする。
+    change($('splitMegabytes'), '100');
+    await addChapters();
+    expect(splitMarks()).toEqual([]);
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（上限に収まります）');
+    expect($('splitNote').textContent).toContain('下の一覧でファイルを選ぶと、その始まりと終わりを前後の頁を見ながら動かせます。');
+    const card = (pageKey) => document.querySelector(`#pageGrid [data-page-key="${pageKey}"]`);
+    const key = document.querySelectorAll('#pageGrid > li')[4].dataset.pageKey;
+    expect(card(key).classList.contains('split-candidate')).toBe(true);
+
+    // 1 ファイルの行を選ぶと、始まりと終わりを動かす欄を開く（本の最初から最後まで）。
+    selectPart(0);
+    expect(partItems()[0].classList.contains('selected')).toBe(true);
+    expect(partItems()[0].querySelector('.bm-part-select').getAttribute('aria-expanded')).toBe('true');
+    // 本の最初と最後には境目が無いので、帯は出さず、2 つに分けるボタンだけを出す。
+    expect(editor().querySelectorAll('.bm-edge')).toHaveLength(0);
+    expect(partItems()[0].nextElementSibling.className).toBe('bm-part-tools');
+    // 2 つに分ける（中の区切りの候補で）。選んだファイルは 1 つ目のまま。
+    editorButton('このファイルの中の区切りの候補（無ければ真ん中）で 2 つに分ける').click();
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル']);
+    expect(partItems()[0].classList.contains('selected')).toBe(true);
+    // 終わりの境目の前後の頁（前の 2 頁と後ろの 2 頁）と、その訳を出す。
+    expect(edgeReason(1)).toBe('3 頁の前で分ける（見出し「第2章 壁」）');
+    // 境目を動かせる範囲の頁（前後のファイルが空にならない範囲）を、左右に送れる帯に並べる。
+    const strip = () => editor().querySelector('[data-edge="終わり"]').querySelector('.bm-edge-strip');
+    expect([...strip().querySelectorAll('.bm-edge-page')].map((page) => page.textContent)).toEqual([
+      '表紙',
+      '表紙',
+      '1 頁',
+      '2 頁',
+      '3 頁',
+      '4 頁',
+      '5 頁',
+      '6 頁',
+    ]);
+    expect(strip().querySelectorAll('.bm-edge-page')[4].querySelector('img').alt).toBe('3 頁（本_本文.pdf の 3 頁目）');
+    // 頁と頁の間は線だけ。今の境目はその後ろの頁の縁を太く、上の段に ✂、下の段に区切りの候補の ▲。
+    const marker = (edge) => editor().querySelector(`[data-edge="${edge}"] .bm-cut-marker`);
+    expect(strip().querySelector('.bm-edge-page.cut').dataset.at).toBe('4');
+    expect(marker('終わり').getAttribute('aria-label')).toBe('終わり（3 頁の前）');
+    // 読み上げでは、矢印キーで動かせるつまみ（スライダー）として伝える。
+    expect(['role', 'aria-valuemin', 'aria-valuemax', 'aria-valuenow', 'aria-valuetext'].map((name) => marker('終わり').getAttribute(name))).toEqual([
+      'slider',
+      '1',
+      '7',
+      '4',
+      '3 頁の前',
+    ]);
+    // ▲ は、今の境目（3 頁の前）と重なっていても出す（そこは押せない印）。
+    expect([...strip().querySelectorAll('.bm-hint')].map((hint) => [hint.tagName, hint.className, hint.getAttribute('aria-label')])).toEqual([
+      ['SPAN', 'bm-hint on', null],
+      ['BUTTON', 'bm-hint', '終わりを5 頁の前（見出し「第3章 床」）へ動かす'],
+    ]);
+    // 終わりの帯は、選んだファイルの下（次のファイルとの間）に出す。
+    expect(strip().closest('li').className).toBe('bm-part-editor after');
+    expect(partItems()[0].querySelector('.bm-part-select').getAttribute('aria-controls')).toBe('partEditorEnd');
+    // 2 つに分けるボタンは、終わりの帯の下に出す（終わりの帯は、選んだファイルのすぐ下）。
+    expect(partItems()[0].nextElementSibling).toBe(strip().closest('li'));
+    expect(strip().closest('li').nextElementSibling.className).toBe('bm-part-tools');
+    // ✂ を押しただけでは、何も変わらない。
+    marker('終わり').click();
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル']);
+    // 2 つ目のファイルの頁は、頁の一覧で地の色を変える。
+    expect(card(key).classList.contains('part-alt')).toBe(true);
+    expect(card(key).classList.contains('split-candidate')).toBe(false);
+    expect(card(key).previousElementSibling.classList.contains('part-alt')).toBe(false);
+
+    // ✂ は矢印キーでも 1 頁ずつ動かせる（ほかのキーでは動かない）。
+    const press = (target, key) => target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    press(marker('終わり'), 'Enter');
+    press(marker('終わり'), 'ArrowRight');
+    expect(splitMarks()).toEqual(['4 頁:ここから 2 つ目のファイル']);
+    expect(edgeReason(1)).toBe('4 頁の前で分ける（手で決めた位置）');
+    // 描き直しても、動かした先の境目にキーボードの位置を置く。
+    expect(document.activeElement).toBe(marker('終わり'));
+    expect(marker('終わり').getAttribute('aria-label')).toBe('終わり（4 頁の前）');
+    expect(logText()).toContain('3 頁の前で分けていたのを、4 頁の前にしました');
+    selectPart(1);
+    // 始まりの帯は、選んだファイルの上（前のファイルとの間）に出す。
+    expect(partItems()[1].previousElementSibling.className).toBe('bm-part-editor before');
+    expect(partItems()[0].nextElementSibling.className).toBe('bm-part-editor before');
+    expect(document.activeElement).toBe(partItems()[1].querySelector('.bm-part-select'));
+    expect(partItems()[1].querySelector('.bm-part-select').getAttribute('aria-controls')).toBe('partEditorStart');
+    expect(edgeReason(0)).toBe('4 頁の前で分ける（手で決めた位置）');
+    expect(editor().querySelector('[data-edge="終わり"]')).toBeNull();
+    // 上の段の ✂ を左右にドラッグして動かす。帯の頁は 8 枚（表紙〜6 頁）で 1 枚 100px、帯は 0〜1000px。
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function box() {
+      return this.classList.contains('bm-edge-inner') ? { left: 0, width: 800, right: 800 } : { left: 0, width: 1000, right: 1000 };
+    });
+    onTestFinished(() => rect.mockRestore());
+    const wait = () => new Promise((resolve) => setTimeout(resolve, 80));
+    const pointer = (target, type, clientX) => target.dispatchEvent(new MouseEvent(type, { clientX, bubbles: true }));
+    const grab = marker('始まり');
+    pointer(grab, 'pointerdown', 510);
+    // 押した ✂ にキーボードの位置を置く。
+    expect(document.activeElement).toBe(grab);
+    // 帯の端に指があれば、止めていても帯を送り続ける。
+    pointer(grab, 'pointermove', 10);
+    await wait();
+    pointer(grab, 'pointermove', 995);
+    await wait();
+    // ✂ は指に付いていく。ドラッグの間は一覧を描き直さない（掴んだ ✂ を残す）。
+    pointer(grab, 'pointermove', 410);
+    await wait();
+    // 境目の太い線と、塗った ▲ も、✂ に付いていく。
+    expect(editor().querySelector('[data-edge="始まり"] .bm-edge-page.cut').dataset.at).toBe('4');
+    expect(editor().querySelector('[data-edge="始まり"] .bm-hint.on').dataset.at).toBe('4');
+    $('outputName').value = '本2.pdf';
+    $('outputName').dispatchEvent(new Event('input'));
+    expect(grab.isConnected).toBe(true);
+    pointer(grab, 'pointerup', 410);
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル']);
+    // 描き直しても、動かした ✂ にキーボードの位置を置く。
+    expect(document.activeElement).toBe(marker('始まり'));
+    expect(marker('始まり').getAttribute('aria-label')).toBe('始まり（3 頁の前）');
+    // 元の位置で離したとき・取り消したとき・見失ったときは動かさない。
+    pointer(marker('始まり'), 'pointerdown', 410);
+    pointer(marker('始まり'), 'pointerup', 410);
+    const other = marker('始まり');
+    pointer(other, 'pointerdown', 410);
+    pointer(other, 'pointermove', 610);
+    pointer(other, 'pointercancel', 610);
+    // 取り消すと、線も元へ戻る。
+    expect(editor().querySelector('[data-edge="始まり"] .bm-edge-page.cut').dataset.at).toBe('4');
+    const lost = marker('始まり');
+    pointer(lost, 'pointerdown', 410);
+    pointer(lost, 'pointermove', 610);
+    lost.dispatchEvent(new Event('lostpointercapture'));
+    // 離したあとは、もう動きに付いていかない。
+    pointer(other, 'pointermove', 610);
+    pointer(other, 'pointerup', 610);
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル']);
+    // 上の段を押すと、いちばん近い頁と頁の間へ動かす（今の境目なら何もしない）。
+    const rail = () => editor().querySelector('[data-edge="始まり"] .bm-edge-rail');
+    pointer(rail(), 'click', 410);
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル']);
+    pointer(rail(), 'click', 510);
+    expect(splitMarks()).toEqual(['4 頁:ここから 2 つ目のファイル']);
+    // 範囲の外を押しても、動かせる端まで。
+    pointer(rail(), 'click', 5000);
+    expect(splitMarks()).toEqual(['6 頁:ここから 2 つ目のファイル']);
+    // ✂ を押しても上の段の押し方にはならない。
+    marker('始まり').click();
+    expect(splitMarks()).toEqual(['6 頁:ここから 2 つ目のファイル']);
+    pointer(rail(), 'click', 410);
+    rect.mockRestore();
+    $('outputName').value = '本.pdf';
+    $('outputName').dispatchEvent(new Event('input'));
+    // 同じ行をもう一度押すと閉じる。
+    selectPart(1);
+    expect(editor()).toBeNull();
+
+    // 2 つ目のファイルも、中の章の見出しで 2 つに分ける。
+    selectPart(1);
+    editorButton('このファイルの中の区切りの候補（無ければ真ん中）で 2 つに分ける').click();
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル', '5 頁:ここから 3 つ目のファイル']);
+    // 境目は、前後のファイルが空にならない範囲でだけ動かせる（2 つ目のファイルは選んだまま）。
+    press(marker('始まり'), 'ArrowRight');
+    expect(splitMarks()).toEqual(['4 頁:ここから 2 つ目のファイル', '5 頁:ここから 3 つ目のファイル']);
+    press(marker('始まり'), 'ArrowRight');
+    press(marker('終わり'), 'ArrowLeft');
+    // 上の段を範囲の外で押しても、前後のファイルが空になるところへは動かない。
+    const narrow = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, width: 600, right: 600 });
+    editor().querySelector('[data-edge="始まり"] .bm-edge-rail').dispatchEvent(new MouseEvent('click', { clientX: 5000, bubbles: true }));
+    narrow.mockRestore();
+    expect(splitMarks()).toEqual(['4 頁:ここから 2 つ目のファイル', '5 頁:ここから 3 つ目のファイル']);
+    // 1 頁だけのファイルは、2 つに分けられない。
+    expect(editorButton('このファイルの中の区切りの候補（無ければ真ん中）で 2 つに分ける')).toBeNull();
+    // 下の段の ▲（区切りの候補）を押すと、そこへ動かす。
+    editorButton('始まりを3 頁の前（見出し「第2章 壁」）へ動かす').click();
+    selectPart(1);
+    expect(partItems().map((item) => item.textContent.replace(/:.*$/, ''))).toEqual([
+      '本_1.pdf',
+      '本_2_第2章 壁.pdf',
+      '本_3_第3章 床.pdf',
+    ]);
+    // 分けたファイルには、最初の頁の縮小画像と、上限に対する大きさの棒を添える。
+    const [first] = partItems();
+    expect(first.querySelector('.bm-part-thumb').src).toBe(document.querySelector('#pageGrid li img').src);
+    expect(first.querySelector('.bm-part-bar > span').style.width).toBe('20%');
+    $('splitAutoBtn').click();
+
+    // まとまりが上限を超えれば、さらに分ける（候補の無い位置なら、そう添える）。
+    change($('splitMegabytes'), '15');
+    expect(splitMarks()).toHaveLength(5);
+    selectPart(0);
+    expect(edgeReason(1)).toBe('2 頁の前で分ける（上限に収まるように選んだ位置）');
+    selectPart(0);
+    // 棒は、大きさと頁数のうち上限に近い方で、100% を超えない。
+    change($('splitPages'), '4');
+    const bars = () => [...$('splitPlan').querySelectorAll('.bm-part-bar')];
+    expect(bars()[0].title).toBe('上限の 75%');
+    // 手で分ける位置を外して上限を超えたら、棒は 100% で止め、注意の色にする。
+    const cut = partItems().at(-1).dataset.key.replace(/^part:/, '');
+    selectPart(partItems().length - 1);
+    editorButton('この境目で分けるのをやめて、前のファイルとまとめる').click();
+    // まとめたファイルを選んだままにする。手で決めたあとも、上限に収まるように選んで
+    // いた位置には、そう訳を出す。
+    expect(partItems().at(-1).previousElementSibling.className).toBe('bm-part-editor before');
+    expect(edgeReason(0)).toBe('5 頁の前で分ける（見出し「第3章 床」）');
+    selectPart(1);
+    expect(edgeReason(0)).toBe('2 頁の前で分ける（上限に収まるように選んだ位置）');
+    const last = partItems().at(-1);
+    expect(last.classList.contains('warn')).toBe(true);
+    expect(last.querySelector('.bm-part-bar').title).toBe('上限の 133%');
+    expect(last.querySelector('.bm-part-bar > span').style.width).toBe('100%');
+    // 外した位置を手で分け直したら、手で決めた位置になる。
+    splitButton(cut).click();
+    selectPart(partItems().length - 1);
+    expect(edgeReason(0)).toBe('6 頁の前で分ける（手で決めた位置）');
+    // 次のファイルとまとめる。
+    selectPart(partItems().length - 2);
+    editorButton('この境目で分けるのをやめて、次のファイルとまとめる').click();
+    expect(splitMarks()).not.toContain('6 頁:ここから 6 つ目のファイル');
+    // 選んだファイルは頁で覚えておき、分ける位置が変わっても、その頁を含むファイルの下に欄を出す。
+    expect(partItems().at(-1).previousElementSibling.className).toBe('bm-part-editor before');
+    change($('splitMegabytes'), '100');
+    expect(partItems().at(-1).previousElementSibling.className).toBe('bm-part-editor before');
+    change($('splitPages'), '');
+  });
+
+  it('拡大表示でも、その頁から分けるかどうかを切り替え、前後の区切りへ送れる', async () => {
+    change($('splitMegabytes'), '100');
+    await addChapters();
+    // 区切りの候補の、次の頁（3 頁）を拡大する。
+    document.querySelectorAll('#pageGrid > li')[4].querySelector('.bm-thumb').click();
+    await flush();
+    expect($('previewTitle').textContent).toBe('3 頁（本_本文.pdf の 3 頁目）');
+    expect($('previewSplit').hidden).toBe(false);
+    expect($('previewSplitText').textContent).toBe('区切りの候補: 見出し「第2章 壁」（分けていません）');
+    expect($('previewPrevSeamBtn').disabled).toBe(true);
+    expect($('previewNextSeamBtn').disabled).toBe(false);
+    $('previewSplitBtn').click();
+    expect($('previewSplitText').textContent).toBe('この頁から 2 つ目のファイル（見出し「第2章 壁」）');
+    expect($('previewSplitBtn').textContent).toBe('分けない');
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル']);
+
+    // 次の区切り（5 頁）へ送り、戻る。
+    $('previewNextSeamBtn').click();
+    await vi.waitFor(() => expect($('previewTitle').textContent).toBe('5 頁（本_本文.pdf の 5 頁目）'));
+    expect($('previewNextSeamBtn').disabled).toBe(true);
+    expect($('previewSplitBtn').textContent).toBe('ここから分ける');
+    $('previewPrevSeamBtn').click();
+    await vi.waitFor(() => expect($('previewTitle').textContent).toBe('3 頁（本_本文.pdf の 3 頁目）'));
+    // 区切りの候補でない頁。
+    $('previewNextBtn').click();
+    await vi.waitFor(() => expect($('previewTitle').textContent).toBe('4 頁（本_本文.pdf の 4 頁目）'));
+    expect($('previewSplitText').textContent).toBe('この頁の前では分けません');
+    $('previewSplitBtn').click();
+    expect($('previewSplitText').textContent).toBe('この頁から 3 つ目のファイル（手で決めた位置）');
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル', '4 頁:ここから 3 つ目のファイル']);
+    $('previewCloseBtn').click();
+
+    // 最初の頁の前では分けられない。
+    document.querySelector('#pageGrid .bm-thumb').click();
+    await flush();
+    expect($('previewSplit').hidden).toBe(true);
+    expect($('previewPrevSeamBtn').disabled).toBe(true);
+    $('previewCloseBtn').click();
+  });
+
+  it('長いファイルの境目の帯には、境目の前後 20 頁までを並べる', async () => {
+    drop([file('長い本.pdf', pdf(Array.from({ length: 60 }, (_, i) => page(`l${i + 1}`, i + 1))))]);
+    await settled(1);
+    selectPart(0);
+    editorButton('このファイルの中の区切りの候補（無ければ真ん中）で 2 つに分ける').click();
+    expect(splitMarks()).toEqual(['31 頁:ここから 2 つ目のファイル']);
+    const pages = [...editor().querySelector('[data-edge="終わり"]').querySelectorAll('.bm-edge-page')].map((item) => item.textContent);
+    // 31 頁の前の境目から、前後 20 か所の間（その両側の頁）まで。
+    expect(pages[0]).toBe('10 頁');
+    expect(pages.at(-1)).toBe('51 頁');
+    expect(pages).toHaveLength(42);
+    // 端の間で動かすと、帯はその境目を中心に描き直す。
+    for (let k = 0; k < 19; k++) {
+      editor().querySelector('[data-edge="終わり"] .bm-cut-marker').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    }
+    expect(splitMarks()).toEqual(['50 頁:ここから 2 つ目のファイル']);
+    const moved = [...editor().querySelector('[data-edge="終わり"]').querySelectorAll('.bm-edge-page')].map((item) => item.textContent);
+    expect([moved[0], moved.at(-1)]).toEqual(['29 頁', '60 頁']);
+  });
+
+  it('2 つに分けるときは、いちばん確からしい区切りで分け、節などの見出しの ▲ は薄くする', async () => {
+    drop([
+      file(
+        '本.pdf',
+        pdf([page('s1', 1), page('s2', 2), page('s3', 3, { heading: 'Section 2' }), page('s4', 4), page('s5', 5, { heading: '第2章 壁' }), page('s6', 6)])
+      ),
+    ]);
+    await settled(1);
+    selectPart(0);
+    editorButton('このファイルの中の区切りの候補（無ければ真ん中）で 2 つに分ける').click();
+    // 真ん中（4 頁）に近い節（3 頁）より、確からしい章（5 頁）で分ける。
+    expect(splitMarks()).toEqual(['5 頁:ここから 2 つ目のファイル']);
+    const hints = [...editor().querySelectorAll('[data-edge="終わり"] .bm-hint')];
+    expect(hints.map((hint) => [hint.dataset.at, hint.classList.contains('weak')])).toEqual([
+      ['2', true],
+      ['4', false],
+    ]);
+  });
+
+  it('目次の項目が指す頁は、目次に載らない同じ階層の見出しより確からしい区切りにする', async () => {
+    // 2 頁目は目次（第2章は 4 頁から）。5 頁目の「第3章」は OCR の読み違いのように、目次に載っていない。
+    drop([
+      file(
+        '本.pdf',
+        pdf([
+          page('t1', 1, { mb: 10 }),
+          // 本に無い頁を指す項目と、同じ頁を指す 2 つ目の項目は使わない。
+          page('t2', 2, { mb: 10, tocLines: ['第1章 基礎 1', '第2章 壁 4', '第2章 壁（つづき） 4', '第9章 付録 99'] }),
+          page('t3', 3, { mb: 10 }),
+          page('t4', 4, { mb: 10 }),
+          page('t5', 5, { mb: 10, heading: '第3章 床' }),
+          // 節の見出しは、目次に載っていなくても使う（章ごとの目次にしか載らないことがあるので）。
+          page('t6', 6, { mb: 10, heading: 'Section 2' }),
+        ])
+      ),
+    ]);
+    await settled(1);
+    expect(document.querySelectorAll('#pageGrid > li')[5].querySelector('.bm-split-reason').textContent).toBe('見出し「Section 2」');
+    // 目次に載らない見出しも候補には残す（目次の無い資料もあるので、目次だけには頼らない）。
+    expect(document.querySelectorAll('#pageGrid > li')[4].querySelector('.bm-split-reason').textContent).toBe('見出し「第3章 床」');
+    expect(logText()).toContain('目次とみなした頁 1（2 頁目）、目次の項目 4（「第1章 基礎」1 頁、「第2章 壁」4 頁、');
+    // 上限を超えれば、目次が裏付ける 4 頁の前でまず分ける（収まれば、5 頁の前では分けない）。
+    change($('splitMegabytes'), '35');
+    expect(splitMarks()).toEqual(['4 頁:ここから 2 つ目のファイル']);
+    expect(partItems().map((item) => item.textContent.replace(/:.*$/, ''))).toEqual(['本_1_第1章 基礎.pdf', '本_2_第2章 壁.pdf']);
+  });
+
+  it('目次の頁番号が扉の次の頁を指し、扉に同じ階層の見出しがあれば、扉から始める', async () => {
+    drop([
+      file(
+        '本.pdf',
+        pdf([
+          page('u1', 1, { mb: 10 }),
+          page('u2', 2, { mb: 10, tocLines: ['第1章 基礎 1', '第2章 壁 4', '第3章 床 6'] }),
+          page('u3', 3, { mb: 10, heading: '第2章 壁' }), // 扉
+          page('u4', 4, { mb: 10 }),
+          // 扉の見出しの階層が違えば、目次の指す頁のまま。
+          page('u5', 5, { mb: 10, heading: 'Section 9' }),
+          page('u6', 6, { mb: 10 }),
+          page('u7', 7, { mb: 10 }),
+        ])
+      ),
+    ]);
+    await settled(1);
+    const reasons = [...document.querySelectorAll('#pageGrid > li')].map((li) => li.querySelector('.bm-split-reason')?.textContent ?? '');
+    expect(reasons[2]).toBe('見出し「第2章 壁」');
+    expect(reasons[3]).toBe('');
+    expect(reasons[5]).toBe('見出し「第3章 床」');
+  });
+
+  it('柱を読んだ頁と、分ける位置の提案とその訳を記録に残す', async () => {
+    const heads = ['第1章 1.1 材料', '第1章 1.1 材料', '第1章 1.2 下地', '第1章 1.2 下地', null, '第2章 2.1 施工', '第2章 2.1 施工', '第2章 2.1 施工'];
+    drop([file('本.pdf', pdf(heads.map((head, i) => page(`r${i + 1}`, i + 1, { mb: 10, ...(head ? { head } : { heading: '第2章 施工' }) }))))]);
+    await settled(1);
+    expect(logText()).toContain('柱を読んだ頁 7（変わったところ 3: 1 頁目〜「第1章 1.1 材料」、3 頁目〜「第1章 1.2 下地」、6 頁目〜「第2章 2.1 施工」）');
+    change($('splitMegabytes'), '45');
+    expect(logText()).toContain('分ける位置の提案 1（5 頁（見出し「第2章 施工」・柱の章・順位 0））');
+    change($('splitMegabytes'), '25');
+    expect(logText()).toContain('分ける位置の提案 3（3 頁（柱の変わり目「第1章 1.2 下地」・柱の節・順位 4）、5 頁（見出し「第2章 施工」・柱の章・順位 0）、7 頁（大きさで））');
+    // 手で決めたあとは、提案を出さない（上限を変えれば、提案に戻る）。
+    const before = logText();
+    splitButton('f1:1').click();
+    expect(logText().replace(before, '')).not.toContain('分ける位置の提案');
+    change($('splitMegabytes'), '45');
+    expect(logText().replace(before, '')).toContain('分ける位置の提案 1（');
+  });
+
+  it('分ける位置の提案の訳には、頁番号の戻りも、順位の無い（細かすぎる）候補も出す', async () => {
+    // 章ごとに頁番号を振り直した資料（2 つ目のファイルが 1 頁から）。
+    drop([file('上.pdf', pdf([1, 2, 3].map((n) => page(`a${n}`, n, { mb: 10 })))), file('下.pdf', pdf([1, 2, 3].map((n) => page(`b${n}`, n, { mb: 10 }))))]);
+    await settled(2);
+    change($('splitMegabytes'), '35');
+    expect(logText()).toMatch(/分ける位置の提案 1（[^）]*頁番号の戻り・順位 \d+）/);
+    // 前付け（番号の無い頁が 0 以下に推定される）から本文に入るところ。見出しと重なれば、訳に添える。
+    drop([
+      file(
+        '前付.pdf',
+        pdf([page('c1', null, { mb: 10 }), page('c2', null, { mb: 10 }), page('c3', 1, { mb: 10, heading: '第1章 総論' }), page('c4', 2, { mb: 10 }), page('c5', 3, { mb: 10 })])
+      ),
+    ]);
+    await settled(3);
+    expect(logText()).toMatch(/見出し「第1章 総論」・本文の始まり・順位/);
+    // 頁ごとに見出しがある（細かすぎる）と、順位は付けない。
+    drop([file('細.pdf', pdf(Array.from({ length: 24 }, (_, i) => page(`d${i + 1}`, i + 1, { mb: 5, heading: `第${i + 1}章` }))))]);
+    await settled(4);
+    expect(logText()).toMatch(/見出し「第\d+章」）/);
+    // 柱の変わったところが多ければ、頭の 40 件まで。
+    drop([file('柱.pdf', pdf(Array.from({ length: 42 }, (_, i) => page(`h${i + 1}`, i + 1, { head: `柱${String.fromCharCode(0x4e00 + i)}` }))))]);
+    await settled(5);
+    expect(logText()).toContain(`40 頁目〜「柱${String.fromCharCode(0x4e00 + 39)}」 ほか 2 件）`);
+  });
+
+  it('分け方を学ぶためのデータ（頁ごとの特徴・分けた位置・自動の提案）を JSON で保存できる', async () => {
+    const heads = ['第1章 1.1 材料', '第1章 1.1 材料', '第1章 1.2 下地', '第1章 1.2 下地', null, '第2章 2.1 施工', '第2章 2.1 施工'];
+    drop([file('本.pdf', pdf(heads.map((head, i) => page(`w${i + 1}`, i + 1, { mb: 10, ...(head ? { head } : { heading: '第2章 施工' }) }))))]);
+    await settled(1);
+    expect($('trainingBox').hidden).toBe(false);
+    change($('splitMegabytes'), '45');
+    // 手で直した位置を正解にし、自動の提案も残す。
+    splitButton('f1:2').click();
+    $('trainingBtn').click();
+    await vi.waitFor(() => expect(logText()).toContain('「本_分け方.json」をダウンロードしました'));
+    const saved = URL.createObjectURL.mock.calls.at(-1)[0];
+    const data = JSON.parse(await saved.text());
+    expect(data).toMatchObject({ version: 5, files: ['本.pdf'], manual: true, itemFields: ['text', 'x0', 'x1', 'y', 'h'] });
+    // 頁番号の構造（部が 1 つの本では、何部目か・前の段は無い）。
+    expect(data.pages[2].numbering).toEqual({ role: 'body', number: 3, prefix: null, branch: null, part: null, section: null });
+    // 頁の文字のかたまり（本文も）。余白を OCR で読んでいなければ ocrItems は空。
+    expect(data.pages[2].items.map(([text]) => text)).toContain('第1章 1.2 下地');
+    expect(data.pages[4].items).toContainEqual(['第2章 施工', 0.3, 0.7, 0.3, 0.04]);
+    expect(data.pages[0].ocrItems).toEqual([]);
+    expect(data.pages[0].bytes).toBeGreaterThan(0);
+    expect(data.pages.map((p) => p.start)).toEqual([0, 0, 1, 0, 1, 0, 0]);
+    expect(data.pages.map((p) => p.suggested)).toEqual([0, 0, 0, 0, 1, 0, 0]);
+    expect(data.pages[4]).toMatchObject({
+      label: '5 頁',
+      reason: '見出し「第2章 施工」',
+      running: '',
+      largest: '第2章 施工',
+      features: { heading: 2, running: 3, centered: 1 },
+    });
+    expect(data.pages[2]).toMatchObject({ running: '第1章 1.2 下地', features: { running: 2, step: 1 } });
+  });
+
+  it('分け方を学ぶためのデータには、余白を OCR で読んだ文字も残す', async () => {
+    await addBook();
+    $('trainingBtn').click();
+    await vi.waitFor(() => expect(logText()).toContain('「猫_分け方.json」をダウンロードしました'));
+    const data = JSON.parse(await URL.createObjectURL.mock.calls.at(-1)[0].text());
+    const page5 = data.pages.find((p) => p.label === '5 頁');
+    // 確信度も残す。
+    expect(page5.ocrItems).toEqual([['5', 0.48, 0.52, 0.95, 0.012, 88]]);
+  });
+
+  it('見出しと読んだ頁が多ければ、記録には頭の方だけを出す', async () => {
+    drop([file('本.pdf', pdf(Array.from({ length: 14 }, (_, i) => page(`m${i + 1}`, i + 1, { heading: `第${i + 1}章` }))))]);
+    await settled(1);
+    expect(logText()).toContain('見出しと読んだ頁 14（1 頁目「第1章」、');
+    expect(logText()).toContain('12 頁目「第12章」 ほか 2 頁）');
+    // 見出しが無く、目次だけのときも残す。
+    drop([file('目次.pdf', pdf([page('t1', 15, { toc: true })]))]);
+    await settled(2);
+    expect(logText()).toContain('「目次.pdf」の目次とみなした頁 1（1 頁目）');
+  });
+
+  it('最初の頁が章の扉なら、最初のファイルの名前にもその見出しを添える', async () => {
+    drop([
+      file('本.pdf', pdf([page('h1', 1, { heading: '第1章 基礎' }), page('h2', 2, { toc: true }), page('h3', 3, { heading: '第2章 壁' }), page('h4', 4)])),
+    ]);
+    await settled(1);
+    // どの頁を見出しと読み、どの頁を目次とみなしたかを記録に残す（分かれ方を追えるように）。
+    expect(logText()).toContain('「本.pdf」の見出しと読んだ頁 2（1 頁目「第1章 基礎」、3 頁目「第2章 壁」）、目次とみなした頁 1（2 頁目）');
+    // 上限が無ければ分けず、分けたファイルにも大きさの棒は添えない。
+    change($('splitMegabytes'), '');
+    selectPart(0);
+    editorButton('このファイルの中の区切りの候補（無ければ真ん中）で 2 つに分ける').click();
+    expect($('splitPlan').querySelector('.bm-part-bar')).toBeNull();
+    expect(partItems().map((item) => item.textContent.replace(/:.*$/, ''))).toEqual([
+      '本_1_第1章 基礎.pdf',
+      '本_2_第2章 壁.pdf',
+    ]);
+  });
+
+  it('区切りが無ければ 1 ファイルにまとめ、そう知らせる', async () => {
+    drop([file('猫_奇数.pdf', pdf(ODD)), file('猫_偶数.pdf', pdf(EVEN))]);
+    await settled(2);
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（上限に収まります）');
+    // 区切りが無くても、一覧でファイルを選べば 2 つに分けられる（真ん中で）。
+    expect($('splitNote').textContent).toContain('下の一覧でファイルを選ぶと');
+    selectPart(0);
+    editorButton('このファイルの中の区切りの候補（無ければ真ん中）で 2 つに分ける').click();
+    expect(splitMarks()).toHaveLength(1);
+    change($('splitMegabytes'), '');
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（上限がありません）');
+  });
+
+  it('分けて取り込んだ本（頁番号が通っているファイル）は、上限を超えればファイルの境目で分け、括弧の中の名前を添える', async () => {
+    // 施工ガイドブックのように、本の目次のまとまりごとに分けてあるファイル。
+    const range = (prefix, from, to) =>
+      Array.from({ length: to - from + 1 }, (_, i) => page(`${prefix}${from + i}`, from + i, { mb: 1 }));
+    drop([
+      file('ガイドブック14（表紙・目次）.pdf', pdf(range('a', -1, 3))),
+      file('ガイドブック14(告示1460号第1号ハ).pdf', pdf(range('b', 4, 6))),
+      file('ガイドブック14（柱脚金物）.pdf', pdf(range('c', 7, 8))),
+      file('ガイドブック14（根太受け）.pdf', pdf(range('d', 9, 9))),
+    ]);
+    await settled(4);
+    // 「表紙・目次」は名前から先頭に置く。表紙だけでなく目次もまとまっているので
+    // （4 頁より多ければ）、本文とは別のファイルにする。
+    expect(gridLabels()).toEqual(['表紙', '表紙', '表紙', '表紙', '表紙', '4 頁', '5 頁', '6 頁', '7 頁', '8 頁', '9 頁']);
+    // 上限に収まれば、ファイルの境目があっても分けない。
+    expect(splitMarks()).toEqual([]);
+    // 上限を超えれば、上限に収まる最少の数に、ファイルの境目で分ける（連続スキャンの
+    // 束の切れ目かもしれないので、すべての境目では分けない）。
+    change($('splitMegabytes'), '5');
+    expect(splitMarks()).toEqual(['4 頁:ここから 2 つ目のファイル', '9 頁:ここから 3 つ目のファイル']);
+    expect(partItems().map((item) => item.textContent.replace(/:.*$/, ''))).toEqual([
+      'ガイドブック_1_表紙・目次.pdf',
+      'ガイドブック_2_告示1460号第1号ハ.pdf',
+      'ガイドブック_3_根太受け.pdf',
+    ]);
+  });
+
+  it('上限の欄に数でないものを入れたら、知らせて元に戻す', async () => {
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    change($('splitMegabytes'), 'たくさん');
+    expect($('message').textContent).toBe('上限は0 より大きい数で入れてください（空なら上限なし）。');
+    expect($('splitMegabytes').value).toBe('25');
+    change($('splitPages'), '2.5');
+    expect($('message').textContent).toBe('上限は1 以上の整数で入れてください（空なら上限なし）。');
+    expect($('splitPages').value).toBe('');
+    change($('splitPages'), '-1');
+    expect($('message').textContent).toContain('1 以上の整数');
+    expect(splitMarks()).toHaveLength(2);
+    // 日本語入力のまま打った全角の数字も受ける。
+    change($('splitMegabytes'), '４５');
+    expect($('message').textContent).toBe('');
+    // 上限を超えれば、章の見出しのすべてで分ける（2 つで収まっても、章ごとに）。
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル', '5 頁:ここから 3 つ目のファイル']);
+  });
+
+  it('覚えておいた上限で開き、覚えた値が壊れていれば既定の上限にする', async () => {
+    const reopen = async () => {
+      vi.resetModules();
+      installPage();
+      await import('../src/pdf-book-merger/main.js');
+      await mocks.prepare();
+    };
+    // 前に覚えた分け方（今は無い）は読まない。
+    localStorage.setItem('pdf-book-merger:split-limits-2', JSON.stringify({ megabytes: 30, pages: -1, mode: 'limit' }));
+    await reopen();
+    expect([$('splitMegabytes').value, $('splitPages').value]).toEqual(['30', '']);
+
+    localStorage.setItem('pdf-book-merger:split-limits-2', JSON.stringify({ megabytes: null, pages: 300 }));
+    await reopen();
+    expect([$('splitMegabytes').value, $('splitPages').value]).toEqual(['', '300']);
+
+    localStorage.setItem('pdf-book-merger:split-limits-2', '{');
+    await reopen();
+    expect([$('splitMegabytes').value, $('splitPages').value]).toEqual(['40', '']);
+
+    // 既定が 100 MB だったころに覚えた値（前の名前）は読まず、今の既定で開く。
+    localStorage.removeItem('pdf-book-merger:split-limits-2');
+    localStorage.setItem('pdf-book-merger:split-limits', JSON.stringify({ megabytes: 100, pages: null, mode: 'limit' }));
+    await reopen();
+    expect($('splitMegabytes').value).toBe('40');
+
+    // 保存を禁じたブラウザでも、既定の上限で使え、変えた上限もこの画面の間は効く。
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    await reopen();
+    expect($('splitMegabytes').value).toBe('40');
+    get.mockRestore();
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    expect(splitMarks()).toHaveLength(2);
+    set.mockRestore();
+  });
+
+  it('分ける位置を頁ごとに足したり外したりでき、自動の提案に戻せる', async () => {
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    expect($('splitAutoBtn').hidden).toBe(true);
+
+    splitButton('f2:2').click();
+    expect(splitMarks()).toEqual(['5 頁:ここから 2 つ目のファイル']);
+    expect($('splitAutoBtn').hidden).toBe(false);
+    expect($('splitNote').textContent).toContain('2 ファイルに分けます（手で決めた位置で）');
+    // 上限を超えるファイルは知らせる。
+    expect(partItems()[0].className).toBe('bm-part warn');
+    expect(partItems()[0].textContent).toContain('上限を超えています');
+
+    splitButton('f2:1').click();
+    expect(splitMarks()).toEqual(['2 頁:ここから 2 つ目のファイル', '5 頁:ここから 3 つ目のファイル']);
+    expect(splitButton('f2:1').textContent).toBe('分けない');
+    // 番号を直して並びが変わっても、手で決めた位置は頁に付いていく。
+    renumber(document.querySelector('[data-page-key="f2:1"] .bm-page-number'), '5.5');
+    // （直した番号を確かなものとして、ほかの頁の番号も推定し直す）
+    expect(gridLabels()).toEqual(['表紙', '表紙', '2 頁', '3 頁', '4 頁', '5 頁', '5と6の間 頁', '6 頁']);
+    expect(splitMarks()).toEqual(['5 頁:ここから 2 つ目のファイル', '5と6の間 頁:ここから 3 つ目のファイル']);
+
+    splitButton('f2:1').click();
+    splitButton('f2:4').click();
+    expect(splitMarks()).toEqual([]);
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（手で分ける位置を外しました）');
+    expect(logText()).toContain('3 頁の前で分けるのをやめました');
+    expect(logText()).toContain('2 頁の前で分けます');
+    expect(logText()).toContain('5と6の間 頁の前で分けるのをやめました');
+
+    // 自動の提案は、いまの並び（直した番号で 2 頁が 5 頁の後ろに来た）で考え直す。
+    $('splitAutoBtn').click();
+    expect(splitMarks()).toEqual([
+      '3 頁:ここから 2 つ目のファイル',
+      '5 頁:ここから 3 つ目のファイル',
+      '6 頁:ここから 4 つ目のファイル',
+    ]);
+    expect($('splitAutoBtn').hidden).toBe(true);
+    expect(logText()).toContain('分ける位置を、自動の提案に戻しました');
+  });
+
+  it('ファイルを足したり外したりしたら、手で決めた分ける位置を捨てて、自動の提案に戻す', async () => {
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    splitButton('f2:2').click();
+    expect($('splitAutoBtn').hidden).toBe(false);
+
+    drop([file('本_付録.pdf', pdf([page('x7', 7, { mb: 10 })]))]);
+    await settled(3);
+    expect($('splitAutoBtn').hidden).toBe(true);
+    expect(logText()).toContain('ファイルが変わったので、分ける位置を自動の提案に戻しました');
+
+    splitButton('f2:2').click();
+    fileItem('本_付録.pdf').querySelector('.danger').click();
+    expect($('splitAutoBtn').hidden).toBe(true);
+    expect(splitMarks()).toEqual(['3 頁:ここから 2 つ目のファイル', '5 頁:ここから 3 つ目のファイル']);
+
+    // 読めなかったファイル（本に入っていない）を外しても、手で決めた位置は残す。
+    splitButton('f2:2').click();
+    drop([file('壊れた.pdf', encoder.encode('not a pdf'))]);
+    await settled(3);
+    splitButton('f2:2').click();
+    fileItem('壊れた.pdf').querySelector('.danger').click();
+    expect($('splitAutoBtn').hidden).toBe(false);
+  });
+
+  it('結合した大きさが上限を超えたファイルは、検証の結果で知らせる', async () => {
+    // 分ける位置は見積もりで決めるので、結合したら大きくなることがある（共有していた書体など）。
+    const merge = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementation(async (options) => ({
+      ...(await merge(options)),
+      size: (options.title === '本_1' ? 30 : 20) * 1024 * 1024,
+    }));
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    expect($('verifyResult').textContent).toContain('本_1.pdf は 4 頁・30.0 MB で、上限を超えました。');
+    expect($('verifyResult').textContent).not.toContain('本_2_第2章 壁.pdf は');
+    // 頁数の上限を変えても分ける位置が変わらなければ、結合した PDF は残し、知らせを出し直す。
+    change($('splitPages'), '100');
+    expect($('zipBtn').hidden).toBe(false);
+    expect($('verifyResult').textContent).toContain('上限を超えました');
+    // 上限を変えても分ける位置が変わらなければ、結合した PDF は残し、知らせを出し直す。
+    change($('splitMegabytes'), '３０．５');
+    expect(splitMarks()).toHaveLength(2);
+    expect($('zipBtn').hidden).toBe(false);
+    expect($('verifyResult').textContent).not.toContain('上限を超えました');
+  });
+
+  it('何百にも分けても、同時に書き出すのは 8 ファイルずつにする', async () => {
+    const stash = await fakeStash();
+    const long = Array.from({ length: 10 }, (_, i) => page(`l${i + 1}`, i + 1));
+    drop([file('長い本.pdf', pdf(long))]);
+    await settled(1);
+    change($('splitPages'), '1');
+    expect(splitMarks()).toHaveLength(9);
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    // 8 ファイルぶんの書き口を開いて書き終えてから、残りの 2 ファイルを書く。
+    const groups = mocks.writeMergedPdf.mock.calls.map(([options]) => options.title);
+    expect(groups).toEqual(Array.from({ length: 10 }, (_, i) => `長い本_${String(i + 1).padStart(2, '0')}`));
+    expect([...stash.files.keys()].filter((name) => name.startsWith('merged')).sort()).toEqual(
+      Array.from({ length: 10 }, (_, i) => `merged-1-${i + 1}.pdf`).sort()
+    );
+    expect($('verifyResult').textContent).toContain('10 ファイル・計 10 頁すべてが');
+    // pdf.js の worker は、最後のファイルを検証してから止める。
+    expect(mocks.releasePdfWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it('頁番号の無い PDF を一覧の順につなぐときも、上限を超えればファイルの境目で分ける', async () => {
+    const chapter = (prefix) => [1, 2, 3, 4, 5].map((n) => page(`${prefix}${n}`, null, { mb: 24 }));
+    drop([file('1章.pdf', pdf(chapter('a'))), file('2章.pdf', pdf(chapter('b'))), file('3章.pdf', pdf(chapter('c')))]);
+    await settled(3);
+    change($('splitMegabytes'), '250');
+    // 上限に収まる最少の数（2 つ）に、ファイルの境目で分ける。
+    expect(splitMarks()).toEqual(['番号なし:ここから 2 つ目のファイル']);
+    expect(document.querySelector('#pageGrid .split-start').dataset.pageKey).toMatch(/^f[23]:0$/);
+    change($('splitMegabytes'), '');
+    expect(splitMarks()).toEqual([]);
+    expect($('splitNote').textContent).toContain('1 ファイルにまとめます（上限がありません）');
+    // 本文が無いので、頁ラベルは付けない（結合した PDF の通し番号になる）。分けても同じ。
+    change($('splitMegabytes'), '250');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    expect($('verifyResult').textContent).toContain('頁ラベル（ビューアーに出る頁番号）: 付けていません（通し番号）');
+    expect($('verifyResult').className).toBe('bm-verify ok');
+  });
+
+  it('しおりの項目と、続けてつないだファイルの境目も、分ける位置の候補にする', async () => {
+    const first = [page('a1', 1, { mb: 10 }), page('a2', 2, { mb: 10 }), page('a3', 3, { mb: 10 })];
+    const second = [page('b4', 4, { mb: 10 }), page('b5', 5, { mb: 10 }), page('b6', 6, { mb: 10 })];
+    drop([file('上巻.pdf', pdf(first, { outline: [[0, '序章'], [1, '第1章 基礎']] })), file('下巻.pdf', pdf(second))]);
+    await settled(2);
+    expect([...document.querySelectorAll('#pageGrid .bm-split-reason')].map((r) => r.textContent)).toEqual([
+      'しおり「第1章 基礎」',
+      'ファイルの境目「下巻.pdf」',
+    ]);
+    change($('splitMegabytes'), '40');
+    expect(splitMarks()).toEqual(['4 頁:ここから 2 つ目のファイル']);
+    // 最初のファイルの名前には、最初の頁のしおりの名前を添える。
+    expect(partItems().map((item) => item.textContent.replace(/:.*$/, ''))).toEqual([
+      '結合_1_序章.pdf',
+      '結合_2_下巻.pdf',
+    ]);
+    change($('splitMegabytes'), '20');
+    expect(splitMarks()).toEqual(['2 頁:ここから 2 つ目のファイル', '4 頁:ここから 3 つ目のファイル', '6 頁:ここから 4 つ目のファイル']);
+  });
+
+  it('分けたファイルごとに結合して検証し、1 つずつか ZIP にまとめてダウンロードできる', async () => {
+    await addChapters();
+    change($('splitMegabytes'), '25');
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+
+    const calls = mocks.mergePdf.mock.calls.map(([options]) => options);
+    expect(calls.map((options) => options.order.map((entry) => entry.pageKey))).toEqual([
+      ['f1:0', 'f1:1', 'f2:0', 'f2:1'],
+      ['f2:2', 'f2:3'],
+      ['f2:4', 'f2:5'],
+    ]);
+    expect(calls.map((options) => options.title)).toEqual(['本_1', '本_2_第2章 壁', '本_3_第3章 床']);
+    // 分けたファイルにも、本の頁番号の頁ラベルを付ける。
+    const { pageLabelTexts } = await import('../src/pdf-book-merger/ordering.js');
+    expect(calls.map((options) => pageLabelTexts(options.labels, options.order.length))).toEqual([
+      ['表紙1', '表紙2', '1', '2'],
+      ['3', '4'],
+      ['5', '6'],
+    ]);
+    expect(calls.every((options) => options.infoFrom === 'f2')).toBe(true);
+
+    expect($('verifyResult').className).toBe('bm-verify ok');
+    expect($('verifyResult').textContent).toContain('検証できました。3 ファイル・計 8 頁すべてが、元の頁と大きさ・文字情報・画像まで一致しています。');
+    expect($('verifyResult').textContent).toContain('本_2_第2章 壁.pdf: 2 頁。文字情報（検索できる文字）のある頁: 2 / 2 頁。');
+    expect($('verifyResult').textContent).toContain('タイトル: 本_3_第3章 床');
+    expect(logText()).toContain('8 頁を 3 ファイルに分けて');
+    expect(logText()).toContain('「本_2_第2章 壁.pdf」を検証しました（2 頁すべて一致）');
+    expect(logText()).toContain('すべて結合して検証しました（3 ファイル');
+
+    // 1 冊ぶんのダウンロードの代わりに、ZIP と、ファイルごとのダウンロードを出す。
+    expect($('downloadBtn').hidden).toBe(true);
+    expect($('zipBtn').hidden).toBe(false);
+    const rows = [...$('partDownloads').children];
+    expect(rows.map((row) => row.querySelector('span').textContent.replace(/・.*$/, ''))).toEqual([
+      '本_1.pdf（4 頁',
+      '本_2_第2章 壁.pdf（2 頁',
+      '本_3_第3章 床.pdf（2 頁',
+    ]);
+
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    rows[1].querySelector('button').click();
+    await flush();
+    const single = URL.createObjectURL.mock.calls.at(-1)[0];
+    expect(specOf(new Uint8Array(await single.arrayBuffer())).title).toBe('本_2_第2章 壁');
+    expect(logText()).toContain('「本_2_第2章 壁.pdf」をダウンロードしました');
+
+    $('zipBtn').click();
+    await flush();
+    const zip = URL.createObjectURL.mock.calls.at(-1)[0];
+    expect(await zipNames(zip)).toEqual(['本_1.pdf', '本_2_第2章 壁.pdf', '本_3_第3章 床.pdf']);
+    expect(logText()).toContain('「本.zip」をダウンロードしました');
+    expect(click).toHaveBeenCalledTimes(2);
+
+    // 分ける位置を変えたら、結合した PDF は捨てる。
+    splitButton('f2:2').click();
+    expect($('downloadBtn').hidden).toBe(false);
+    expect($('downloadBtn').disabled).toBe(true);
+    expect($('zipBtn').hidden).toBe(true);
+    expect($('partDownloads').hidden).toBe(true);
+  });
+
+  it('iPhone では、ZIP も共有シートに渡す', async () => {
+    const userAgent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+    );
+    Object.assign(navigator, { share: vi.fn().mockResolvedValue(undefined), canShare: () => true });
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('zipBtn').hidden).toBe(false));
+
+    $('zipBtn').click();
+    await flush();
+    const [shared] = navigator.share.mock.calls[0][0].files;
+    expect([shared.name, shared.type]).toEqual(['本.zip', 'application/zip']);
+    expect(await zipNames(shared)).toEqual(['本_1.pdf', '本_2_第2章 壁.pdf', '本_3_第3章 床.pdf']);
+    expect(logText()).toContain('「本.zip」を共有シートに渡しました');
+    // 共有シートを閉じただけなら、何も記録しない。
+    navigator.share.mockRejectedValueOnce(Object.assign(new Error('cancel'), { name: 'AbortError' }));
+    $('zipBtn').click();
+    await flush();
+    expect(logText().match(/「本\.zip」を/g)).toHaveLength(3);
+    userAgent.mockRestore();
+    delete navigator.share;
+    delete navigator.canShare;
+  });
+
+  it('合計が 4 GB を超えるときは ZIP にまとめず、1 つずつのダウンロードを案内する', async () => {
+    const merge = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementation(async (options) => ({ ...(await merge(options)), size: 2 * 1024 ** 3 }));
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('zipBtn').hidden).toBe(false));
+
+    $('zipBtn').click();
+    await flush();
+    expect($('message').textContent).toContain('4 GB を超えるため、ZIP にまとめられません');
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('分けたファイルの食い違いは、どのファイルの何枚目かを挙げる', async () => {
+    const merge = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementation(async (options) => {
+      const result = await merge(options);
+      if (options.title !== '本_2_第2章 壁') return result;
+      const spec = specOf(result.bytes);
+      spec.pages[0].corrupt = true;
+      spec.pages.pop();
+      return { ...result, bytes: pdf(spec.pages, { title: spec.title, labels: spec.labels }) };
+    });
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+
+    expect($('verifyResult').className).toBe('bm-verify ng');
+    expect($('verifyResult').textContent).toContain('本_2_第2章 壁.pdf: 頁の数が違います（並べた数 2、結合した PDF 1）。');
+    expect($('verifyResult').textContent).toContain('本_2_第2章 壁.pdf の 1 枚目（3 頁）: 画像・描く中身が元の頁と違います');
+    expect(logText()).toContain('「本_2_第2章 壁.pdf」を検証して、食い違いが見つかりました');
+  });
+
+  it('分けたファイルの頁を読めなければ、どのファイルの何頁目かを出す', async () => {
+    const merge = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementation(async (options) => {
+      const result = await merge(options);
+      if (options.title !== '本_2_第2章 壁') return result;
+      const spec = specOf(result.bytes);
+      spec.pages[1].broken = '読めない頁';
+      return { ...result, bytes: pdf(spec.pages, { title: spec.title, labels: spec.labels }) };
+    });
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('message').textContent).toContain('「本_2_第2章 壁.pdf」の 2 頁目を検証できませんでした'));
+    expect($('zipBtn').hidden).toBe(true);
+    // 途中で失敗しても、pdf.js の worker は止める。
+    expect(mocks.releasePdfWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it('保存領域には分けたファイルごとに書き、結合し直したら前のものを、失敗したら書いたものを消す', async () => {
+    const stash = await fakeStash();
+    await addChapters();
+    change($('splitMegabytes'), '25');
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    const merged = () => [...stash.files.keys()].filter((name) => name.startsWith('merged')).sort();
+    expect(merged()).toEqual(['merged-1-1.pdf', 'merged-1-2.pdf', 'merged-1-3.pdf']);
+    // ZIP は、保存領域のファイルを読まずに並べる。
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    $('zipBtn').click();
+    await flush();
+    expect(await zipNames(URL.createObjectURL.mock.calls.at(-1)[0])).toEqual(['本_1.pdf', '本_2_第2章 壁.pdf', '本_3_第3章 床.pdf']);
+    expect(click).toHaveBeenCalled();
+
+    // 結合し直したら、書き終えてから前のものを消す。
+    splitButton('f2:4').click();
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    expect(merged()).toEqual(['merged-2-1.pdf', 'merged-2-2.pdf']);
+
+    // 2 つ目で失敗したら、1 つ目に書いたものも消し、前のものは残す。
+    const write = mocks.writeMergedPdf.getMockImplementation();
+    mocks.writeMergedPdf.mockImplementation(async (options) => {
+      if (options.title === '本_2_第2章 壁') throw new Error('「本_本文.pdf」は暗号化（パスワード保護）されているため結合できません。');
+      return write(options);
+    });
+    splitButton('f2:4').click();
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('message').textContent).toContain('暗号化'));
+    expect(stash.removed).toContain('merged-3-1.pdf');
+    expect(merged()).toEqual(['merged-2-1.pdf', 'merged-2-2.pdf']);
+  });
+
+  it('分けたファイルを結合している間に並びが変わったら、書いたものを消して捨てる', async () => {
+    const stash = await fakeStash();
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    const write = mocks.writeMergedPdf.getMockImplementation();
+    mocks.writeMergedPdf.mockImplementation(async (options) => {
+      if (options.title === '本_2_第2章 壁') await gate;
+      return write(options);
+    });
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect(mocks.writeMergedPdf).toHaveBeenCalledTimes(2));
+    splitButton('f2:4').click();
+    release();
+
+    await vi.waitFor(() => expect($('message').textContent).toContain('結合している間に並びか名前が変わりました'));
+    expect([...stash.files.keys()].filter((name) => name.startsWith('merged'))).toEqual([]);
+    expect(mocks.writeMergedPdf).toHaveBeenCalledTimes(3);
+  });
+
+  it('1 ファイルのときの頁の数の食い違いと、51 頁以上の食い違いをまとめて出す', async () => {
+    const many = Array.from({ length: 52 }, (_, i) => page(`m${i + 1}`, i + 1));
+    drop([file('長い本.pdf', pdf(many))]);
+    await settled(1);
+    const merge = mocks.mergePdf.getMockImplementation();
+    mocks.mergePdf.mockImplementation(async (options) => {
+      const result = await merge(options);
+      const spec = specOf(result.bytes);
+      spec.pages.pop();
+      spec.pages.forEach((p) => (p.corrupt = true));
+      return { ...result, bytes: pdf(spec.pages, { title: spec.title, labels: spec.labels }) };
+    });
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    expect($('verifyResult').textContent).toContain('頁の数が違います（並べた数 52、結合した PDF 51）。');
+    expect($('verifyResult').textContent).toContain('1 枚目（1 頁）: 画像・描く中身が元の頁と違います');
+    expect($('verifyResult').textContent).toContain('ほか 1 頁');
+  });
+
+  it('検証している間に分ける位置が変わったら、検証をやめて捨てる', async () => {
+    await addChapters();
+    change($('splitMegabytes'), '25');
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    mocks.pageDigestsGate = gate;
+
+    mocks.closePdf.mockClear();
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect(logText()).toContain('検証: 「本_1.pdf」を読みました'));
+    splitButton('f2:4').click();
+    release();
+
+    await vi.waitFor(() => expect($('message').textContent).toContain('結合している間に並びか名前が変わりました'));
+    // 頁は読まずに閉じ、残りのファイルは検証しない。
+    expect(mocks.closePdf).toHaveBeenCalledTimes(1);
+    expect(logText()).not.toContain('「本_2_第2章 壁.pdf」を読みました');
   });
 });

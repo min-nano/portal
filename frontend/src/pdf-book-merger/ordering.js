@@ -342,8 +342,9 @@ function manualNumbers(file, infer, overrides) {
 }
 
 // 頁番号の無いファイルのうち、これより頁の多いものは本文の束かもしれないので、表紙と
-// せず（番号なし）、知らせる（表紙と裏表紙・帯・口絵などは数頁）。
-const LISTED_PAGES = 4;
+// せず（番号なし）、知らせる（表紙と裏表紙・帯・口絵などは数頁）。分けるときも、先頭・
+// 末尾に置く頁がこれより多ければ、表紙だけでなく目次・付録などがまとまっているとみなす（split.js）。
+export const LISTED_PAGES = 4;
 
 // 並べたときに同じ番号が並んだら、確かなものを先に置く。
 const STATUS_RANK = { manual: 0, detected: 0, inferred: 1, conflict: 1, uncertain: 2, unknown: 3, unplaced: 3 };

@@ -3,12 +3,18 @@
 <dialog id="previewDialog" class="app-dialog bm-preview">
   <h3 id="previewTitle"></h3>
   <p id="previewIssues" class="hint"></p>
+  <div id="previewSplit" class="bm-preview-split" hidden>
+    <span id="previewSplitText"></span>
+    <button type="button" id="previewSplitBtn" class="secondary"></button>
+  </div>
   <div class="bm-preview-image">
     <img id="previewImage" alt="">
   </div>
   <div class="dialog-actions">
+    <button type="button" id="previewPrevSeamBtn" class="secondary">前の区切り</button>
     <button type="button" id="previewPrevBtn" class="secondary">前の頁</button>
     <button type="button" id="previewNextBtn" class="secondary">次の頁</button>
+    <button type="button" id="previewNextSeamBtn" class="secondary">次の区切り</button>
     <button type="button" id="previewCloseBtn">閉じる</button>
   </div>
 </dialog>

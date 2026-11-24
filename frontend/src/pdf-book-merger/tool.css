@@ -567,6 +567,335 @@ input.bm-page-number {
   /* 文字は共通の 1rem のまま（iPhone・iPad の Safari が、16px 未満の欄に入ると画面を拡大するため）。 */
 }
 
+/* --- 分ける ------------------------------------------------------------- */
+
+/* 新しいファイルを始める頁。左の縁を太くして、ファイルの境目と分かるようにする。 */
+.bm-page.split-start {
+  border-left: 4px solid var(--brand-500);
+}
+
+.bm-split-mark {
+  font-weight: 700;
+  color: var(--text-brand);
+}
+
+/* 分ける候補の理由（しおり・見出し・ファイルの境目）と、分ける・分けないの切り替え。 */
+.bm-split-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-1);
+}
+
+.bm-split-reason {
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.bm-split-toggle button {
+  min-height: 28px;
+  font-size: var(--fs-2xs);
+}
+
+/* 頁の一覧で、分けたファイルごとに地の色を変える（どこからどこまでが 1 つのファイルか見えるように）。 */
+.bm-page.part-alt {
+  background: var(--brand-50);
+}
+
+/* 分けていない区切りの候補（見出しなど）。破線の縁で、見比べる頁だと分かるようにする。 */
+.bm-page.split-candidate:not(.warn):not(.error) {
+  border-left: 3px dashed var(--brand-300);
+}
+
+.bm-plan {
+  list-style: none;
+  margin: var(--s-2) 0 var(--s-4);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.bm-plan:empty {
+  display: none;
+}
+
+/* 分けたファイル。左に太い縁を付け、ファイルの始まりと分かるようにする。 */
+.bm-plan > .bm-part {
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--brand-500);
+  border-radius: var(--r-md);
+}
+
+.bm-plan > .bm-part.warn {
+  border-left-color: var(--warn-500);
+}
+
+.bm-part-name {
+  font-weight: 700;
+}
+
+/* 分けたファイルの行は、全体がボタン。押すと始まりと終わりを動かす欄を開く。 */
+button.bm-part-select {
+  display: flow-root;
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+}
+
+button.bm-part-select > .bm-part-thumb {
+  float: left;
+  margin: 0 var(--s-2) var(--s-1) 0;
+}
+
+button.bm-part-select > * + * {
+  margin-left: var(--s-2);
+}
+
+button.bm-part-select > .bm-part-bar {
+  margin-left: 0;
+}
+
+.bm-plan > .bm-part.selected {
+  background: var(--brand-50);
+  border-color: var(--brand-500);
+}
+
+/* 選んだファイルの始まり（上）と終わり（下）を動かす欄。前・次のファイルとの間に置く。 */
+.bm-part-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin-left: var(--s-4);
+  padding: var(--s-3);
+  font-size: var(--fs-xs);
+  background: var(--surface);
+  border: 1px solid var(--brand-300);
+}
+
+.bm-part-editor.before {
+  margin-bottom: calc(-1 * var(--s-2));
+  border-bottom: 0;
+  border-radius: var(--r-md) var(--r-md) 0 0;
+}
+
+.bm-part-editor.after {
+  margin-top: calc(-1 * var(--s-2));
+  border-top: 0;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+}
+
+/* 選んだファイルを 2 つに分けるボタン。 */
+.bm-part-tools {
+  margin-left: var(--s-4);
+}
+
+.bm-part-tools button {
+  min-height: 32px;
+  font-size: var(--fs-2xs);
+}
+
+.bm-edge {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.bm-edge-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
+.bm-edge-reason {
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+/* 境目を動かせる範囲の頁を左右に並べた帯。横に送って見る。上の段に今の境目（✂）、
+   下の段に区切りの候補（▲）を置き、頁と頁の間は線だけにする。位置は頁の幅の何倍か。 */
+.bm-edge-strip {
+  --edge-page: min(7rem, 24vw);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.bm-edge-inner {
+  position: relative;
+  display: inline-block;
+  /* 上の段の ✂ のフォーカスの枠が、帯の上の縁で切れないように余白を取る。 */
+  padding: 2.25rem 0 1.75rem;
+  vertical-align: top;
+}
+
+.bm-edge-rail,
+.bm-edge-hints {
+  position: absolute;
+  right: 0;
+  left: 0;
+}
+
+/* 上の段。押すと、いちばん近い頁と頁の間へ境目を動かす。 */
+.bm-edge-rail {
+  top: 0.25rem;
+  height: 1.75rem;
+  cursor: pointer;
+  background: linear-gradient(var(--brand-100), var(--brand-100)) center / 100% 2px no-repeat;
+}
+
+.bm-edge-hints {
+  bottom: 0;
+  height: 1.5rem;
+}
+
+.bm-edge-pages {
+  display: flex;
+}
+
+.bm-edge-page {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-sizing: border-box;
+  /* 頁の幅をそろえる（✂ と押した位置を、頁の幅の何倍かで決めるので）。 */
+  width: var(--edge-page);
+  min-width: var(--edge-page);
+  max-width: var(--edge-page);
+  overflow: hidden;
+  padding: 0 4px;
+  color: var(--text-muted);
+  text-align: center;
+  border-left: 1px solid var(--n-200);
+}
+
+/* 今の境目は、その後ろの頁の左の縁を太い線にする。 */
+.bm-edge-page.cut {
+  border-left: 3px solid var(--brand-500);
+}
+
+/* 今の境目（✂）。指で左右にドラッグできるように、帯の横送りにさせない。 */
+button.bm-cut-marker {
+  position: absolute;
+  top: 0;
+  min-width: 2rem;
+  min-height: 1.75rem;
+  padding: 0 var(--s-1);
+  color: var(--n-0);
+  font-weight: 700;
+  background: var(--brand-500);
+  border: 0;
+  border-radius: var(--r-sm);
+  transform: translateX(-50%);
+  touch-action: none;
+  cursor: grab;
+}
+
+/* 区切りの候補（▲）。押すと、そこへ境目を動かす。 */
+.bm-hint.on {
+  color: var(--n-0);
+  background: var(--brand-300);
+  border-style: solid;
+}
+
+.bm-hint {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  bottom: 0;
+  min-width: 1.75rem;
+  min-height: 1.5rem;
+  padding: 0;
+  color: var(--brand-500);
+  font-size: var(--fs-2xs);
+  background: var(--surface);
+  border: 1px dashed var(--brand-300);
+  transform: translateX(-50%);
+}
+
+/* 節などの見出し（読み違いもしやすい）の ▲ は薄くする。 */
+.bm-hint.weak {
+  opacity: 0.55;
+}
+
+.bm-edge-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+
+.bm-edge-tools button {
+  min-height: 32px;
+  font-size: var(--fs-2xs);
+}
+
+/* 分けたファイルの一覧（頁の範囲と大きさ）と、ファイルごとのダウンロード。 */
+.bm-parts {
+  margin: 0;
+  padding-left: var(--s-5);
+  font-size: var(--fs-sm);
+}
+
+.bm-parts:empty {
+  display: none;
+}
+
+.bm-part {
+  padding: var(--s-1) 0;
+  word-break: break-all;
+}
+
+.bm-part > * + * {
+  margin-left: var(--s-2);
+}
+
+.bm-part.warn {
+  color: var(--warn-700);
+}
+
+/* 分けたファイルの最初の頁の縮小画像と、上限に対する大きさの棒。 */
+.bm-part-thumb {
+  display: block;
+  width: 2.5rem;
+  border: 1px solid var(--divider);
+  border-radius: var(--r-sm);
+}
+
+.bm-part {
+  display: flow-root;
+}
+
+.bm-part-bar {
+  display: block;
+  height: 6px;
+  margin: var(--s-1) 0 0;
+  background: var(--n-100);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.bm-part-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--brand-400);
+}
+
+.bm-part.warn .bm-part-bar > span {
+  background: var(--warn-500);
+}
+
 /* --- 検証の結果 ---------------------------------------------------------- */
 
 .bm-verify {
@@ -614,6 +943,16 @@ input.bm-page-number {
 .bm-preview {
   width: min(96vw, 60rem);
   max-width: none;
+}
+
+/* 拡大表示の中で、その頁から分けるかどうかを切り替える。 */
+.bm-preview-split {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+  font-size: var(--fs-sm);
 }
 
 .bm-preview-image {

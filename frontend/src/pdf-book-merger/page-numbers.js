@@ -213,9 +213,10 @@ export function pageNumberCandidates(items, source = 'text') {
  *
  * @param {{text:string,x0:number,x1:number,y:number,h:number}[]} items
  * @param {string} [source]
+ * @param {ReturnType<typeof groupLines>} [lines] items を行にまとめたもの（ほかでも使うために、
+ *   もうまとめてあれば渡す）
  */
-export function readMargin(items, source = 'text') {
-  const lines = groupLines(items);
+export function readMargin(items, source = 'text', lines = groupLines(items)) {
   return { candidates: candidatesOf(lines, source), heads: headsOf(lines) };
 }
 
