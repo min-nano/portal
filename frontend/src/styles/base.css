@@ -23,6 +23,12 @@
   display: none !important;
 }
 
+/* 使えないアカウントには、ツールの中身を見せず理由の欄だけを残す
+   （src/page-start.js）。 */
+#app[data-closed] > :not(#message) {
+  display: none !important;
+}
+
 /* iOS Safari は、ビューポートより広い塊（横スクロールする表など）の中の
    文字を勝手に大きくする（自動テキスト拡大）。判定の行だけ文字が飛び抜けて
    大きくなってしまうので、拡大は行わせない。指でのピンチ拡大は妨げない。 */

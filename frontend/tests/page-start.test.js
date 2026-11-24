@@ -138,14 +138,36 @@ describe('startPage', () => {
     startPage({ prepare: async () => {} });
     await settle();
 
-    // 消さずに隠す（動いている途中の処理が要素を見失って落ちないように）。
-    expect(document.getElementById('mergeBtn').hidden).toBe(true);
-    expect([...app().children].filter((child) => !child.hidden).map((child) => child.id)).toEqual([
-      'message',
-    ]);
+    // 消さずに印を付け、CSS で隠す（動いている途中の処理が要素を見失わない）。
+    expect(document.getElementById('mergeBtn')).not.toBeNull();
+    expect(app().hasAttribute('data-closed')).toBe(true);
     expect(document.getElementById('message').textContent).toBe(
       'このアプリは許可されたアカウント専用です。'
     );
+  });
+
+  it('準備が使えないアカウントとして断られたら、画面の中身も隠す', async () => {
+    hideStaffOnlyForExternalUsers.mockReturnValue(new Promise(() => {}));
+    const refused = Object.assign(new Error('このアプリは許可されたアカウント専用です。'), {
+      status: 403,
+      code: 'account_not_allowed',
+    });
+
+    startPage({ prepare: async () => Promise.reject(refused) });
+    await settle();
+
+    expect(app().hasAttribute('data-closed')).toBe(true);
+    expect(document.getElementById('message').textContent).toBe(
+      'このアプリは許可されたアカウント専用です。'
+    );
+  });
+
+  it('ほかの理由で準備に失敗したときは、画面を閉じない（理由を出すだけ）', async () => {
+    startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')) });
+    await settle();
+
+    expect(app().hasAttribute('data-closed')).toBe(false);
+    expect(document.getElementById('message').textContent).toBe('通信に失敗しました。');
   });
 
   it('準備の途中で断られたと分かっても、理由を出すのは準備が終わってから', async () => {

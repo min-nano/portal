@@ -96,4 +96,21 @@ describe('hideStaffOnlyForExternalUsers', () => {
     expect([shown('staff'), shown('open')]).toEqual([false, true]);
     style.remove();
   });
+
+  it('閉じた画面（#app[data-closed]）は、理由の欄だけを見せる（base.css の決めごと）', () => {
+    const style = document.createElement('style');
+    style.textContent = readFileSync(resolve(process.cwd(), 'src/styles/base.css'), 'utf8');
+    document.head.append(style);
+    document.body.innerHTML = `
+      <div id="app" data-closed>
+        <button id="merge">結合</button>
+        <div id="message">このアプリは許可されたアカウント専用です。</div>
+      </div>`;
+    const shown = (id) => getComputedStyle(document.getElementById(id)).display !== 'none';
+
+    // ツールが後から hidden を外しても、閉じたまま。
+    document.getElementById('merge').hidden = false;
+    expect([shown('merge'), shown('message')]).toEqual([false, true]);
+    style.remove();
+  });
 });

@@ -59,6 +59,8 @@ export function startPage({
   begin().catch((error) => {
     // 待っても出てこないので、読み込み中の表示は終わりにして理由を出す。
     finishPageLoading();
+    // 準備が使えないアカウントとして断られたなら、画面の中身も隠す。
+    if (error.code === ACCOUNT_NOT_ALLOWED) closeApp();
     onError(error.message);
   });
 
@@ -86,18 +88,24 @@ export function startPage({
     if (refused) {
       // 準備が API を呼ばないページ（PDF 結合ツールは画面の中だけで動く）でも
       // 使わせないよう、理由の欄（#message）だけを残して画面の中身を隠す。
-      // 消さずに隠すのは、動いている途中の処理が要素を見失って落ちないため。
       closeApp();
       onError(refused.message);
     }
   }
 }
 
-/** 画面（#app）の中身を、理由の欄（#message）だけ残して隠す。 */
+/** 使えないアカウント（バックエンドが付ける目印。account.js も同じものを見る）。 */
+const ACCOUNT_NOT_ALLOWED = 'account_not_allowed';
+
+/**
+ * 画面（#app）の中身を、理由の欄（#message）だけ残して隠す。
+ *
+ * 要素は消さず、#app に印を付けて CSS（base.css）で隠す。動いている途中の
+ * 処理が要素を見失って落ちることがなく、ツールが後から要素を出し直しても
+ * （hidden を外しても）閉じたままになる。
+ */
 function closeApp() {
-  for (const child of document.getElementById('app').children) {
-    if (child.id !== 'message') child.hidden = true;
-  }
+  document.getElementById('app').dataset.closed = '';
 }
 
 /**

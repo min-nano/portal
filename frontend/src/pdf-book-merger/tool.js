@@ -11,7 +11,7 @@ export default {
   title: 'PDF 結合ツール',
   dir: fileURLToPath(new URL('.', import.meta.url)),
   page: 'page.html',
-  // <div id="app"> の外に出す部分（拡大表示と、Drive への保存ダイアログ）。
+  // <div id="app"> の外に出す部分（頁の拡大表示）。
   overlay: 'overlay.html',
   entry: 'main.js', // 画面の入口
   icon: 'icon.svg', // トップページの絵: 2 つの書類が 1 つにまとまる
