@@ -72,7 +72,7 @@ export function startPage({
     connectSiteSettingsMenu();
     // 答えは待たない。使えないアカウントだと分かったら理由を出すが、出すのは
     // 画面を出した後（組み立て途中の画面を見せない）。準備のほうが先に失敗
-    // したら、そちらの理由を出す（同じアカウントなら、準備も同じ理由で断られる）。
+    // したら、そちらの理由を出す（準備が API を呼ぶページなら、同じ理由で断られる）。
     const refusal = hideStaffOnlyForExternalUsers().then(
       () => null,
       (error) => error
@@ -83,7 +83,21 @@ export function startPage({
     showApp();
 
     const refused = await refusal;
-    if (refused) onError(refused.message);
+    if (refused) {
+      // 準備が API を呼ばないページ（PDF 結合ツールは画面の中だけで動く）でも
+      // 使わせないよう、理由の欄（#message）だけを残して画面の中身を片付ける。
+      // 残しておくと、操作のたびに理由の欄が書き換えられて理由も消える。
+      closeApp();
+      onError(refused.message);
+    }
+  }
+}
+
+/** 画面（#app）の中身を、理由の欄（#message）だけ残して片付ける。 */
+function closeApp() {
+  const app = document.getElementById('app');
+  for (const child of [...app.children]) {
+    if (child.id !== 'message') child.remove();
   }
 }
 

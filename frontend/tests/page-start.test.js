@@ -129,6 +129,22 @@ describe('startPage', () => {
     expect(onError).toHaveBeenCalledWith('このアプリは許可されたアカウント専用です。');
   });
 
+  it('使えないアカウントには、理由の欄だけを残して画面を片付ける（API を呼ばないツールも使わせない）', async () => {
+    app().insertAdjacentHTML('afterbegin', '<button id="mergeBtn">結合</button>');
+    hideStaffOnlyForExternalUsers.mockRejectedValue(
+      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403 })
+    );
+
+    startPage({ prepare: async () => {} });
+    await settle();
+
+    expect(document.getElementById('mergeBtn')).toBeNull();
+    expect([...app().children].map((child) => child.id)).toEqual(['message']);
+    expect(document.getElementById('message').textContent).toBe(
+      'このアプリは許可されたアカウント専用です。'
+    );
+  });
+
   it('準備の途中で断られたと分かっても、理由を出すのは準備が終わってから', async () => {
     hideStaffOnlyForExternalUsers.mockRejectedValue(
       Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403 })
