@@ -2297,19 +2297,19 @@ describe('結合と検証', () => {
 
     expect(gridLabels()).toEqual([
       ...[1, 2, 3, 4, 5, 6].map((n) => `${n} 頁`),
-      '2/1 頁',
-      '2/2 頁',
-      '2/3 頁',
-      '-2/4 頁',
-      '2/5 頁',
-      '2/6 頁',
+      '2-1 頁',
+      '2-2 頁',
+      '2-3 頁',
+      '-2-4 頁',
+      '2-5 頁',
+      '2-6 頁',
     ]);
-    expect($('problems').textContent).toContain('2/4 頁が見つかりません');
-    expect($('problems').textContent).toContain('（1〜6 頁・2/1〜2/6 頁）');
+    expect($('problems').textContent).toContain('2-4 頁が見つかりません');
+    expect($('problems').textContent).toContain('（1〜6 頁・2-1〜2-6 頁）');
 
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
-    expect(mocks.mergePdf.mock.calls[0][0].labels).toContainEqual({ start: 6, style: 'D', prefix: '2/', first: 1 });
+    expect(mocks.mergePdf.mock.calls[0][0].labels).toContainEqual({ start: 6, style: 'D', prefix: '2-', first: 1 });
     expect($('verifyResult').className).toBe('bm-verify ok');
     expect($('verifyResult').textContent).toContain('頁ラベル（ビューアーに出る頁番号）: 本の頁番号と一致');
   });

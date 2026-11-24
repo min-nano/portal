@@ -66,11 +66,11 @@ describe('部の推定', () => {
     expect(mismatch).toBe(false);
     expect(problems.map((p) => [p.kind, p.level])).toEqual([['parts', 'warn']]);
     // 2 つ目の部は、番号が戻ったところで分けたまとまり「2/」として書く。
-    expect(problems[0].message).toContain('（1〜12 頁・2/1〜2/8 頁）');
+    expect(problems[0].message).toContain('（1〜12 頁・2-1〜2-8 頁）');
     expect(displayLabel(order[11])).toBe('12 頁');
-    expect(displayLabel(order[12])).toBe('2/1 頁');
+    expect(displayLabel(order[12])).toBe('2-1 頁');
     // まとまりの番号を頭に付けるので、頁ラベルも重ならずに付けられる。
-    expect(pageLabelTexts(pageLabelRanges(order), order.length).slice(10, 14)).toEqual(['11', '12', '2/1', '2/2']);
+    expect(pageLabelTexts(pageLabelRanges(order), order.length).slice(10, 14)).toEqual(['11', '12', '2-1', '2-2']);
   });
 
   it('1 頁ずつのファイルは、借りた歩幅が逆順でも一覧の順を本の順と見る', () => {
@@ -568,18 +568,36 @@ describe('頁番号の前に刷られた部・編などの番号（2-21）', () 
     expect(missingLabel(card)).toBe('2-6 頁');
   });
 
+  it('まとまりの番号を付けると刷られたほかの頁の番号と重なるなら、「/」で区切る', () => {
+    // 「2-」の頁が 2 度 1 から始まり、2 度目は 3-2-1… になるが、第 3 部 2 頁の枝番 1（3-2-1）がある。
+    const files = [printed('a', ['2-1', '2-2', '2-3', '2-1', '2-2']), printed('b', ['3-1', '3-2', '3-2-1', '3-3'])];
+    const { order } = arrangePrinted(files);
+
+    expect(order.map(displayLabel)).toEqual(['2-1 頁', '2-2 頁', '2-3 頁', '3/2-1 頁', '3/2-2 頁', '3-1 頁', '3-2 頁', '3-2-1 頁', '3-3 頁']);
+    expect(pageLabelTexts(pageLabelRanges(order), order.length)[3]).toBe('3/2-1');
+    expect(missingLabel({ from: 3, to: 3, prefix: [2], section: [3], sectionSlash: true })).toBe('3/2-3 頁');
+  });
+
+  it('枝番の頁のある本では、まとまりの番号を「/」で区切る（枝番と読ませない）', () => {
+    // 加除式の本の 2 冊目が 1 から始まる。2-1 と書くと 2 頁の枝番 1 に見える。
+    const files = [printed('a', [1, 2, '3-1', '3-2', 4, 5]), printed('b', [1, 2, 3])];
+    const { order } = arrangePrinted(files);
+
+    expect(order.filter((e) => e.fileKey === 'b').map(displayLabel)).toEqual(['2/1 頁', '2/2 頁', '2/3 頁']);
+  });
+
   it('同じ部の番号が最初に戻れば、そこで分けて本の順ですぐ前の頁の後に置き、まとまりの番号を付ける', () => {
     // 「2-」の頁が 2 度 1 から始まる（両面の束）。「3-」の頁はそのまま。
     const files = [printed('a', ['2-1', '2-2', '2-3', '2-1', '2-2']), printed('b', ['3-1', '3-2'])];
     const { order, problems } = arrangePrinted(files);
 
-    expect(order.map(displayLabel)).toEqual(['2-1 頁', '2-2 頁', '2-3 頁', '3/2-1 頁', '3/2-2 頁', '3-1 頁', '3-2 頁']);
+    expect(order.map(displayLabel)).toEqual(['2-1 頁', '2-2 頁', '2-3 頁', '3-2-1 頁', '3-2-2 頁', '3-1 頁', '3-2 頁']);
     expect(order.map((e) => e.section ?? null)).toEqual([null, null, null, [3], [3], null, null]);
     const parts = problems.find((p) => p.kind === 'parts');
-    expect(parts.message).toContain('（2-1〜2-3 頁・3/2-1〜3/2-2 頁・3-1〜3-2 頁）');
+    expect(parts.message).toContain('（2-1〜2-3 頁・3-2-1〜3-2-2 頁・3-1〜3-2 頁）');
     expect(problems.find((p) => p.kind === 'depth').message).not.toContain('〜');
     // まとまりの番号を頭に付けた頁ラベルを付ける。
-    expect(pageLabelTexts(pageLabelRanges(order), order.length)).toEqual(['2-1', '2-2', '2-3', '3/2-1', '3/2-2', '3-1', '3-2']);
+    expect(pageLabelTexts(pageLabelRanges(order), order.length)).toEqual(['2-1', '2-2', '2-3', '3-2-1', '3-2-2', '3-1', '3-2']);
   });
   it('部の番号の付いた本で、部の番号を読めなかった束は一覧の前後の部から置いて知らせ、1 頁直せば部に入る', () => {
     const files = [...book(), printed('again', [5, 7])]; // 2-5・2-7 を撮り直した束（部の番号を読めなかった）
@@ -588,9 +606,9 @@ describe('頁番号の前に刷られた部・編などの番号（2-21）', () 
     // 本の順ですぐ前の奇数頁の束（2-5〜3-3）の後に、まとまり「4/」として置く（裏返した偶数頁の
     // 束は一覧で下にあるほど本の前なので、奇数頁の束どうしで比べる）。
     const again = order.filter((e) => e.fileKey === 'again');
-    expect(again.map(displayLabel)).toEqual(['4/5 頁', '4/7 頁']);
+    expect(again.map(displayLabel)).toEqual(['4-5 頁', '4-7 頁']);
     expect(order.slice(-2)).toEqual(again);
-    expect(problems.find((p) => p.kind === 'parts').message).toContain('4/5〜4/7 頁');
+    expect(problems.find((p) => p.kind === 'parts').message).toContain('4-5〜4-7 頁');
     expect(problems.some((p) => p.kind === 'no-prefix')).toBe(false);
     const overrides = new Map([['again:0', { path: [2, 5] }]]);
     const fixed = arrangePrinted(files, overrides);
@@ -620,6 +638,7 @@ describe('頁番号の前に刷られた部・編などの番号（2-21）', () 
     // 一覧で部の束より下にあれば、本の順ですぐ前の頁（1-5）の後に、まとまり「2/」として置く。
     const reversed = arrangePrinted([...files].reverse());
     expect(reversed.order.map(displayLabel)).toEqual([
+      // 「2-1」と刷られた頁があるので、まとまりの番号は「/」で区切る。
       ...['1-1', '1-2', '1-3', '1-4', '1-5', '2/1', '2/2', '2/3', '2-1', '2-2', '2-3', '2-4', '2-5'].map((l) => `${l} 頁`),
     ]);
   });
@@ -757,9 +776,9 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
     expect(order.filter((e) => e.fileKey === 'b').every((e) => pathText(e.section) === '3')).toBe(true);
     expect(order.filter((e) => e.fileKey === 'c').every((e) => pathText(e.section) === '4')).toBe(true);
     expect(order.filter((e) => e.fileKey === 'a').every((e) => !e.section)).toBe(true);
-    expect(displayLabel(order.find((e) => e.fileKey === 'c'))).toBe('4/1 頁');
+    expect(displayLabel(order.find((e) => e.fileKey === 'c'))).toBe('4-1 頁');
     expect(problems.map((p) => p.kind)).toEqual(['parts', 'depth', 'uncertain']);
-    expect(problems[0].message).toContain('3/1〜3/12 頁・4/1〜4/9 頁');
+    expect(problems[0].message).toContain('3-1〜3-12 頁・4-1〜4-9 頁');
     expect(problems.find((p) => p.kind === 'depth').message).toContain('（1-1 など）');
   });
 
@@ -774,13 +793,13 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
     const { order } = arrangeBookOf(files);
     const labels = order.map(displayLabel);
 
-    expect(labels.filter((l) => l.endsWith('4-30 頁'))).toEqual(['4-30 頁', '6/4-30 頁']);
+    expect(labels.filter((l) => l.endsWith('4-30 頁'))).toEqual(['4-30 頁', '6-4-30 頁']);
     // 第 6 部の章はつながっているので、同じまとまり「6/」のまま。
     expect(order.filter((e) => e.fileKey === 'p6').every((e) => pathText(e.section) === '6')).toBe(true);
-    expect(labels.indexOf('6/1-1 頁')).toBeGreaterThan(labels.indexOf('5-20 頁'));
+    expect(labels.indexOf('6-1-1 頁')).toBeGreaterThan(labels.indexOf('5-20 頁'));
     // 前付けにするのは、本の最初の部の前の頁だけ（第 6 部の扉は、第 6 部の 1 章の頭のまま）。
     expect(labels[0]).toBe('0-1 頁');
-    expect(labels).toContain('6/1-前付(0) 頁');
+    expect(labels).toContain('6-1-0 頁');
     // 裏返した束しか無い前の段は、一覧の下の束を本の前として前付けを決める。
     const even = [volume('e2', ['1-4', '1-2']), volume('e1', ['1-4', '1-2', null])];
     expect(arrangeBookOf(even).order.map(displayLabel)[0]).toBe('0-2 頁');
@@ -798,6 +817,7 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
     const files = [volume('p', [1, 2, 3, 1, 2]), volume('q', run(1, 6))];
     const labels = arrangeBookOf(files).order.filter((e) => e.fileKey === 'p').map(displayLabel);
 
+    // 「1-1」と刷られた頁があるので「/」で区切る。
     expect(labels).toEqual(['1 頁', '2 頁', '3 頁', '1/1 頁', '1/2 頁']);
   });
 
@@ -805,7 +825,7 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
     // 束の途中で部の番号が読めなくなった（番号だけの頁が 3 頁続く）。
     const { order } = arrangeBookOf([volume('s', [...run(1, 6), 21, 22, 23, ...run(3, 6)])]);
 
-    expect(order.map(displayLabel).slice(5, 10)).toEqual(['1-6 頁', '2/21 頁', '2/22 頁', '2/23 頁', '3-1 頁']);
+    expect(order.map(displayLabel).slice(5, 10)).toEqual(['1-6 頁', '2-21 頁', '2-22 頁', '2-23 頁', '3-1 頁']);
   });
 
   it('一覧で部の並びが前後しても、本の順ですぐ前の頁の後に置く', () => {
@@ -813,14 +833,14 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
     const files = [volume('x', run(3, 6)), volume('y', run(null, 4)), volume('z', run(2, 6))];
     const labels = arrangeBookOf(files).order.map(displayLabel);
 
-    expect(labels.slice(-5)).toEqual(['3-6 頁', '4/1 頁', '4/2 頁', '4/3 頁', '4/4 頁']);
+    expect(labels.slice(-5)).toEqual(['3-6 頁', '4-1 頁', '4-2 頁', '4-3 頁', '4-4 頁']);
   });
 
   it('分けたまとまりの中で番号が戻れば、さらに分ける', () => {
     const files = [volume('x', run(3, 6)), volume('y', [1, 2, 3, 1, 2])];
     const labels = arrangeBookOf(files).order.filter((e) => e.fileKey === 'y').map(displayLabel);
 
-    expect(labels).toEqual(['4/1 頁', '4/2 頁', '4/3 頁', '5/1 頁', '5/2 頁']);
+    expect(labels).toEqual(['4-1 頁', '4-2 頁', '4-3 頁', '5-1 頁', '5-2 頁']);
   });
 
   it('裏返した偶数頁の束は、一覧で下にあるほど本の前として、すぐ前の頁を探す', () => {
@@ -836,7 +856,7 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
 
     expect(order.map(displayLabel)).toEqual([
       ...run(5, 8).map((l) => `${l} 頁`),
-      ...run(null, 8).map((n) => `6/${n} 頁`),
+      ...run(null, 8).map((n) => `6-${n} 頁`),
     ]);
   });
 
@@ -850,7 +870,7 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
     ];
     const labels = arrangeBookOf(files).order.map(displayLabel);
 
-    expect(labels.slice(-4)).toEqual(['3/1-1 頁', '3/1-2 頁', '4/1-1 頁', '4/1-2 頁']);
+    expect(labels.slice(-4)).toEqual(['3-1-1 頁', '3-1-2 頁', '4-1-1 頁', '4-1-2 頁']);
   });
 
   it('分けたまとまりの番号は重ならない（後の部の後に置いたまとまりは、さらに後の番号）', () => {
@@ -862,8 +882,7 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
       volume('C', run(3, 4)),
       volume('D', ['1-1', '1-2']),
     ];
-    const labels = arrangeBookOf(files).order.map(displayLabel);
-    const sections = [...new Set(labels.filter((l) => l.includes('/')).map((l) => l.split('/')[0]))];
+    const sections = [...new Set(arrangeBookOf(files).order.filter((e) => e.section).map((e) => pathText(e.section)))];
 
     expect(sections).toEqual(['3', '4', '5']);
   });
@@ -907,6 +926,7 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
     // 第 6 部の束の前書き（1〜2 と刷ってある）を、第 5 部の 5-1・5-2 と重ねない。
     const files = [volume('e', run(5, 8)), volume('f', [1, 2, ...run(6, 8)])];
     const labels = arrangeBookOf(files).order.filter((e) => e.fileKey === 'f').map(displayLabel);
+    // 前書きを「6-1」とすると第 6 部の 6-1 と重なるので、「/」で区切る。
     expect(labels.slice(0, 3)).toEqual(['6/1 頁', '6/2 頁', '6-1 頁']);
   });
   it('逆順の束・片面ずつの束の前付け', () => {

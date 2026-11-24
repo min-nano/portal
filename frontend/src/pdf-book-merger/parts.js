@@ -24,7 +24,7 @@
 // 頁番号の前に部・編などの番号を刷った本（2-21。page-numbers.js の階層）は、
 // 刷られた前の段ごとに分けてから、それぞれの中で上のように振り直しを探す。
 // 振り直しで分けたまとまりと前の段の無い頁は、本の順ですぐ前の頁のまとまりの後に置き、
-// 前のまとまりの番号に 1 を足した番号を付ける（arrangeUnits。頁は「6/4-30」）。
+// 前のまとまりの番号に 1 を足した番号を付ける（arrangeUnits。頁は「6-4-30」）。
 
 import { comparePaths, pageNumberText, prefixKey, sideOf, stripPageNumber } from './page-numbers.js';
 
@@ -37,7 +37,7 @@ import { comparePaths, pageNumberText, prefixKey, sideOf, stripPageNumber } from
  *   partOf: 頁の key → 何番目のまとまりか（0 から、並べる順）。count: まとまりの数。
  *   mismatch: 奇数頁と偶数頁の束で部の数が揃わず、分けるのをやめた（前の段のどれかで）。
  *   sections: 頁番号が戻ったところで分けたまとまりの番号（まとまり → [6] など。刷られた
- *   番号のまま並ぶまとまりには無い）。頁は「6/4-30」のように、この番号を頭に付けて書く。
+ *   番号のまま並ぶまとまりには無い）。頁は「6-4-30」のように、この番号を頭に付けて書く。
  */
 export function assignParts(files, numberings) {
   const segments = splitSegments(files, numberings);
@@ -80,7 +80,7 @@ export function assignParts(files, numberings) {
  * 刷られた前の段の、本の順で最初のまとまりは、刷られた番号のまま並べる（4-30 頁）。それ以外
  * （頁番号が部の初めに戻ったところから先・前の段の無い頁）は、ファイルを部の区切りとは
  * みなさず（束は部をまたいでスキャンするので）、本の順ですぐ前にある頁のまとまりの後に置き、
- * 前のまとまりの番号に 1 を足した番号を付ける（第 5 部の後なら 6。頁は「6/4-30」）。
+ * 前のまとまりの番号に 1 を足した番号を付ける（第 5 部の後なら 6。頁は「6-4-30」）。
  * スキャンした束の頁は飛び飛びにはならないので、近くの頁が並ぶように区切る。
  * 本の順で前に頁が無ければ、本の先頭（前付け）に置く。
  *

@@ -34,15 +34,16 @@ describe('displayLabel', () => {
   });
 
   it('頁番号が戻ったところで分けたまとまりの頁は、まとまりの番号を頭に付ける', () => {
-    expect(displayLabel({ ...body('a', 3), part: 1, section: [2] })).toBe('2/3 頁');
-    expect(displayLabel({ ...body('a', 30), prefix: [4], part: 1, section: [6] })).toBe('6/4-30 頁');
+    expect(displayLabel({ ...body('a', 3), part: 1, section: [2] })).toBe('2-3 頁');
+    expect(displayLabel({ ...body('a', 30), prefix: [4], part: 1, section: [6] })).toBe('6-4-30 頁');
     expect(displayLabel({ ...body('a', 3), part: null })).toBe('3 頁');
   });
 
   it('頁番号の前に刷られた部・編などの番号は、頁番号に付けて書く', () => {
     expect(displayLabel({ ...body('a', 21), prefix: [2], part: 1 })).toBe('2-21 頁');
     expect(displayLabel({ ...body('a', 21), prefix: [2, 2], branch: [3] })).toBe('2-2-21-3 頁');
-    expect(displayLabel({ ...body('a', 0), prefix: [2] })).toBe('2-前付(0) 頁');
+    expect(displayLabel({ ...body('a', 0), prefix: [2] })).toBe('2-0 頁');
+    expect(displayLabel({ ...body('a', -1), prefix: [2] })).toBe('2-前付(-1) 頁');
     expect(displayLabel({ ...body('a', 16.5), prefix: [2] })).toBe('2-16と2-17の間 頁');
   });
 });
@@ -171,16 +172,19 @@ describe('gridItems', () => {
       { ...body('a', 1), part: 1, section: [2] },
       { ...body('b', 3), part: 1, section: [2] },
     ];
-    expect(missingLabel(gridItems(renumbered)[1])).toBe('2/2 頁');
+    expect(missingLabel(gridItems(renumbered)[1])).toBe('2-2 頁');
+    // 「/」で区切るまとまり（sectionSlash）も引き継ぐ。
+    const slashed = renumbered.map((entry) => ({ ...entry, sectionSlash: true }));
+    expect(missingLabel(gridItems(slashed)[1])).toBe('2/2 頁');
   });
 
   it('抜けの札の見出し', () => {
     expect(missingLabel({ from: 58, to: 58 })).toBe('58 頁');
     expect(missingLabel({ from: 60, to: 70 })).toBe('60〜70 頁');
     expect(missingLabel({ from: 57, to: 57, branch: [2] })).toBe('57-2 頁');
-    expect(missingLabel({ from: 58, to: 58, part: 1, section: [2] })).toBe('2/58 頁');
-    expect(missingLabel({ from: 57, to: 57, branch: [2], part: 1, section: [6], prefix: [4] })).toBe('6/4-57-2 頁');
-    expect(missingLabel({ from: 60, to: 70, part: 1, section: [6], prefix: [4] })).toBe('6/4-60〜6/4-70 頁');
+    expect(missingLabel({ from: 58, to: 58, part: 1, section: [2] })).toBe('2-58 頁');
+    expect(missingLabel({ from: 57, to: 57, branch: [2], part: 1, section: [6], prefix: [4] })).toBe('6-4-57-2 頁');
+    expect(missingLabel({ from: 60, to: 70, part: 1, section: [6], prefix: [4] })).toBe('6-4-60〜6-4-70 頁');
     expect(missingLabel({ from: 58, to: 58, prefix: [2] })).toBe('2-58 頁');
     expect(missingLabel({ from: 60, to: 70, prefix: [2] })).toBe('2-60〜2-70 頁');
     expect(missingLabel({ from: 57, to: 57, branch: [1, 2], prefix: [2] })).toBe('2-57-1-2 頁');

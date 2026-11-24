@@ -427,7 +427,7 @@ export function placeFiles(files, numberings, overrides = new Map()) {
  * }}
  *   branch は枝番、prefix は前の段（部・編などの番号）で、あるときだけ。part は何部目か
  *   （0 から。部が 1 つなら null）。section は、頁番号が部の初めに戻ったところで分けた
- *   まとまりの番号（[6]。頁は「6/4-30」と書く。刷られた番号のまま並ぶまとまりには付けない）。
+ *   まとまりの番号（[6]。頁は「6-4-30」と書く。sectionSlash は「6/4-30」と区切る（markSlashes）。刷られた番号のまま並ぶまとまりには付けない）。
  *   mismatch は、番号の振り直しが束の種類（奇数頁・偶数頁）ごとに揃わず、部に分けるのを
  *   やめたとき。
  */
@@ -502,6 +502,7 @@ export function arrangeBook(files, numberings, overrides = new Map()) {
     });
   });
 
+  markSlashes(body);
   body.sort((a, b) => {
     // 番号の決まらない頁は本文の最後に（並べようが無いので、目立つところへ）。
     if (a.number === null || b.number === null) {
@@ -592,9 +593,9 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
     const numbered = parts.get(part);
     // 部の頁は、どれも同じ前の段（部・編などの番号）を持つ。
     const { prefix = null, section = null } = numbered[0];
-    // 頁番号が戻ったところで分けたまとまり（番号の頭に「6/」を付ける）。
+    // 頁番号が戻ったところで分けたまとまり（番号の頭に「6-」を付ける）。
     sectioned ||= section !== null;
-    const sec = sectionHead(section);
+    const sec = sectionHead(numbered[0]);
     const head = `${sec}${prefix ? `${pathText(prefix)}-` : ''}`;
     // 確認の画面の項目を見分けるもの（部が分かれていれば部も入れる）。
     const tag = (number) => {
@@ -699,7 +700,7 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
     problems.push({
       level: 'warn',
       kind: 'parts',
-      message: `頁番号が部の初めに戻ったところで本文を分け、本の順ですぐ前の頁の後に並べました（${ranges.join('・')}）。分けたまとまりの頁は、前のまとまりの番号に 1 を足した番号を頭に付けて「6/4-30 頁」のように書きます。部の分かれていない本なら、同じ束を最初から 2 度入れていないか確かめてください。`,
+      message: `頁番号が部の初めに戻ったところで本文を分け、本の順ですぐ前の頁の後に並べました（${ranges.join('・')}）。分けたまとまりの頁は、前のまとまりの番号に 1 を足した番号を 1 つ上の階層として頭に付け、「6-4-30 頁」のように書きます（刷られたほかの頁の番号と重なるときだけ「6/4-30 頁」と区切ります）。部の分かれていない本なら、同じ束を最初から 2 度入れていないか確かめてください。`,
       pageKeys: [],
     });
   }
@@ -784,12 +785,34 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
 }
 
 /**
- * 頁番号が戻ったところで分けたまとまりの頭（[6] → "6/"。無ければ ''）。
- *
- * @param {number[]|null|undefined} section
+ * まとまりの番号を「-」でつなぐと、刷られたほかの頁（まとまりの番号の無い頁）の番号と重なる
+ * まとまりに、sectionSlash を付ける（「/」で区切る）。枝番の頁のある本（加除式）では、「-」の
+ * 後ろは枝番と読めるので、すべてのまとまりを「/」で区切る（2-15 を 2 頁の枝番 15 と読ませない）。
  */
-export function sectionHead(section) {
-  return section ? `${pathText(section)}/` : '';
+function markSlashes(body) {
+  const printed = new Set(body.filter((item) => !item.section && item.number !== null).map((item) => pageNumberText(item)));
+  const branched = body.some((item) => item.branch);
+  const clash = new Set(
+    body
+      .filter(
+        (item) =>
+          item.section && item.number !== null && (branched || printed.has(`${pathText(item.section)}-${pageNumberText(item)}`))
+      )
+      .map((item) => item.part)
+  );
+  for (const item of body) if (clash.has(item.part)) item.sectionSlash = true;
+}
+
+/**
+ * 頁番号が戻ったところで分けたまとまりの頭。まとまりの番号を 1 つ上の階層として「-」で
+ * つなぐ（[6] → "6-"。頁は 6-4-30）。そうすると刷られたほかの頁の番号と重なるまとまりだけ
+ * 「/」で区切る（sectionSlash。3-2-1 が第 3 部 2 頁の枝番 1 と重なるなら 3/2-1）。無ければ ''。
+ *
+ * @param {{section?:number[], sectionSlash?:boolean}} item 頁か抜けの札
+ */
+export function sectionHead(item) {
+  if (!item.section) return '';
+  return `${pathText(item.section)}${item.sectionSlash ? '/' : '-'}`;
 }
 
 /**
@@ -827,7 +850,7 @@ export function compressRanges(numbers, head = '') {
  *   表紙       「表紙」（複数頁なら 表紙1, 表紙2…）
  *   前付け     i, ii, iii…（番号が 0 以下に推定された頁）
  *   本文       本の頁番号（前の段のある頁は 2-21 のように「2-」を、頁番号が戻ったところで
- *              分けたまとまりの頁は 6/4-30 のように「6/」を頭に付けた番号）
+ *              分けたまとまりの頁は 6-4-30 のように「6-」を頭に付けた番号）
  *   枝番の頁   57-1, 57-2…（「57-」を頭に付けた番号）
  *   位置を決めきれない頁 「差込」
  *   裏表紙     「裏表紙」
@@ -862,7 +885,7 @@ export function pageLabelRanges(order) {
       return backs > 1 ? { style: 'D', prefix: '裏表紙', number: backSeen } : { style: null, prefix: '裏表紙', number: 0 };
     }
     if (item.number === null || !Number.isInteger(item.number)) return { style: null, prefix: '差込', number: 0 };
-    const head = `${sectionHead(item.section)}${item.prefix ? `${pathText(item.prefix)}-` : ''}`;
+    const head = `${sectionHead(item)}${item.prefix ? `${pathText(item.prefix)}-` : ''}`;
     if (item.branch) {
       return { style: 'D', prefix: `${head}${pathText([item.number, ...item.branch.slice(0, -1)])}-`, number: item.branch.at(-1) };
     }

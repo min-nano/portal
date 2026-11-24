@@ -802,8 +802,8 @@ export function numberingSequence(numbering) {
 }
 
 /**
- * 頁番号の表示。前付け（0 以下）は「前付」と分かるようにする。枝番は 57-1、前の段の
- * ある頁は 2-21・2-57-1 の形。
+ * 頁番号の表示。前付け（0 以下）は「前付」と分かるようにする（前の段のある 0 頁は 2-0 のまま）。
+ * 枝番は 57-1、前の段のある頁は 2-21・2-57-1 の形。
  *
  * @param {number|null} number
  * @param {number[]|null} [branch]
@@ -814,6 +814,8 @@ export function formatNumber(number, branch = null, prefix = null) {
   const head = prefix ? `${pathText(prefix)}-` : '';
   if (branch) return `${head}${pathText([number, ...branch])}`;
   if (!Number.isInteger(number)) return `${head}${Math.floor(number)}と${head}${Math.ceil(number)}の間`;
+  // 前の段のある 0 頁（目次の 0-0、部の扉の 2-0）は、そのまま書く。
+  if (number === 0 && prefix) return `${head}0`;
   return number <= 0 ? `${head}前付(${number})` : `${head}${number}`;
 }
 

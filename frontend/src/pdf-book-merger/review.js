@@ -27,7 +27,7 @@ export function displayLabel(entry) {
   if (entry.role === 'front') return '表紙';
   if (entry.role === 'back') return '裏表紙';
   if (entry.number === null) return '番号不明';
-  return `${sectionHead(entry.section)}${formatNumber(entry.number, entry.branch, entry.prefix)} 頁`;
+  return `${sectionHead(entry)}${formatNumber(entry.number, entry.branch, entry.prefix)} 頁`;
 }
 
 /**
@@ -178,8 +178,8 @@ export function gridItems(order) {
   let previous = null;
   // 抜けの札の部（前の頁と同じ部）。
   const where = () => {
-    const { part, prefix, section } = previous;
-    return { part, ...(prefix ? { prefix } : {}), ...(section ? { section } : {}) };
+    const { part, prefix, section, sectionSlash } = previous;
+    return { part, ...(prefix ? { prefix } : {}), ...(section ? { section } : {}), ...(sectionSlash ? { sectionSlash } : {}) };
   };
   const missing = (from, to) => {
     if (to - from + 1 > MAX_MISSING_CARDS) {
@@ -228,10 +228,10 @@ export function gridItems(order) {
 
 /**
  * 抜けている頁の札の見出し（58 頁・60〜70 頁・57-2 頁。前の段のある頁は「2-58 頁」
- * 「2-60〜2-70 頁」、頁番号が戻ったところで分けたまとまりなら「6/4-30 頁」）。
+ * 「2-60〜2-70 頁」、頁番号が戻ったところで分けたまとまりなら「6-4-30 頁」）。
  */
 export function missingLabel(item) {
-  const head = `${sectionHead(item.section)}${item.prefix ? `${pathText(item.prefix)}-` : ''}`;
+  const head = `${sectionHead(item)}${item.prefix ? `${pathText(item.prefix)}-` : ''}`;
   if (item.branch) return `${head}${pathText([item.from, ...item.branch])} 頁`;
   return item.from === item.to ? `${head}${item.from} 頁` : `${head}${item.from}〜${head}${item.to} 頁`;
 }
