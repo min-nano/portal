@@ -48,6 +48,7 @@ import {
   pageLabelTexts,
   ROLE_NAMES,
   ROLES,
+  withoutSection,
 } from './ordering.js';
 import {
   mergeCandidates,
@@ -55,6 +56,7 @@ import {
   pageNumberCandidates,
   pageNumberText,
   parsePageNumber,
+  pathText,
   readMargin,
   sideOf,
   unsettledPages,
@@ -110,12 +112,20 @@ const DOWNLOAD_BUDGET = 64 * 1024 * 1024;
 let nextKey = 1;
 /** 選んだファイル（画面の並び順）。中身は addFiles() を参照。 */
 const files = [];
-/** 頁ごとに手で直した番号（頁の key → 番号）。 */
+/** 頁ごとに手で直した番号（頁の key → parsePageNumber の形）。 */
 const overrides = new Map();
 /** 同じ頁らしい組を探す（前に見比べた頁どうしは見比べ直さない）。 */
 const findDuplicates = createDuplicateFinder();
 /** 最後に組み立てた並びと指摘。 */
-let view = { order: [], problems: [], issues: new Map(), numberings: new Map(), places: new Map(), anyNumbered: false };
+let view = {
+  order: [],
+  problems: [],
+  issues: new Map(),
+  numberings: new Map(),
+  places: new Map(),
+  sections: new Map(),
+  anyNumbered: false,
+};
 /** 結合した PDF と検証の結果。並びが変わったら捨てる。 */
 let merged = null;
 /** 結合と検証の途中か（その間は、拡大表示のために PDF を開かない）。 */
@@ -1272,6 +1282,7 @@ function setAllRoles(value) {
 
 // --- 並べて確かめる ----------------------------------------------------------
 
+
 function readyFiles() {
   return files.filter((file) => file.status === 'ready');
 }
@@ -1324,7 +1335,9 @@ function refresh() {
     textless
   );
 
-  view = { order, problems, issues, numberings, places, anyNumbered: [...places.values()].includes('numbered') };
+  // 頁ごとの、頁番号が戻ったところで分けたまとまりの番号（ファイルの一覧の要約にも付ける）。
+  const sections = new Map(order.filter((entry) => entry.section).map((entry) => [entry.pageKey, entry.section]));
+  view = { order, problems, issues, numberings, places, sections, anyNumbered: [...places.values()].includes('numbered') };
   if (!$('outputName').value.trim() || $('outputName').dataset.suggested === 'true') {
     const suggested = suggestBookName(files.map((file) => file.name));
     $('outputName').value = suggested;
@@ -1350,7 +1363,7 @@ function mergeKey() {
     outputName(),
     ...view.order.map(
       (entry) =>
-        `${entry.pageKey}|${entry.role}|${entry.number}|${entry.branch ?? ''}|${entry.role === 'body' ? '' : entry.status}|${entry.part}`
+        `${entry.pageKey}|${entry.role}|${entry.number}|${entry.branch ?? ''}|${entry.prefix ?? ''}|${entry.role === 'body' ? '' : entry.status}|${entry.part}|${entry.section ?? ''}`
     ),
   ].join('\n');
 }
@@ -1580,7 +1593,9 @@ function fileMeta(file) {
   const details = [];
   const place = view.places.get(file.key);
   if (place === 'numbered') {
-    details.push(`頁番号: ${numberingSequence(view.numberings.get(file.key))}`);
+    // 並びの確認と同じく、頁番号が戻ったところで分けたまとまりの番号（6-）も付ける。
+    const sections = file.pages.map((page) => view.sections.get(page.key));
+    details.push(`頁番号: ${numberingSequence(view.numberings.get(file.key), sections)}`);
     if (file.manual) details.push('手入力');
   } else {
     details.push(`${file.pages.length} 頁`);
@@ -1640,8 +1655,9 @@ function fileControls(file) {
   start.type = 'text';
   start.inputMode = 'numeric';
   start.size = 5;
-  start.placeholder = numbering?.pages[0]?.number?.toString() ?? '自動';
-  start.value = file.manual ? String(file.manual.start) : '';
+  const first = numbering?.pages[0];
+  start.placeholder = first && first.number !== null ? pageNumberText(first) : '自動';
+  start.value = file.manual ? pathText([...(file.manual.prefix ?? []), file.manual.start]) : '';
   startField.append(start);
 
   const stepField = el(document, 'label', 'bm-inline');
@@ -1666,15 +1682,17 @@ function fileControls(file) {
     if (!value) {
       file.manual = null;
     } else {
-      const number = Number(value);
-      if (!Number.isInteger(number)) {
-        // 描き直さないので、進み方の欄も使っている値に戻す（選んだ値が残ると、並びと食い違う）。
-        step.value = file.manual ? String(file.manual.step) : '';
-        showMessage('先頭の頁の番号は整数で入れてください。', 'red');
+      // 部・編などの番号を前に付けた頁番号（2-1）も入れられる（前の段は、そのファイルの頁に付ける）。
+      const path = parsePageNumber(value)?.path;
+      // 断るときは描き直さないので、進み方の欄も使っている値に戻す（選んだ値が残ると、並びと食い違う）。
+      const restoreStep = () => (step.value = file.manual ? String(file.manual.step) : '');
+      if (!path || !Number.isInteger(path.at(-1))) {
+        restoreStep();
+        showMessage('先頭の頁の番号は整数（部・編などの番号を前に付けるなら 2-1 の形）で入れてください。', 'red');
         return;
       }
       const chosen = Number(step.value) || numbering?.step || 2;
-      file.manual = { start: number, step: chosen };
+      file.manual = { start: path.at(-1), step: chosen, ...(path.length > 1 ? { prefix: path.slice(0, -1) } : {}) };
     }
     showMessage('');
     refresh();
@@ -1958,7 +1976,7 @@ function numberEditor(entry, name, { jump }) {
   // 指摘の項目の中にも同じ頁が並ぶので、読み上げでどちらの欄か分かるようにする。
   input.setAttribute('aria-label', title);
   input.placeholder = entry.number === null ? '番号' : pageNumberText(entry);
-  const initial = overrides.has(entry.pageKey) ? pageNumberText(overrides.get(entry.pageKey)) : '';
+  const initial = overrides.has(entry.pageKey) ? pathText(overrides.get(entry.pageKey).path) : '';
   input.value = initial;
   let warned = false; // 正しくない番号の断りを出した
 
@@ -1982,7 +2000,7 @@ function numberEditor(entry, name, { jump }) {
     const value = input.value.trim();
     const number = parsePageNumber(value);
     if (value && !number) {
-      showMessage('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。', 'red');
+      showMessage('番号は数字（枝番や部・編などの番号の付いた頁は 57-1・2-21 の形）で入れてください。', 'red');
       warned = true;
       return false;
     }
@@ -1991,7 +2009,7 @@ function numberEditor(entry, name, { jump }) {
     if (warned || value !== initial) showMessage('');
     warned = false;
     if (value === initial) return true;
-    if (number) overrides.set(entry.pageKey, number);
+    if (number) overrides.set(entry.pageKey, withoutSection(number, entry));
     else overrides.delete(entry.pageKey);
     refresh();
     return true;

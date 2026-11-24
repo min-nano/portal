@@ -7,10 +7,12 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  comparePaths,
   detectStep,
   formatNumber,
   groupLines,
   inferFileNumbers,
+  interpret,
   manualFileNumbers,
   mergeCandidates,
   normalizeDigits,
@@ -19,6 +21,7 @@ import {
   pageNumberText,
   parsePageNumber,
   readMargin,
+  sideOf,
   stripPageNumber,
   unsettledPages,
 } from '../src/pdf-book-merger/page-numbers.js';
@@ -29,10 +32,12 @@ function item(text, { x = 0.5, y = 0.95, h = 0.012, w = 0.02 } = {}) {
 }
 
 /** 頁番号だけが読めた頁の候補（頁番号の読み取りを通さず、直接作る）。 */
-const read = (value, score = 3.5) => [{ value, score, source: 'text', zone: 'bottom' }];
+const read = (value, score = 3.5) => [{ path: [value], score, source: 'text', zone: 'bottom' }];
 const none = () => [];
+/** 候補の番号（12 は 12、57-1 は '57-1'）。 */
+const labelOf = (c) => (c.path.length === 1 ? c.path[0] : c.path.join('-'));
 /** 枝番の付いた番号（57-1）だけが読めた頁の候補。 */
-const branch = (value, number) => [{ value, branch: number, score: 3.5, source: 'text', zone: 'bottom' }];
+const branch = (value, number) => [{ path: [value, number], score: 3.5, source: 'text', zone: 'bottom' }];
 
 describe('normalizeDigits / groupLines', () => {
   it('全角の数字を半角にする', () => {
@@ -47,6 +52,17 @@ describe('normalizeDigits / groupLines', () => {
     ]);
 
     expect(lines.map((line) => line.text)).toEqual(['本文', '12']);
+  });
+
+  it('同じ文字を少しずらして重ね書きしたもの（太字に見せる刷り方）は 1 度だけ読む', () => {
+    const bold = [0, 0.001, 0.002].map((dx) => ({ text: '3-14', x0: 0.48 + dx, x1: 0.52 + dx, y: 0.95, h: 0.012 }));
+    expect(groupLines(bold).map((line) => line.text)).toEqual(['3-14']);
+    // 並んだ同じ文字（「11」の 1 文字ずつの断片）は重ね書きではない。
+    const digits = [
+      { text: '1', x0: 0.49, x1: 0.5, y: 0.95, h: 0.01 },
+      { text: '1', x0: 0.5, x1: 0.51, y: 0.95, h: 0.01 },
+    ];
+    expect(groupLines(digits).map((line) => line.text)).toEqual(['11']);
   });
 
   it('字の間が開いていれば区切る（柱と頁番号をくっつけない）', () => {
@@ -72,24 +88,24 @@ describe('readMargin', () => {
 
     expect(heads).toEqual(['第2部 運動の法則 57', '12 総論']);
     // 頁番号の候補も同じ行から拾う。
-    expect(candidates.map((c) => c.value)).toEqual([12, 57]);
+    expect(candidates.map(labelOf)).toEqual([12, 57]);
   });
 
   it('柱からその頁の頁番号を落とす（飾りの記号で区切られていても。ほかの数字は残す）', () => {
-    expect(stripPageNumber('第2部 運動の法則 57', 57)).toBe('第2部運動の法則');
-    expect(stripPageNumber('12 総論', 12)).toBe('総論');
-    expect(stripPageNumber('12｜書名', 12)).toBe('書名');
-    expect(stripPageNumber('書名・13', 13)).toBe('書名');
-    expect(stripPageNumber('Part 2', 13)).toBe('Part2');
+    expect(stripPageNumber('第2部 運動の法則 57', { number: 57 })).toBe('第2部運動の法則');
+    expect(stripPageNumber('12 総論', { number: 12 })).toBe('総論');
+    expect(stripPageNumber('12｜書名', { number: 12 })).toBe('書名');
+    expect(stripPageNumber('書名・13', { number: 13 })).toBe('書名');
+    expect(stripPageNumber('Part 2', { number: 13 })).toBe('Part2');
     expect(stripPageNumber('Part 2', null)).toBe('Part2');
     // 枝番の頁は「57-1」をまとめて落とす。
-    expect(stripPageNumber('民法解説 57-1', 57, 1)).toBe('民法解説');
-    expect(stripPageNumber('57-1 民法解説', 57, 1)).toBe('民法解説');
-    expect(stripPageNumber('民法解説 57 - 1', 57, 1)).toBe('民法解説'); // OCR の断片の間の空白
+    expect(stripPageNumber('民法解説 57-1', { number: 57, branch: [1] })).toBe('民法解説');
+    expect(stripPageNumber('57-1 民法解説', { number: 57, branch: [1] })).toBe('民法解説');
+    expect(stripPageNumber('民法解説 57 - 1', { number: 57, branch: [1] })).toBe('民法解説'); // OCR の断片の間の空白
     // 小数の番号は落とさない（「.」を正規表現の何でもよい 1 字にしない）。
-    expect(stripPageNumber('森の話 1605', 16.5)).toBe('森の話1605');
+    expect(stripPageNumber('森の話 1605', { number: 16.5 })).toBe('森の話1605');
     // 同じ番号をもう一度（作った正規表現を使い回す）。
-    expect(stripPageNumber('総論 57', 57)).toBe('総論');
+    expect(stripPageNumber('総論 57', { number: 57 })).toBe('総論');
   });
 
   it('「Page 16 of 200」「16 / 200 頁」のような頁番号だけの行は、柱として拾わない', () => {
@@ -123,21 +139,21 @@ describe('pageNumberCandidates', () => {
   it('下の余白に番号だけが置かれた行は、強い候補', () => {
     const [candidate] = pageNumberCandidates([item('- 12 -')]);
 
-    expect(candidate).toMatchObject({ value: 12, source: 'text', zone: 'bottom' });
+    expect(candidate).toMatchObject({ path: [12], source: 'text', zone: 'bottom' });
     expect(candidate.score).toBeGreaterThanOrEqual(3);
   });
 
   it.each(['12', '(12)', 'p.12', '12頁', '－１２－', '— 12 —'])('飾りの付いた番号 %s', (text) => {
-    expect(pageNumberCandidates([item(text)]).map((c) => c.value)).toEqual([12]);
+    expect(pageNumberCandidates([item(text)]).map(labelOf)).toEqual([12]);
   });
 
   it('柱の末尾・先頭に付いた番号は、弱い候補', () => {
     const trailing = pageNumberCandidates([item('第3章 運動の法則 57', { y: 0.04, w: 0.6 })]);
     const leading = pageNumberCandidates([item('58 第3章 運動の法則', { y: 0.04, w: 0.6 })]);
 
-    expect(trailing.map((c) => c.value)).toEqual([57]);
+    expect(trailing.map(labelOf)).toEqual([57]);
     expect(trailing[0].score).toBeLessThan(3);
-    expect(leading.map((c) => c.value)).toEqual([58]);
+    expect(leading.map(labelOf)).toEqual([58]);
   });
 
   it('本文の中の数字・章番号・年号は拾わない', () => {
@@ -152,9 +168,7 @@ describe('pageNumberCandidates', () => {
   });
 
   it('上下の帯の両方に候補があれば、両方を挙げる（どちらが合うかは並びで決める）', () => {
-    const values = pageNumberCandidates([item('3', { y: 0.04 }), item('15', { y: 0.96 })]).map(
-      (c) => c.value
-    );
+    const values = pageNumberCandidates([item('3', { y: 0.04 }), item('15', { y: 0.96 })]).map(labelOf);
 
     expect(values.sort((a, b) => a - b)).toEqual([3, 15]);
   });
@@ -165,20 +179,32 @@ describe('pageNumberCandidates', () => {
 });
 
 describe('detectStep', () => {
+  // detectStep は階層に合わせて読んだ候補（interpret）を受け取る。
+  const stepOf = (pages, depth = 0) =>
+    detectStep(pages.map((list) => list.map((c) => ({ ...c, ...interpret(c.path, depth) })))).step;
+  const labeled = (text) => [{ path: text.split('-').map(Number), score: 3.5, source: 'text', zone: 'bottom' }];
+
   it('奇数頁の束は 2 つずつ', () => {
-    expect(detectStep([read(1), read(3), none(), read(7)]).step).toBe(2);
+    expect(stepOf([read(1), read(3), none(), read(7)])).toBe(2);
   });
 
   it('裏返した偶数頁の束は 2 つずつ逆順', () => {
-    expect(detectStep([read(20), read(18), read(16)]).step).toBe(-2);
+    expect(stepOf([read(20), read(18), read(16)])).toBe(-2);
   });
 
   it('両面の束は 1 つずつ', () => {
-    expect(detectStep([read(5), read(6), read(7)]).step).toBe(1);
+    expect(stepOf([read(5), read(6), read(7)])).toBe(1);
   });
 
   it('番号が 1 つしか読めなければ決めない', () => {
-    expect(detectStep([none(), read(5), none()]).step).toBeNull();
+    expect(stepOf([none(), read(5), none()])).toBeNull();
+  });
+
+  it('前の段（部・編などの番号）の違う頁どうしの差は数えない（前の段の分からない頁とは数える）', () => {
+    // 1-3 → 2-1 は -2 に見えるが、部が変わっただけ。
+    expect(stepOf([labeled('1-1'), labeled('1-3'), labeled('2-1'), labeled('2-3')], 1)).toBe(2);
+    expect(stepOf([labeled('1-5'), labeled('2-3')], 1)).toBeNull();
+    expect(stepOf([read(5), labeled('2-7')], 1)).toBe(2);
   });
 });
 
@@ -206,8 +232,8 @@ describe('inferFileNumbers', () => {
 
   it('柱の章番号よりも、並びに合う頁番号を選ぶ', () => {
     const header = (chapter, page) => [
-      { value: chapter, score: 2.5, source: 'text', zone: 'top' },
-      { value: page, score: 3.5, source: 'text', zone: 'bottom' },
+      { path: [chapter], score: 2.5, source: 'text', zone: 'top' },
+      { path: [page], score: 3.5, source: 'text', zone: 'bottom' },
     ];
     const { pages } = inferFileNumbers([header(3, 41), header(3, 43), header(3, 45)]);
 
@@ -263,7 +289,7 @@ describe('inferFileNumbers（頁ごとに手で入れた番号）', () => {
   it('手で入れた番号は確かなものとし、読めなかった頁はそこから補う', () => {
     // 番号が 1 つも読めなかった束。2 頁に番号を入れれば、歩幅も残りの頁も決まる。
     const { step, pages } = inferFileNumbers([none(), none(), none(), none()], {
-      fixed: [null, { number: 13 }, null, { number: 17 }],
+      fixed: [null, { path: [13] }, null, { path: [17] }],
     });
 
     expect(step).toBe(2);
@@ -276,7 +302,7 @@ describe('inferFileNumbers（頁ごとに手で入れた番号）', () => {
     // （歩幅は、ほかの束から借りたもの）。
     const { pages } = inferFileNumbers([read(31), read(48), none(), read(17)], {
       step: 2,
-      fixed: [{ number: 41 }, null, null, null],
+      fixed: [{ path: [41] }, null, null, null],
     });
 
     expect(pages.map((p) => p.number)).toEqual([41, 43, 45, 47]);
@@ -288,17 +314,17 @@ describe('inferFileNumbers（頁ごとに手で入れた番号）', () => {
     // 番号に数えない図版の頁に、図版の前の頁の番号を入れた。後ろの頁は読めたとおり。
     const { pages } = inferFileNumbers([read(11), none(), read(13), read(15)], {
       step: 2,
-      fixed: [null, { number: 12.5 }, null, null],
+      fixed: [null, { path: [12.5] }, null, null],
     });
     expect(pages.map((p) => p.number)).toEqual([11, 12.5, 13, 15]);
 
-    const jumped = inferFileNumbers([none(), read(31), read(33)], { step: 2, fixed: [{ number: 11 }, null, null] });
+    const jumped = inferFileNumbers([none(), read(31), read(33)], { step: 2, fixed: [{ path: [11] }, null, null] });
     expect(jumped.pages.map((p) => p.number)).toEqual([11, 31, 33]);
   });
 
   it('入れた番号は、読めた候補の点数によらず並びが必ず通る', () => {
     const { pages } = inferFileNumbers([read(1, 9), read(3, 9), read(5, 9)], {
-      fixed: [null, { number: 4 }, null],
+      fixed: [null, { path: [4] }, null],
     });
 
     expect(pages[1]).toEqual({ number: 4, status: 'manual', read: null });
@@ -306,27 +332,27 @@ describe('inferFileNumbers（頁ごとに手で入れた番号）', () => {
 
   it('読めたとおりの番号を入れた頁は、読めた候補を残す（読み取りの内訳に数える）', () => {
     const { pages } = inferFileNumbers([read(1), read(3), branch(3, 1)], {
-      fixed: [null, { number: 3 }, { number: 3, branch: 1 }],
+      fixed: [null, { path: [3] }, { path: [3, 1] }],
     });
 
     expect(pages[1]).toMatchObject({ status: 'manual', read: { value: 3 } });
-    expect(pages[2]).toMatchObject({ status: 'manual', read: { value: 3, branch: 1 } });
+    expect(pages[2]).toMatchObject({ status: 'manual', read: { value: 3, branch: [1] } });
   });
 
   it('枝番の頁は並びから外し、そこで番号が飛んでもよい', () => {
     const { pages } = inferFileNumbers([read(53), read(55), none(), read(59)], {
-      fixed: [null, null, { number: 57, branch: 1 }, null],
+      fixed: [null, null, { path: [57, 1] }, null],
     });
 
     expect(pages.map((p) => p.number)).toEqual([53, 55, 57, 59]);
-    expect(pages[2]).toEqual({ number: 57, branch: 1, status: 'manual', read: null });
+    expect(pages[2]).toEqual({ number: 57, branch: [1], status: 'manual', read: null });
     expect(pages[3].status).toBe('detected');
   });
 
   it('読めた枝番より、手で入れた枝番の無い番号を使い、並びに入れる', () => {
-    const branched = [{ value: 57, branch: 1, score: 3.5, source: 'text', zone: 'bottom' }];
+    const branched = [{ path: [57, 1], score: 3.5, source: 'text', zone: 'bottom' }];
     const { pages } = inferFileNumbers([read(53), read(55), branched, none()], {
-      fixed: [null, null, { number: 57 }, null],
+      fixed: [null, null, { path: [57] }, null],
     });
 
     expect(pages.map((p) => p.number)).toEqual([53, 55, 57, 59]);
@@ -335,7 +361,7 @@ describe('inferFileNumbers（頁ごとに手で入れた番号）', () => {
 
   it('間に挟む頁（12.5）は並びから外し、前後は飛ばさない', () => {
     const { pages } = inferFileNumbers([read(11), read(12), none(), none(), read(14)], {
-      fixed: [null, null, { number: 12.5 }, null, null],
+      fixed: [null, null, { path: [12.5] }, null, null],
     });
 
     expect(pages.map((p) => p.number)).toEqual([11, 12, 12.5, 13, 14]);
@@ -343,7 +369,7 @@ describe('inferFileNumbers（頁ごとに手で入れた番号）', () => {
   });
 
   it('歩幅が決まらなければ、入れた頁にだけ番号を付ける', () => {
-    const { step, pages } = inferFileNumbers([none(), none(), none()], { fixed: [null, { number: 8 }] });
+    const { step, pages } = inferFileNumbers([none(), none(), none()], { fixed: [null, { path: [8] }] });
 
     expect(step).toBeNull();
     expect(pages.map((p) => p.number)).toEqual([null, 8, null]);
@@ -392,7 +418,7 @@ describe('枝番の頁（加除式の差し替え）', () => {
   it.each(['57-1', '57 - 1', '５７－１', '- 57-1 -', '57ー1頁'])('枝番の付いた番号 %s', (text) => {
     const [candidate] = pageNumberCandidates([item(text)]);
 
-    expect(candidate).toMatchObject({ value: 57, branch: 1 });
+    expect(candidate).toMatchObject({ path: [57, 1] });
     expect(candidate.score).toBeGreaterThanOrEqual(3);
   });
 
@@ -402,10 +428,10 @@ describe('枝番の頁（加除式の差し替え）', () => {
   });
 
   it('同じ番号でも、枝番が違えば別の候補', () => {
-    const values = pageNumberCandidates([item('57', { y: 0.04 }), item('57-1')]).map((c) => [c.value, c.branch]);
+    const values = pageNumberCandidates([item('57', { y: 0.04 }), item('57-1')]).map((c) => c.path);
     expect(values).toEqual(
       expect.arrayContaining([
-        [57, undefined],
+        [57],
         [57, 1],
       ])
     );
@@ -425,8 +451,8 @@ describe('枝番の頁（加除式の差し替え）', () => {
       [51, null, 'detected'],
       [53, null, 'detected'],
       [55, null, 'detected'],
-      [57, 1, 'detected'],
-      [57, 3, 'detected'],
+      [57, [1], 'detected'],
+      [57, [3], 'detected'],
       [59, null, 'detected'],
     ]);
   });
@@ -440,12 +466,14 @@ describe('枝番の頁（加除式の差し替え）', () => {
 
   it('枝番の頁をまたぐ頁どうしの差は、歩幅の票に数えない', () => {
     // 55 → 59（間に枝番の頁）を数えると、歩幅 4 にも 2 にもならない並びが混ざる。
-    expect(detectStep([read(55), read(59)], new Set([1])).step).toBeNull();
-    expect(detectStep([read(55), read(57)]).step).toBe(2);
+    const seen = (value) => [{ value, score: 3.5 }];
+    expect(detectStep([seen(55), seen(59)], new Set([1])).step).toBeNull();
+    expect(detectStep([seen(55), seen(57)]).step).toBe(2);
   });
 
   it('枝番の頁だけのファイル', () => {
-    const { step, pages } = inferFileNumbers([branch(57, 1), branch(57, 3)]);
+    // 読み方の上限を 0 にしたとき（ほかのファイルで枝番と読んだとき）。上限が無ければ「57-」の頁と読む。
+    const { step, pages } = inferFileNumbers([branch(57, 1), branch(57, 3)], { maxDepth: 0 });
 
     expect(step).toBeNull();
     expect(pages.map((p) => p.status)).toEqual(['detected', 'detected']);
@@ -460,14 +488,21 @@ describe('枝番の頁（加除式の差し替え）', () => {
   });
 
   it('見せ方と、手で入れる番号の読み方', () => {
-    expect(formatNumber(57, 1)).toBe('57-1');
-    expect(parsePageNumber('57-1')).toEqual({ number: 57, branch: 1 });
-    expect(parsePageNumber(' ５７－２ ')).toEqual({ number: 57, branch: 2 });
-    expect(parsePageNumber('12.5')).toEqual({ number: 12.5 });
-    expect(parsePageNumber('-3')).toEqual({ number: -3 });
+    expect(formatNumber(57, [1])).toBe('57-1');
+    expect(formatNumber(57, [1, 2], [2])).toBe('2-57-1-2');
+    expect(parsePageNumber('57-1')).toEqual({ path: [57, 1] });
+    expect(parsePageNumber(' ５７－２ ')).toEqual({ path: [57, 2] });
+    expect(parsePageNumber('2-2-21-3')).toEqual({ path: [2, 2, 21, 3] });
+    // 手で入れるときは、2 段目からの 0（部の扉の 1-0）も受け付ける（読み取りでは日付と取り違えないよう拾わない）。
+    expect(parsePageNumber('1-0')).toEqual({ path: [1, 0] });
+    expect(parsePageNumber('1-05')).toBeNull();
+    expect(parsePageNumber('12')).toEqual({ path: [12] });
+    expect(parsePageNumber('12.5')).toEqual({ path: [12.5] });
+    expect(parsePageNumber('-3')).toEqual({ path: [-3] });
     expect(parsePageNumber('abc')).toBeNull();
     expect(parsePageNumber('')).toBeNull();
-    expect(pageNumberText({ number: 57, branch: 1 })).toBe('57-1');
+    expect(pageNumberText({ number: 57, branch: [1] })).toBe('57-1');
+    expect(pageNumberText({ prefix: [2], number: 21 })).toBe('2-21');
     expect(pageNumberText({ number: 12.5 })).toBe('12.5');
   });
 });
@@ -490,45 +525,45 @@ describe('本文の脇の行番号（5 行おき）', () => {
       pageNumber(91),
     ];
 
-    expect(pageNumberCandidates(items).map((c) => c.value)).toEqual([91]);
+    expect(pageNumberCandidates(items).map(labelOf)).toEqual([91]);
   });
 
   it('図で間が空いても、すぐ上の行番号から 5 増えていれば行番号', () => {
     const items = [left(15, 0.4, '本文の行'), left(20, 0.51, '本文の行'), left(25, 0.89), pageNumber(79)];
 
-    expect(pageNumberCandidates(items).map((c) => c.value)).toEqual([79]);
+    expect(pageNumberCandidates(items).map(labelOf)).toEqual([79]);
   });
 
   it('すぐ下に 5 大きい番号がある行番号も外す（右の余白の、行の末尾に付いた行番号）', () => {
     const right = (number, y) => ({ text: `本文の行 ${number}`, x0: 0.1, x1: 0.92, y, h: 0.011 });
     const items = [right(35, 0.87), right(40, 0.9), pageNumber(64, 0.1)];
 
-    expect(pageNumberCandidates(items).map((c) => c.value)).toEqual([64]);
+    expect(pageNumberCandidates(items).map(labelOf)).toEqual([64]);
   });
 
   it('行番号の列にあっても、5 ずつ続かない番号は頁番号として残す', () => {
     // 偶数頁の頁番号が、左の行番号の列の真下に来ることがある。
     const items = [left(35, 0.79, '本文の行'), left(40, 0.86, '本文の行'), left(80, 0.95)];
 
-    expect(pageNumberCandidates(items).map((c) => c.value)).toEqual([80]);
+    expect(pageNumberCandidates(items).map(labelOf)).toEqual([80]);
   });
 
   it('5 の倍数でない番号、別の列の番号、上下の向きが逆のものは行番号とみなさない', () => {
-    expect(pageNumberCandidates([left(40, 0.86, '本文の行'), left(41, 0.95)]).map((c) => c.value)).toEqual([41]);
+    expect(pageNumberCandidates([left(40, 0.86, '本文の行'), left(41, 0.95)]).map(labelOf)).toEqual([41]);
     // 枝番の付いた番号は、行番号の列の真下にあっても頁番号。
     const branchPage = { ...left(45, 0.95), text: '45-1' };
-    expect(pageNumberCandidates([left(40, 0.86, '本文の行'), branchPage])).toMatchObject([{ value: 45, branch: 1 }]);
-    expect(pageNumberCandidates([left(40, 0.86, '本文の行'), pageNumber(45)]).map((c) => c.value)).toEqual([45]);
+    expect(pageNumberCandidates([left(40, 0.86, '本文の行'), branchPage])).toMatchObject([{ path: [45, 1] }]);
+    expect(pageNumberCandidates([left(40, 0.86, '本文の行'), pageNumber(45)]).map(labelOf)).toEqual([45]);
     // 5 大きい番号が上にある（行番号は上から増える）。
-    expect(pageNumberCandidates([left(50, 0.5, '本文の行'), left(45, 0.95)]).map((c) => c.value)).toEqual([45]);
+    expect(pageNumberCandidates([left(50, 0.5, '本文の行'), left(45, 0.95)]).map(labelOf)).toEqual([45]);
   });
 });
 
 describe('文字情報だけでは番号の決まらない頁（余白を OCR する頁）', () => {
   /** 柱や表の中の数字だけが拾えた頁（弱い候補）。 */
-  const weak = (value) => [{ value, score: 2, source: 'text', zone: 'top' }];
+  const weak = (value) => [{ path: [value], score: 2, source: 'text', zone: 'top' }];
   const ocr = (value, branchNumber) => [
-    { value, ...(branchNumber ? { branch: branchNumber } : {}), score: 4, source: 'ocr', zone: 'bottom' },
+    { path: branchNumber ? [value, branchNumber] : [value], score: 4, source: 'ocr', zone: 'bottom' },
   ];
 
   it('候補が無い頁・並びに合わない頁（弱い候補だけ・読み違え）を挙げ、並びに合う頁は挙げない', () => {
@@ -565,21 +600,186 @@ describe('文字情報だけでは番号の決まらない頁（余白を OCR �
 
   it('同じ番号の候補は 1 つにして点数の高いほうを残し、点数の順に並べる', () => {
     const text = [
-      { value: 182, score: 4, source: 'text', zone: 'bottom' },
-      { value: 3, score: 2, source: 'text', zone: 'top' },
+      { path: [182], score: 4, source: 'text', zone: 'bottom' },
+      { path: [3], score: 2, source: 'text', zone: 'top' },
     ];
     const fromImage = [
-      { value: 182, score: 3.5, source: 'ocr', zone: 'bottom' },
-      { value: 182, branch: 1, score: 3.5, source: 'ocr', zone: 'bottom' },
-      { value: 3, score: 4, source: 'ocr', zone: 'bottom' },
+      { path: [182], score: 3.5, source: 'ocr', zone: 'bottom' },
+      { path: [182, 1], score: 3.5, source: 'ocr', zone: 'bottom' },
+      { path: [3], score: 4, source: 'ocr', zone: 'bottom' },
     ];
     // 同点なら後の読み（OCR）を残す。
-    expect(mergeCandidates(text, [{ value: 182, score: 4, source: 'ocr', zone: 'bottom' }])[0].source).toBe('ocr');
+    expect(mergeCandidates(text, [{ path: [182], score: 4, source: 'ocr', zone: 'bottom' }])[0].source).toBe('ocr');
 
     expect(mergeCandidates(text, fromImage)).toEqual([
-      { value: 3, score: 4, source: 'ocr', zone: 'bottom' },
-      { value: 182, score: 4, source: 'text', zone: 'bottom' },
-      { value: 182, branch: 1, score: 3.5, source: 'ocr', zone: 'bottom' },
+      { path: [3], score: 4, source: 'ocr', zone: 'bottom' },
+      { path: [182], score: 4, source: 'text', zone: 'bottom' },
+      { path: [182, 1], score: 3.5, source: 'ocr', zone: 'bottom' },
     ]);
+  });
+});
+
+describe('ハイフンで区切った頁番号の階層（枝番か、部・編などの番号か）', () => {
+  /** ハイフンで区切った番号（'2-21'。null は読めなかった頁）を、頁ごとの候補にする。 */
+  const pages = (...labels) =>
+    labels.map((label) =>
+      label === null ? [] : [{ path: String(label).split('-').map(Number), score: 3.5, source: 'text', zone: 'bottom' }]
+    );
+  const texts = (numbering) => numbering.pages.map((page) => (page.number === null ? null : pageNumberText(page)));
+
+  it('ハイフンで区切った番号を、段の列として拾う（2 段目からは 0 で始まらず、上限を超えない）', () => {
+    expect(pageNumberCandidates([item('2-21')]).map((c) => c.path)).toEqual([[2, 21]]);
+    expect(pageNumberCandidates([item('- 2-2-21-3 -')]).map((c) => c.path)).toEqual([[2, 2, 21, 3]]);
+    expect(pageNumberCandidates([item('２－１２０')]).map((c) => c.path)).toEqual([[2, 120]]);
+    // 日付・段の多すぎるもの・上限を超える段は拾わない。
+    expect(pageNumberCandidates([item('2024-05-01')])).toEqual([]);
+    expect(pageNumberCandidates([item('1-2-3-4-5')])).toEqual([]);
+    expect(pageNumberCandidates([item('2-2024')])).toEqual([]);
+    // 0 で始まる段のある番号（電話番号など）も拾わない。番号だけなら、これまでどおり。
+    expect(pageNumberCandidates([item('03-1234')])).toEqual([]);
+    expect(pageNumberCandidates([item('012')]).map((c) => c.path)).toEqual([[12]]);
+  });
+
+  it('階層に合わせて読む（段の足りない番号は、前の段の分からない頁番号）', () => {
+    expect(interpret([2, 21], 0)).toEqual({ prefix: null, value: 2, branch: [21] });
+    expect(interpret([2, 21], 1)).toEqual({ prefix: [2], value: 21, branch: null });
+    expect(interpret([2, 2, 21, 3], 1)).toEqual({ prefix: [2], value: 2, branch: [21, 3] });
+    expect(interpret([2, 2, 21, 3], 2)).toEqual({ prefix: [2, 2], value: 21, branch: [3] });
+    expect(interpret([21], 1)).toEqual({ prefix: null, value: 21, branch: null });
+  });
+
+  it('数字の列を頭から比べる（短いほうが先）', () => {
+    const paths = [[58], [57, 2], [57], [57, 1, 1], [57, 1]];
+    expect(paths.sort(comparePaths)).toEqual([[57], [57, 1], [57, 1, 1], [57, 2], [58]]);
+  });
+
+  it('3 部構成の本の 2-21 は、前後とつながる「2-」の 21 頁と読む', () => {
+    const first = inferFileNumbers(pages('1-75', '1-77', '1-79', '2-1', '2-3', null, '2-7'));
+    expect(first.step).toBe(2);
+    // 部が変わっても歩幅は 2 のまま。番号の読めない頁は、前後の頁の部を引き継ぐ。
+    expect(texts(first)).toEqual(['1-75', '1-77', '1-79', '2-1', '2-3', '2-5', '2-7']);
+    expect(first.pages[5]).toMatchObject({ prefix: [2], number: 5, status: 'inferred' });
+    expect(numberingSequence(first)).toBe('1-75, 1-77, 1-79, 2-1, 2-3, 2-5, 2-7');
+    expect(texts(inferFileNumbers(pages('2-19', '2-21', '2-23', '2-25')))).toEqual(['2-19', '2-21', '2-23', '2-25']);
+  });
+
+  it('加除式の本の 57-1 は、前後に枝番の無い頁があるので枝番と読む', () => {
+    const kajo = inferFileNumbers(pages(51, 53, 55, '57-1', '57-3', 59, 61));
+    expect(kajo.pages[3]).toMatchObject({ number: 57, branch: [1], status: 'detected' });
+    expect(kajo.pages[3]).not.toHaveProperty('prefix');
+    // 枝番の頁が 10 頁続いても、前後の枝番の無い頁から枝番と分かる。
+    const long = inferFileNumbers(pages(55, 56, '57-1', '57-2', '57-3', '57-4', '57-5', '57-6', '57-7', '57-8', '57-9', '57-10', 58, 59));
+    expect(texts(long)).toEqual([
+      '55', '56', '57-1', '57-2', '57-3', '57-4', '57-5', '57-6', '57-7', '57-8', '57-9', '57-10', '58', '59',
+    ]);
+    expect(long.pages.some((page) => page.prefix)).toBe(false);
+  });
+
+  it('部・章・頁と入れ子の枝番（2-2-21-3）も段ごとに読む', () => {
+    const { pages: read } = inferFileNumbers(pages('2-2-17', '2-2-19', '2-2-21', '2-2-21-1', '2-2-23'));
+    expect(read[3]).toMatchObject({ prefix: [2, 2], number: 21, branch: [1], status: 'detected' });
+    expect(read.map((page) => page.number)).toEqual([17, 19, 21, 21, 23]);
+  });
+
+  it('部・編の番号の付いた本の枝番（2-57-1）は、部の番号と枝番に分ける', () => {
+    const numbering = inferFileNumbers(pages('2-51', '2-53', '2-55', '2-57-1', '2-57-3', '2-59'));
+    expect(texts(numbering)).toEqual(['2-51', '2-53', '2-55', '2-57-1', '2-57-3', '2-59']);
+    expect(numbering.pages[3]).toMatchObject({ prefix: [2], number: 57, branch: [1] });
+  });
+
+  it('読み方はファイルの中でも場所ごとに選ぶ（前付けの枝番と、本文の章の番号）', () => {
+    // 前付けは 1, 2, 3-1, 3-2, 4 …（3 頁の枝番）、本文は 1-1, 1-2 …（第 1 章の頁）。
+    // 読み方を変えるには費用が掛かるので、本文の頁が何頁か（ここでは 9 頁）続いて分かる。
+    const body = ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9'];
+    const numbering = inferFileNumbers(pages(1, 2, '3-1', '3-2', 4, 5, null, ...body));
+    // 境目の読めない頁は、どちらとも決められない（ここでは章の扉の 1-0 にして、要確認にする）。
+    expect(texts(numbering)).toEqual(['1', '2', '3-1', '3-2', '4', '5', '1-0', ...body]);
+    expect(numbering.pages[6].status).toBe('uncertain');
+    expect(numbering.pages[2]).toMatchObject({ number: 3, branch: [1] });
+    expect(numbering.pages[7]).toMatchObject({ prefix: [1], number: 1 });
+  });
+
+  it('読み方の上限を決めて読む（枝番の頁だけのファイルを、ほかのファイルに合わせて枝番と読む）', () => {
+    expect(texts(inferFileNumbers(pages('57-1', '57-3', '57-5')))).toEqual(['57-1', '57-3', '57-5']);
+    expect(inferFileNumbers(pages('57-1', '57-3', '57-5')).pages[0]).toMatchObject({ prefix: [57], number: 1 });
+    const capped = inferFileNumbers(pages('57-1', '57-3', '57-5'), { maxDepth: 0 });
+    expect(capped.step).toBeNull();
+    expect(capped.pages[0]).toMatchObject({ number: 57, branch: [1], status: 'detected' });
+  });
+
+  it('1 頁だけの 2-1 は読み方を決められず、枝番と読む', () => {
+    const { step, pages: read } = inferFileNumbers(pages('2-1'));
+    expect(step).toBeNull();
+    expect(read[0]).toMatchObject({ number: 2, branch: [1], status: 'detected' });
+  });
+
+  it('ほかのファイルの読み方（depthHint）で、1 頁だけの番号と手で入れた番号を読む', () => {
+    expect(inferFileNumbers(pages(null, '2-21', null), { depthHint: 1 }).pages[1]).toMatchObject({
+      prefix: [2], number: 21, status: 'detected',
+    });
+    // 手で入れた 2-5 は「2-」の 5 頁と読み、次の頁の 7 だけの番号も「2-」の頁にする。
+    const numbering = inferFileNumbers(pages(null, 7), { depthHint: 1, fixed: [{ path: [2, 5] }] });
+    expect(texts(numbering)).toEqual(['2-5', '2-7']);
+    // 手掛かりが無ければ、2-5 を枝番と読んで 7 頁へ続けてよい。
+    expect(texts(inferFileNumbers(pages(null, 7), { fixed: [{ path: [2, 5] }] }))).toEqual(['2-5', '7']);
+  });
+
+  it('手で入れた番号も、読み方を選ぶ手掛かりにする', () => {
+    const fixed = [{ path: [2, 1] }, { path: [2, 3] }, null];
+    const numbering = inferFileNumbers(pages(null, null, null), { fixed });
+
+    expect(texts(numbering)).toEqual(['2-1', '2-3', '2-5']);
+    expect(numbering.pages.map((page) => page.status)).toEqual(['manual', 'manual', 'inferred']);
+  });
+
+  it('前の段を入れずに直した番号・間に挟む番号は、前後の頁の前の段にする', () => {
+    const file = pages('2-1', '2-3', null, '2-7', null);
+    const fixed = [null, null, { path: [5] }, null, { path: [7.5] }];
+    const numbering = inferFileNumbers(file, { fixed });
+
+    expect(texts(numbering)).toEqual(['2-1', '2-3', '2-5', '2-7', '2-7.5']);
+    // 間に挟む頁がファイルの先頭なら、後ろの頁の前の段にする。
+    const head = inferFileNumbers(pages(null, '3-1', '3-3'), { fixed: [{ path: [0.5] }] });
+    expect(head.pages[0]).toMatchObject({ number: 0.5, prefix: [3] });
+    // 前の段の分かる頁が無ければ、付けない。
+    const alone = inferFileNumbers(pages(null, 5, 7), { fixed: [{ path: [4.5] }] });
+    expect(alone.pages[0]).not.toHaveProperty('prefix');
+  });
+
+  it('前の段の違う頁に番号を手で入れたら、読めた候補と前の段まで同じときだけ読めた頁に数える', () => {
+    const file = pages('2-1', '2-3');
+    expect(inferFileNumbers(file, { fixed: [{ path: [2, 1] }] }).pages[0].read).toMatchObject({ path: [2, 1] });
+    expect(inferFileNumbers(file, { fixed: [{ path: [1] }] }).pages[0].read).toMatchObject({ path: [2, 1] });
+    expect(inferFileNumbers(file, { fixed: [{ path: [3, 1] }] }).pages[0].read).toBeNull();
+  });
+
+  it('柱からは、前の段まで書いた番号を落とす（前の段を刷っていなければ、頁番号から後ろを）', () => {
+    expect(stripPageNumber('第2部 総則 2-21', { prefix: [2], number: 21 })).toBe('第2部総則');
+    expect(stripPageNumber('総則 2 - 57 - 1', { prefix: [2], number: 57, branch: [1] })).toBe('総則');
+    expect(stripPageNumber('総則 21', { prefix: [2], number: 21 })).toBe('総則');
+    expect(stripPageNumber('総則 3-21', { prefix: [2], number: 21 })).toBe('総則3');
+    expect(stripPageNumber('総則', { prefix: [2], number: 21 })).toBe('総則');
+  });
+
+  it('本の階層を、ファイルだけから選んで OCR する頁を決める', () => {
+    // 階層 0 なら枝番の頁だけが並び、2-5 の読めない頁は番号が決まらない。
+    expect([...unsettledPages(pages('2-1', '2-3', null, '2-7'))]).toEqual([2]);
+  });
+
+  it('入れ子の枝番の頁の表裏は、いちばん後ろの段で見る', () => {
+    expect([sideOf(57, [1, 1]), sideOf(57, [1, 2]), sideOf(null), sideOf(2.5)]).toEqual(['odd', 'even', null, null]);
+  });
+
+  it('番号の付き方の要約にも、頁番号が戻ったところで分けたまとまりの番号を付ける', () => {
+    const numbering = inferFileNumbers(pages('5-123', '5-124', '1-1', '1-2', '1-3'));
+    const sections = [undefined, undefined, [6], [6], [6]];
+
+    expect(numberingSequence(numbering, sections)).toBe('5-123, 5-124, 6-1-1, 6-1-2, 6-1-3');
+    // まとまりが変われば並べ直す（番号が続いていても）。
+    expect(numberingSequence(inferFileNumbers(pages(1, 2, 3, 4), { depth: 0 }), [undefined, undefined, [2], [2]])).toBe('1, 2, 2-3, 2-4');
+  });
+
+  it('手で決めたファイルの番号にも、前の段を付ける', () => {
+    expect(manualFileNumbers(2, 1, 2, [3]).pages.map(pageNumberText)).toEqual(['3-1', '3-3']);
   });
 });

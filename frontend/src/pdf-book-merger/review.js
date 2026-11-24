@@ -3,8 +3,8 @@
 // 頁番号の並び（ordering.js）、スキャンの検査（image-checks.js）、文字情報の
 // 有無を、頁ごとの「確認が要ること」にまとめる。DOM には触らない。
 
-import { branchLayout, partName } from './ordering.js';
-import { formatNumber } from './page-numbers.js';
+import { branchLayout, sectionHead } from './ordering.js';
+import { formatNumber, pathText } from './page-numbers.js';
 import { TEXT_QUALITY_MESSAGE } from './text-quality.js';
 
 /** 番号の決まり方の見出し（頁の下に小さく出す）。 */
@@ -27,12 +27,7 @@ export function displayLabel(entry) {
   if (entry.role === 'front') return '表紙';
   if (entry.role === 'back') return '裏表紙';
   if (entry.number === null) return '番号不明';
-  return `${partPrefix(entry.part)}${formatNumber(entry.number, entry.branch)} 頁`;
-}
-
-/** 部が分かれているときの頁の見出しの頭（「第 2 部 」）。 */
-export function partPrefix(part) {
-  return part === null || part === undefined ? '' : `${partName(part)} `;
+  return `${sectionHead(entry)}${formatNumber(entry.number, entry.branch, entry.prefix)} 頁`;
 }
 
 /**
@@ -56,7 +51,7 @@ export function pageIssues(order, problems, scanIssues, textless = new Set()) {
       add(entry.pageKey, {
         kind: 'conflict',
         level: 'warn',
-        message: `読み取った番号（${entry.read?.value}）が前後の並びと合いません`,
+        message: `読み取った番号（${pathText(entry.read.path)}）が前後の並びと合いません`,
       });
     } else if (entry.status === 'uncertain') {
       add(entry.pageKey, {
@@ -163,11 +158,13 @@ const MAX_MISSING_CARDS = 6;
  * （部が変わったところでは、番号が戻るので挟まない）。
  *
  * 枝番の頁に差し替えられたとみなす番号（ordering.js の branchLayout。部ごと）には
- * 札を挟まない。枝番の抜け（57-1 と 57-3 の間の 57-2）には、枝番を付けた札を挟む。
+ * 札を挟まない。枝番の抜け（57-1 と 57-3 の間の 57-2）には、枝番を付けた札を挟む
+ * （入れ子の枝番 57-1-2 も段ごとに。下の段の枝番の頁に差し替えられた枝番の頁には挟まない）。
  *
  * @param {ReturnType<import('./ordering.js').arrangeBook>['order']} order
  * @returns {({type:'page', entry:object} |
- *   {type:'missing', from:number, to:number, branch?:number, part:number|null})[]}
+ *   {type:'missing', from:number, to:number, branch?:number[], prefix?:number[], part:number|null,
+ *    section?:number[]})[]}
  */
 export function gridItems(order) {
   const isNumbered = (entry) => entry.role === 'body' && Number.isInteger(entry.number);
@@ -176,15 +173,19 @@ export function gridItems(order) {
     if (!byPart.has(entry.part)) byPart.set(entry.part, []);
     byPart.get(entry.part).push(entry);
   }
-  const replacedIn = new Map([...byPart].map(([part, entries]) => [part, branchLayout(entries).replaced]));
+  const layouts = new Map([...byPart].map(([part, entries]) => [part, branchLayout(entries)]));
   const items = [];
   let previous = null;
+  // 抜けの札の部（前の頁と同じ部）。
+  const where = () => {
+    const { part, prefix, section } = previous;
+    return { part, ...(prefix ? { prefix } : {}), ...(section ? { section } : {}) };
+  };
   const missing = (from, to) => {
-    const { part } = previous;
     if (to - from + 1 > MAX_MISSING_CARDS) {
-      items.push({ type: 'missing', from, to, part });
+      items.push({ type: 'missing', from, to, ...where() });
     } else {
-      for (let m = from; m <= to; m++) items.push({ type: 'missing', from: m, to: m, part });
+      for (let m = from; m <= to; m++) items.push({ type: 'missing', from: m, to: m, ...where() });
     }
   };
   for (const entry of order) {
@@ -194,7 +195,7 @@ export function gridItems(order) {
     }
     // 部が変わったところでは、番号が戻るので比べない。
     if (previous !== null && previous.part === entry.part) {
-      const replaced = replacedIn.get(entry.part);
+      const { replaced, covered } = layouts.get(entry.part);
       let from = null;
       for (let m = previous.number + 1; m <= entry.number; m++) {
         const absent = m < entry.number && !replaced.has(m);
@@ -204,9 +205,19 @@ export function gridItems(order) {
           from = null;
         }
       }
-      const firstBranch = previous.number === entry.number ? (previous.branch ?? 0) + 1 : 1;
-      for (let b = firstBranch; b < (entry.branch ?? 0); b++) {
-        items.push({ type: 'missing', from: entry.number, to: entry.number, branch: b, part: entry.part });
+      // 枝番の抜け。前の頁と同じところまでは比べず、違う段からは前の頁の次（前の頁に
+      // その段が無ければ 1）から、それより下の段は 1 から数える。
+      const before = [previous.number, ...(previous.branch ?? [])];
+      const after = [entry.number, ...(entry.branch ?? [])];
+      let same = 0;
+      while (same < Math.min(before.length, after.length) && before[same] === after[same]) same++;
+      for (let level = Math.max(same, 1); level < after.length; level++) {
+        const first = level === same && level < before.length ? before[level] + 1 : 1;
+        for (let b = first; b < after[level]; b++) {
+          const path = [...after.slice(0, level), b];
+          if (covered.has(pathText(path))) continue;
+          items.push({ type: 'missing', from: entry.number, to: entry.number, branch: path.slice(1), ...where() });
+        }
       }
     }
     previous = entry;
@@ -215,11 +226,14 @@ export function gridItems(order) {
   return items;
 }
 
-/** 抜けている頁の札の見出し（58 頁・60〜70 頁・57-2 頁。部が分かれていれば「第 2 部 58 頁」）。 */
+/**
+ * 抜けている頁の札の見出し（58 頁・60〜70 頁・57-2 頁。前の段のある頁は「2-58 頁」
+ * 「2-60〜2-70 頁」、頁番号が戻ったところで分けたまとまりなら「6-4-30 頁」）。
+ */
 export function missingLabel(item) {
-  const prefix = partPrefix(item.part);
-  if (item.branch) return `${prefix}${item.from}-${item.branch} 頁`;
-  return `${prefix}${item.from === item.to ? `${item.from} 頁` : `${item.from}〜${item.to} 頁`}`;
+  const head = `${sectionHead(item)}${item.prefix ? `${pathText(item.prefix)}-` : ''}`;
+  if (item.branch) return `${head}${pathText([item.from, ...item.branch])} 頁`;
+  return item.from === item.to ? `${head}${item.from} 頁` : `${head}${item.from}〜${head}${item.to} 頁`;
 }
 
 /**

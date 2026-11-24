@@ -845,7 +845,7 @@ describe('ファイルを足して並べる', () => {
 
     // 数字でなければ断り、Enter では開いたまま（打ち直さずに直せる）。
     renumber(third, 'abc');
-    expect($('message').textContent).toBe('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。');
+    expect($('message').textContent).toBe('番号は数字（枝番や部・編などの番号の付いた頁は 57-1・2-21 の形）で入れてください。');
     expect(third.hidden).toBe(false);
     expect(third.value).toBe('abc');
     // Esc は元に戻して閉じ、断りも消して、「修正」にフォーカスを戻す。
@@ -858,7 +858,7 @@ describe('ファイルを足して並べる', () => {
     edit.click();
     third.value = 'abc';
     third.blur();
-    expect($('message').textContent).toBe('番号は数字（枝番の付いた頁は 57-1 の形）で入れてください。');
+    expect($('message').textContent).toBe('番号は数字（枝番や部・編などの番号の付いた頁は 57-1・2-21 の形）で入れてください。');
     expect([third.value, third.hidden]).toEqual(['', true]);
     // 別のアプリ・タブへ移っただけなら、開いたまま。
     edit.click();
@@ -915,7 +915,7 @@ describe('ファイルを足して並べる', () => {
     change(startField, '11');
     expect(gridLabels()).toContain('17 頁');
     change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '1.5');
-    expect($('message').textContent).toBe('先頭の頁の番号は整数で入れてください。');
+    expect($('message').textContent).toBe('先頭の頁の番号は整数（部・編などの番号を前に付けるなら 2-1 の形）で入れてください。');
     // 番号が整数でないまま進み方を選んでも、欄は使っている進み方（11 からの 2 つずつ）に戻す。
     const invalidStep = fileItem('猫_奇数.pdf').querySelectorAll('.bm-file-controls select')[1];
     change(invalidStep, '-2');
@@ -939,7 +939,7 @@ describe('ファイルを足して並べる', () => {
     const autoStep = fileItem('猫_奇数.pdf').querySelectorAll('.bm-file-controls select')[1];
     change(autoStep, '1');
     expect(autoStep.value).toBe('');
-    expect($('message').textContent).toBe('先頭の頁の番号は整数で入れてください。');
+    expect($('message').textContent).toBe('先頭の頁の番号は整数（部・編などの番号を前に付けるなら 2-1 の形）で入れてください。');
     expect(gridLabels()).toEqual(before);
     // 番号を入れれば、選んだ進み方で並ぶ。
     change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '11');
@@ -966,6 +966,8 @@ describe('ファイルを足して並べる', () => {
     const labels = ['53 頁', '54 頁', '55 頁', '56 頁', '57-1 頁', '57-2 頁', '57-3 頁', '57-4 頁', '59 頁', '60 頁', '61 頁', '62 頁'];
     expect(gridLabels()).toEqual(labels);
     expect(fileItem('法令_奇数.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 53, 55, 57-1, 57-3, 59, 61)');
+    // 前後に枝番の無い頁があるので、枝番と読む。
+    expect($('problems').textContent).not.toContain('部・編などの番号、');
     expect($('problems').textContent).toContain('57〜58 頁は無く、枝番の付いた頁（57-1〜57-4）があります。');
     expect($('problems').textContent).not.toContain('見つかりません');
 
@@ -978,6 +980,39 @@ describe('ファイルを足して並べる', () => {
     expect(gridLabels()).toEqual([...labels.slice(0, 6), '-57-3 頁', '57-4 頁', '57-5 頁', ...labels.slice(8)]);
     expect(card('57-5 頁').querySelector('.bm-page-number').value).toBe('57-5');
     expect($('problems').textContent).toContain('57-3 頁が見つかりません（枝番の付いた頁）');
+  });
+
+  it('部・編などの番号を頁番号の前に置いた本（2-21）は、前後のつながりから部の番号と読む', async () => {
+    drop([
+      file('部_奇数.pdf', pdf([page('o11', '1-1'), page('o13', '1-3'), page('o21', '2-1'), page('o23', '2-3'), page('o25', '2-5')])),
+      file('部_偶数.pdf', pdf([page('e26', '2-6'), page('e24', '2-4'), page('e22', '2-2'), page('e14', '1-4'), page('e12', '1-2')])),
+    ]);
+    await settled(2);
+
+    const labels = ['1-1 頁', '1-2 頁', '1-3 頁', '1-4 頁', '2-1 頁', '2-2 頁', '2-3 頁', '2-4 頁', '2-5 頁', '2-6 頁'];
+    expect(gridLabels()).toEqual(labels);
+    // 読み方を選ぶ欄は無い（場所ごとに前後の頁から選ぶ）。
+    expect($('depthMode')).toBeNull();
+    expect(fileItem('部_奇数.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 1-1, 1-3, 2-1, 2-3, 2-5)');
+    expect($('problems').textContent).toContain('「1-」を部・編などの番号、1 を頁番号と読み');
+    expect($('problems').textContent).toContain('読み方は場所ごとに前後の頁から選んでいます');
+    expect($('problems').textContent).not.toContain('見つかりません');
+    expect($('problems').textContent).not.toContain('部に分けて並べました');
+
+    // 先頭の頁の番号は、部の番号を付けて入れられる。
+    const startField = () => fileItem('部_奇数.pdf').querySelector('.bm-file-controls input[type="text"]');
+    expect(startField().placeholder).toBe('1-1');
+    change(startField(), '3-1');
+    // 奇数頁の束が「3-」の 1〜9 頁になり、もとの 1-1 頁などは抜けになる。
+    expect(gridLabels().slice(-9)).toEqual(['3-1 頁', '-3-2 頁', '3-3 頁', '-3-4 頁', '3-5 頁', '-3-6 頁', '3-7 頁', '-3-8 頁', '3-9 頁']);
+    expect(gridLabels()).not.toContain('1-1 頁');
+    expect(startField().value).toBe('3-1');
+    // 頁ごとの番号も、部の番号を付けて直せる。
+    const card = [...document.querySelectorAll('#pageGrid .bm-page')].find(
+      (li) => li.querySelector('.bm-page-label strong')?.textContent === '3-1 頁'
+    );
+    renumber(card.querySelector('.bm-page-number'), '1-1');
+    expect(gridLabels()[0]).toBe('1-1 頁');
   });
 
   it('頁を読めなければ、何頁目のどこで止まったかを添えて一覧に残す', async () => {
@@ -2227,7 +2262,7 @@ describe('結合と検証', () => {
     expect($('logText').textContent).toContain('「猫.pdf」をダウンロードしました');
   });
 
-  it('部ごとに頁番号が振り直されていれば部に分けて並べ、頁ラベルは付けない（通し番号）', async () => {
+  it('部ごとに頁番号が振り直されていれば分けて並べ、2 つ目からはまとまりの番号を付ける（頁ラベルも）', async () => {
     drop([
       file('本_1.pdf', pdf([page('a1', 1), page('a2', 2), page('a3', 3), page('a4', 4)])),
       file('本_2.pdf', pdf([page('a5', 5), page('a6', 6), page('b1', 1), page('b2', 2), page('b3', 3)])), // 第 2 部の始まりをまたぐ
@@ -2236,22 +2271,24 @@ describe('結合と検証', () => {
     await settled(3);
 
     expect(gridLabels()).toEqual([
-      ...[1, 2, 3, 4, 5, 6].map((n) => `第 1 部 ${n} 頁`),
-      '第 2 部 1 頁',
-      '第 2 部 2 頁',
-      '第 2 部 3 頁',
-      '-第 2 部 4 頁',
-      '第 2 部 5 頁',
-      '第 2 部 6 頁',
+      ...[1, 2, 3, 4, 5, 6].map((n) => `1-${n} 頁`),
+      '2-1 頁',
+      '2-2 頁',
+      '2-3 頁',
+      '-2-4 頁',
+      '2-5 頁',
+      '2-6 頁',
     ]);
-    expect($('problems').textContent).toContain('第 2 部の 4 頁が見つかりません');
-    expect($('problems').textContent).toContain('本文を 2 部に分けて並べました（第 1 部 1〜6 頁・第 2 部 1〜6 頁）');
+    expect($('problems').textContent).toContain('2-4 頁が見つかりません');
+    expect($('problems').textContent).toContain('（1-1〜1-6 頁・2-1〜2-6 頁）');
+    // ファイルの一覧の要約にも、並びの確認と同じ番号（まとまりの番号つき）を出す。
+    expect(fileItem('本_2.pdf').querySelector('.hint').textContent).toBe('本文(頁番号: 1-5, 1-6, 2-1, 2-2, 2-3)');
 
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
-    expect(mocks.mergePdf.mock.calls[0][0].labels).toEqual([]);
+    expect(mocks.mergePdf.mock.calls[0][0].labels).toContainEqual({ start: 6, style: 'D', prefix: '2-', first: 1 });
     expect($('verifyResult').className).toBe('bm-verify ok');
-    expect($('verifyResult').textContent).toContain('頁ラベル（ビューアーに出る頁番号）: 付けていません（通し番号）');
+    expect($('verifyResult').textContent).toContain('頁ラベル（ビューアーに出る頁番号）: 本の頁番号と一致');
   });
 
   it('iPhone では、共有シートに渡せない大きさの PDF は、ダウンロードに保存し、そう記録に残す', async () => {
