@@ -161,6 +161,33 @@ describe('gridItems', () => {
     expect(labels).toEqual(['57-1-1', '57-1-2', '57-3', '57-4', '-57-4-1 頁', '57-4-2', '-57-5 頁', '-57-6-1 頁', '57-6-2']);
   });
 
+  it('枝番の抜けも、長く続いていたら 1 枚の札にまとめる', () => {
+    const page = (...path) => ({ ...body(path.join('-'), path[0]), branch: path.slice(1) });
+    const labels = (order) =>
+      gridItems(order).map((item) => (item.type === 'missing' ? `-${missingLabel(item)}` : item.entry.pageKey));
+
+    // 57-1 の次が 57-1234（読み違い）でも、札は 1 枚。
+    const items = gridItems([page(57, 1), page(57, 1234)]);
+    expect(items).toHaveLength(3);
+    expect(items[1]).toEqual({ type: 'missing', from: 57, to: 57, branch: [2], branchTo: 1233, part: undefined });
+    expect(missingLabel(items[1])).toBe('57-2〜57-1233 頁');
+    // MAX_MISSING_CARDS（6）までは 1 枚ずつ、それを超えたらまとめる。
+    expect(labels([page(57, 1), page(57, 8)])).toEqual(['57-1', '-57-2 頁', '-57-3 頁', '-57-4 頁', '-57-5 頁', '-57-6 頁', '-57-7 頁', '57-8']);
+    expect(labels([page(57, 1), page(57, 9)])).toEqual(['57-1', '-57-2〜57-8 頁', '57-9']);
+    // 入れ子の段の抜けも、段ごとにまとめる。下の段の枝番の頁に差し替えられた枝番の頁
+    // （57-3 と、その裏の 57-4）は抜けにしない。
+    expect(labels([page(57, 1), page(57, 3, 9), page(57, 12)])).toEqual([
+      '57-1',
+      '-57-2 頁',
+      '-57-3-1〜57-3-8 頁',
+      '57-3-9',
+      '-57-5〜57-11 頁',
+      '57-12',
+    ]);
+    // 差し替えられた枝番の頁（57-3・57-4）で、続く抜けが切れる。
+    expect(labels([page(57, 1), page(57, 12), page(57, 3, 1)])).toEqual(['57-1', '-57-2 頁', '-57-5〜57-11 頁', '57-12', '57-3-1']);
+  });
+
   it('抜けの札は、前の頁の部・前の段を引き継ぐ', () => {
     const order = [
       { ...body('a', 1), prefix: [2], part: 1 },
@@ -185,6 +212,10 @@ describe('gridItems', () => {
     expect(missingLabel({ from: 58, to: 58, prefix: [2] })).toBe('2-58 頁');
     expect(missingLabel({ from: 60, to: 70, prefix: [2] })).toBe('2-60〜2-70 頁');
     expect(missingLabel({ from: 57, to: 57, branch: [1, 2], prefix: [2] })).toBe('2-57-1-2 頁');
+    expect(missingLabel({ from: 57, to: 57, branch: [2], branchTo: 30 })).toBe('57-2〜57-30 頁');
+    expect(missingLabel({ from: 57, to: 57, branch: [1, 2], branchTo: 30, part: 1, section: [6], prefix: [4] })).toBe(
+      '6-4-57-1-2〜6-4-57-1-30 頁'
+    );
   });
 });
 

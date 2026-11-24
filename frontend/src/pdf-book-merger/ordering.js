@@ -665,7 +665,7 @@ export function checkSequence(order, { sheets = false, mismatch = false } = {}) 
         problems.push({
           level: 'error',
           kind: 'missing',
-          message: `${absent.map((path) => `${head}${pathText(path)}`).join('・')} 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。`,
+          message: `${branchRanges(absent, head)} 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。`,
           pageKeys: [],
           ...tag(number),
         });
@@ -838,6 +838,23 @@ export function compressRanges(numbers, head = '') {
   }
   if (start !== null) parts.push(range());
   return parts.join('・');
+}
+
+/**
+ * 抜けている枝番の頁（並べた [57, 2] の形）を、続くところは範囲にして書く
+ * （57-2〜57-4・57-6・57-7-1〜57-7-3）。並びで隣り合う、同じ上の段の枝番どうしを compressRanges でまとめる。
+ *
+ * @param {number[][]} paths
+ * @param {string} head 番号の頭に付ける前の段
+ */
+function branchRanges(paths, head) {
+  const runs = [];
+  for (const path of paths) {
+    const parent = pathText(path.slice(0, -1));
+    if (runs.at(-1)?.parent !== parent) runs.push({ parent, values: [] });
+    runs.at(-1).values.push(path.at(-1));
+  }
+  return runs.map(({ parent, values }) => compressRanges(values, `${head}${parent}-`)).join('・');
 }
 
 /**

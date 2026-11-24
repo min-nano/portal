@@ -625,6 +625,19 @@ describe('枝番の頁（加除式の差し替え）', () => {
     ]);
   });
 
+  it('抜けている枝番は、続くところを範囲で書く', () => {
+    const problems = checkSequence(arrange([file('odd', [56, '57-1', '57-5', '57-7', '57-123', 59])]));
+
+    expect(problems.find((p) => p.kind === 'missing').message).toBe(
+      '57-2〜57-4・57-6・57-8〜57-122 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。'
+    );
+    // 入れ子の枝番は、上の段ごとにまとめる（並びは番号の順のまま）。
+    const nested = checkSequence(arrange([file('odd', [56, '57-1', '57-3-5', '57-5', 59])]));
+    expect(nested.find((p) => p.kind === 'missing').message).toBe(
+      '57-2・57-3-1〜57-3-4 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。'
+    );
+  });
+
   it('枝番の頁で始まる・終わる束は、紙の表と裏を枝番で確かめる', () => {
     const problems = checkSequence(arrange([file('mid', ['57-2', '57-3'])]), { sheets: true });
 

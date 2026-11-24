@@ -980,6 +980,11 @@ describe('ファイルを足して並べる', () => {
     expect(gridLabels()).toEqual([...labels.slice(0, 6), '-57-3 頁', '57-4 頁', '57-5 頁', ...labels.slice(8)]);
     expect(card('57-5 頁').querySelector('.bm-page-number').value).toBe('57-5');
     expect($('problems').textContent).toContain('57-3 頁が見つかりません（枝番の付いた頁）');
+
+    // 57-5 頁を 57-1234 頁（読み違いなど）に直しても、続く抜けは 1 枚の札にまとまる。
+    renumber(card('57-5 頁').querySelector('.bm-page-number'), '57-1234');
+    expect(gridLabels()).toEqual([...labels.slice(0, 6), '-57-3 頁', '57-4 頁', '-57-5〜57-1233 頁', '57-1234 頁', ...labels.slice(8)]);
+    expect($('problems').textContent).toContain('57-3・57-5〜57-1233 頁が見つかりません（枝番の付いた頁）');
   });
 
   it('部・編などの番号を頁番号の前に置いた本（2-21）は、前後のつながりから部の番号と読む', async () => {
