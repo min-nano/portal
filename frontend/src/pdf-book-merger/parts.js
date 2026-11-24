@@ -189,24 +189,24 @@ function firstOf(unit) {
 /**
  * まとまりの、本の順ですぐ前にある頁のまとまり。まとまりの最初の区間の、同じファイルの中の
  * 前の区間を先に見て、無ければ本の順でいちばん近い前のファイルの区間（同じ種類の束の中で、
- * 一覧の位置を本の順に揃えたもの。歩幅の分からない区間は一覧の位置）。無ければ null。
+ * 一覧の位置を本の順に揃えたもの）。無ければ null。歩幅の分からない区間は、本のどのファイルも
+ * 歩幅が分からないとき（ほかのファイルの歩幅を借りるので）だけで、そのときは一覧の位置で比べる。
  */
 function predecessor(unit, segments) {
   const first = firstOf(unit);
   // 同じファイルの中の前の区間（まとまりの最初の区間の前は、ほかのまとまり）。
   if (first.prev) return first.prev.unit;
-  const at = (segment) => (first.kind === null ? segment.order : segment.rank);
   const before = segments.filter(
     (other) =>
       other.unit !== unit &&
       other.file.key !== first.file.key &&
-      (first.kind === null || other.kind === first.kind) &&
-      at(other) < at(first)
+      other.kind === first.kind &&
+      other.rank < first.rank
   );
   if (before.length === 0) return null;
-  const nearest = Math.max(...before.map(at));
+  const nearest = Math.max(...before.map((other) => other.rank));
   // そのファイルの、本の順で最後の区間（ファイルの中の区間は、本の順に next でつながる）。
-  const near = before.filter((other) => at(other) === nearest);
+  const near = before.filter((other) => other.rank === nearest);
   return near.find((other) => !near.includes(other.next)).unit;
 }
 
@@ -218,17 +218,16 @@ function predecessor(unit, segments) {
 function successor(unit, segments) {
   const last = unit.segments.reduce((a, b) => (comparePaths(b.position, a.position) > 0 ? b : a));
   if (last.next) return last.next.unit;
-  const at = (segment) => (last.kind === null ? segment.order : segment.rank);
   const after = segments.filter(
     (other) =>
       other.unit !== unit &&
       other.file.key !== last.file.key &&
-      (last.kind === null || other.kind === last.kind) &&
-      at(other) > at(last)
+      other.kind === last.kind &&
+      other.rank > last.rank
   );
   if (after.length === 0) return null;
-  const nearest = Math.min(...after.map(at));
-  const near = after.filter((other) => at(other) === nearest);
+  const nearest = Math.min(...after.map((other) => other.rank));
+  const near = after.filter((other) => other.rank === nearest);
   return near.find((other) => !near.includes(other.prev)).unit;
 }
 

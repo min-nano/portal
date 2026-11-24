@@ -5,12 +5,10 @@
 // 並ぶこと、撮り直しや 2 度入れを部の始まりと取り違えないことを縛る。
 
 import { describe, expect, it } from 'vitest';
-import { pathText } from '../src/pdf-book-merger/page-numbers.js';
+import { inferFileNumbers, pathText } from '../src/pdf-book-merger/page-numbers.js';
 import {
   arrangeBook,
-  bookDepth,
   checkSequence,
-  hasDashedNumbers,
   numberFiles,
   pageLabelRanges,
   pageLabelTexts,
@@ -520,11 +518,10 @@ describe('頁番号の前に刷られた部・編などの番号（2-21）', () 
     });
     return f;
   };
-  /** 本の階層を選んで並べ、確かめる。 */
+  /** 並べて、確かめる。 */
   const arrangePrinted = (files, overrides = new Map()) => {
-    const { depth } = bookDepth(files, overrides);
-    const { order, mismatch } = arrangeBook(files, numberFiles(files, overrides, depth), overrides);
-    return { depth, order, problems: checkSequence(order, { sheets: true, mismatch, depth }) };
+    const { order, mismatch } = arrangeBook(files, numberFiles(files, overrides), overrides);
+    return { order, problems: checkSequence(order, { sheets: true, mismatch }) };
   };
   const text = (e) => (e.number === null ? '?' : [...(e.prefix ?? []), e.number, ...(e.branch ?? [])].join('-'));
 
@@ -537,9 +534,8 @@ describe('頁番号の前に刷られた部・編などの番号（2-21）', () 
   ];
 
   it('前の段を部・編などの番号と読み、刷られた順に並べる（部の振り直しの注意は出さない）', () => {
-    const { depth, order, problems } = arrangePrinted(book());
+    const { order, problems } = arrangePrinted(book());
 
-    expect(depth).toBe(1);
     expect(order.map(text)).toEqual([
       '1-1', '1-2', '1-3', '1-4', '1-5', '1-6',
       '2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8',
@@ -621,9 +617,8 @@ describe('頁番号の前に刷られた部・編などの番号（2-21）', () 
       printed('b', ['1-1', '1-2', '1-3', '1-4', '1-5']),
       printed('c', ['2-1', '2-2', '2-3', '2-4', '2-5']),
     ];
-    const { depth, order } = arrangePrinted(files);
+    const { order } = arrangePrinted(files);
 
-    expect(depth).toBe(1);
     expect(order.map(text)).toEqual(['1', '2', '3', '1-1', '1-2', '1-3', '1-4', '1-5', '2-1', '2-2', '2-3', '2-4', '2-5']);
     expect(order.map((e) => e.part)).toEqual([0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2]);
     // 一覧で部の束より下にあれば、本の順ですぐ前の頁（1-5）の後に、まとまり「2/」として置く。
@@ -636,9 +631,8 @@ describe('頁番号の前に刷られた部・編などの番号（2-21）', () 
 
   it('加除式の本の枝番の頁は、これまでどおり枝番として並べる', () => {
     const files = [printed('o', [51, 53, 55, '57-1', '57-3', 59]), printed('e', [60, '57-4', '57-2', 56, 54, 52])];
-    const { depth, order, problems } = arrangePrinted(files);
+    const { order, problems } = arrangePrinted(files);
 
-    expect(depth).toBe(0);
     expect(order.map(text)).toEqual(['51', '52', '53', '54', '55', '56', '57-1', '57-2', '57-3', '57-4', '59', '60']);
     expect(problems.map((p) => p.kind)).toEqual(['replaced']);
   });
@@ -660,9 +654,10 @@ describe('頁番号の前に刷られた部・編などの番号（2-21）', () 
   });
 
   it('入れ子の枝番の頁で始まり・終わる束の、紙の表裏', () => {
-    // 枝番と読む（階層 0）。
+    // 枝番と読む（ほかのファイルで枝番と読んだとき）。
     const files = [printed('a', ['57-1-2', '57-1-3'])];
-    const { order } = arrangeBook(files, numberFiles(files));
+    const read = inferFileNumbers(files[0].pages.map((page) => page.candidates), { maxDepth: 0 });
+    const { order } = arrangeBook(files, new Map([['a', read]]));
     const problems = checkSequence(order, { sheets: true });
 
     expect(problems.map((p) => p.message)).toEqual([
@@ -671,24 +666,6 @@ describe('頁番号の前に刷られた部・編などの番号（2-21）', () 
       '最初の頁が偶数（57-1-2 頁）です。その表（57-1-1 頁）が欠けていないか確かめてください。',
       '最後の頁が奇数（57-1-3 頁）です。その裏（57-1-4 頁）が欠けていないか確かめてください（裏が白紙でスキャンしていない場合は問題ありません）。',
     ]);
-  });
-
-  it('ハイフンで区切った番号があるか（階層を選ぶ欄を出すか）', () => {
-    expect(hasDashedNumbers(book())).toBe(true);
-    expect(hasDashedNumbers([printed('a', [1, 3])])).toBe(false);
-    expect(hasDashedNumbers([printed('a', [1, null])], new Map([['a:1', { path: [2, 3] }]]))).toBe(true);
-    expect(hasDashedNumbers([printed('a', [1, null])], new Map([['a:1', { path: [3] }]]))).toBe(false);
-    // 弱い候補（柱の末尾の番号など）は見ない。
-    const weak = printed('w', [null]);
-    weak.pages[0].candidates = [{ path: [2, 3], score: 2, source: 'text', zone: 'top' }];
-    expect(hasDashedNumbers([weak])).toBe(false);
-  });
-
-  it('ファイルごとに番号を入れたファイル・名前で表紙と見たファイルは、階層を選ぶ手掛かりにしない', () => {
-    const manual = printed('m', ['2-1', '2-3', '2-5'], { manual: { start: 1, step: 2 } });
-    const cover = { ...printed('c', ['2-1', '2-3', '2-5']), coverByName: true };
-    expect(bookDepth([manual, cover, printed('x', [1, 3, 5])]).depth).toBe(0);
-    expect(bookDepth([printed('x', ['2-1', '2-3', '2-5'])]).depth).toBe(1);
   });
 
   it('ファイルごとに入れた番号の前の段（入れなければ読み取った前の段）と、頁ごとの番号', () => {
@@ -709,14 +686,14 @@ describe('頁番号の前に刷られた部・編などの番号（2-21）', () 
       'b:3-1:manual',
       'b:4-9:manual',
     ]);
-    // 枝番と読む本（階層 0）では、入れた前の段を使わない（読み方を選び直したとき）。
-    expect(numberFiles([files[1]], new Map(), 0).get('b').pages.map(text)).toEqual(['1', '3']);
+    // 入れた前の段は、ほかのファイルが無くても使う。
+    expect(numberFiles([files[1]], new Map()).get('b').pages.map(text)).toEqual(['3-1', '3-3']);
     // 前の段を入れず、読み取った前の段も無ければ、付けない。
     const unread = [printed('u', [null, null], { manual: { start: 3, step: 2 } })];
-    expect(numberFiles(unread, new Map(), 1).get('u').pages.map(text)).toEqual(['3', '5']);
+    expect(numberFiles(unread, new Map()).get('u').pages.map(text)).toEqual(['3', '5']);
     // 前の段の分からない本（階層 0）では、ファイルごとの番号に前の段を付けない。
     const plain = [printed('p', [null, null], { manual: { start: 5, step: 1 } })];
-    const numbered = numberFiles(plain, new Map([['p:1', { path: [6, 1] }]]), 0);
+    const numbered = numberFiles(plain, new Map([['p:1', { path: [6, 1] }]]));
     expect(numbered.get('p').pages.map((page) => [page.number, page.prefix, page.branch])).toEqual([
       [5, undefined, undefined],
       [6, undefined, [1]],
@@ -738,10 +715,9 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
   const run = (prefix, count, from = 1) => Array.from({ length: count }, (_, i) => (prefix === null ? from + i : `${prefix}-${from + i}`));
   const text = (page) => (page.number === null ? '?' : [...(page.prefix ?? []), page.number, ...(page.branch ?? [])].join('-'));
   const arrangeBookOf = (files, overrides = new Map()) => {
-    const { depth } = bookDepth(files, overrides);
-    const numberings = numberFiles(files, overrides, depth);
+    const numberings = numberFiles(files, overrides);
     const { order, mismatch } = arrangeBook(files, numberings, overrides);
-    return { depth, numberings, order, problems: checkSequence(order, { mismatch, depth }) };
+    return { numberings, order, problems: checkSequence(order, { mismatch }) };
   };
   // 第 1〜2 部（両面。目次は 1〜3 と刷ってあり、目次の 1 頁目と部の扉には番号が無い）と、
   // 番号だけが刷られた第 3 部・第 4 部の巻（一覧でその後ろ）。
@@ -752,10 +728,9 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
   ];
 
   it('部の番号の無い巻は、本の順ですぐ前の頁の後に、番号を付けたまとまりとして並べる', () => {
-    const { depth, order, problems } = arrangeBookOf(book());
+    const { order, problems } = arrangeBookOf(book());
 
     // 番号だけの巻が多くても、部の番号の付いた束から読み方を選ぶ。
-    expect(depth).toBe(1);
     expect(order.map(text)).toEqual([
       '0-0', '0-1', '0-2', '0-3', '0-4',
       ...run(1, 10),
@@ -888,13 +863,6 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
     expect(sections).toEqual(['4', '5', '6']);
   });
 
-  it('歩幅の分からない区間は、一覧の位置ですぐ前の頁を探す', () => {
-    // 番号が 1 つだけの束（歩幅を借りる束も無い）。部の番号と読む本として並べる。
-    const files = [volume('a', ['3-1']), volume('b', [null, 7, null])];
-    const { order } = arrangeBook(files, numberFiles(files, new Map(), 1));
-    expect(order.find((e) => e.fileKey === 'b' && e.number === 7).section).toEqual([4]);
-  });
-
   it('同じ前の段の、本の順でいちばん前のまとまりを刷られた番号のまま並べる（裏返した束どうしで比べる）', () => {
     // 裏返した偶数頁の束: 一覧で下の束（e2）ほど本の前。両面の束（f0）は一覧の最初。
     const files = [
@@ -902,14 +870,18 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
       volume('e1', ['5-4', '5-2']),
       volume('e2', ['5-4', '5-2']),
     ];
-    const { order } = arrangeBook(files, numberFiles(files, new Map(), 1));
+    const { order } = arrangeBook(files, numberFiles(files, new Map()));
     expect(order.filter((e) => e.fileKey === 'e2').every((e) => !e.section)).toBe(true);
     expect(order.filter((e) => e.fileKey === 'e1').every((e) => pathText(e.section) === '6')).toBe(true);
   });
 
-  it('本全体の読み方は、ハイフンで区切った番号の無いファイルを数えずに選ぶ', () => {
-    const files = [volume('a', run(1, 6)), volume('b', run(null, 40))];
-    expect(bookDepth(files).depth).toBe(1);
+  it('1 頁だけ読めたファイルは、ほかのファイルでハイフンで区切って読めた頁のいちばん多い読み方で読む', () => {
+    // 番号だけの頁の間の枝番の頁（57-1）と、部の頁（3-1 …）。多いほうの読み方にする（同じなら枝番）。
+    const kajo = volume('k', [55, 56, '57-1', '57-2', 58]);
+    const single = volume('s', [null, '2-7']);
+    const read = (files) => numberFiles(files).get('s').pages[1];
+    expect(read([kajo, volume('p', ['3-1', '3-2', '3-3']), single])).toMatchObject({ prefix: [2], number: 7 });
+    expect(read([kajo, volume('p', ['3-1', '3-2']), single])).toMatchObject({ number: 2, branch: [7] });
   });
 
   it('前付けの頁を前の部にするのは、刷られた番号があるときか、本の最初の「1-」の部の前だけ', () => {
@@ -932,13 +904,10 @@ describe('部の番号の無い頁のまとまり（部の番号を刷ってい�
   });
   it('逆順の束・片面ずつの束の前付け', () => {
     // 裏返した偶数頁の束: 本の順（最後の頁から）に前付けを数える。
-    const even = numberFiles([volume('e', ['1-6', '1-4', '1-2', null])], new Map(), 1).get('e');
+    const even = numberFiles([volume('e', ['1-6', '1-4', '1-2', null])], new Map()).get('e');
     expect(even.pages.map(text)).toEqual(['1-6', '1-4', '1-2', '0-2']);
     // 奇数頁の束で刷られた番号が無ければ、1 から 2 つずつ。
-    const odd = numberFiles([volume('o', [null, null, '1-1', '1-3'])], new Map(), 1).get('o');
+    const odd = numberFiles([volume('o', [null, null, '1-1', '1-3'])], new Map()).get('o');
     expect(odd.pages.map(text)).toEqual(['0-1', '0-3', '1-1', '1-3']);
-    // 歩幅の決まらないファイル（番号が 1 つだけ）は、1 つずつ数える。
-    const single = numberFiles([volume('s', [null, '1-5'])], new Map(), 1).get('s');
-    expect([single.step, single.pages.map(text)]).toEqual([null, ['0-1', '1-5']]);
   });
 });

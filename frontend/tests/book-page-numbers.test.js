@@ -7,7 +7,6 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  chooseDepth,
   comparePaths,
   detectStep,
   formatNumber,
@@ -473,7 +472,8 @@ describe('枝番の頁（加除式の差し替え）', () => {
   });
 
   it('枝番の頁だけのファイル', () => {
-    const { step, pages } = inferFileNumbers([branch(57, 1), branch(57, 3)]);
+    // 読み方の上限を 0 にしたとき（ほかのファイルで枝番と読んだとき）。上限が無ければ「57-」の頁と読む。
+    const { step, pages } = inferFileNumbers([branch(57, 1), branch(57, 3)], { maxDepth: 0 });
 
     expect(step).toBeNull();
     expect(pages.map((p) => p.status)).toEqual(['detected', 'detected']);
@@ -625,7 +625,6 @@ describe('ハイフンで区切った頁番号の階層（枝番か、部・編�
     labels.map((label) =>
       label === null ? [] : [{ path: String(label).split('-').map(Number), score: 3.5, source: 'text', zone: 'bottom' }]
     );
-  const depthOf = (...files) => chooseDepth(files.map((candidates) => ({ candidates }))).depth;
   const texts = (numbering) => numbering.pages.map((page) => (page.number === null ? null : pageNumberText(page)));
 
   it('ハイフンで区切った番号を、段の列として拾う（2 段目からは 0 で始まらず、上限を超えない）', () => {
@@ -655,61 +654,80 @@ describe('ハイフンで区切った頁番号の階層（枝番か、部・編�
   });
 
   it('3 部構成の本の 2-21 は、前後とつながる「2-」の 21 頁と読む', () => {
-    const files = [
-      pages('1-75', '1-77', '1-79', '2-1', '2-3', null, '2-7'),
-      pages('2-19', '2-21', '2-23', '2-25'),
-      pages('3-1', '3-3', '3-5'),
-    ];
-    const { depth, scores } = chooseDepth(files.map((candidates) => ({ candidates })));
-
-    expect(depth).toBe(1);
-    expect(scores[1]).toBeGreaterThan(scores[0]);
-    const first = inferFileNumbers(files[0], { depth });
+    const first = inferFileNumbers(pages('1-75', '1-77', '1-79', '2-1', '2-3', null, '2-7'));
     expect(first.step).toBe(2);
     // 部が変わっても歩幅は 2 のまま。番号の読めない頁は、前後の頁の部を引き継ぐ。
     expect(texts(first)).toEqual(['1-75', '1-77', '1-79', '2-1', '2-3', '2-5', '2-7']);
     expect(first.pages[5]).toMatchObject({ prefix: [2], number: 5, status: 'inferred' });
     expect(numberingSequence(first)).toBe('1-75, 1-77, 1-79, 2-1, 2-3, 2-5, 2-7');
-    expect(texts(inferFileNumbers(files[1], { depth }))).toEqual(['2-19', '2-21', '2-23', '2-25']);
+    expect(texts(inferFileNumbers(pages('2-19', '2-21', '2-23', '2-25')))).toEqual(['2-19', '2-21', '2-23', '2-25']);
   });
 
   it('加除式の本の 57-1 は、前後に枝番の無い頁があるので枝番と読む', () => {
-    expect(depthOf(pages(51, 53, 55, '57-1', '57-3', 59, 61), pages(52, 54, 56, '57-2', '57-4', 60))).toBe(0);
+    const kajo = inferFileNumbers(pages(51, 53, 55, '57-1', '57-3', 59, 61));
+    expect(kajo.pages[3]).toMatchObject({ number: 57, branch: [1], status: 'detected' });
+    expect(kajo.pages[3]).not.toHaveProperty('prefix');
     // 枝番の頁が 10 頁続いても、前後の枝番の無い頁から枝番と分かる。
-    expect(depthOf(pages(55, 56, '57-1', '57-2', '57-3', '57-4', '57-5', '57-6', '57-7', '57-8', '57-9', '57-10', 58, 59))).toBe(0);
+    const long = inferFileNumbers(pages(55, 56, '57-1', '57-2', '57-3', '57-4', '57-5', '57-6', '57-7', '57-8', '57-9', '57-10', 58, 59));
+    expect(texts(long)).toEqual([
+      '55', '56', '57-1', '57-2', '57-3', '57-4', '57-5', '57-6', '57-7', '57-8', '57-9', '57-10', '58', '59',
+    ]);
+    expect(long.pages.some((page) => page.prefix)).toBe(false);
   });
 
   it('部・章・頁と入れ子の枝番（2-2-21-3）も段ごとに読む', () => {
-    const files = [pages('2-2-17', '2-2-19', '2-2-21', '2-2-21-1', '2-2-23'), pages('2-3-1', '2-3-3')];
-    const depth = depthOf(...files);
-
-    expect(depth).toBe(2);
-    const { pages: read } = inferFileNumbers(files[0], { depth });
+    const { pages: read } = inferFileNumbers(pages('2-2-17', '2-2-19', '2-2-21', '2-2-21-1', '2-2-23'));
     expect(read[3]).toMatchObject({ prefix: [2, 2], number: 21, branch: [1], status: 'detected' });
     expect(read.map((page) => page.number)).toEqual([17, 19, 21, 21, 23]);
   });
 
   it('部・編の番号の付いた本の枝番（2-57-1）は、部の番号と枝番に分ける', () => {
-    const file = pages('2-51', '2-53', '2-55', '2-57-1', '2-57-3', '2-59');
-
-    expect(depthOf(file)).toBe(1);
-    expect(texts(inferFileNumbers(file, { depth: 1 }))).toEqual(['2-51', '2-53', '2-55', '2-57-1', '2-57-3', '2-59']);
+    const numbering = inferFileNumbers(pages('2-51', '2-53', '2-55', '2-57-1', '2-57-3', '2-59'));
+    expect(texts(numbering)).toEqual(['2-51', '2-53', '2-55', '2-57-1', '2-57-3', '2-59']);
+    expect(numbering.pages[3]).toMatchObject({ prefix: [2], number: 57, branch: [1] });
   });
 
-  it('ハイフンの無い本・点が同じなら、枝番と読む（階層 0）', () => {
-    // ハイフンで区切った番号が無ければ、点を数えずに 0。
-    expect(chooseDepth([{ candidates: pages(1, 3, 5) }])).toEqual({ depth: 0, scores: [] });
-    expect(chooseDepth([])).toEqual({ depth: 0, scores: [] });
-    // 1 頁だけの 2-1 は、どちらとも決められない。
-    expect(depthOf(pages('2-1'))).toBe(0);
+  it('読み方はファイルの中でも場所ごとに選ぶ（前付けの枝番と、本文の章の番号）', () => {
+    // 前付けは 1, 2, 3-1, 3-2, 4 …（3 頁の枝番）、本文は 1-1, 1-2 …（第 1 章の頁）。
+    // 読み方を変えるには費用が掛かるので、本文の頁が何頁か（ここでは 9 頁）続いて分かる。
+    const body = ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9'];
+    const numbering = inferFileNumbers(pages(1, 2, '3-1', '3-2', 4, 5, null, ...body));
+    // 境目の読めない頁は、どちらとも決められない（ここでは章の扉の 1-0 にして、要確認にする）。
+    expect(texts(numbering)).toEqual(['1', '2', '3-1', '3-2', '4', '5', '1-0', ...body]);
+    expect(numbering.pages[6].status).toBe('uncertain');
+    expect(numbering.pages[2]).toMatchObject({ number: 3, branch: [1] });
+    expect(numbering.pages[7]).toMatchObject({ prefix: [1], number: 1 });
   });
 
-  it('手で入れた番号も、階層を選ぶ手掛かりにする', () => {
+  it('読み方の上限を決めて読む（枝番の頁だけのファイルを、ほかのファイルに合わせて枝番と読む）', () => {
+    expect(texts(inferFileNumbers(pages('57-1', '57-3', '57-5')))).toEqual(['57-1', '57-3', '57-5']);
+    expect(inferFileNumbers(pages('57-1', '57-3', '57-5')).pages[0]).toMatchObject({ prefix: [57], number: 1 });
+    const capped = inferFileNumbers(pages('57-1', '57-3', '57-5'), { maxDepth: 0 });
+    expect(capped.step).toBeNull();
+    expect(capped.pages[0]).toMatchObject({ number: 57, branch: [1], status: 'detected' });
+  });
+
+  it('1 頁だけの 2-1 は読み方を決められず、枝番と読む', () => {
+    const { step, pages: read } = inferFileNumbers(pages('2-1'));
+    expect(step).toBeNull();
+    expect(read[0]).toMatchObject({ number: 2, branch: [1], status: 'detected' });
+  });
+
+  it('ほかのファイルの読み方（depthHint）で、1 頁だけの番号と手で入れた番号を読む', () => {
+    expect(inferFileNumbers(pages(null, '2-21', null), { depthHint: 1 }).pages[1]).toMatchObject({
+      prefix: [2], number: 21, status: 'detected',
+    });
+    // 手で入れた 2-5 は「2-」の 5 頁と読み、次の頁の 7 だけの番号も「2-」の頁にする。
+    const numbering = inferFileNumbers(pages(null, 7), { depthHint: 1, fixed: [{ path: [2, 5] }] });
+    expect(texts(numbering)).toEqual(['2-5', '2-7']);
+    // 手掛かりが無ければ、2-5 を枝番と読んで 7 頁へ続けてよい。
+    expect(texts(inferFileNumbers(pages(null, 7), { fixed: [{ path: [2, 5] }] }))).toEqual(['2-5', '7']);
+  });
+
+  it('手で入れた番号も、読み方を選ぶ手掛かりにする', () => {
     const fixed = [{ path: [2, 1] }, { path: [2, 3] }, null];
-    const { depth } = chooseDepth([{ candidates: pages(null, null, null), fixed }]);
+    const numbering = inferFileNumbers(pages(null, null, null), { fixed });
 
-    expect(depth).toBe(1);
-    const numbering = inferFileNumbers(pages(null, null, null), { depth, fixed });
     expect(texts(numbering)).toEqual(['2-1', '2-3', '2-5']);
     expect(numbering.pages.map((page) => page.status)).toEqual(['manual', 'manual', 'inferred']);
   });
@@ -717,29 +735,22 @@ describe('ハイフンで区切った頁番号の階層（枝番か、部・編�
   it('前の段を入れずに直した番号・間に挟む番号は、前後の頁の前の段にする', () => {
     const file = pages('2-1', '2-3', null, '2-7', null);
     const fixed = [null, null, { path: [5] }, null, { path: [7.5] }];
-    const numbering = inferFileNumbers(file, { depth: 1, fixed });
+    const numbering = inferFileNumbers(file, { fixed });
 
     expect(texts(numbering)).toEqual(['2-1', '2-3', '2-5', '2-7', '2-7.5']);
     // 間に挟む頁がファイルの先頭なら、後ろの頁の前の段にする。
-    const head = inferFileNumbers(pages(null, '3-1', '3-3'), { depth: 1, fixed: [{ path: [0.5] }] });
+    const head = inferFileNumbers(pages(null, '3-1', '3-3'), { fixed: [{ path: [0.5] }] });
     expect(head.pages[0]).toMatchObject({ number: 0.5, prefix: [3] });
     // 前の段の分かる頁が無ければ、付けない。
-    const alone = inferFileNumbers(pages(null, 5, 7), { depth: 1, fixed: [{ path: [4.5] }] });
+    const alone = inferFileNumbers(pages(null, 5, 7), { fixed: [{ path: [4.5] }] });
     expect(alone.pages[0]).not.toHaveProperty('prefix');
   });
 
   it('前の段の違う頁に番号を手で入れたら、読めた候補と前の段まで同じときだけ読めた頁に数える', () => {
     const file = pages('2-1', '2-3');
-    expect(inferFileNumbers(file, { depth: 1, fixed: [{ path: [2, 1] }] }).pages[0].read).toMatchObject({ path: [2, 1] });
-    expect(inferFileNumbers(file, { depth: 1, fixed: [{ path: [1] }] }).pages[0].read).toMatchObject({ path: [2, 1] });
-    expect(inferFileNumbers(file, { depth: 1, fixed: [{ path: [3, 1] }] }).pages[0].read).toBeNull();
-  });
-
-  it('歩幅の決まらないファイルでも、読めた前の段を付ける', () => {
-    const { step, pages: read } = inferFileNumbers(pages(null, '2-21', null), { depth: 1 });
-
-    expect(step).toBeNull();
-    expect(read[1]).toMatchObject({ prefix: [2], number: 21, status: 'detected' });
+    expect(inferFileNumbers(file, { fixed: [{ path: [2, 1] }] }).pages[0].read).toMatchObject({ path: [2, 1] });
+    expect(inferFileNumbers(file, { fixed: [{ path: [1] }] }).pages[0].read).toMatchObject({ path: [2, 1] });
+    expect(inferFileNumbers(file, { fixed: [{ path: [3, 1] }] }).pages[0].read).toBeNull();
   });
 
   it('柱からは、前の段まで書いた番号を落とす（前の段を刷っていなければ、頁番号から後ろを）', () => {
@@ -760,7 +771,7 @@ describe('ハイフンで区切った頁番号の階層（枝番か、部・編�
   });
 
   it('番号の付き方の要約にも、頁番号が戻ったところで分けたまとまりの番号を付ける', () => {
-    const numbering = inferFileNumbers(pages('5-123', '5-124', '1-1', '1-2', '1-3'), { depth: 1 });
+    const numbering = inferFileNumbers(pages('5-123', '5-124', '1-1', '1-2', '1-3'));
     const sections = [undefined, undefined, [6], [6], [6]];
 
     expect(numberingSequence(numbering, sections)).toBe('5-123, 5-124, 6-1-1, 6-1-2, 6-1-3');

@@ -65,18 +65,6 @@
         <option value="auto">自動に戻す（番号・進み方も）</option>
       </select>
     </label>
-    <!-- ハイフンで区切った頁番号（57-1・2-21）の読み方。そうした番号を読んだときだけ出す。
-         自動は前後の頁とのつながりから選び、選んだ読み方を括弧に添える。 -->
-    <label id="depthField" class="bm-inline" hidden>
-      ハイフンで区切った頁番号
-      <select id="depthMode">
-        <option value="auto" selected>自動</option>
-        <option value="0">57-1 は 57 頁の枝番</option>
-        <option value="1">2-21 は部・編などの「2-」の 21 頁</option>
-        <option value="2">2-3-21 は部・章などの「2-3-」の 21 頁</option>
-        <option value="3">2-3-1-21 は「2-3-1-」の 21 頁</option>
-      </select>
-    </label>
   </div>
   <ul id="fileList" class="bm-files"></ul>
 </portal-section>

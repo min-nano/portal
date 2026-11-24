@@ -13,11 +13,10 @@
 // 頁ごとに直した番号は確かなものとして、同じファイルの残りの頁の番号を推定し直す。
 // 枝番の頁（57-1, 57-2, …）は、同じ番号の頁（57）のあと、次の番号（58）の前に並べる。
 // ハイフンで区切った頁番号のどの段が頁番号か（2-21 は 2 頁の枝番か、第 2 部の 21 頁か）は、
-// 本ごとに選ぶ（bookDepth。page-numbers.js の chooseDepth）。前の段（部・編などの番号）は
+// 頁の並びの中で場所ごとに選ぶ（page-numbers.js の inferFileNumbers）。前の段（部・編などの番号）は
 // 部として、刷られたとおりの順に並べる。
 
 import {
-  chooseDepth,
   comparePaths,
   inferFileNumbers,
   interpret,
@@ -141,20 +140,19 @@ export function guessRole(name, pages) {
  * @param {{key:string, role:string, manual:?{start:number,step:number,prefix?:number[]},
  *          pages:{key:string, candidates:object[]}[]}[]} files
  * @param {Map<string, {path:number[]}>} [overrides] 頁ごとに手で決めた番号（parsePageNumber の形）
- * @param {number} [depth] ハイフンで区切った頁番号の階層（本全体で 1 つ。bookDepth）
  * @returns {Map<string, ReturnType<typeof inferFileNumbers>>}
  */
-export function numberFiles(files, overrides = new Map(), depth = 0) {
+export function numberFiles(files, overrides = new Map()) {
   const result = new Map();
   const body = files.filter((file) => file.role === 'body');
-  const infer = (file, step) =>
+  const infer = (file, step, context = {}) =>
     inferFileNumbers(byName(file) ? file.pages.map(() => []) : file.pages.map((page) => page.candidates), {
       step,
-      depth,
       fixed: file.pages.map((page) => overrides.get(page.key)),
+      ...context,
     });
   for (const file of body) {
-    result.set(file.key, file.manual ? manualNumbers(file, infer, overrides, depth) : infer(file));
+    result.set(file.key, file.manual ? manualNumbers(file, infer, overrides) : infer(file));
   }
 
   const weights = new Map(STEPS.map((step) => [step, 0]));
@@ -176,16 +174,75 @@ export function numberFiles(files, overrides = new Map(), depth = 0) {
       result.set(file.key, infer(file, prior));
     }
   }
-  if (depth > 0) frontMatter(body, result);
+  readLikeOthers(body, result, infer, overrides);
+  frontMatter(body, result);
   return result;
 }
 
-/** 階層を選ぶのに使う、ファイルの頁の候補と手で入れた番号。 */
-function dataOf(file, overrides) {
-  return {
-    candidates: file.pages.map((page) => page.candidates),
-    fixed: file.pages.map((page) => overrides.get(page.key) ?? null),
-  };
+/**
+ * ファイルの中だけでは読み方（階層）を決められない頁を、ほかのファイルの読み方に合わせて読み直す。
+ *
+ *   - ハイフンで区切った番号の頁だけのファイル（差し替えた枝番の頁だけを別にスキャンした束など）は、
+ *     57-1, 57-3 が枝番か「57-」の部の頁か決められない（「2-」の部の束と同じ形）ので、ほかの
+ *     ファイルの読み方より深く読まない
+ *   - 歩幅の決まらないファイル（読めた頁が 1 つ）の 2-1 と、手で入れた 2-5 は、ほかのファイルの
+ *     読み方で読む
+ *
+ * ほかのファイルの読み方は、ハイフンで区切って読めた頁のいちばん多い読み方（同じなら浅いほう）。
+ * ほかのファイルにハイフンで区切った頁が無ければ、このファイルの 57-1 の 57 がどれも、ほかの
+ * ファイルの番号に無く、その隣の番号（56・58）があるとき 0（番号だけの本の、差し替えた枝番の頁
+ * だけの束）。57 頁があれば（目次 1〜3 の束と、第 1 部 1-1〜の束）、ファイルの中の読み方のまま。
+ */
+function readLikeOthers(files, numberings, infer, overrides) {
+  const seen = new Map(
+    files.map((file) => {
+      const counts = new Map();
+      const plain = new Set();
+      const { pages } = numberings.get(file.key);
+      const isPlain = (page) => page.number !== null && !page.prefix && !page.branch;
+      const firstPlain = pages.findIndex(isPlain);
+      const lastPlain = pages.findLastIndex(isPlain);
+      pages.forEach((page, index) => {
+        if (isPlain(page)) plain.add(page.number);
+        if (!page.read || page.read.path.length < 2) return;
+        // 枝番と読んだ頁は、前後に番号だけの頁があるときだけ数える（束の端の枝番は、部の頁を
+        // 読み方を変える費用のせいで枝番と読んだだけかもしれない）。
+        if (page.branch && !(firstPlain < index && index < lastPlain)) return;
+        const depth = page.prefix?.length ?? 0;
+        counts.set(depth, (counts.get(depth) ?? 0) + 1);
+      });
+      return [file.key, { counts, plain }];
+    })
+  );
+  for (const file of files) {
+    if (byName(file)) continue;
+    const dashed = file.pages.flatMap((page) =>
+      [...page.candidates.map((c) => c.path), overrides.get(page.key)?.path ?? []].filter((path) => path.length >= 2)
+    );
+    if (dashed.length === 0) continue;
+    const counts = new Map();
+    const plain = new Set();
+    for (const other of files) {
+      if (other === file) continue;
+      const { counts: theirs, plain: numbers } = seen.get(other.key);
+      for (const [depth, count] of theirs) counts.set(depth, (counts.get(depth) ?? 0) + count);
+      for (const number of numbers) plain.add(number);
+    }
+    let hint;
+    let most = 0;
+    for (const [depth, count] of [...counts].sort((a, b) => a[0] - b[0])) {
+      if (count > most) [hint, most] = [depth, count];
+    }
+    const gap = (head) => !plain.has(head) && (plain.has(head - 1) || plain.has(head + 1));
+    if (hint === undefined && dashed.every((path) => gap(path[0]))) hint = 0;
+    if (hint === undefined) continue;
+    const { step, pages: numbered_ } = numberings.get(file.key);
+    const strong = numbered_.filter((page) => page.read);
+    const allDeep = strong.length > 0 && strong.every((page) => page.read.path.length >= 2);
+    const context = { depthHint: hint, ...(allDeep ? { maxDepth: hint } : {}) };
+    const read = (target, known, extra = {}) => infer(target, known, { ...context, ...extra });
+    numberings.set(file.key, file.manual ? manualNumbers(file, read, overrides) : read(file, step));
+  }
 }
 
 /**
@@ -236,7 +293,7 @@ function frontMatter(files, numberings) {
     // 前付けにした部も使ったものとする（部をまたぐ束の、2 つ目の「1-」の前の頁を重ねない）。
     if (used.has(prefixKey(previous))) continue;
     used.add(prefixKey(previous));
-    const stride = Math.abs(step ?? 1);
+    const stride = Math.abs(step);
     const start = plain < 0 ? (stride === 2 && pages[order[at]].number % 2 === 0 ? 2 : 1) : run[plain].number - stride * plain;
     run.forEach((page, i) => {
       if (page.number === null || page.prefix || plain < 0) page.number = start + stride * i;
@@ -258,18 +315,18 @@ function byName(file) {
 /**
  * 番号を手で決めたファイル（先頭の番号と進み方）の頁の番号。頁ごとに入れた番号は、
  * その頁だけを変える。前の段（部・編などの番号）を入れなければ、読み取った番号の前の段を使う。
- * 前の段は、本を部・編などの番号の付いた頁番号と読むとき（階層 1 以上）だけ付ける（枝番と
- * 読み直したら、入れた前の段は使わない）。
+ * 頁ごとに入れたハイフンで区切った番号は、そのファイルの前の段と同じ段の数で読む（先頭を
+ * 2-1 と入れたファイルの 2-5 は「2-」の 5 頁、前の段の無いファイルの 57-1 は枝番）。
  */
-function manualNumbers(file, infer, overrides, depth) {
+function manualNumbers(file, infer, overrides) {
   const { start, step } = file.manual;
-  const prefix =
-    depth > 0 ? (file.manual.prefix ?? infer(file).pages.find((page) => page.prefix)?.prefix ?? null) : null;
+  // 読み取った前の段は、頁ごとに入れた番号を除いて読む（入れた番号は、その頁だけを変える）。
+  const prefix = file.manual.prefix ?? infer(file, undefined, { fixed: [] }).pages.find((page) => page.prefix)?.prefix ?? null;
   const numbering = manualFileNumbers(file.pages.length, start, step, prefix);
   file.pages.forEach((page, index) => {
     const manual = overrides.get(page.key);
     if (!manual) return;
-    const { value, branch, prefix: printed } = interpret(manual.path, depth);
+    const { value, branch, prefix: printed } = interpret(manual.path, prefix?.length ?? 0);
     const own = printed ?? prefix;
     numbering.pages[index] = {
       number: value,
@@ -282,43 +339,6 @@ function manualNumbers(file, infer, overrides, depth) {
     };
   });
   return numbering;
-}
-
-/**
- * 本のハイフンで区切った頁番号の階層（page-numbers.js の chooseDepth）を、本文のファイルの
- * 頁の候補と手で入れた番号から選ぶ。ファイルごとに番号を入れたファイル、名前で表紙と
- * 見て番号を見ないファイル、ハイフンで区切った番号の無いファイルは数えない。
- * ハイフンで区切った番号の無いファイル（1, 2, 3 … とだけ刷った巻）を数えると、どの階層でも
- * 段の足りない番号ばかりになって、部の番号を付けた束まで枝番と読んでしまうため。
- *
- * @param {{key:string, role:string, manual:?object, coverByName?:boolean,
- *          pages:{key:string, candidates:object[]}[]}[]} files
- * @param {Map<string, {path:number[]}>} [overrides]
- * @returns {{depth:number, scores:number[]}}
- */
-export function bookDepth(files, overrides = new Map()) {
-  return chooseDepth(
-    files
-      .filter((file) => file.role === 'body' && !file.manual && !byName(file) && hasDashedNumbers([file], overrides))
-      .map((file) => dataOf(file, overrides))
-  );
-}
-
-/**
- * ハイフンで区切った番号が本の中にあるか（階層を選ぶ欄を出すかどうか）。番号だけの行の
- * 候補と、手で入れた番号を見る。
- *
- * @param {{pages:{key:string, candidates:object[]}[]}[]} files
- * @param {Map<string, {path:number[]}>} [overrides]
- */
-export function hasDashedNumbers(files, overrides = new Map()) {
-  return files.some((file) =>
-    file.pages.some(
-      (page) =>
-        page.candidates.some((c) => c.path.length > 1 && c.score >= STRONG_SCORE) ||
-        (overrides.get(page.key)?.path.length ?? 0) > 1
-    )
-  );
 }
 
 // 頁番号の無いファイルのうち、これより頁の多いものは本文の束かもしれないので、表紙と
@@ -538,15 +558,14 @@ export function arrangeBook(files, numberings, overrides = new Map()) {
  * こともあるので）。
  *
  * @param {ReturnType<typeof arrangeBook>['order']} order
- * @param {{sheets?:boolean, mismatch?:boolean, depth?:number}} [options]
- *   sheets: 片面ずつの束を組み合わせたか。mismatch: arrangeBook の mismatch。
- *   depth: ハイフンで区切った頁番号の階層（1 以上なら、前の段を部・編などの番号と読んだことを知らせる）
+ * @param {{sheets?:boolean, mismatch?:boolean}} [options]
+ *   sheets: 片面ずつの束を組み合わせたか。mismatch: arrangeBook の mismatch
  * @returns {{level:'error'|'warn'|'info', kind:string, message:string, pageKeys:string[], number?:number|string, numbers?:number[]}[]}
  *   number: 同じ種類の指摘が番号ごと・部ごとに出るときの、それを見分けるもの（重なり、枝番の
  *   頁の抜け・差し替えの番号。部が分かれていれば「部:番号」、番号の無い指摘は部）。
  *   numbers: 抜けている番号（枝番でない頁の抜け）
  */
-export function checkSequence(order, { sheets = false, mismatch = false, depth = 0 } = {}) {
+export function checkSequence(order, { sheets = false, mismatch = false } = {}) {
   const problems = [];
   if (order.length === 0) {
     problems.push({
@@ -705,13 +724,13 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
   }
   // ハイフンで区切った頁番号の前の段を、部・編などの番号と読んだ（枝番と読み違えていないか）。
   // 例には、部の頁（前付けの「0-」の頁より、1 以上の部の頁）を挙げる。
-  const candidates = depth > 0 ? body.filter((item) => item.prefix && item.number > 0 && Number.isInteger(item.number) && !item.branch) : [];
+  const candidates = body.filter((item) => item.prefix && item.number > 0 && Number.isInteger(item.number) && !item.branch);
   const example = candidates.find((item) => item.prefix.at(-1) > 0) ?? candidates[0];
   if (example) {
     problems.push({
       level: 'info',
       kind: 'depth',
-      message: `ハイフンで区切った頁番号（${pageNumberText(example)} など）は、前後の頁とのつながりから、「${pathText(example.prefix)}-」を部・編などの番号、${example.number} を頁番号と読み、その順に並べました${several && !sectioned ? `（${ranges.join('・')}）` : ''}。枝番の付いた頁なら、一覧の上の「ハイフンで区切った頁番号」で読み方を選び直してください。`,
+      message: `ハイフンで区切った頁番号（${pageNumberText(example)} など）は、前後の頁とのつながりから、「${pathText(example.prefix)}-」を部・編などの番号、${example.number} を頁番号と読み、その順に並べました${several && !sectioned ? `（${ranges.join('・')}）` : ''}。読み方は場所ごとに前後の頁から選んでいます（枝番の頁を部の頁と読み違えているときは、前後の頁の番号を直すと読み直します）。`,
       pageKeys: [],
     });
   }

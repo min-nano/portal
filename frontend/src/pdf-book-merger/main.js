@@ -39,10 +39,8 @@ import { blobStash, openStash } from './stash.js';
 import { CRASH_LOG_LINES, createCrashLog } from './crash-log.js';
 import {
   arrangeBook,
-  bookDepth,
   checkSequence,
   guessRole,
-  hasDashedNumbers,
   isCoverName,
   nameRank,
   numberFiles,
@@ -115,11 +113,6 @@ let nextKey = 1;
 const files = [];
 /** 頁ごとに手で直した番号（頁の key → parsePageNumber の形）。 */
 const overrides = new Map();
-/**
- * ハイフンで区切った頁番号の読み方（階層）。'auto' は本の頁番号のつながりから選ぶ
- * （ordering.js の bookDepth）。数字は前の段の数（0 は 57-1 を枝番、1 は 2-21 を「2-」の 21 頁と読む）。
- */
-let depthMode = 'auto';
 /** 同じ頁らしい組を探す（前に見比べた頁どうしは見比べ直さない）。 */
 const findDuplicates = createDuplicateFinder();
 /** 最後に組み立てた並びと指摘。 */
@@ -130,7 +123,6 @@ let view = {
   numberings: new Map(),
   places: new Map(),
   sections: new Map(),
-  depth: 0,
   anyNumbered: false,
 };
 /** 結合した PDF と検証の結果。並びが変わったら捨てる。 */
@@ -1289,15 +1281,6 @@ function setAllRoles(value) {
 
 // --- 並べて確かめる ----------------------------------------------------------
 
-/**
- * ハイフンで区切った頁番号の読み方の欄。そうした番号を読んだ（入れた）ときだけ出し
- * （手で選んだあとは、選び直せるよう出したまま）、「自動」には自動で選ぶ読み方（auto）を添える。
- */
-function renderDepth(ready, auto) {
-  $('depthField').hidden = depthMode === 'auto' && !hasDashedNumbers(ready, overrides);
-  const chosen = $('depthMode').querySelector(`option[value="${auto}"]`);
-  $('depthMode').querySelector('option[value="auto"]').textContent = `自動（${chosen.textContent}）`;
-}
 
 function readyFiles() {
   return files.filter((file) => file.status === 'ready');
@@ -1319,15 +1302,12 @@ function describePage(entry) {
 /** 並びと指摘を組み立て直し、画面を描き直す。結合した PDF は捨てる。 */
 function refresh() {
   const ready = readyFiles();
-  const auto = bookDepth(ready, overrides).depth;
-  renderDepth(ready, auto);
-  const depth = depthMode === 'auto' ? auto : Number(depthMode);
-  const numberings = numberFiles(ready, overrides, depth);
+  const numberings = numberFiles(ready, overrides);
   const { order, mismatch, places } = arrangeBook(ready, numberings, overrides);
   const sheets = ready.some(
     (file) => places.get(file.key) === 'numbered' && Math.abs(numberings.get(file.key).step ?? 0) === 2
   );
-  const problems = checkSequence(order, { sheets, mismatch, depth: depthMode === 'auto' ? auto : 0 });
+  const problems = checkSequence(order, { sheets, mismatch });
   const { textless, problem } = textCoverage(order, pageOf);
   if (problem) problems.push(problem);
 
@@ -1356,7 +1336,7 @@ function refresh() {
 
   // 頁ごとの、頁番号が戻ったところで分けたまとまりの番号（ファイルの一覧の要約にも付ける）。
   const sections = new Map(order.filter((entry) => entry.section).map((entry) => [entry.pageKey, entry.section]));
-  view = { order, problems, issues, numberings, places, sections, depth, anyNumbered: [...places.values()].includes('numbered') };
+  view = { order, problems, issues, numberings, places, sections, anyNumbered: [...places.values()].includes('numbered') };
   if (!$('outputName').value.trim() || $('outputName').dataset.suggested === 'true') {
     const suggested = suggestBookName(files.map((file) => file.name));
     $('outputName').value = suggested;
@@ -1708,12 +1688,6 @@ function fileControls(file) {
       if (!path || !Number.isInteger(path.at(-1))) {
         restoreStep();
         showMessage('先頭の頁の番号は整数（部・編などの番号を前に付けるなら 2-1 の形）で入れてください。', 'red');
-        return;
-      }
-      // 枝番と読む本では、ハイフンの付いた番号はファイルの先頭にできない（枝番の頁は頁ごとに入れる）。
-      if (path.length > 1 && view.depth === 0) {
-        restoreStep();
-        showMessage('ハイフンの付いた番号は、「ハイフンで区切った頁番号」で部・編などの番号と読むときだけ入れられます。', 'red');
         return;
       }
       const chosen = Number(step.value) || numbering?.step || 2;
@@ -2554,11 +2528,6 @@ function wireUp() {
   }
   $('bulkRole').addEventListener('change', (event) => {
     if (event.target.value) setAllRoles(event.target.value);
-  });
-  $('depthMode').addEventListener('change', (event) => {
-    depthMode = event.target.value;
-    log(`ハイフンで区切った頁番号の読み方を「${event.target.selectedOptions[0].textContent}」にしました`);
-    refresh();
   });
   $('outputName').addEventListener('input', () => {
     $('outputName').dataset.suggested = 'false';
