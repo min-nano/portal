@@ -129,7 +129,7 @@ describe('startPage', () => {
     expect(onError).toHaveBeenCalledWith('このアプリは許可されたアカウント専用です。');
   });
 
-  it('使えないアカウントには、理由の欄だけを残して画面を片付ける（API を呼ばないツールも使わせない）', async () => {
+  it('使えないアカウントには、理由の欄だけを残して画面を隠す（API を呼ばないツールも使わせない）', async () => {
     app().insertAdjacentHTML('afterbegin', '<button id="mergeBtn">結合</button>');
     hideStaffOnlyForExternalUsers.mockRejectedValue(
       Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403, code: 'account_not_allowed' })
@@ -138,8 +138,11 @@ describe('startPage', () => {
     startPage({ prepare: async () => {} });
     await settle();
 
-    expect(document.getElementById('mergeBtn')).toBeNull();
-    expect([...app().children].map((child) => child.id)).toEqual(['message']);
+    // 消さずに隠す（動いている途中の処理が要素を見失って落ちないように）。
+    expect(document.getElementById('mergeBtn').hidden).toBe(true);
+    expect([...app().children].filter((child) => !child.hidden).map((child) => child.id)).toEqual([
+      'message',
+    ]);
     expect(document.getElementById('message').textContent).toBe(
       'このアプリは許可されたアカウント専用です。'
     );

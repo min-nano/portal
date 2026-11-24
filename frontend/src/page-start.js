@@ -85,19 +85,18 @@ export function startPage({
     const refused = await refusal;
     if (refused) {
       // 準備が API を呼ばないページ（PDF 結合ツールは画面の中だけで動く）でも
-      // 使わせないよう、理由の欄（#message）だけを残して画面の中身を片付ける。
-      // 残しておくと、操作のたびに理由の欄が書き換えられて理由も消える。
+      // 使わせないよう、理由の欄（#message）だけを残して画面の中身を隠す。
+      // 消さずに隠すのは、動いている途中の処理が要素を見失って落ちないため。
       closeApp();
       onError(refused.message);
     }
   }
 }
 
-/** 画面（#app）の中身を、理由の欄（#message）だけ残して片付ける。 */
+/** 画面（#app）の中身を、理由の欄（#message）だけ残して隠す。 */
 function closeApp() {
-  const app = document.getElementById('app');
-  for (const child of [...app.children]) {
-    if (child.id !== 'message') child.remove();
+  for (const child of document.getElementById('app').children) {
+    if (child.id !== 'message') child.hidden = true;
   }
 }
 

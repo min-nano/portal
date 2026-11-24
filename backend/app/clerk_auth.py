@@ -150,8 +150,9 @@ def verify_token(token: str) -> User:
         return User(email=email, external=True)
 
     # 社内ドメインが未設定なら、誰も通さない（設定の漏れとして 500）。以前は
-    # 判定を飛ばして全員を通していたが、同意画面を「外部」にするとどの Google
-    # アカウントでもここまで来られるので、全員が社内ユーザー扱いになってしまう。
+    # 判定を飛ばして全員を通していたが、外部ユーザーのために確認コードでの
+    # サインインを有効にすると、どのメールアドレスでもここまで来られるので、
+    # 全員が社内ユーザー（Drive の代理アクセスまで通る）扱いになってしまう。
     domains = config.allowed_email_domains()
     if not domains:
         raise AuthError("サーバーの認証設定（ALLOWED_EMAIL_DOMAINS）が未設定です。", 500)
