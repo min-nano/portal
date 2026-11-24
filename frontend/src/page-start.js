@@ -88,17 +88,23 @@ export function startPage({
       // 準備が別の理由（起動待ちの 503 など）で先に失敗しても、使えない
       // アカウントだと分かれば、そちらを出す（「待てば通る」と思わせない）。
       // 待つのは少しだけ（答えが遅いときに、準備の失敗を出すのを遅らせない）。
-      throw (await settledWithin(refusal, REFUSAL_GRACE_MS)) ?? error;
+      // それより遅れて断りが届いたら、そのときに画面を閉じて理由を出し直す。
+      const refused = await settledWithin(refusal, REFUSAL_GRACE_MS);
+      if (!refused) refusal.then((late) => late && refuse(late));
+      throw refused ?? error;
     }
     showApp();
 
+    // 準備が API を呼ばないページ（PDF 結合ツールは画面の中だけで動く）でも
+    // 使わせないよう、理由の欄（#message）だけを残して画面の中身を隠す。
     const refused = await refusal;
-    if (refused) {
-      // 準備が API を呼ばないページ（PDF 結合ツールは画面の中だけで動く）でも
-      // 使わせないよう、理由の欄（#message）だけを残して画面の中身を隠す。
-      closeApp();
-      onError(refused.message);
-    }
+    if (refused) refuse(refused);
+  }
+
+  /** 使えないアカウント: 画面の中身を隠して、理由を出す。 */
+  function refuse(refused) {
+    closeApp();
+    onError(refused.message);
   }
 }
 

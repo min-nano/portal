@@ -212,6 +212,30 @@ describe('startPage', () => {
     }
   });
 
+  it('準備の失敗を出した後に断りが届いたら、画面を閉じて理由を出し直す', async () => {
+    vi.useFakeTimers();
+    try {
+      let answer;
+      hideStaffOnlyForExternalUsers.mockReturnValue(new Promise((resolve, reject) => { answer = reject; }));
+      const onError = vi.fn();
+
+      startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')), onError });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(onError).toHaveBeenLastCalledWith('通信に失敗しました。');
+      expect(app().hasAttribute('data-closed')).toBe(false);
+
+      answer(Object.assign(new Error('このアプリは許可されたアカウント専用です。'), {
+        status: 403,
+        code: 'account_not_allowed',
+      }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onError).toHaveBeenLastCalledWith('このアプリは許可されたアカウント専用です。');
+      expect(app().hasAttribute('data-closed')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('画面を閉じるときは、#app の外に開いているダイアログも閉じる', async () => {
     document.body.insertAdjacentHTML('beforeend', '<dialog id="preview" open></dialog>');
     const preview = document.getElementById('preview');
