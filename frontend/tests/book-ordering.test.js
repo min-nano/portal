@@ -531,12 +531,13 @@ describe('頁ラベル', () => {
     expect(pageLabelRanges(arrange([file('a', [null])]))).toEqual([]);
   });
 
-  it('振り直しを推定して部に分けていれば付けない（通し番号）', () => {
+  it('頁番号が戻ったところで分けたまとまりには、その番号を頭に付ける（ラベルが重ならない）', () => {
     const order = [
-      { role: 'body', number: 1, part: 0, partLabel: '第 1 部' },
-      { role: 'body', number: 1, part: 1, partLabel: '第 2 部' },
+      { role: 'body', number: 1, part: 0 },
+      { role: 'body', number: 1, part: 1, section: [2] },
+      { role: 'body', number: 30, prefix: [4], part: 2, section: [6] },
     ];
-    expect(pageLabelRanges(order)).toEqual([]);
+    expect(pageLabelTexts(pageLabelRanges(order), 3)).toEqual(['1', '2/1', '6/4-30']);
   });
 
   it('頁番号の前に刷られた部・編などの番号で分けた部には、その番号を頭に付ける', () => {

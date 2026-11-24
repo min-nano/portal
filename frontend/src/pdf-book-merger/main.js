@@ -1371,7 +1371,7 @@ function mergeKey() {
     outputName(),
     ...view.order.map(
       (entry) =>
-        `${entry.pageKey}|${entry.role}|${entry.number}|${entry.branch ?? ''}|${entry.prefix ?? ''}|${entry.role === 'body' ? '' : entry.status}|${entry.part}|${entry.partLabel ?? ''}`
+        `${entry.pageKey}|${entry.role}|${entry.number}|${entry.branch ?? ''}|${entry.prefix ?? ''}|${entry.role === 'body' ? '' : entry.status}|${entry.part}|${entry.section ?? ''}`
     ),
   ].join('\n');
 }

@@ -33,8 +33,9 @@ describe('displayLabel', () => {
     expect(displayLabel({ ...body('a', 57), branch: [1] })).toBe('57-1 頁');
   });
 
-  it('振り直しを推定して部に分けていれば、部を添える', () => {
-    expect(displayLabel({ ...body('a', 3), part: 1, partLabel: '第 2 部' })).toBe('第 2 部 3 頁');
+  it('頁番号が戻ったところで分けたまとまりの頁は、まとまりの番号を頭に付ける', () => {
+    expect(displayLabel({ ...body('a', 3), part: 1, section: [2] })).toBe('2/3 頁');
+    expect(displayLabel({ ...body('a', 30), prefix: [4], part: 1, section: [6] })).toBe('6/4-30 頁');
     expect(displayLabel({ ...body('a', 3), part: null })).toBe('3 頁');
   });
 
@@ -167,18 +168,19 @@ describe('gridItems', () => {
 
     expect(gridItems(order)[1]).toEqual({ type: 'missing', from: 2, to: 2, prefix: [2], part: 1 });
     const renumbered = [
-      { ...body('a', 1), part: 1, partLabel: '第 2 部' },
-      { ...body('b', 3), part: 1, partLabel: '第 2 部' },
+      { ...body('a', 1), part: 1, section: [2] },
+      { ...body('b', 3), part: 1, section: [2] },
     ];
-    expect(missingLabel(gridItems(renumbered)[1])).toBe('第 2 部 2 頁');
+    expect(missingLabel(gridItems(renumbered)[1])).toBe('2/2 頁');
   });
 
   it('抜けの札の見出し', () => {
     expect(missingLabel({ from: 58, to: 58 })).toBe('58 頁');
     expect(missingLabel({ from: 60, to: 70 })).toBe('60〜70 頁');
     expect(missingLabel({ from: 57, to: 57, branch: [2] })).toBe('57-2 頁');
-    expect(missingLabel({ from: 58, to: 58, part: 1, partLabel: '第 2 部' })).toBe('第 2 部 58 頁');
-    expect(missingLabel({ from: 57, to: 57, branch: [2], part: 1, partLabel: '第 2 部' })).toBe('第 2 部 57-2 頁');
+    expect(missingLabel({ from: 58, to: 58, part: 1, section: [2] })).toBe('2/58 頁');
+    expect(missingLabel({ from: 57, to: 57, branch: [2], part: 1, section: [6], prefix: [4] })).toBe('6/4-57-2 頁');
+    expect(missingLabel({ from: 60, to: 70, part: 1, section: [6], prefix: [4] })).toBe('6/4-60〜6/4-70 頁');
     expect(missingLabel({ from: 58, to: 58, prefix: [2] })).toBe('2-58 頁');
     expect(missingLabel({ from: 60, to: 70, prefix: [2] })).toBe('2-60〜2-70 頁');
     expect(missingLabel({ from: 57, to: 57, branch: [1, 2], prefix: [2] })).toBe('2-57-1-2 頁');

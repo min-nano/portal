@@ -22,9 +22,9 @@
 // など）は、部には分けない（重なりとして指摘される）。DOM には触らない。
 //
 // 頁番号の前に部・編などの番号を刷った本（2-21。page-numbers.js の階層）は、
-// 刷られた前の段ごとに分けてから、それぞれの中で上のように振り直しを探す
-// （前の段は刷られたとおりに並べ、振り直しは推定する）。前の段の無い頁（部の番号を
-// 刷っていない巻など）は、本の順で前後にある部から置き場所を決める（placeSections）。
+// 刷られた前の段ごとに分けてから、それぞれの中で上のように振り直しを探す。
+// 振り直しで分けたまとまりと前の段の無い頁は、本の順ですぐ前の頁のまとまりの後に置き、
+// 前のまとまりの番号に 1 を足した番号を付ける（arrangeUnits。頁は「6/4-30」）。
 
 import { comparePaths, pageNumberText, prefixKey, sideOf, stripPageNumber } from './page-numbers.js';
 
@@ -33,92 +33,160 @@ import { comparePaths, pageNumberText, prefixKey, sideOf, stripPageNumber } from
  *          signature?:{length:number, hash:string}}[]}[]} files
  *   番号の付いた本文のファイル（一覧の順）
  * @param {Map<string, {step:number|null, pages:{number:number|null, branch?:number[], prefix?:number[]}[]}>} numberings
- * @returns {{partOf: Map<string, number>, count: number, mismatch: boolean, names: string[],
- *   sections: Set<number>, unplaced: Set<string>}}
- *   partOf: 頁の key → 何部目か（0 から）。count: 部の数。
+ * @returns {{partOf: Map<string, number>, count: number, mismatch: boolean, sections: Map<number, number[]>}}
+ *   partOf: 頁の key → 何番目のまとまりか（0 から、並べる順）。count: まとまりの数。
  *   mismatch: 奇数頁と偶数頁の束で部の数が揃わず、分けるのをやめた（前の段のどれかで）。
- *   names: 部ごとの呼び名（「第 2 部」「「5-」の後」）。刷られた前の段だけで分かる部
- *   （頁番号の 2-21 で分かる）は ''。
- *   sections: 前の段の無い頁を、前後の部から置いた部（placeSections）。
- *   unplaced: 前後の部から置き場所を決められなかった頁の key
+ *   sections: 頁番号が戻ったところで分けたまとまりの番号（まとまり → [6] など。刷られた
+ *   番号のまま並ぶまとまりには無い）。頁は「6/4-30」のように、この番号を頭に付けて書く。
  */
 export function assignParts(files, numberings) {
   const segments = splitSegments(files, numberings);
   markCopies(segments);
-  placeSections(segments);
 
-  // 刷られた前の段ごと（と、前の段の無い頁を置いたところごと）に、振り直しを探す。
+  // 刷られた前の段ごとに、振り直し（番号が部の初めに戻るところ）を探す。
   const groups = new Map();
   for (const segment of segments) {
-    const { key } = segment.place;
-    if (!groups.has(key)) groups.set(key, { ...segment.place, segments: [] });
-    groups.get(key).segments.push(segment);
+    if (!groups.has(segment.prefixKey)) groups.set(segment.prefixKey, { prefix: segment.prefix, segments: [] });
+    groups.get(segment.prefixKey).segments.push(segment);
   }
-  const ordered = [...groups.values()].sort((a, b) => comparePaths(a.sort, b.sort));
-  const printed = segments.some((segment) => segment.prefix);
   let mismatch = false;
-  const names = [];
-  const sections = new Set();
-  for (const group of ordered) {
+  const units = [];
+  for (const group of groups.values()) {
     const result = renumbered(group.segments);
     mismatch ||= result.mismatch;
-    const first = names.length;
-    for (let sub = 0; sub < result.count; sub++) {
-      if (group.kind !== 'printed' && printed) sections.add(names.length);
-      names.push(partLabel(group, sub, result.count, printed));
+    const mine = Array.from({ length: result.count }, (_, sub) => ({ prefix: group.prefix, sub, segments: [] }));
+    for (const segment of group.segments) {
+      if (segment.copyOf) continue;
+      segment.unit = mine[segment.part];
+      mine[segment.part].segments.push(segment);
     }
-    for (const segment of group.segments) segment.part = first + segment.part;
+    units.push(...mine.filter((unit) => unit.segments.length));
   }
+  for (const segment of segments) if (segment.copyOf) segment.unit = segment.copyOf.unit;
 
+  const { order, sections } = arrangeUnits(units, segments);
   const partOf = new Map();
-  const unplaced = new Set();
   for (const segment of segments) {
-    const part = segment.copyOf ? segment.copyOf.part : segment.part;
-    for (const index of segment.pages) {
-      const { key } = segment.file.pages[index];
-      partOf.set(key, part);
-      if (segment.place.kind === 'unplaced') unplaced.add(key);
+    const part = order.indexOf(segment.unit);
+    for (const index of segment.pages) partOf.set(segment.file.pages[index].key, part);
+  }
+  const numbered = new Map([...sections].map(([unit, id]) => [order.indexOf(unit), id]));
+  return { partOf, count: order.length, mismatch, sections: numbered };
+}
+
+/**
+ * まとまり（刷られた前の段と、その中の振り直し）を本の順に並べ、番号を付ける。
+ *
+ * 刷られた前の段の、本の順で最初のまとまりは、刷られた番号のまま並べる（4-30 頁）。それ以外
+ * （頁番号が部の初めに戻ったところから先・前の段の無い頁）は、ファイルを部の区切りとは
+ * みなさず（束は部をまたいでスキャンするので）、本の順ですぐ前にある頁のまとまりの後に置き、
+ * 前のまとまりの番号に 1 を足した番号を付ける（第 5 部の後なら 6。頁は「6/4-30」）。
+ * スキャンした束の頁は飛び飛びにはならないので、近くの頁が並ぶように区切る。
+ * 本の順で前に頁が無ければ、本の先頭（前付け）に置く。
+ *
+ * @returns {{order:object[], sections:Map<object, number[]>}}
+ */
+function arrangeUnits(units, segments) {
+  rankAll(segments);
+  const printed = units.some((unit) => unit.prefix);
+  // 刷られた前の段ごとに、本の順でいちばん前のまとまり（刷られた番号のまま並べるもの）。
+  const firstByPrefix = new Map();
+  for (const unit of units) {
+    if (!unit.prefix) continue;
+    const key = prefixKey(unit.prefix);
+    const known = firstByPrefix.get(key);
+    if (!known || earlier(unit, known)) firstByPrefix.set(key, unit);
+  }
+  const main = [...firstByPrefix.values()];
+  const extras = new Map(); // まとまり → その後に置くまとまり
+  const front = [];
+  for (const unit of units) {
+    if (main.includes(unit)) continue;
+    const before = predecessor(unit, segments);
+    if (before) {
+      if (!extras.has(before)) extras.set(before, []);
+      extras.get(before).push(unit);
+    } else {
+      front.push(unit);
     }
   }
-  return { partOf, count: names.length, mismatch, names, sections, unplaced };
+  const byBook = (a, b) => comparePaths(firstOf(a).position, firstOf(b).position) || firstOf(a).rank - firstOf(b).rank;
+  main.sort((a, b) => comparePaths(a.prefix, b.prefix));
+
+  const order = [];
+  const sections = new Map();
+  let top = printed ? 0 : 1; // 前付け（前の段の無い本では、最初のまとまり）の番号
+  const visit = (unit) => {
+    if (order.includes(unit)) return;
+    order.push(unit);
+    // これまでに付けた・刷られた番号の最大（分けたまとまりの番号が重ならないように）。
+    top = Math.max(top, sections.get(unit)?.[0] ?? unit.prefix?.[0] ?? top);
+    for (const next of (extras.get(unit) ?? []).sort(byBook)) {
+      if (order.includes(next)) continue;
+      // 分けたまとまりの続き（1- の章のあとの 2- の章）は、同じまとまりの番号のまま。
+      const continues = sections.has(unit) && unit.prefix && next.prefix && comparePaths(next.prefix, unit.prefix) > 0;
+      sections.set(next, continues ? sections.get(unit) : [top + 1]);
+      visit(next);
+    }
+  };
+  // 前付け（前の段の無い本では、本の最初のまとまり）は番号を付けない。
+  for (const unit of front) visit(unit);
+  for (const unit of main) visit(unit);
+  // 前の頁をたどると元に戻るまとまりがあっても、頁を落とさないよう最後に置く（番号は付けない
+  // ので、刷られた番号が重なれば重なりとして指摘される）。
+  for (const unit of units) visit(unit);
+  return { order, sections };
 }
 
 /**
- * 部の呼び名。
- *
- *   刷られた前の段で分かる部               ''（振り直しで分けたなら「「2-」の第 2 部」）
- *   前の段の無い本の、振り直しで分けた部   「第 2 部」
- *   前の段の無い頁を、「5-」の部の後に置いた「「5-」の後」（振り直しで分けたなら「（2 つ目）」を添える）
- *   前の段の無い頁を、本の先頭に置いた     ''（振り直しで分けたなら「前付け（2 つ目）」）
- *   置き場所を決められなかった             「置き場所不明」
+ * まとまり a が b より本の前にあるか。同じ種類の束（奇数頁・偶数頁・両面）の区間の、本の順
+ * （rank。裏返した束は一覧の下ほど前）で比べる。
  */
-function partLabel(group, sub, count, printed) {
-  const nth = count === 1 ? '' : `（${sub + 1} つ目）`;
-  if (group.kind === 'after') return `「${prefixKey(group.prefix)}-」の後${nth}`;
-  if (group.kind === 'unplaced') return `置き場所不明${nth}`;
-  if (count === 1) return '';
-  if (group.kind === 'printed') return `「${prefixKey(group.prefix)}-」の第 ${sub + 1} 部`;
-  return printed ? `前付け${nth}` : `第 ${sub + 1} 部`;
+function earlier(a, b) {
+  // 同じ前の段のまとまりは、振り直しで分けたもの。2 つ目からのまとまりの束の種類は、どれも
+  // 1 つ目にもある（どの種類の束も 1 つ目から数えるので）。
+  const kinds = new Set(b.segments.map((segment) => segment.kind));
+  const kind = a.segments.map((segment) => segment.kind).find((k) => kinds.has(k));
+  const at = (unit) => Math.min(...unit.segments.filter((segment) => segment.kind === kind).map((segment) => segment.rank));
+  return at(a) < at(b);
+}
+
+/** まとまりの、本の順で最初の区間（いちばん前の位置から始まるもの。同じなら本の順で前のもの）。 */
+function firstOf(unit) {
+  return unit.segments.reduce((first, segment) =>
+    comparePaths(segment.position, first.position) < 0 ||
+    (comparePaths(segment.position, first.position) === 0 && segment.rank < first.rank)
+      ? segment
+      : first
+  );
 }
 
 /**
- * 区間の置き場所（segment.place）を決める。
- *
- * 前の段（部・編などの番号）のある区間は、その前の段の部に置く。前の段の無い区間（部の番号を
- * 刷っていない巻・目次など）は、ファイルを部の区切りとはみなさず（束は部をまたいでスキャン
- * するので）、本の順で前後にある前の段のある頁から置き場所を決める。前後は、同じファイルの
- * 中の前後の区間を先に見て、無ければ一覧で前後のファイル（いちばん近いもの）を見る。
- *
- *   前に「5-」の頁があり、後ろの頁が「5-」より後の部か、無い  → 「5-」の部の後に、新しいまとまりとして
- *   前に前の段のある頁が無い                                  → 本の先頭（前付け）
- *   前に「5-」、後ろに「5-」以前の部の頁がある                → 置き場所を決められない（本文の最後に）
- *
- * 前の段の無い本では、すべての区間を 1 つのまとまりにする（これまでどおり）。
+ * まとまりの、本の順ですぐ前にある頁のまとまり。まとまりの最初の区間の、同じファイルの中の
+ * 前の区間を先に見て、無ければ本の順でいちばん近い前のファイルの区間（同じ種類の束の中で、
+ * 一覧の位置を本の順に揃えたもの。歩幅の分からない区間は一覧の位置）。無ければ null。
  */
-function placeSections(segments) {
-  const printed = segments.some((segment) => segment.prefix);
-  // 一覧の位置を本の順に揃える（裏返した偶数頁の束は、一覧で下にあるほど本の前）。束の種類
-  // （奇数頁・偶数頁・両面）ごとに揃えるので、前後のファイルは同じ種類の束から探す。
+function predecessor(unit, segments) {
+  const first = firstOf(unit);
+  // 同じファイルの中の前の区間（まとまりの最初の区間の前は、ほかのまとまり）。
+  if (first.prev) return first.prev.unit;
+  const at = (segment) => (first.kind === null ? segment.order : segment.rank);
+  const before = segments.filter(
+    (other) =>
+      other.unit !== unit &&
+      other.file.key !== first.file.key &&
+      (first.kind === null || other.kind === first.kind) &&
+      at(other) < at(first)
+  );
+  if (before.length === 0) return null;
+  const nearest = Math.max(...before.map(at));
+  // そのファイルの、本の順で最後の区間（ファイルの中の区間は、本の順に next でつながる）。
+  const near = before.filter((other) => at(other) === nearest);
+  return near.find((other) => !near.includes(other.next)).unit;
+}
+
+/** 区間の rank（一覧の位置を本の順に揃えたもの）を、束の種類ごとに付ける。 */
+function rankAll(segments) {
   const kinds = new Map();
   for (const segment of segments) {
     if (segment.kind === null) continue;
@@ -126,45 +194,7 @@ function placeSections(segments) {
     kinds.get(segment.kind).push(segment);
   }
   for (const list of kinds.values()) rankByBookOrder(list);
-  for (const segment of segments) {
-    if (segment.prefix) {
-      segment.place = { key: segment.prefixKey, kind: 'printed', prefix: segment.prefix, sort: [...segment.prefix, 0] };
-      continue;
-    }
-    const before = printed ? nearPrefix(segment, segments, -1) : null;
-    const after = before ? nearPrefix(segment, segments, 1) : null;
-    if (!before) {
-      segment.place = { key: '', kind: 'front', prefix: null, sort: [] };
-    } else if (after && comparePaths(after, before) <= 0) {
-      segment.place = { key: 'unplaced', kind: 'unplaced', prefix: null, sort: [Infinity] };
-    } else {
-      const key = `after:${prefixKey(before)}`;
-      segment.place = { key, kind: 'after', prefix: before, sort: [...before, 1] };
-    }
-  }
-}
-
-/**
- * 区間の前（direction -1）か後ろ（1）で、いちばん近い前の段のある頁の前の段。同じファイルの
- * 中の区間を先に見て、無ければ本の順でいちばん近い、前の段のある頁を含むファイルの前の段
- * （前なら最も後の部、後ろなら最も前の部）。本の順は、同じ種類の束の中で、一覧の位置を
- * 本の順に揃えたもの（rank。歩幅の分からない区間は一覧の位置）。無ければ null。
- */
-function nearPrefix(segment, segments, direction) {
-  for (let other = direction < 0 ? segment.prev : segment.next; other; other = direction < 0 ? other.prev : other.next) {
-    if (other.prefix) return other.prefix;
-  }
-  const at = (other) => (segment.kind === null ? other.order : other.rank);
-  const others = segments.filter(
-    (other) =>
-      other.prefix &&
-      (segment.kind === null || other.kind === segment.kind) &&
-      Math.sign(at(other) - at(segment)) === direction
-  );
-  if (others.length === 0) return null;
-  const nearest = direction < 0 ? Math.max(...others.map(at)) : Math.min(...others.map(at));
-  const prefixes = others.filter((other) => at(other) === nearest).map((other) => other.prefix).sort(comparePaths);
-  return direction < 0 ? prefixes.at(-1) : prefixes[0];
+  for (const segment of segments) if (segment.kind === null) segment.rank = segment.order;
 }
 
 /**
@@ -275,6 +305,8 @@ function splitSegments(files, numberings) {
     // つながりと部の始まりは、並びの上の位置（枝番の頁は、同じ側の元の頁の位置）で見る。
     segment.start = Math.min(...segment.numbers);
     segment.end = Math.max(...segment.numbers);
+    // 本の中の位置（前の段と、始まりの番号）。まとまりの始まりを探すのに使う。
+    segment.position = [...(segment.prefix ?? []), segment.start];
     // 奇数頁の束か偶数頁の束かは、頁の位置の偶奇の多いほう（手で直した 1 頁や、余白の読み違いに
     // 引きずられない）。同じ数なら、いちばん小さい位置の偶奇。
     const odd = segment.numbers.filter((n) => sideOf(n) === 'odd').length;

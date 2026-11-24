@@ -207,6 +207,19 @@ function frontMatter(files, numberings) {
   );
   const used = new Set(prefixes.map(prefixKey));
   const first = prefixes.sort(comparePaths)[0];
+  // 前の段ごとの、本の順でいちばん前の束（裏返していない束は一覧の上ほど、裏返した束しか無ければ
+  // 一覧の下ほど前）。同じ前の段の頁が後の束にもあれば（章の番号だけを刷った後の巻の 1-1 など）、
+  // その前の頁は前付けではない。
+  const earliest = new Map();
+  files.forEach((file, index) => {
+    const { step, pages } = numberings.get(file.key);
+    const rank = step < 0 ? files.length - index : -files.length + index;
+    for (const page of pages) {
+      if (!page.prefix) continue;
+      const key = prefixKey(page.prefix);
+      if (!earliest.has(key) || rank < earliest.get(key).rank) earliest.set(key, { rank, file });
+    }
+  });
   for (const file of files) {
     const { step, pages } = numberings.get(file.key);
     const order = pages.map((_, index) => index);
@@ -214,12 +227,15 @@ function frontMatter(files, numberings) {
     const at = order.findIndex((index) => pages[index].prefix && pages[index].number >= 1);
     if (at <= 0) continue;
     const { prefix } = pages[order[at]];
+    if (earliest.get(prefixKey(prefix)).file !== file) continue;
     const run = order.slice(0, at).map((index) => pages[index]);
     const plain = run.findIndex((page) => page.number !== null && !page.prefix);
     // run の頁は、前の段が無いか、0 以下の番号（前の段のある最初の 1 以上の頁より前なので）。
     if (plain < 0 && (comparePaths(prefix, first) !== 0 || prefix.at(-1) !== 1)) continue;
     const previous = [...prefix.slice(0, -1), prefix.at(-1) - 1];
+    // 前付けにした部も使ったものとする（部をまたぐ束の、2 つ目の「1-」の前の頁を重ねない）。
     if (used.has(prefixKey(previous))) continue;
+    used.add(prefixKey(previous));
     const stride = Math.abs(step ?? 1);
     const start = plain < 0 ? (stride === 2 && pages[order[at]].number % 2 === 0 ? 2 : 1) : run[plain].number - stride * plain;
     run.forEach((page, i) => {
@@ -404,14 +420,14 @@ export function placeFiles(files, numberings, overrides = new Map()) {
  *   order: {
  *     fileKey:string, pageIndex:number, pageKey:string, role:'front'|'body'|'back',
  *     number:number|null, branch?:number[], prefix?:number[], status:string, read:object|null,
- *     part:number|null, partLabel?:string,
+ *     part:number|null, section?:number[],
  *   }[],
  *   mismatch: boolean,
  *   places: ReturnType<typeof placeFiles>,
  * }}
  *   branch は枝番、prefix は前の段（部・編などの番号）で、あるときだけ。part は何部目か
- *   （0 から。部が 1 つなら null）。partLabel は部の呼び名（「第 2 部」「「5-」の後」。刷られた
- *   前の段で分かる部には付けない）。section は、前の段の無い頁を前後の部から置いた部の頁。
+ *   （0 から。部が 1 つなら null）。section は、頁番号が部の初めに戻ったところで分けた
+ *   まとまりの番号（[6]。頁は「6/4-30」と書く。刷られた番号のまま並ぶまとまりには付けない）。
  *   mismatch は、番号の振り直しが束の種類（奇数頁・偶数頁）ごとに揃わず、部に分けるのを
  *   やめたとき。
  */
@@ -469,18 +485,16 @@ export function arrangeBook(files, numberings, overrides = new Map()) {
     file.pages.forEach((page, index) => {
       const { number, branch, prefix, status, read } = numbering.pages[index];
       const part = parts.count > 1 ? parts.partOf.get(page.key) : null;
-      const partLabel = part === null ? '' : parts.names[part];
+      const section = part === null ? undefined : parts.sections.get(part);
       body.push(
         entry(file, page, index, 'body', {
           number,
           ...(branch ? { branch } : {}),
           ...(prefix ? { prefix } : {}),
-          // 前後の部から置き場所を決められなかった、前の段の無い頁（parts.js の placeSections）。
-          status: parts.unplaced.has(page.key) ? 'unplaced' : status,
+          status,
           read,
           part,
-          ...(partLabel ? { partLabel } : {}),
-          ...(parts.sections.has(part) ? { section: true } : {}),
+          ...(section ? { section } : {}),
           fileOrder,
           seq: body.length,
         })
@@ -553,25 +567,13 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
       pageKeys: unknown.map((item) => item.pageKey),
     });
   }
-  const unplaced = body.filter((item) => item.status === 'unplaced' && item.number === null);
+  const unplaced = body.filter((item) => item.status === 'unplaced');
   if (unplaced.length) {
     problems.push({
       level: 'error',
       kind: 'unplaced',
       message: `頁番号の無いファイルが本文のファイルの間にあり、置き場所を決められない頁が ${unplaced.length} 頁あります（本文の最後に並べてあります）。一覧で本文のファイルより上（先頭に置く）か下（末尾に置く）へ動かすか、ファイルの「先頭の頁の番号」を入れてください。`,
       pageKeys: unplaced.map((item) => item.pageKey),
-    });
-  }
-
-  // 前の段の無い頁で、前後の部から置き場所を決められなかったもの（前に「3-」、後ろに「2-」が
-  // あるなど。束が一覧で入れ替わっているか、部をまたいで逆順に並んでいる）。
-  const sectionless = body.filter((item) => item.status === 'unplaced' && item.number !== null);
-  if (sectionless.length) {
-    problems.push({
-      level: 'error',
-      kind: 'section-unplaced',
-      message: `部・編などの番号の無い頁が ${sectionless.length} 頁あり、一覧で前後にある部の並びが食い違うので、置き場所を決められません（本文の最後に「置き場所不明」として並べてあります）。一覧で前後の部の束のあいだへ動かすか、この部分は別に結合してください。部の中の頁なら、どれか 1 頁の番号を「2-21」の形で直してください。`,
-      pageKeys: sectionless.map((item) => item.pageKey),
     });
   }
 
@@ -585,15 +587,15 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
   }
   const several = parts.size > 1;
   const ranges = [];
-  let renumbered = false;
+  let sectioned = false;
   for (const part of [...parts.keys()].sort((a, b) => a - b)) {
     const numbered = parts.get(part);
     // 部の頁は、どれも同じ前の段（部・編などの番号）を持つ。
-    const { partLabel = '', prefix = null, section = false } = numbered[0];
-    // 振り直しを推定して分けた部（前の段の無い頁を置いた部は数えない）。
-    renumbered ||= Boolean(partLabel) && !section;
-    const label = partLabel ? `${partLabel}の ` : '';
-    const head = prefix ? `${pathText(prefix)}-` : '';
+    const { prefix = null, section = null } = numbered[0];
+    // 頁番号が戻ったところで分けたまとまり（番号の頭に「6/」を付ける）。
+    sectioned ||= section !== null;
+    const sec = sectionHead(section);
+    const head = `${sec}${prefix ? `${pathText(prefix)}-` : ''}`;
     // 確認の画面の項目を見分けるもの（部が分かれていれば部も入れる）。
     const tag = (number) => {
       if (!several) return number === undefined ? {} : { number };
@@ -612,7 +614,7 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
       problems.push({
         level: 'error',
         kind: 'duplicate',
-        message: `${label}${number} 頁が ${items.length} 回あります（同じ束を 2 度スキャンした・番号の読み違い）。`,
+        message: `${sec}${number} 頁が ${items.length} 回あります（同じ束を 2 度スキャンした・番号の読み違い）。`,
         pageKeys: items.map((item) => item.pageKey),
         ...tag(number),
       });
@@ -622,7 +624,7 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
     const numbers = [...new Set(numbered.map((item) => item.number))].sort((a, b) => a - b);
     const lowest = numbers[0];
     const highest = numbers[numbers.length - 1];
-    ranges.push(`${partLabel ? `${partLabel} ` : ''}${head}${lowest}〜${head}${highest} 頁`);
+    ranges.push(`${head}${lowest}〜${head}${highest} 頁`);
     const missing = [];
     for (let n = lowest; n <= highest; n++) {
       if (!plain.has(n) && !replaced.has(n)) missing.push(n);
@@ -631,7 +633,7 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
       problems.push({
         level: 'error',
         kind: 'missing',
-        message: `${label}${compressRanges(missing, head)} 頁が見つかりません（計 ${missing.length} 頁）。束の入れ忘れ・重送の可能性があります。`,
+        message: `${compressRanges(missing, head)} 頁が見つかりません（計 ${missing.length} 頁）。束の入れ忘れ・重送の可能性があります。`,
         pageKeys: [],
         numbers: missing,
         ...tag(),
@@ -644,7 +646,7 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
         problems.push({
           level: 'error',
           kind: 'missing',
-          message: `${label}${absent.map((path) => `${head}${pathText(path)}`).join('・')} 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。`,
+          message: `${absent.map((path) => `${head}${pathText(path)}`).join('・')} 頁が見つかりません（枝番の付いた頁）。束の入れ忘れ・重送の可能性があります。`,
           pageKeys: [],
           ...tag(number),
         });
@@ -656,7 +658,7 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
         problems.push({
           level: 'info',
           kind: 'replaced',
-          message: `${label}${compressRanges(instead, head)} 頁は無く、枝番の付いた頁（${pages}）があります。差し替えられた頁とみなしました。`,
+          message: `${compressRanges(instead, head)} 頁は無く、枝番の付いた頁（${pages}）があります。差し替えられた頁とみなしました。`,
           pageKeys: numbered.filter((item) => item.branch && item.number === number).map((item) => item.pageKey),
           ...tag(number),
         });
@@ -677,7 +679,7 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
         problems.push({
           level: 'warn',
           kind: 'sheet-start',
-          message: `${label}最初の頁が偶数（${pageNumberText(first)} 頁）です。その表（${beside(first, -1)} 頁）が欠けていないか確かめてください。`,
+          message: `最初の頁が偶数（${sec}${pageNumberText(first)} 頁）です。その表（${sec}${beside(first, -1)} 頁）が欠けていないか確かめてください。`,
           pageKeys: byNumber.get(pageNumberText(first)).map((item) => item.pageKey),
           ...tag(),
         });
@@ -686,18 +688,18 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
         problems.push({
           level: 'warn',
           kind: 'sheet-end',
-          message: `${label}最後の頁が奇数（${pageNumberText(last)} 頁）です。その裏（${beside(last, 1)} 頁）が欠けていないか確かめてください（裏が白紙でスキャンしていない場合は問題ありません）。`,
+          message: `最後の頁が奇数（${sec}${pageNumberText(last)} 頁）です。その裏（${sec}${beside(last, 1)} 頁）が欠けていないか確かめてください（裏が白紙でスキャンしていない場合は問題ありません）。`,
           pageKeys: byNumber.get(pageNumberText(last)).map((item) => item.pageKey),
           ...tag(),
         });
       }
     }
   }
-  if (several && renumbered) {
+  if (sectioned) {
     problems.push({
       level: 'warn',
       kind: 'parts',
-      message: `頁番号が振り直されているところで、本文を ${parts.size} 部に分けて並べました（${ranges.join('・')}）。部の分かれていない本なら、同じ束を最初から 2 度入れていないか確かめてください。頁ラベルは付けないので、ビューアーの頁番号は通し番号になります。`,
+      message: `頁番号が部の初めに戻ったところで本文を分け、本の順ですぐ前の頁の後に並べました（${ranges.join('・')}）。分けたまとまりの頁は、前のまとまりの番号に 1 を足した番号を頭に付けて「6/4-30 頁」のように書きます。部の分かれていない本なら、同じ束を最初から 2 度入れていないか確かめてください。`,
       pageKeys: [],
     });
   }
@@ -709,20 +711,21 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
     problems.push({
       level: 'info',
       kind: 'depth',
-      message: `ハイフンで区切った頁番号（${pageNumberText(example)} など）は、前後の頁とのつながりから、「${pathText(example.prefix)}-」を部・編などの番号、${example.number} を頁番号と読み、その順に並べました${several && !renumbered ? `（${ranges.join('・')}）` : ''}。枝番の付いた頁なら、一覧の上の「ハイフンで区切った頁番号」で読み方を選び直してください。`,
+      message: `ハイフンで区切った頁番号（${pageNumberText(example)} など）は、前後の頁とのつながりから、「${pathText(example.prefix)}-」を部・編などの番号、${example.number} を頁番号と読み、その順に並べました${several && !sectioned ? `（${ranges.join('・')}）` : ''}。枝番の付いた頁なら、一覧の上の「ハイフンで区切った頁番号」で読み方を選び直してください。`,
       pageKeys: [],
     });
   }
-  // 部・編などの番号の付いた本で、前の段の無い頁（部の番号を刷っていない巻、文字情報が前の段を
-  // 落とした束など）。本の順で前後にある部から置いた（parts.js の placeSections）ことを知らせる。
+  // 部・編などの番号の付いた本で、前の段の無い頁を本の先頭（前付け）に置いた（本の順で前に頁の
+  // ある前の段の無い頁は、分けたまとまりとして「parts」で知らせる）。
   const unprefixed =
-    depth > 0 && example ? body.filter((item) => item.number !== null && !item.prefix && item.status !== 'unplaced') : [];
+    depth > 0 && example
+      ? body.filter((item) => item.number !== null && !item.prefix && !item.section)
+      : [];
   if (unprefixed.length) {
-    const places = [...new Set(unprefixed.map((item) => item.partLabel || '前付け'))];
     problems.push({
       level: 'warn',
       kind: 'no-prefix',
-      message: `部・編などの番号の無い頁が ${unprefixed.length} 頁あり、一覧で前後にある部の頁から置き場所を決めました（${places.join('・')}）。部の中の頁なら、どれか 1 頁の番号を「2-21」の形で直してください（同じファイルの残りの頁も、その部の頁になります）。`,
+      message: `部・編などの番号の無い頁が ${unprefixed.length} 頁あり、本の順で前に頁が無いので、本文の先頭（前付け）に置きました。部の中の頁なら、どれか 1 頁の番号を「2-21」の形で直してください（同じファイルの残りの頁も、その部の頁になります）。`,
       pageKeys: unprefixed.map((item) => item.pageKey),
     });
   }
@@ -781,6 +784,15 @@ export function checkSequence(order, { sheets = false, mismatch = false, depth =
 }
 
 /**
+ * 頁番号が戻ったところで分けたまとまりの頭（[6] → "6/"。無ければ ''）。
+ *
+ * @param {number[]|null|undefined} section
+ */
+export function sectionHead(section) {
+  return section ? `${pathText(section)}/` : '';
+}
+
+/**
  * [1,2,3,7,9,10] → "1〜3・7・9〜10"。head は番号の頭に付ける前の段（"2-" なら "2-1〜2-3・2-7"）。
  *
  * @param {number[]} numbers
@@ -814,22 +826,22 @@ export function compressRanges(numbers, head = '') {
  *
  *   表紙       「表紙」（複数頁なら 表紙1, 表紙2…）
  *   前付け     i, ii, iii…（番号が 0 以下に推定された頁）
- *   本文       本の頁番号（前の段のある頁は 2-21 のように「2-」を頭に付けた番号）
+ *   本文       本の頁番号（前の段のある頁は 2-21 のように「2-」を、頁番号が戻ったところで
+ *              分けたまとまりの頁は 6/4-30 のように「6/」を頭に付けた番号）
  *   枝番の頁   57-1, 57-2…（「57-」を頭に付けた番号）
  *   位置を決めきれない頁 「差込」
  *   裏表紙     「裏表紙」
  *   一覧の位置で置いた、表紙と分からない頁 「番号なし」
  *
  * 同じ形で番号が 1 つずつ進むところは 1 つの範囲にまとめる。本文が無い
- * （一覧の順につなぐだけの）とき・振り直しを推定して部に分けたときは付けない（ビューアーの
- * 頁番号は、結合した PDF の通し番号になる）。頁番号の前に刷られた部・編などの番号で
- * 分けた部は、ラベルの番号が重ならないので付ける。
+ * （一覧の順につなぐだけの）ときは付けない（ビューアーの頁番号は、結合した PDF の通し番号
+ * になる）。部が分かれていても、まとまりの番号を頭に付けるので、ラベルは重ならない。
  *
  * @param {ReturnType<typeof arrangeBook>['order']} order
  * @returns {{start:number, style:'D'|'r'|null, prefix:string, first:number}[]}
  */
 export function pageLabelRanges(order) {
-  if (!order.some((item) => item.role === 'body') || order.some((item) => item.partLabel)) {
+  if (!order.some((item) => item.role === 'body')) {
     return [];
   }
   const fronts = order.filter((item) => item.role === 'front' && item.status !== 'listed').length;
@@ -850,7 +862,7 @@ export function pageLabelRanges(order) {
       return backs > 1 ? { style: 'D', prefix: '裏表紙', number: backSeen } : { style: null, prefix: '裏表紙', number: 0 };
     }
     if (item.number === null || !Number.isInteger(item.number)) return { style: null, prefix: '差込', number: 0 };
-    const head = item.prefix ? `${pathText(item.prefix)}-` : '';
+    const head = `${sectionHead(item.section)}${item.prefix ? `${pathText(item.prefix)}-` : ''}`;
     if (item.branch) {
       return { style: 'D', prefix: `${head}${pathText([item.number, ...item.branch.slice(0, -1)])}-`, number: item.branch.at(-1) };
     }

@@ -3,7 +3,7 @@
 // 頁番号の並び（ordering.js）、スキャンの検査（image-checks.js）、文字情報の
 // 有無を、頁ごとの「確認が要ること」にまとめる。DOM には触らない。
 
-import { branchLayout } from './ordering.js';
+import { branchLayout, sectionHead } from './ordering.js';
 import { formatNumber, pathText } from './page-numbers.js';
 import { TEXT_QUALITY_MESSAGE } from './text-quality.js';
 
@@ -27,17 +27,7 @@ export function displayLabel(entry) {
   if (entry.role === 'front') return '表紙';
   if (entry.role === 'back') return '裏表紙';
   if (entry.number === null) return '番号不明';
-  return `${partPrefix(entry)}${formatNumber(entry.number, entry.branch, entry.prefix)} 頁`;
-}
-
-/**
- * 振り直しを推定して部に分けたときの頁の見出しの頭（「第 2 部 」）。頁番号の前に刷られた
- * 部・編などの番号で分かる部（2-21 頁）には付けない。
- *
- * @param {{partLabel?:string}} item 頁か抜けの札
- */
-export function partPrefix(item) {
-  return item.partLabel ? `${item.partLabel} ` : '';
+  return `${sectionHead(entry.section)}${formatNumber(entry.number, entry.branch, entry.prefix)} 頁`;
 }
 
 /**
@@ -71,13 +61,6 @@ export function pageIssues(order, problems, scanIssues, textless = new Set()) {
       });
     } else if (entry.status === 'unknown') {
       add(entry.pageKey, { kind: 'unknown', level: 'error', message: '頁番号を決められません' });
-    } else if (entry.status === 'unplaced' && entry.number !== null) {
-      // 前の段（部・編などの番号）の無い頁で、前後の部から置き場所を決められなかった（ordering.js）。
-      add(entry.pageKey, {
-        kind: 'section-unplaced',
-        level: 'error',
-        message: '部・編などの番号が無く、前後の部の並びが食い違うので置き場所を決められません',
-      });
     } else if (entry.status === 'unplaced') {
       add(entry.pageKey, {
         kind: 'unplaced',
@@ -181,7 +164,7 @@ const MAX_MISSING_CARDS = 6;
  * @param {ReturnType<import('./ordering.js').arrangeBook>['order']} order
  * @returns {({type:'page', entry:object} |
  *   {type:'missing', from:number, to:number, branch?:number[], prefix?:number[], part:number|null,
- *    partLabel?:string})[]}
+ *    section?:number[]})[]}
  */
 export function gridItems(order) {
   const isNumbered = (entry) => entry.role === 'body' && Number.isInteger(entry.number);
@@ -195,8 +178,8 @@ export function gridItems(order) {
   let previous = null;
   // 抜けの札の部（前の頁と同じ部）。
   const where = () => {
-    const { part, prefix, partLabel } = previous;
-    return { part, ...(prefix ? { prefix } : {}), ...(partLabel ? { partLabel } : {}) };
+    const { part, prefix, section } = previous;
+    return { part, ...(prefix ? { prefix } : {}), ...(section ? { section } : {}) };
   };
   const missing = (from, to) => {
     if (to - from + 1 > MAX_MISSING_CARDS) {
@@ -244,14 +227,13 @@ export function gridItems(order) {
 }
 
 /**
- * 抜けている頁の札の見出し（58 頁・60〜70 頁・57-2 頁。振り直しで部に分けていれば
- * 「第 2 部 58 頁」、前の段のある頁は「2-58 頁」「2-60〜2-70 頁」）。
+ * 抜けている頁の札の見出し（58 頁・60〜70 頁・57-2 頁。前の段のある頁は「2-58 頁」
+ * 「2-60〜2-70 頁」、頁番号が戻ったところで分けたまとまりなら「6/4-30 頁」）。
  */
 export function missingLabel(item) {
-  const part = partPrefix(item);
-  const head = item.prefix ? `${pathText(item.prefix)}-` : '';
-  if (item.branch) return `${part}${head}${pathText([item.from, ...item.branch])} 頁`;
-  return `${part}${item.from === item.to ? `${head}${item.from} 頁` : `${head}${item.from}〜${head}${item.to} 頁`}`;
+  const head = `${sectionHead(item.section)}${item.prefix ? `${pathText(item.prefix)}-` : ''}`;
+  if (item.branch) return `${head}${pathText([item.from, ...item.branch])} 頁`;
+  return item.from === item.to ? `${head}${item.from} 頁` : `${head}${item.from}〜${head}${item.to} 頁`;
 }
 
 /**

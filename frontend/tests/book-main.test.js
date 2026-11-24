@@ -2287,7 +2287,7 @@ describe('結合と検証', () => {
     expect($('logText').textContent).toContain('「猫.pdf」をダウンロードしました');
   });
 
-  it('部ごとに頁番号が振り直されていれば部に分けて並べ、頁ラベルは付けない（通し番号）', async () => {
+  it('部ごとに頁番号が振り直されていれば分けて並べ、2 つ目からはまとまりの番号を付ける（頁ラベルも）', async () => {
     drop([
       file('本_1.pdf', pdf([page('a1', 1), page('a2', 2), page('a3', 3), page('a4', 4)])),
       file('本_2.pdf', pdf([page('a5', 5), page('a6', 6), page('b1', 1), page('b2', 2), page('b3', 3)])), // 第 2 部の始まりをまたぐ
@@ -2296,22 +2296,22 @@ describe('結合と検証', () => {
     await settled(3);
 
     expect(gridLabels()).toEqual([
-      ...[1, 2, 3, 4, 5, 6].map((n) => `第 1 部 ${n} 頁`),
-      '第 2 部 1 頁',
-      '第 2 部 2 頁',
-      '第 2 部 3 頁',
-      '-第 2 部 4 頁',
-      '第 2 部 5 頁',
-      '第 2 部 6 頁',
+      ...[1, 2, 3, 4, 5, 6].map((n) => `${n} 頁`),
+      '2/1 頁',
+      '2/2 頁',
+      '2/3 頁',
+      '-2/4 頁',
+      '2/5 頁',
+      '2/6 頁',
     ]);
-    expect($('problems').textContent).toContain('第 2 部の 4 頁が見つかりません');
-    expect($('problems').textContent).toContain('本文を 2 部に分けて並べました（第 1 部 1〜6 頁・第 2 部 1〜6 頁）');
+    expect($('problems').textContent).toContain('2/4 頁が見つかりません');
+    expect($('problems').textContent).toContain('（1〜6 頁・2/1〜2/6 頁）');
 
     $('mergeBtn').click();
     await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
-    expect(mocks.mergePdf.mock.calls[0][0].labels).toEqual([]);
+    expect(mocks.mergePdf.mock.calls[0][0].labels).toContainEqual({ start: 6, style: 'D', prefix: '2/', first: 1 });
     expect($('verifyResult').className).toBe('bm-verify ok');
-    expect($('verifyResult').textContent).toContain('頁ラベル（ビューアーに出る頁番号）: 付けていません（通し番号）');
+    expect($('verifyResult').textContent).toContain('頁ラベル（ビューアーに出る頁番号）: 本の頁番号と一致');
   });
 
   it('iPhone では、共有シートに渡せない大きさの PDF は、ダウンロードに保存し、そう記録に残す', async () => {

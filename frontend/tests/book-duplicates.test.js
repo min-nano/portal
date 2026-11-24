@@ -199,6 +199,12 @@ describe('duplicateIssues', () => {
       entry('b:0', { number: 1, prefix: [3], status: 'detected', part: 1 }),
     ];
     expect(duplicateIssues(printed, [{ a: 'a:0', b: 'b:0', exact: true }], describe_).issues.size).toBe(0);
+    // 番号が戻ったところで分けたまとまり（3/）が違っても、中身まで同じなら同じ頁。
+    const again = [
+      entry('a:0', { number: 1, prefix: [2], status: 'detected', part: 0 }),
+      entry('b:0', { number: 1, prefix: [2], section: [3], status: 'detected', part: 1 }),
+    ];
+    expect([...duplicateIssues(again, [{ a: 'a:0', b: 'b:0', exact: true }], describe_).issues.keys()]).toEqual(['a:0', 'b:0']);
   });
 
   it('中身まで同じ頁は誤り、似た頁は注意として、互いを挙げる', () => {
