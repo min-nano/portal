@@ -64,14 +64,12 @@ describe('hideStaffOnlyForExternalUsers', () => {
     expect(document.documentElement.dataset.account).toBeUndefined();
   });
 
-  it('サーバーの設定の漏れ（500）も、理由を投げる', async () => {
-    const misconfigured = Object.assign(
-      new Error('サーバーの認証設定（ALLOWED_EMAIL_DOMAINS）が未設定です。'),
-      { status: 500 }
+  it('5xx は一時的かもしれないので、何もしない（画面を閉じない）', async () => {
+    apiGet.mockRejectedValue(
+      Object.assign(new Error('サーバーエラーが発生しました (HTTP 500)。'), { status: 500 })
     );
-    apiGet.mockRejectedValue(misconfigured);
 
-    await expect(hideStaffOnlyForExternalUsers()).rejects.toBe(misconfigured);
+    expect(await hideStaffOnlyForExternalUsers()).toBe(false);
   });
 
   it('隠すのは、印の付いた入口だけ（base.css の決めごと）', () => {
