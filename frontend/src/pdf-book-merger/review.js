@@ -160,11 +160,13 @@ const MAX_MISSING_CARDS = 6;
  * 枝番の頁に差し替えられたとみなす番号（ordering.js の branchLayout。部ごと）には
  * 札を挟まない。枝番の抜け（57-1 と 57-3 の間の 57-2）には、枝番を付けた札を挟む
  * （入れ子の枝番 57-1-2 も段ごとに。下の段の枝番の頁に差し替えられた枝番の頁には挟まない）。
+ * 枝番の無い頁も枝番の頁も、続けて抜けている数が MAX_MISSING_CARDS を超えたら 1 枚の札に
+ * まとめる（枝番の札では、branch がまとめの最初の枝番、branchTo が最後の枝番）。
  *
  * @param {ReturnType<import('./ordering.js').arrangeBook>['order']} order
  * @returns {({type:'page', entry:object} |
- *   {type:'missing', from:number, to:number, branch?:number[], prefix?:number[], part:number|null,
- *    section?:number[]})[]}
+ *   {type:'missing', from:number, to:number, branch?:number[], branchTo?:number, prefix?:number[],
+ *    part:number|null, section?:number[]})[]}
  */
 export function gridItems(order) {
   const isNumbered = (entry) => entry.role === 'body' && Number.isInteger(entry.number);
@@ -181,11 +183,20 @@ export function gridItems(order) {
     const { part, prefix, section } = previous;
     return { part, ...(prefix ? { prefix } : {}), ...(section ? { section } : {}) };
   };
-  const missing = (from, to) => {
-    if (to - from + 1 > MAX_MISSING_CARDS) {
-      items.push({ type: 'missing', from, to, ...where() });
-    } else {
-      for (let m = from; m <= to; m++) items.push({ type: 'missing', from: m, to: m, ...where() });
+  // first から last の手前までのうち、抜けているものを、続くところごとに札にする
+  // （card(最初, 最後) が札。続く数が MAX_MISSING_CARDS を超えたら 1 枚にまとめる）。
+  const missingRuns = (first, last, absent, card) => {
+    let from = null;
+    for (let m = first; m <= last; m++) {
+      const gap = m < last && absent(m);
+      if (gap && from === null) from = m;
+      if (gap || from === null) continue;
+      if (m - from > MAX_MISSING_CARDS) {
+        items.push(card(from, m - 1));
+      } else {
+        for (let n = from; n < m; n++) items.push(card(n, n));
+      }
+      from = null;
     }
   };
   for (const entry of order) {
@@ -196,15 +207,12 @@ export function gridItems(order) {
     // 部が変わったところでは、番号が戻るので比べない。
     if (previous !== null && previous.part === entry.part) {
       const { replaced, covered } = layouts.get(entry.part);
-      let from = null;
-      for (let m = previous.number + 1; m <= entry.number; m++) {
-        const absent = m < entry.number && !replaced.has(m);
-        if (absent && from === null) from = m;
-        if (!absent && from !== null) {
-          missing(from, m - 1);
-          from = null;
-        }
-      }
+      missingRuns(
+        previous.number + 1,
+        entry.number,
+        (m) => !replaced.has(m),
+        (from, to) => ({ type: 'missing', from, to, ...where() })
+      );
       // 枝番の抜け。前の頁と同じところまでは比べず、違う段からは前の頁の次（前の頁に
       // その段が無ければ 1）から、それより下の段は 1 から数える。
       const before = [previous.number, ...(previous.branch ?? [])];
@@ -213,11 +221,20 @@ export function gridItems(order) {
       while (same < Math.min(before.length, after.length) && before[same] === after[same]) same++;
       for (let level = Math.max(same, 1); level < after.length; level++) {
         const first = level === same && level < before.length ? before[level] + 1 : 1;
-        for (let b = first; b < after[level]; b++) {
-          const path = [...after.slice(0, level), b];
-          if (covered.has(pathText(path))) continue;
-          items.push({ type: 'missing', from: entry.number, to: entry.number, branch: path.slice(1), ...where() });
-        }
+        const parent = after.slice(1, level);
+        missingRuns(
+          first,
+          after[level],
+          (b) => !covered.has(pathText([entry.number, ...parent, b])),
+          (from, to) => ({
+            type: 'missing',
+            from: entry.number,
+            to: entry.number,
+            branch: [...parent, from],
+            ...(from === to ? {} : { branchTo: to }),
+            ...where(),
+          })
+        );
       }
     }
     previous = entry;
@@ -227,12 +244,16 @@ export function gridItems(order) {
 }
 
 /**
- * 抜けている頁の札の見出し（58 頁・60〜70 頁・57-2 頁。前の段のある頁は「2-58 頁」
- * 「2-60〜2-70 頁」、頁番号が戻ったところで分けたまとまりなら「6-4-30 頁」）。
+ * 抜けている頁の札の見出し（58 頁・60〜70 頁・57-2 頁・57-2〜57-30 頁。前の段のある頁は
+ * 「2-58 頁」「2-60〜2-70 頁」、頁番号が戻ったところで分けたまとまりなら「6-4-30 頁」）。
  */
 export function missingLabel(item) {
   const head = `${sectionHead(item)}${item.prefix ? `${pathText(item.prefix)}-` : ''}`;
-  if (item.branch) return `${head}${pathText([item.from, ...item.branch])} 頁`;
+  if (item.branch) {
+    const label = `${head}${pathText([item.from, ...item.branch])}`;
+    if (item.branchTo === undefined) return `${label} 頁`;
+    return `${label}〜${head}${pathText([item.from, ...item.branch.slice(0, -1), item.branchTo])} 頁`;
+  }
   return item.from === item.to ? `${head}${item.from} 頁` : `${head}${item.from}〜${head}${item.to} 頁`;
 }
 
