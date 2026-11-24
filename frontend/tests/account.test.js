@@ -45,7 +45,9 @@ describe('hideStaffOnlyForExternalUsers', () => {
   });
 
   it('聞けなかったときは何もしない（入口が見えたままになるだけ）', async () => {
-    apiGet.mockRejectedValue(new Error('サーバーエラーが発生しました (HTTP 503)。'));
+    apiGet.mockRejectedValue(
+      Object.assign(new Error('サーバーエラーが発生しました (HTTP 503)。'), { status: 503 })
+    );
 
     expect(await hideStaffOnlyForExternalUsers()).toBe(false);
     expect(document.documentElement.dataset.account).toBeUndefined();
@@ -60,6 +62,16 @@ describe('hideStaffOnlyForExternalUsers', () => {
 
     await expect(hideStaffOnlyForExternalUsers()).rejects.toBe(refused);
     expect(document.documentElement.dataset.account).toBeUndefined();
+  });
+
+  it('サーバーの設定の漏れ（500）も、理由を投げる', async () => {
+    const misconfigured = Object.assign(
+      new Error('サーバーの認証設定（ALLOWED_EMAIL_DOMAINS）が未設定です。'),
+      { status: 500 }
+    );
+    apiGet.mockRejectedValue(misconfigured);
+
+    await expect(hideStaffOnlyForExternalUsers()).rejects.toBe(misconfigured);
   });
 
   it('隠すのは、印の付いた入口だけ（base.css の決めごと）', () => {

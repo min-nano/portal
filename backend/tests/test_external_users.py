@@ -55,7 +55,7 @@ def test_the_web_manifest_declares_the_same_audience(tool):
     manifest = (FRONTEND_SRC / tool.id / "tool.js").read_text(encoding="utf-8")
     # コメントの中の文字に引っかからないよう、行頭のプロパティだけを読む。
     # 書くなら true / false の素の値で（ほかの書き方は、ここで落とす）。
-    declared = re.findall(r"^\s*externalUsers:\s*([^,\s]+)\s*,", manifest, re.MULTILINE)
+    declared = re.findall(r"^\s*externalUsers:\s*([^,\s/]+)", manifest, re.MULTILINE)
     assert declared in ([], ["true"], ["false"]), declared
     assert (declared == ["true"]) == tool.external_users
 
