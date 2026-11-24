@@ -15,6 +15,8 @@
 // ハイフンで区切った頁番号のどの段が頁番号か（2-21 は 2 頁の枝番か、第 2 部の 21 頁か）は、
 // 頁の並びの中で場所ごとに選ぶ（page-numbers.js の inferFileNumbers）。前の段（部・編などの番号）は
 // 部として、刷られたとおりの順に並べる。
+// ローマ数字の番号の頁（前付けの i, ii, …）は、部とは別のまとまり（part が ROMAN_PART）として、
+// 本文のどの頁よりも前に、番号の順に並べる。
 
 import {
   comparePaths,
@@ -24,11 +26,21 @@ import {
   pageNumberText,
   pathText,
   prefixKey,
+  romanNumeral,
+  romanOf,
   sideOf,
   STEPS,
   STRONG_SCORE,
 } from './page-numbers.js';
 import { assignParts } from './parts.js';
+
+export { romanNumeral };
+
+/**
+ * ローマ数字の番号の頁（前付け）のまとまりの番号（arrangeBook の part）。部（0 から）より前に
+ * 並べ、部が 1 つでも別のまとまりとして並びを確かめる（ii の次の 3 を抜けと見ないように）。
+ */
+export const ROMAN_PART = -1;
 
 export const ROLES = {
   body: '頁番号で並べる（番号が無ければ一覧の位置で）',
@@ -199,7 +211,7 @@ function readLikeOthers(files, numberings, infer, overrides) {
       const counts = new Map();
       const plain = new Set();
       const { pages } = numberings.get(file.key);
-      const isPlain = (page) => page.number !== null && !page.prefix && !page.branch;
+      const isPlain = (page) => page.number !== null && !page.prefix && !page.branch && !page.roman;
       const firstPlain = pages.findIndex(isPlain);
       const lastPlain = pages.findLastIndex(isPlain);
       pages.forEach((page, index) => {
@@ -285,7 +297,9 @@ function frontMatter(files, numberings) {
     if (at <= 0) continue;
     const { prefix } = pages[order[at]];
     if (earliest.get(prefixKey(prefix)).file !== file) continue;
-    const run = order.slice(0, at).map((index) => pages[index]);
+    // ローマ数字の頁（前付け）は、刷られたローマ数字のまま残し、その後ろの頁だけを見る。
+    const romanEnd = order.slice(0, at).findLastIndex((index) => pages[index].roman) + 1;
+    const run = order.slice(romanEnd, at).map((index) => pages[index]);
     const plain = run.findIndex((page) => page.number !== null && !page.prefix);
     // run の頁は、前の段が無いか、0 以下の番号（前の段のある最初の 1 以上の頁より前なので）。
     if (plain < 0 && (comparePaths(prefix, first) !== 0 || prefix.at(-1) !== 1)) continue;
@@ -327,11 +341,13 @@ function manualNumbers(file, infer, overrides) {
     const manual = overrides.get(page.key);
     if (!manual) return;
     const { value, branch, prefix: printed } = interpret(manual.path, prefix?.length ?? 0);
-    const own = printed ?? prefix;
+    // ローマ数字の番号（前付け）は、ファイルの前の段を付けない。
+    const own = manual.roman ? null : (printed ?? prefix);
     numbering.pages[index] = {
       number: value,
       ...(branch ? { branch } : {}),
       ...(own ? { prefix: own } : {}),
+      ...romanOf(manual),
       status: 'manual',
       read: null,
       // 部（parts.js）は、ファイルごとに入れた番号で決める（その頁だけの番号で部を切らない）。
@@ -455,8 +471,13 @@ export function arrangeBook(files, numberings, overrides = new Map()) {
   const places = placeFiles(files, numberings, overrides);
   const numbered = files.filter((file) => places.get(file.key) === 'numbered');
   // 部は、頁ごとに手で直した番号も入れて推定した番号（numberFiles）で決める（読み違えた
-  // 1 頁を直せば、そこで部を切らない）。
-  const parts = assignParts(numbered, numberings);
+  // 1 頁を直せば、そこで部を切らない）。ローマ数字の頁（前付け）は部とは別に並べるので、番号の
+  // 無い頁として渡す（vi の次の 1 を、番号が戻った部の始まりと見ないように）。
+  const arabic = new Map(numbered.map((file) => [file.key, withoutRoman(numberings.get(file.key))]));
+  const parts = assignParts(
+    numbered.filter((file) => arabic.get(file.key).pages.some((page) => page.number !== null)),
+    arabic
+  );
   const front = [];
   const body = [];
   const back = [];
@@ -503,14 +524,15 @@ export function arrangeBook(files, numberings, overrides = new Map()) {
     }
     const numbering = numberings.get(file.key);
     file.pages.forEach((page, index) => {
-      const { number, branch, prefix, status, read } = numbering.pages[index];
-      const part = parts.count > 1 ? parts.partOf.get(page.key) : null;
+      const { number, branch, prefix, roman, status, read } = numbering.pages[index];
+      const part = roman ? ROMAN_PART : parts.count > 1 ? parts.partOf.get(page.key) : null;
       const section = part === null ? undefined : parts.sections.get(part);
       body.push(
         entry(file, page, index, 'body', {
           number,
           ...(branch ? { branch } : {}),
           ...(prefix ? { prefix } : {}),
+          ...(roman ? { roman } : {}),
           status,
           read,
           part,
@@ -543,6 +565,21 @@ export function arrangeBook(files, numberings, overrides = new Map()) {
     delete item.seq;
   }
   return { order: [...front, ...body, ...back], mismatch: parts.mismatch, places };
+}
+
+/**
+ * ローマ数字の頁を、番号の無い頁にした番号の付き方（部を決める parts.js に渡す）。ファイルごとに
+ * 番号を入れたファイルの、頁ごとに入れたローマ数字の頁は、ファイルごとの番号（base）も見ない。
+ * ローマ数字の頁が無ければ、そのまま返す。
+ *
+ * @param {ReturnType<typeof inferFileNumbers>} numbering
+ */
+function withoutRoman(numbering) {
+  if (!numbering.pages.some((page) => page.roman)) return numbering;
+  return {
+    ...numbering,
+    pages: numbering.pages.map((page) => (page.roman ? { number: null, status: 'unknown', read: null } : page)),
+  };
 }
 
 /**
@@ -604,7 +641,8 @@ export function checkSequence(order, { sheets = false, mismatch = false } = {}) 
     if (!parts.has(part)) parts.set(part, []);
     parts.get(part).push(item);
   }
-  const several = parts.size > 1;
+  // ローマ数字の頁（前付け）のまとまりは、部とは数えない。
+  const several = [...parts.keys()].filter((part) => part !== ROMAN_PART).length > 1;
   const ranges = [];
   let sectioned = false;
   for (const part of [...parts.keys()].sort((a, b) => a - b)) {
@@ -615,8 +653,11 @@ export function checkSequence(order, { sheets = false, mismatch = false } = {}) 
     sectioned ||= section !== null;
     const sec = sectionHead(numbered[0]);
     const head = `${sec}${prefix ? `${pathText(prefix)}-` : ''}`;
+    // ローマ数字の頁（前付け）のまとまり。番号は ii（i より前に推定した頁は「前付0」）と書く。
+    const roman = part === ROMAN_PART;
     // 確認の画面の項目を見分けるもの（部が分かれていれば部も入れる）。
     const tag = (number) => {
+      if (roman) return { number: number === undefined ? 'roman' : `roman:${number}` };
       if (!several) return number === undefined ? {} : { number };
       return { number: number === undefined ? `${part}` : `${part}:${number}` };
     };
@@ -643,7 +684,8 @@ export function checkSequence(order, { sheets = false, mismatch = false } = {}) 
     const numbers = [...new Set(numbered.map((item) => item.number))].sort((a, b) => a - b);
     const lowest = numbers[0];
     const highest = numbers[numbers.length - 1];
-    ranges.push(`${head}${lowest}〜${head}${highest} 頁`);
+    // 部の並びの書き出し（部に分けた・部の番号を読んだことの知らせ）には、前付けを入れない。
+    if (!roman) ranges.push(`${head}${lowest}〜${head}${highest} 頁`);
     const missing = [];
     for (let n = lowest; n <= highest; n++) {
       if (!plain.has(n) && !replaced.has(n)) missing.push(n);
@@ -652,7 +694,7 @@ export function checkSequence(order, { sheets = false, mismatch = false } = {}) 
       problems.push({
         level: 'error',
         kind: 'missing',
-        message: `${compressRanges(missing, head)} 頁が見つかりません（計 ${missing.length} 頁）。束の入れ忘れ・重送の可能性があります。`,
+        message: `${compressRanges(missing, head, roman ? (n) => pageNumberText({ number: n, roman }) : undefined)} 頁が見つかりません（計 ${missing.length} 頁）。束の入れ忘れ・重送の可能性があります。`,
         pageKeys: [],
         numbers: missing,
         ...tag(),
@@ -685,14 +727,16 @@ export function checkSequence(order, { sheets = false, mismatch = false } = {}) 
     }
 
     if (sheets) {
-      const first = numbered[0];
+      // ローマ数字の並びで i より前に推定した頁（扉など）は、紙の表裏を数えない（ローマ数字の頁は、
+      // 読めた（入れた）i 以降の頁から推定するので、i 以降の頁が必ずある）。
+      const first = roman ? numbered.find((item) => item.number >= 1) : numbered[0];
       const last = numbered[numbered.length - 1];
       // 同じ紙のもう一方の面（枝番の頁は、いちばん後ろの段で数える）。
       const beside = (item, delta) =>
         pageNumberText(
           item.branch
             ? { ...item, branch: [...item.branch.slice(0, -1), item.branch.at(-1) + delta] }
-            : { prefix: item.prefix, number: item.number + delta }
+            : { prefix: item.prefix, number: item.number + delta, ...romanOf(item) }
         );
       if (sideOf(first.number, first.branch) === 'even') {
         problems.push({
@@ -817,15 +861,17 @@ export function withoutSection(number, entry) {
 
 /**
  * [1,2,3,7,9,10] → "1〜3・7・9〜10"。head は番号の頭に付ける前の段（"2-" なら "2-1〜2-3・2-7"）。
+ * format を渡すと、番号をその書き方で書く（ローマ数字の頁なら "i〜iii・vii"。head は使わない）。
  *
  * @param {number[]} numbers
  * @param {string} [head]
+ * @param {(n:number) => string} [format]
  */
-export function compressRanges(numbers, head = '') {
+export function compressRanges(numbers, head = '', format = (n) => `${head}${n}`) {
   const parts = [];
   let start = null;
   let prev = null;
-  const range = () => (start === prev ? `${head}${start}` : `${head}${start}〜${head}${prev}`);
+  const range = () => (start === prev ? format(start) : `${format(start)}〜${format(prev)}`);
   for (const n of [...numbers].sort((a, b) => a - b)) {
     if (start === null) {
       start = prev = n;
@@ -865,7 +911,9 @@ function branchRanges(paths, head) {
  * 本の 17 頁が開く。
  *
  *   表紙       「表紙」（複数頁なら 表紙1, 表紙2…）
- *   前付け     i, ii, iii…（番号が 0 以下に推定された頁）
+ *   前付け     ローマ数字の頁は刷られた番号（ii）。番号が 0 以下に推定された頁は i, ii, iii…と
+ *              数える（ローマ数字の頁の後なら、その続きから）。ローマ数字の並びで i より前に
+ *              推定した頁は「前付」
  *   本文       本の頁番号（前の段のある頁は 2-21 のように「2-」を、頁番号が戻ったところで
  *              分けたまとまりの頁は 6-4-30 のように「6-」を頭に付けた番号）
  *   枝番の頁   57-1, 57-2…（「57-」を頭に付けた番号）
@@ -906,6 +954,11 @@ export function pageLabelRanges(order) {
     if (item.branch) {
       return { style: 'D', prefix: `${head}${pathText([item.number, ...item.branch.slice(0, -1)])}-`, number: item.branch.at(-1) };
     }
+    if (item.roman) {
+      if (item.number < 1) return { style: null, prefix: '前付', number: 0 };
+      frontMatter = item.number;
+      return { style: 'r', prefix: '', number: item.number };
+    }
     if (item.number <= 0) {
       frontMatter++;
       return { style: 'r', prefix: head, number: frontMatter };
@@ -925,23 +978,6 @@ export function pageLabelRanges(order) {
     if (!continues) ranges.push({ start: index, style: label.style, prefix: label.prefix, first: label.number || 1 });
   });
   return ranges;
-}
-
-/** 小文字のローマ数字（頁ラベルの前付け。PDF の /r と同じ書き方）。 */
-export function romanNumeral(number) {
-  const table = [
-    [1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'],
-    [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i'],
-  ];
-  let rest = number;
-  let text = '';
-  for (const [value, letters] of table) {
-    while (rest >= value) {
-      text += letters;
-      rest -= value;
-    }
-  }
-  return text;
 }
 
 /**

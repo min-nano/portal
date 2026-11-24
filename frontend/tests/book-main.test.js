@@ -813,6 +813,25 @@ describe('ファイルを足して並べる', () => {
     expect($('logText').textContent).toContain('3 ファイルの配置を「自動」にしました');
   });
 
+  it('前付けのローマ数字の番号を、頁ごとに入れられる（本文より前に並べる）', async () => {
+    await addBook();
+    const input = (key) => document.querySelector(`#pageGrid [data-page-key="${key}"] .bm-page-number`);
+    renumber(input('f1:0'), 'ii');
+    expect(gridLabels().slice(0, 5)).toEqual(['表紙', '表紙', 'ii 頁', '2 頁', '3 頁']);
+    // 欄には入れたとおりのローマ数字を出す。
+    expect(input('f1:0').value).toBe('ii');
+    expect(input('f1:1').placeholder).toBe('3');
+  });
+
+  it('ローマ数字の並びで i より前に推定した頁の欄には、見本の番号を出さない', async () => {
+    drop([file('猫_前付.pdf', pdf([page('t', null), page('r1', 'i'), page('r2', 'ii'), page('r3', 'iii')]))]);
+    await settled(1);
+    expect(gridLabels()).toEqual(['前付(0) 頁', 'i 頁', 'ii 頁', 'iii 頁']);
+    const input = (key) => document.querySelector(`#pageGrid [data-page-key="${key}"] .bm-page-number`);
+    expect(input('f1:0').placeholder).toBe('番号');
+    expect(input('f1:2').placeholder).toBe('ii');
+  });
+
   it('頁ごと・ファイルごとに番号を直せる', async () => {
     await addBook();
 
@@ -845,7 +864,7 @@ describe('ファイルを足して並べる', () => {
 
     // 数字でなければ断り、Enter では開いたまま（打ち直さずに直せる）。
     renumber(third, 'abc');
-    expect($('message').textContent).toBe('番号は数字（枝番や部・編などの番号の付いた頁は 57-1・2-21 の形）で入れてください。');
+    expect($('message').textContent).toBe('番号は数字（枝番や部・編などの番号の付いた頁は 57-1・2-21、前付けのローマ数字は ii の形）で入れてください。');
     expect(third.hidden).toBe(false);
     expect(third.value).toBe('abc');
     // Esc は元に戻して閉じ、断りも消して、「修正」にフォーカスを戻す。
@@ -858,7 +877,7 @@ describe('ファイルを足して並べる', () => {
     edit.click();
     third.value = 'abc';
     third.blur();
-    expect($('message').textContent).toBe('番号は数字（枝番や部・編などの番号の付いた頁は 57-1・2-21 の形）で入れてください。');
+    expect($('message').textContent).toBe('番号は数字（枝番や部・編などの番号の付いた頁は 57-1・2-21、前付けのローマ数字は ii の形）で入れてください。');
     expect([third.value, third.hidden]).toEqual(['', true]);
     // 別のアプリ・タブへ移っただけなら、開いたまま。
     edit.click();
@@ -915,6 +934,10 @@ describe('ファイルを足して並べる', () => {
     change(startField, '11');
     expect(gridLabels()).toContain('17 頁');
     change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), '1.5');
+    expect($('message').textContent).toBe('先頭の頁の番号は整数（部・編などの番号を前に付けるなら 2-1 の形）で入れてください。');
+    // ローマ数字（前付け）は、頁ごとにだけ入れられる。
+    $('message').textContent = '';
+    change(fileItem('猫_奇数.pdf').querySelector('.bm-file-controls input[type="text"]'), 'ii');
     expect($('message').textContent).toBe('先頭の頁の番号は整数（部・編などの番号を前に付けるなら 2-1 の形）で入れてください。');
     // 番号が整数でないまま進み方を選んでも、欄は使っている進み方（11 からの 2 つずつ）に戻す。
     const invalidStep = fileItem('猫_奇数.pdf').querySelectorAll('.bm-file-controls select')[1];

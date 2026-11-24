@@ -67,7 +67,7 @@ describe('prepareOcr', () => {
     expect(tesseract.scheduler.addWorker).toHaveBeenCalledTimes(1);
     expect(tesseract.scheduler.addWorker).toHaveBeenCalledWith(tesseract.pending[1].worker);
     expect(tesseract.pending[1].worker.setParameters).toHaveBeenCalledWith(
-      expect.objectContaining({ tessedit_char_whitelist: '0123456789-()' })
+      expect.objectContaining({ tessedit_char_whitelist: '0123456789-()ivxlcIVXLC' })
     );
 
     // 残りも、用意できたら加わる。
@@ -203,5 +203,16 @@ describe('readStrip', () => {
 
     await readStrip({ canvas: stripCanvas([]), top: 0, height: 0.14 });
     expect(boxesReadSoFar()).toBe(2);
+  });
+
+  it('前付けのローマ数字も読む（数字・飾りとローマ数字の字が混ざった読みは捨てる）', async () => {
+    const texts = ['ii', 'ii', '1i', 'x-', 'ab', '(iv)'];
+    tesseract.scheduler.addJob = vi.fn().mockImplementation(async () => ({ data: { text: texts.shift(), confidence: 90 } }));
+    const reading = readStrip({ canvas: stripCanvas([100, 280]), top: 0.86, height: 0.14 });
+    await workersRequested(2);
+    tesseract.pending.forEach((pending) => pending.resolve());
+    const items = await reading;
+    // 1 つ目のかたまりは ii が 2 票、2 つ目は x- と (iv) が同点で先の x-。
+    expect(items.map((item) => item.text)).toEqual(['ii', 'x-']);
   });
 });
