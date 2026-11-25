@@ -69,14 +69,14 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
 | # | 前提 | 設定・確認の場所 | 理由 |
 | --- | --- | --- | --- |
 | 1 | 既存の競合アカウントが無い | 管理コンソール → ディレクトリ → 管理対象外のユーザー → **個人アカウント** の一覧が空（あれば[移行を促すか名前を変えさせる](https://knowledge.workspace.google.com/admin/users/use-the-transfer-tool-to-migrate-unmanaged-personal-accounts)） | すでに Clerk にユーザーがいる社員のアドレスの競合アカウントは、Invite-only でも止まらず、その社員として入れる（Drive にも代理アクセスできる） |
-| 2 | Workspace のユーザーがいない社内アドレスで、個人アカウントを作らせない | Gmail → コンプライアンス → **コンテンツ コンプライアンス**（最上位の組織部門）：受信メッセージ／エンベロープ送信者の末尾が `@idverification.bounces.google.com` なら**メールを拒否**／影響を受けるアカウントの種類は**ユーザー・グループ・認識できない / キャッチオール**のすべて | Google のアカウント作成の確認メールを止める（[Prevent creation of unmanaged personal accounts](https://knowledge.workspace.google.com/admin/users/prevent-creation-of-unmanaged-personal-accounts)）。拒否したメールには、ほかのルーティングやコンプライアンスの規則（社外への写しなど）は適用されない（[Set up rules for advanced email content filtering](https://knowledge.workspace.google.com/admin/gmail/advanced/set-up-rules-for-advanced-email-content-filtering)）。Workspace のユーザーがいるアドレスと、グループのアドレスは、Google が「既に使用されている」として作らせない（後者はこのドメインで試して確認） |
+| 2 | Workspace のユーザーがいない社内アドレスで、個人アカウントを作らせない | Gmail → コンプライアンス → **コンテンツ コンプライアンス**（最上位の組織部門）：受信メッセージ／エンベロープ送信者の末尾が `@idverification.bounces.google.com` なら**メールを拒否**／影響を受けるアカウントの種類は**ユーザー・グループ・認識できない / キャッチオール**のすべて | Google のアカウント作成の確認メールを止める（[Prevent creation of unmanaged personal accounts](https://knowledge.workspace.google.com/admin/users/prevent-creation-of-unmanaged-personal-accounts)）。社内ドメイン宛てのメールをすべて Gmail が受けている場合に効く（MX や分割配信で別のメールシステムへ届く分は、そちらで同じ送信元を止める）。拒否したメールには、ほかのルーティングやコンプライアンスの規則（社外への写しなど）は適用されない（[Set up rules for advanced email content filtering](https://knowledge.workspace.google.com/admin/gmail/advanced/set-up-rules-for-advanced-email-content-filtering)）。Workspace のユーザーがいるアドレスと、グループのアドレスは、Google が「既に使用されている」として作らせない（後者はこのドメインで試して確認） |
 | 3 | 管理されていない仕事用アカウントの作成を禁止する | 管理コンソール → ディレクトリ → 管理対象外のユーザー → 仕事用アカウント → 設定を管理（[Prevent new unmanaged work accounts](https://knowledge.workspace.google.com/admin/users/prevent-new-unmanaged-work-accounts)） | 2 と同じく、Workspace のユーザーがいない社内アドレスで Google アカウントを作らせないため。**画面が開けない環境もある**（特権管理者で権限があっても「アクセス権がありません」になった）。その場合は 2・4 で代える |
 | 4 | Clerk の Access mode を **Invite-only** にし、社内ドメインのグループや別名のアドレスのユーザーは作らない | Clerk ダッシュボード → Access mode | 2・3 をすり抜けたアカウントがあっても、Clerk にそのアドレスのユーザーが無ければ入れない（自分でアドレスを足して入ることは 7 で止める） |
 | 5 | 社内ドメインの Clerk ユーザーが、すべて在籍中の Workspace ユーザーのアドレスである（退職した社員や、グループ・別名・試しに作ったアドレスのユーザーを消す） | Clerk ダッシュボード → Users（**本番・開発の両インスタンス**で。切り替えるときと、1 と同じく定期的に） | Invite-only はすでにいるユーザーのサインインを止めない。Workspace のユーザーがいないアドレスの Clerk ユーザーは、そのアドレスで作られた Google アカウントから入られうるうえ、社内ユーザーとして扱われ続ける |
 | 6 | 社員が第三者アプリの制限で締め出されないようにする | 管理コンソール → セキュリティ → API の制御 → アプリのアクセス制御で、Clerk の OAuth クライアントを**信頼できる**にする（同意画面を「外部」にするインスタンスのクライアントすべて） | 同意画面が「外部」だと、社員から見ると第三者のアプリになる |
 | 7 | 利用者が自分でメールアドレスを足したり変えたりできないようにする | Clerk ダッシュボード → User & authentication → User model → User permissions → **Allow users to change their email address** をオフ（両インスタンス） | セッショントークンの `email` は主のメールアドレス。外部ユーザーが社内ドメインのアドレス（の Google アカウント）を自分のユーザーに足して主にすると、社員として扱われる。オフにすると、新しいアドレスを伴う OAuth アカウントの紐づけも止まる（[Restrict changes](https://clerk.com/docs/guides/configure/auth-strategies/sign-up-sign-in-options)） |
 
-1 の一覧と 5 は、定期的に確かめます。PR プレビューで外部ユーザーを試すなら、開発インスタンスにも 4〜7 が要ります（プレビューのバックエンドも同じ `ALLOWED_EMAIL_DOMAINS` で社内ユーザーを決め、Drive に代理アクセスするため）。
+1 の一覧と 5 は、定期的に確かめます。1〜3 は Workspace 全体の設定なので、**どのインスタンスの同意画面を「外部」にする前にも**済ませます（本番は「内部」のまま、PR プレビューだけで外部ユーザーを試す場合も）。開発インスタンスで試すなら、4〜7 も開発インスタンスに要り、あわせて開発インスタンスの **Test mode をオフ**にします（オンだと `+clerk_test` のアドレスがメールを受け取らずに固定のコードで確認済みになる）。プレビューのバックエンドも同じ `ALLOWED_EMAIL_DOMAINS` で社内ユーザーを決め、Drive に代理アクセスするためです。
 
 **新しく使い始める人は、社員も外部ユーザーも、先に Clerk にユーザーを作ります**（Google でのサインインでも同じ）。Clerk のダッシュボードの **Users → Create user** で、その人のメールアドレスだけを入れて作ります。そのため、Clerk の **Email address はユーザーの属性として必須のまま**残します（無効にするのはサインインの手段としての確認コード・リンク・パスワード）。メールアドレスだけで作れることを、先に開発インスタンスで確かめてください。こうして作ったメールアドレスは確認済みとして登録され（[createUser](https://clerk.com/docs/reference/backend/user/create-user)）、本人が同じアドレスの Google アカウントでサインインすると、そのユーザーに紐づきます。外部ユーザーは、そのアドレスを `ALLOWED_EXTERNAL_EMAILS` に足すのとあわせて作ります。
 
@@ -631,7 +631,7 @@ firebase.json                 # Hosting 設定（/api/** → Cloud Run リライ
      ```json
      {"email": "{{user.primary_email_address}}"}
      ```
-   - その OAuth クライアントの同意画面は、社員だけで使うなら **「内部」** にする（Workspace のアカウントしか通らないので、下の前提は要らない）。組織外のアカウント（外部ユーザー）も使わせる場合に限り、同意画面を **「外部」**（公開状態は「本番」）にし、**Access mode を Invite-only** にする。**変える前に、「外部ユーザー（組織外のアカウント）」の前提 1〜7 を満たしておく**（とくに 6 を先にしないと、社員が第三者アプリの制限で締め出されることがある）。
+   - その OAuth クライアントの同意画面は、社員だけで使うなら **「内部」** にする（Workspace のアカウントしか通らないので、「外部ユーザー（組織外のアカウント）」の前提は要らない。「内部」を選べるのは、OAuth クライアントの GCP プロジェクトがその Workspace の組織に属しているときだけ）。組織外のアカウント（外部ユーザー）も使わせる場合に限り、同意画面を **「外部」**（公開状態は「本番」）にし、**Access mode を Invite-only** にする。**変える前に、「外部ユーザー（組織外のアカウント）」の前提 1〜7 を満たしておく**（とくに 6 を先にしないと、社員が第三者アプリの制限で締め出されることがある）。
 3. API Keys から **Publishable Key** を控える。本番（`pk_live_...`）はリポジトリ変数 `CLERK_PUBLISHABLE_KEY`、開発（`pk_test_...`）は `CLERK_PUBLISHABLE_KEY_TEST` に設定する（ローカル開発ではどちらかを `VITE_CLERK_PUBLISHABLE_KEY` として渡す）。
 4. 本番ドメイン（Firebase Hosting の URL / カスタムドメイン）を本番インスタンスに登録する。開発インスタンスにはプレビュー URL のパターン（後述の「PR プレビュー」参照）を Allowed origins に登録する。
 
@@ -970,7 +970,7 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 
 プレビューを動かすための前提:
 
-1. **Clerk 開発インスタンス** にも本番と同じ設定を行う（Google のみ有効化・セッショントークンの `email` クレーム。外部ユーザーをプレビューでも試すなら、開発インスタンスでも「外部ユーザー（組織外のアカウント）」の前提 4〜7 を満たしてから、Google 接続の同意画面を「外部」にする。試す人は Clerk にユーザーを作っておく。「1. Clerk」）。開発インスタンスは既定で任意のオリジンからの利用を許可するため、プレビュー URL のための追加設定は通常不要。オリジンを明示的に制限したい場合のみ、**Allowed origins** を Backend API で設定する（ダッシュボードに UI は無い。渡した配列で全置換される点に注意）:
+1. **Clerk 開発インスタンス** にも本番と同じ設定を行う（Google のみ有効化・セッショントークンの `email` クレーム。外部ユーザーをプレビューでも試すなら、「外部ユーザー（組織外のアカウント）」の前提 1〜3（Workspace 全体）と、開発インスタンスでの 4〜7・Test mode のオフを満たしてから、Google 接続の同意画面を「外部」にする。試す人は Clerk にユーザーを作っておく。「1. Clerk」）。開発インスタンスは既定で任意のオリジンからの利用を許可するため、プレビュー URL のための追加設定は通常不要。オリジンを明示的に制限したい場合のみ、**Allowed origins** を Backend API で設定する（ダッシュボードに UI は無い。渡した配列で全置換される点に注意）:
    ```bash
    curl -X PATCH https://api.clerk.com/v1/instance \
      -H "Authorization: Bearer <開発インスタンスの Secret Key (sk_test_...)>" \
