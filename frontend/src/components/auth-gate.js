@@ -10,9 +10,11 @@
 
 const TAG = 'portal-auth-gate';
 
-// 社員も、招待された外部ユーザーも Google で入る
-// （README「外部ユーザー（組織外のアカウント）」）。
-export const DEFAULT_NOTE = 'Google アカウントでサインインしてください。';
+// 社員も外部ユーザーも Google で入る。外部ユーザーを使わせる環境では、
+// 初めての人は先に管理者が Clerk にユーザーを作る（Invite-only）ので、その案内も
+// 添える（README「外部ユーザー（組織外のアカウント）」）。
+export const DEFAULT_NOTE =
+  'Google アカウントでサインインしてください（初めて使う場合、登録が必要なときは管理者に依頼してください）。';
 
 // Clerk のサインイン画面は、未サインインだと分かってから読み込む
 // （auth.js の loadClerkUI）。描かれるまでのあいだ枠だけが空で残らないよう、

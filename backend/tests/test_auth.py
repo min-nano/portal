@@ -169,8 +169,10 @@ def test_external_emails_may_be_listed_one_per_line(monkeypatch):
 
 @pytest.mark.parametrize("email", ["x+clerk_test@example.co.jp", "Tester+a@Example.co.jp"])
 def test_subaddresses_in_the_staff_domain_are_refused(email):
-    # Clerk のテストモードでは +clerk_test のアドレスがメール無しで通る。
-    # Workspace のアドレスに + は無いので、社内ドメインでは + を通さない。
+    # 社員+x@ 宛てのメールは社員本人に届くので、そのサブアドレスで個人の
+    # Google アカウントを作られうる（同意画面が「外部」だと Google ログインも
+    # 通る）。Clerk のテストモードの +clerk_test も同じ。Workspace のアドレスに
+    # + は無いので、社内ドメインでは + を通さない。
     with pytest.raises(AuthError) as e:
         clerk_auth.verify_token(make_token(email=email))
     assert e.value.status == 403
