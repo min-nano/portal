@@ -158,9 +158,11 @@ def verify_token(token: str) -> User:
         return User(email=email, external=True)
     local_part, _, email_domain = email.lower().rpartition("@")
     # 社内ドメインでも、+ を含むアドレス（サブアドレス）は社内ユーザーにしない。
-    # Workspace のアドレスには + を使えないので社員は困らない。社内ドメインの
-    # アドレスで、Workspace のアカウント以外の入り方（Clerk のテストモードの
-    # +clerk_test のアドレスなど）を通さないための、念のための守り。
+    # Workspace のアドレスには + を使えないので社員は困らない。一方、
+    # 社員+x@社内ドメイン 宛てのメールは社員本人（や、そのメールを読める人）に
+    # 届くので、そのサブアドレスで個人の Google アカウントを作られうる。同意画面が
+    # 「外部」だと、それで Google ログインできてしまうため、ここで断る（Clerk の
+    # テストモードの +clerk_test のアドレスも、これで通らない）。
     if email_domain not in [d.lower() for d in domains] or "+" in local_part:
         raise AuthError(
             f"このアプリは許可されたアカウント専用です（{email} は利用できません）。",
