@@ -145,8 +145,8 @@ def verify_token(token: str) -> User:
         )
 
     # 社内ドメインが未設定なら、誰も通さない（設定の漏れとして 500）。以前は
-    # 判定を飛ばして全員を通していたが、外部ユーザーのために確認コードでの
-    # サインインを有効にすると、どのメールアドレスでもここまで来られるので、
+    # 判定を飛ばして全員を通していたが、外部ユーザーのために Google の同意画面を
+    # 「外部」にすると、どの Google アカウントでもここまで来られるので、
     # 全員が社内ユーザー（Drive の代理アクセスまで通る）扱いになってしまう。
     domains = config.allowed_email_domains()
     if not domains:
@@ -158,9 +158,9 @@ def verify_token(token: str) -> User:
         return User(email=email, external=True)
     local_part, _, email_domain = email.lower().rpartition("@")
     # 社内ドメインでも、+ を含むアドレス（サブアドレス）は社内ユーザーにしない。
-    # Workspace のアドレスには + を使えないので社員は困らない一方、Clerk の
-    # テストモード（開発インスタンスは既定でオン）では、+clerk_test を含む
-    # アドレスがメールを受け取らずに固定のコードで通ってしまうため。
+    # Workspace のアドレスには + を使えないので社員は困らない。社内ドメインの
+    # アドレスで、Workspace のアカウント以外の入り方（Clerk のテストモードの
+    # +clerk_test のアドレスなど）を通さないための、念のための守り。
     if email_domain not in [d.lower() for d in domains] or "+" in local_part:
         raise AuthError(
             f"このアプリは許可されたアカウント専用です（{email} は利用できません）。",
