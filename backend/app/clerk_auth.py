@@ -161,8 +161,7 @@ def verify_token(token: str) -> User:
     # Workspace のアドレスには + を使えないので社員は困らない。一方、
     # 社員+x@社内ドメイン 宛てのメールは社員本人（や、そのメールを読める人）に
     # 届くので、そのサブアドレスで個人の Google アカウントを作られうる。主な守りは
-    # README「外部ユーザー」の前提 2・4・5（確認メールを止める・Clerk のユーザーを
-    # 作らせない）で、これは念のための二重の守り（Clerk のテストモードの
+    # README「外部ユーザー」の前提の表（1〜7）で、これは念のための二重の守り（Clerk のテストモードの
     # +clerk_test のアドレスも、これで通らない）。別名やキャッチオールは防げない。
     if email_domain not in [d.lower() for d in domains] or "+" in local_part:
         raise AuthError(
