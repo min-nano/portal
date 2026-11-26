@@ -1,11 +1,11 @@
 <!-- 説明は長いので、見出しの「?」に畳む（押すか、マウスを載せると開く）。
      説明の文は、途中で改行すると空白が入って見えるので 1 行に書く。 -->
 <div class="page-head">
-  <h2 class="bm-help-host">
+  <h2 class="help-host">
     PDF の結合
-    <span class="bm-help">
-      <button type="button" class="bm-help-btn" aria-label="このツールの説明" aria-expanded="false" aria-controls="helpIntro">?</button>
-      <span class="bm-help-body" id="helpIntro">
+    <span class="help">
+      <button type="button" class="help-btn" aria-label="このツールの説明" aria-expanded="false" aria-controls="helpIntro">?</button>
+      <span class="help-body" id="helpIntro">
         選んだ PDF を 1 つの PDF にまとめます。裁断した本を分けてスキャンした PDF（奇数頁の束・偶数頁の束・表紙・裏表紙など）は、頁番号を読み取って 1 冊ぶんの順に並べます（部ごとに番号が振り直されていても並べられます）。頁番号の無い PDF は、ファイルの一覧の順（追加順・名前順・更新日時順、または手で並べ替えた順）につなぎます。頁の抜け・重なりと、スキャンの傾き・ずれ・すじを確かめてから結合し、結合した PDF も元の頁と突き合わせて検証します。頁番号の読み取り・検査・結合はすべてこの端末の中で行い、Drive のファイルもこの端末が Drive から直接読みます。サーチャブル PDF の文字情報はそのまま残ります。
       </span>
     </span>
@@ -14,11 +14,11 @@
 
 <!-- 見出しに「?」を入れるので、開閉ボタンの読み上げ名は label で渡す。 -->
 <portal-section class="card bm-step" id="filesSection" label="1. スキャンしたファイル">
-  <h3 slot="title" class="bm-help-host">
+  <h3 slot="title" class="help-host">
     1. スキャンしたファイル
-    <span class="bm-help">
-      <button type="button" class="bm-help-btn" aria-label="ファイルの選び方" aria-expanded="false" aria-controls="helpFiles">?</button>
-      <span class="bm-help-body" id="helpFiles">
+    <span class="help">
+      <button type="button" class="help-btn" aria-label="ファイルの選び方" aria-expanded="false" aria-controls="helpFiles">?</button>
+      <span class="help-body" id="helpFiles">
         Drive の選択画面では、PDF を押すたびに選ぶ・外すが切り替わり、いくつでも選べます（フォルダを移っても残ります）。手元のファイルは、この枠へドラッグ＆ドロップしても追加できます。最後の頁から並んでいるファイル（給紙の都合で逆順になったもの）も、頁番号から自動で並べ直します。番号の無い表紙なども、ファイルごとに「進み方」で逆順を選べます。文字情報に頁番号が見つからない頁は、画像の余白から読み取ります（初回だけ数 MB の読み込みがあります）。
       </span>
     </span>

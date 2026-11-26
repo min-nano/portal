@@ -8,7 +8,7 @@
 
 import '../styles.css';
 import './tool.css';
-import '../components/index.js';
+import { connectHelpTips } from '../components/index.js';
 import { startPage } from '../page-start.js';
 import { apiGet, apiPostForBlob, apiSendJson } from '../api.js';
 import { pickFile } from '../drive-picker.js';
@@ -435,6 +435,7 @@ async function prepare() {
   document.getElementById('submitBtn').addEventListener('click', submitForm);
   bindStickyHeadWorkarounds();
   bindPhotoReading();
+  connectHelpTips();
 
   // フォーム定義と雛形設定を並行して取得してから、最初の 1 部屋を表示する。
   const [loadedConfig] = await Promise.all([

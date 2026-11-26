@@ -14,7 +14,7 @@
 //   <portal-save-bar>          保存欄（PDF ツール）
 //   <portal-save-dialogs>      未保存の確認・名前を付けて保存（PDF ツール）
 //
-// カスタム要素にしていない部品（form-field.js）もここから出す。入力欄は
+// カスタム要素にしていない部品（form-field.js・help-tip.js）もここから出す。入力欄は
 // ページの中に何百と並ぶので、1 つずつを要素にすると、その数だけ
 // アップグレードと shadow DOM が要る。作りかたを 1 つにすれば足りる。
 //
@@ -45,3 +45,4 @@ export {
   buildSection,
   inputModeFor,
 } from './form-field.js';
+export { connectHelpTips } from './help-tip.js';

@@ -89,6 +89,15 @@ beforeEach(async () => {
 });
 
 describe('写真から読み取る', () => {
+  it('説明は「?」に畳んであり、押すと開く', () => {
+    const help = document.getElementById('helpPhoto').closest('.help');
+    const button = help.querySelector('.help-btn');
+    expect(help.classList.contains('open')).toBe(false);
+    button.click();
+    expect(help.classList.contains('open')).toBe(true);
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+  });
+
   it('ボタンで写真の選択を開き、何も選ばなければ何もしない', () => {
     const input = document.getElementById('photoInput');
     const opened = vi.fn();

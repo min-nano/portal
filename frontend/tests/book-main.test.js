@@ -1869,8 +1869,8 @@ describe('ファイルを足して並べる', () => {
   });
 
   it('見出しの「?」は、押すと説明を開き、もう一度押すか外を押すか Esc で閉じる', () => {
-    const [intro, files] = document.querySelectorAll('.bm-help');
-    const button = (help) => help.querySelector('.bm-help-btn');
+    const [intro, files] = document.querySelectorAll('.help');
+    const button = (help) => help.querySelector('.help-btn');
     const isOpen = (help) => help.classList.contains('open') && button(help).getAttribute('aria-expanded') === 'true';
 
     button(intro).click();
@@ -1883,7 +1883,7 @@ describe('ファイルを足して並べる', () => {
     button(files).click();
     expect(isOpen(intro)).toBe(false);
     expect(isOpen(files)).toBe(true);
-    files.querySelector('.bm-help-body').click();
+    files.querySelector('.help-body').click();
     expect(isOpen(files)).toBe(true);
     expect($('filesSection').hasAttribute('collapsed')).toBe(false);
 
@@ -1899,25 +1899,25 @@ describe('ファイルを足して並べる', () => {
   it('見出しの「?」は、マウスを載せている間だけ開き、開くのはいつも 1 つだけ', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
-      const [intro, files] = document.querySelectorAll('.bm-help');
+      const [intro, files] = document.querySelectorAll('.help');
       const isOpen = (help) =>
-        help.classList.contains('open') && help.querySelector('.bm-help-btn').getAttribute('aria-expanded') === 'true';
+        help.classList.contains('open') && help.querySelector('.help-btn').getAttribute('aria-expanded') === 'true';
       const pointer = (help, type, pointerType = 'mouse') =>
         help.dispatchEvent(Object.assign(new Event(type), { pointerType }));
 
       // タッチの pointerenter では開かない（押したときに開く）。
       pointer(intro, 'pointerenter', 'touch');
       expect(isOpen(intro)).toBe(false);
-      intro.querySelector('.bm-help-btn').click();
+      intro.querySelector('.help-btn').click();
       pointer(intro, 'pointerleave', 'touch');
       vi.advanceTimersByTime(1000);
       expect(isOpen(intro)).toBe(true);
-      intro.querySelector('.bm-help-btn').click();
+      intro.querySelector('.help-btn').click();
 
       pointer(intro, 'pointerenter');
       expect(isOpen(intro)).toBe(true);
       // 載せたまま押しても閉じない。
-      intro.querySelector('.bm-help-btn').click();
+      intro.querySelector('.help-btn').click();
       expect(isOpen(intro)).toBe(true);
       // 説明の文へ動かす間の隙間では閉じない。
       pointer(intro, 'pointerleave');
@@ -1930,7 +1930,7 @@ describe('ファイルを足して並べる', () => {
       expect(isOpen(intro)).toBe(false);
 
       // 押して開いたものがあっても、別の「?」に載せればそちらだけになる。
-      files.querySelector('.bm-help-btn').click();
+      files.querySelector('.help-btn').click();
       pointer(intro, 'pointerenter');
       expect(isOpen(files)).toBe(false);
       expect(isOpen(intro)).toBe(true);

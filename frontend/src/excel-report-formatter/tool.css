@@ -151,13 +151,12 @@
   background-size: 10px 10px;
 }
 
-/* 写真から読み取る（データシート・間取り図）。フォームの先頭に、ボタンと説明を置く。 */
+/* 写真から読み取る（データシート・間取り図）。フォームの先頭に、ボタンと
+   説明の「?」を 1 行に置く（説明は「?」の下に重ねて開く）。 */
 .photo-reading {
+  display: flex;
+  align-items: center;
   margin-bottom: var(--s-4);
-}
-
-.photo-reading .hint {
-  margin-top: var(--s-2);
 }
 
 /* 読み取った部屋を確かめるダイアログ（room-dialog.js）。1 行に 階・室名・削除 を並べる。 */

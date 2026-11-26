@@ -959,6 +959,67 @@ body:has(.result-dock .verdict.ng) .verdict-fab .state[data-state='ng'] {
   border-radius: var(--r-pill);
 }
 
+/* --- 「?」を押すと開く説明（components/help-tip.js） ----------------------
+   説明は、基準（.help-host。見出しやボタンの行）の幅いっぱいの下に重ねて出す
+   （「?」の位置に合わせると、狭い画面では右へはみ出す）。開け閉めは
+   help-tip.js の open だけで表す（マウスを載せたときも）。 */
+.help-host {
+  position: relative;
+}
+
+/* ページの見出しは中身の幅に縮むので、説明の幅を取れるよう行いっぱいに広げる。 */
+.page-head .help-host {
+  flex: 1 1 auto;
+}
+
+.help {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+button.help-btn {
+  width: 1.375rem;
+  min-height: 0;
+  height: 1.375rem;
+  padding: 0;
+  margin-left: var(--s-1);
+  font-size: var(--fs-xs);
+  color: var(--brand-600);
+  background: var(--surface);
+  border: 1px solid var(--brand-300);
+  border-radius: var(--r-pill);
+}
+
+button.help-btn:hover,
+.help.open button.help-btn {
+  color: var(--surface);
+  background: var(--brand-600);
+  border-color: var(--brand-600);
+}
+
+.help-body {
+  display: none;
+  position: absolute;
+  top: calc(100% + var(--s-1));
+  left: 0;
+  z-index: var(--z-dock);
+  width: min(36rem, 100%);
+  padding: var(--s-3);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  line-height: 1.7;
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2);
+  cursor: auto;
+}
+
+.help.open .help-body {
+  display: block;
+}
+
 /* --- ダイアログ ---------------------------------------------------------- */
 
 .app-dialog {
