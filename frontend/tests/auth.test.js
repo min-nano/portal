@@ -211,8 +211,12 @@ describe('requireSignIn（サインイン済み）', () => {
 describe('requireSignIn（未サインイン）', () => {
   it('サインインゲートを出し、そこで初めて @clerk/ui を読み込む', async () => {
     const { requireSignIn } = await loadAuthModule();
+    // 前の人（セッションが切れた社員）について覚えたアドレスは、ここで消す。
+    localStorage.setItem('portal.account', JSON.stringify({ email: 'taro@example.com' }));
 
     const clerk = await requireSignIn();
+
+    expect(localStorage.getItem('portal.account')).toBeNull();
 
     expect(clerk).toBeNull();
     expect(document.getElementById('app').hidden).toBe(true);

@@ -207,6 +207,24 @@ describe('forgetRememberedAccount', () => {
     expect(storage.items.has('portal.account')).toBe(false);
   });
 
+  it('ほかのタブで消されたら、このタブでももう覚えない', async () => {
+    const { checkAccount: check } = await freshModule();
+    const storage = memoryStorage();
+    apiGet.mockResolvedValue({ email: 'a@example.co.jp', external: false });
+
+    // ほかのキーの変化や、書き込み（消したのでない）では変わらない。
+    window.dispatchEvent(new StorageEvent('storage', { key: 'portal.site', newValue: null }));
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: 'portal.account', newValue: '{"email":"a@example.co.jp"}' })
+    );
+    expect(await check(document, noWait, storage)).toBe('internal');
+    expect(storage.setItem).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new StorageEvent('storage', { key: 'portal.account', newValue: null }));
+    expect(await check(document, noWait, storage)).toBe('internal');
+    expect(storage.setItem).toHaveBeenCalledTimes(1);
+  });
+
   it('忘れた後に届いた答えでは、もう覚えない（サインアウト中の書き戻しを防ぐ）', async () => {
     const { forgetRememberedAccount: forget, checkAccount: check } = await freshModule();
     const storage = memoryStorage();

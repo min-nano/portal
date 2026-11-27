@@ -127,6 +127,9 @@ export async function requireSignIn() {
   const clerk = await initClerk();
 
   if (!clerk.user) {
+    // サインインしていない（セッションが切れた・別の端末でサインアウトした）なら、
+    // 前の人について覚えたアドレスを共用の端末に残さない（account.js）。
+    forgetRememberedAccount();
     // サインイン画面を出すので、ページの読み込み中の表示はここで終わり
     // （ゲートの中には、サインイン画面が現れるまでの表示が別にある）。
     finishPageLoading();

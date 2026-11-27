@@ -212,8 +212,8 @@ function toolListHtml(tools) {
   return tools
     .map((tool) =>
       [
-        // 外部ユーザーにも使わせると名乗っていないツールは社内専用（外部ユーザー
-        // には見せない。src/account.js）。
+        // 外部ユーザーにも使わせると名乗っていないツールは社内専用（社内ユーザーと
+        // 確かめてから見せる。src/account.js）。
         tool.externalUsers ? '<li>' : '<li data-staff-only>',
         `  <a class="tool-card" href="/${STAGE_DIR}/${tool.id}/">`,
         '    <span class="tool-icon" aria-hidden="true">',
