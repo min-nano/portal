@@ -103,7 +103,7 @@ def test_the_drive_file_list_is_refused(external_client, drive):
 
 
 def test_an_account_on_neither_list_is_refused_with_a_code(anon_client, monkeypatch):
-    """どちらの許可リストにも無いアカウントは、目印（code）付きの 403 で断る。"""
+    """使えないアカウントは、目印（code）付きの 403 で断る。"""
 
     def refuse(authorization):
         raise AuthError("このアプリは許可されたアカウント専用です。", 403, "account_not_allowed")

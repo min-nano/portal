@@ -9,16 +9,12 @@
 """
 
 import os
-import re
 
 
 def _csv(name: str) -> list[str]:
     return [v.strip() for v in os.environ.get(name, "").split(",") if v.strip()]
 
 
-def _words(name: str) -> list[str]:
-    """カンマ・空白・改行のどれで区切っても読める一覧（人が並べて書くもの）。"""
-    return [v for v in re.split(r"[\s,]+", os.environ.get(name, "")) if v]
 
 
 def clerk_issuers() -> list[str]:
@@ -53,15 +49,18 @@ def allowed_email_domains() -> list[str]:
     return _csv("ALLOWED_EMAIL_DOMAINS")
 
 
-def allowed_external_emails() -> list[str]:
-    """個別に利用を許可する組織外のメールアドレス（例: someone@gmail.com）。
+def allow_external_users() -> bool:
+    """社内ドメイン以外でサインインした人を、外部ユーザーとして通すか。
 
-    ここに載ったアカウントは外部ユーザーとして扱い、Drive を使わない機能
-    （手元のファイルを読み、編集したものをダウンロードする）だけを許す。
-    ドメインではなくアドレスで指定するのは、gmail.com のような共有の
-    ドメインを丸ごと許すことにならないようにするため。
+    true のときだけ通し、Drive を使わない機能（手元のファイルを読み、編集した
+    ものをダウンロードする）だけを許す。誰を通すかは Clerk が決める: Access
+    mode を Invite-only にして、管理者が作ったユーザーだけがサインインできる
+    ようにしておく（README「外部ユーザー」）。外部ユーザーのアドレスの一覧を
+    ここにも持つと、Clerk のユーザーと二重に管理することになるので持たない。
+
+    未設定・true 以外なら、社内ドメイン以外は断る（社員だけで使う環境の既定）。
     """
-    return _words("ALLOWED_EXTERNAL_EMAILS")
+    return os.environ.get("ALLOW_EXTERNAL_USERS", "").strip().lower() == "true"
 
 
 def delegated_sa_email() -> str:

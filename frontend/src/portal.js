@@ -8,7 +8,7 @@ import { startPage } from './page-start.js';
 // （サインインの確認が済んだ時点で使える）。理由を出す先は、ツールと違って
 // サインインゲートになる（画面の中にはメッセージ欄が無いため）。
 function showStartError(message) {
-  // ツール一覧を出した後に分かることもある（どちらの許可リストにも無い
+  // ツール一覧を出した後に分かることもある（使えない
   // アカウント。page-start.js）。そのときは一覧をしまって理由だけを出す。
   document.getElementById('app').hidden = true;
   const gate = document.getElementById('authGate');

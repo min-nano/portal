@@ -226,7 +226,7 @@ EXTERNAL_EMAIL = "partner@gmail.com"
 
 @pytest.fixture
 def external_client(drive):
-    """外部ユーザー（ALLOWED_EXTERNAL_EMAILS で個別に許可した組織外のアカウント）。"""
+    """外部ユーザー（ALLOW_EXTERNAL_USERS のときに通す、社内ドメイン以外のアカウント）。"""
     main.app.dependency_overrides[main.require_user] = lambda: User(
         email=EXTERNAL_EMAIL, external=True
     )

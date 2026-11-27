@@ -13,8 +13,8 @@
      （他サイト向けに発行されたトークンの流用を防ぐ。PR プレビューの URL は
      デプロイごとに変わるため fnmatch 形式のワイルドカードを許可する）
   5. email クレームの存在
-  6. メールアドレスが ALLOWED_EXTERNAL_EMAILS に載っている（外部ユーザー）か、
-     メールドメインが ALLOWED_EMAIL_DOMAINS に含まれる（社内ユーザー）こと
+  6. メールドメインが ALLOWED_EMAIL_DOMAINS に含まれる（社内ユーザー）か、
+     ALLOW_EXTERNAL_USERS が true である（それ以外は外部ユーザー）こと
 
 email は Clerk の既定のセッショントークンには含まれないため、Clerk
 ダッシュボードの Sessions → Customize session token で
@@ -50,7 +50,7 @@ _jwk_clients: dict[str, PyJWKClient] = {}
 _jwk_lock = threading.Lock()
 
 
-# どちらの許可リストにも無いアカウント。画面はこの目印で見分け、ツールを
+# 使えないアカウント（社内ドメインでも外部ユーザーでもない）。画面はこの目印で見分け、ツールを
 # 閉じて理由を出す（ほかの 403——プロキシなど——と取り違えないため）。
 ACCOUNT_NOT_ALLOWED = "account_not_allowed"
 
@@ -65,7 +65,7 @@ class AuthError(PortalError):
 @dataclass(frozen=True)
 class User:
     email: str
-    # 組織外のアカウント（ALLOWED_EXTERNAL_EMAILS で個別に許可したもの）か。
+    # 組織外のアカウント（ALLOW_EXTERNAL_USERS のときに通す、社内ドメイン以外）か。
     # False だと Drive の代理アクセスまで通るので、既定値は置かない（作る側が
     # 必ず決める。書き忘れた User が黙って社内ユーザーになることがないように）。
     external: bool
@@ -152,25 +152,32 @@ def verify_token(token: str) -> User:
     if not domains:
         raise AuthError("サーバーの認証設定（ALLOWED_EMAIL_DOMAINS）が未設定です。", 500)
 
-    # 個別に許可した外部アカウントは、ドメインの判定より先に見る。社内の
-    # ドメインに当たる場合でも外部として扱う（できることが少ない側に倒す）。
-    if email.lower() in [e.lower() for e in config.allowed_external_emails()]:
-        return User(email=email, external=True)
     local_part, _, email_domain = email.lower().rpartition("@")
-    # 社内ドメインでも、+ を含むアドレス（サブアドレス）は社内ユーザーにしない。
-    # Workspace のアドレスには + を使えないので社員は困らない。一方、
-    # 社員+x@社内ドメイン 宛てのメールは社員本人（や、そのメールを読める人）に
-    # 届くので、そのサブアドレスで個人の Google アカウントを作られうる。主な守りは
-    # README「外部ユーザー」の前提の表（1〜7）で、これは念のための二重の守り（Clerk のテストモードの
-    # +clerk_test のアドレスも、これで通らない）。別名やキャッチオールは防げない。
-    if email_domain not in [d.lower() for d in domains] or "+" in local_part:
-        raise AuthError(
-            f"このアプリは許可されたアカウント専用です（{email} は利用できません）。",
-            403,
-            ACCOUNT_NOT_ALLOWED,
-        )
+    if email_domain in [d.lower() for d in domains]:
+        # 社内ドメインでも、+ を含むアドレス（サブアドレス）は通さない（外部
+        # ユーザーにもしない）。Workspace のアドレスには + を使えないので社員は
+        # 困らない。一方、社員+x@社内ドメイン 宛てのメールは社員本人（や、そのメールを
+        # 読める人）に届くので、そのサブアドレスで個人の Google アカウントを作られ
+        # うる。主な守りは README「外部ユーザー」の前提の表（1〜7）で、これは念のための
+        # 二重の守り（Clerk のテストモードの +clerk_test のアドレスも、これで通らない）。
+        # 別名やキャッチオールは防げない。
+        if "+" in local_part:
+            raise _not_allowed(email)
+        return User(email=email, external=False)
 
-    return User(email=email, external=False)
+    # 社内ドメイン以外は、外部ユーザーを使わせる環境でだけ通す。誰が
+    # サインインできるかは Clerk（Invite-only）が決める。
+    if config.allow_external_users():
+        return User(email=email, external=True)
+    raise _not_allowed(email)
+
+
+def _not_allowed(email: str) -> AuthError:
+    return AuthError(
+        f"このアプリは許可されたアカウント専用です（{email} は利用できません）。",
+        403,
+        ACCOUNT_NOT_ALLOWED,
+    )
 
 
 def user_from_authorization_header(authorization: str | None) -> User:

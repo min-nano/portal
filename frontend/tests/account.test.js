@@ -53,7 +53,7 @@ describe('hideStaffOnlyForExternalUsers', () => {
     expect(document.documentElement.dataset.account).toBeUndefined();
   });
 
-  it('どちらの許可リストにも無いアカウント（403）は、理由を投げる', async () => {
+  it('使えないアカウント（403）は、理由を投げる', async () => {
     const refused = Object.assign(
       new Error('このアプリは許可されたアカウント専用です（someone@gmail.com は利用できません）。'),
       { status: 403, code: 'account_not_allowed' }

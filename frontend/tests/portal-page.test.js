@@ -68,7 +68,7 @@ describe('ポータルトップページ', () => {
     expect(document.documentElement.dataset.account).toBe('external');
   });
 
-  it('どちらの許可リストにも無いアカウントには、一覧をしまって理由を出す', async () => {
+  it('使えないアカウントには、一覧をしまって理由を出す', async () => {
     requireSignIn.mockResolvedValue({ user: { id: 'user-1' } });
     apiGet.mockRejectedValue(
       Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403, code: 'account_not_allowed' })

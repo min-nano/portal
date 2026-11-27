@@ -68,7 +68,7 @@ def auth_env(monkeypatch):
         "CLERK_AUTHORIZED_PARTIES", f"{FRONTEND_ORIGIN},{PREVIEW_ORIGIN_PATTERN}"
     )
     monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", "example.co.jp")
-    monkeypatch.delenv("ALLOWED_EXTERNAL_EMAILS", raising=False)
+    monkeypatch.delenv("ALLOW_EXTERNAL_USERS", raising=False)
     monkeypatch.setattr(
         clerk_auth, "_signing_key_for", lambda token, issuer: _PUBLIC_PEM
     )
@@ -144,55 +144,45 @@ def test_email_outside_allowed_domain_is_403():
     assert e.value.code == clerk_auth.ACCOUNT_NOT_ALLOWED
 
 
-def test_listed_external_email_is_let_in_as_external(monkeypatch):
-    monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "partner@gmail.com, Other@Example.org")
+def test_other_domains_are_external_users_when_enabled(monkeypatch):
+    # 誰がサインインできるかは Clerk（Invite-only）が決めるので、ここでは
+    # 社内ドメインかどうかだけで分ける。
+    monkeypatch.setenv("ALLOW_EXTERNAL_USERS", "true")
 
     user = clerk_auth.verify_token(make_token(email="partner@gmail.com"))
     assert user == clerk_auth.User(email="partner@gmail.com", external=True)
-    # 大文字小文字は区別しない（Clerk とリポジトリ変数の書き方の違いで弾かない）。
-    assert clerk_auth.verify_token(make_token(email="other@example.ORG")).external
-
-
-def test_staff_accounts_are_not_external(monkeypatch):
-    monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "partner@gmail.com")
-
     assert clerk_auth.verify_token(make_token()).external is False
 
 
-def test_external_emails_may_be_listed_one_per_line(monkeypatch):
-    # リポジトリ変数に 1 行に 1 つずつ書いても読める。
-    monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "\n partner@gmail.com\nother@example.org ,\n")
+@pytest.mark.parametrize("value", ["", "false", "1", "yes"])
+def test_other_domains_are_refused_unless_enabled_exactly(monkeypatch, value):
+    # true 以外（未設定・書き損じ）は、社員だけで使う環境の既定どおり断る。
+    monkeypatch.setenv("ALLOW_EXTERNAL_USERS", value)
 
-    assert clerk_auth.verify_token(make_token(email="partner@gmail.com")).external
-    assert clerk_auth.verify_token(make_token(email="other@example.org")).external
-
-
-@pytest.mark.parametrize("email", ["x+clerk_test@example.co.jp", "Tester+a@Example.co.jp"])
-def test_subaddresses_in_the_staff_domain_are_refused(email):
-    # 社員+x@ 宛てのメールは社員本人に届くので、そのサブアドレスで個人の
-    # Google アカウントを作られうる（同意画面が「外部」だと Google ログインも
-    # 通る）。Clerk のテストモードの +clerk_test も同じ。Workspace のアドレスに
-    # + は無いので、社内ドメインでは + を通さない。
     with pytest.raises(AuthError) as e:
-        clerk_auth.verify_token(make_token(email=email))
+        clerk_auth.verify_token(make_token(email="partner@gmail.com"))
     assert e.value.status == 403
     assert e.value.code == clerk_auth.ACCOUNT_NOT_ALLOWED
 
 
-def test_listing_one_address_does_not_open_its_domain(monkeypatch):
-    # gmail.com のアドレスを 1 つ許しても、gmail.com の他のアカウントは入れない。
-    monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "partner@gmail.com")
+def test_enabling_is_case_insensitive(monkeypatch):
+    monkeypatch.setenv("ALLOW_EXTERNAL_USERS", " True ")
 
+    assert clerk_auth.verify_token(make_token(email="partner@gmail.com")).external
+
+
+@pytest.mark.parametrize("email", ["x+clerk_test@example.co.jp", "Tester+a@Example.co.jp"])
+@pytest.mark.parametrize("external", ["", "true"])
+def test_subaddresses_in_the_staff_domain_are_refused(monkeypatch, email, external):
+    # 社員+x@ 宛てのメールは社員本人に届くので、そのサブアドレスで個人の
+    # Google アカウントを作られうる（同意画面が「外部」だと Google ログインも
+    # 通る）。Clerk のテストモードの +clerk_test も同じ。Workspace のアドレスに
+    # + は無いので、社内ドメインでは + を通さない（外部ユーザーとしても通さない）。
+    monkeypatch.setenv("ALLOW_EXTERNAL_USERS", external)
     with pytest.raises(AuthError) as e:
-        clerk_auth.verify_token(make_token(email="someone@gmail.com"))
+        clerk_auth.verify_token(make_token(email=email))
     assert e.value.status == 403
-
-
-def test_a_listed_address_in_the_staff_domain_is_treated_as_external(monkeypatch):
-    # 両方に当たるときは、できることが少ない側（外部）に倒す。
-    monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "tester@example.co.jp")
-
-    assert clerk_auth.verify_token(make_token()).external is True
+    assert e.value.code == clerk_auth.ACCOUNT_NOT_ALLOWED
 
 
 def test_nobody_gets_in_when_the_staff_domain_is_unset(monkeypatch):
@@ -206,10 +196,10 @@ def test_nobody_gets_in_when_the_staff_domain_is_unset(monkeypatch):
         assert "ALLOWED_EMAIL_DOMAINS" in str(e.value)
 
 
-def test_listed_external_email_is_refused_too_when_the_staff_domain_is_unset(monkeypatch):
+def test_external_users_are_refused_too_when_the_staff_domain_is_unset(monkeypatch):
     # 設定の漏れなので、外部ユーザーも含めて誰も通さない（README のとおり）。
     monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", "")
-    monkeypatch.setenv("ALLOWED_EXTERNAL_EMAILS", "partner@gmail.com")
+    monkeypatch.setenv("ALLOW_EXTERNAL_USERS", "true")
 
     with pytest.raises(AuthError) as e:
         clerk_auth.verify_token(make_token(email="partner@gmail.com"))

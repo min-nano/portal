@@ -54,7 +54,7 @@ jobs:
           SITE_ID: '${{ vars.SITE_ID }}'
           CANONICAL_HOST: '${{ vars.CANONICAL_HOST }}'
           ALLOWED_EMAIL_DOMAINS: '${{ vars.ALLOWED_EMAIL_DOMAINS }}'
-          ALLOWED_EXTERNAL_EMAILS: '${{ vars.ALLOWED_EXTERNAL_EMAILS }}'
+          ALLOW_EXTERNAL_USERS: '${{ vars.ALLOW_EXTERNAL_USERS }}'
           RUNTIME_SA_EMAIL: '${{ vars.RUNTIME_SA_EMAIL }}'
           FIRESTORE_DATABASE: '${{ vars.FIRESTORE_DATABASE }}'
         run: |
@@ -79,12 +79,10 @@ jobs:
           env_vars="$env_vars;ALLOWED_EMAIL_DOMAINS=$ALLOWED_EMAIL_DOMAINS"
           env_vars="$env_vars;DWD_SERVICE_ACCOUNT_EMAIL=$RUNTIME_SA_EMAIL"
           env_vars="$env_vars;SETTINGS_CHANNEL_PATH=static-channels/production"
-          # 任意。組織外のアカウントを個別に許可するときだけ設定する（README「外部ユーザー」）。
-          # 1 行に 1 つずつ書いてもよいよう、空白・改行・; をカンマにそろえる
-          # （改行や ; が残ると、環境変数の受け渡しの書式が壊れる）。
-          external_emails=$(printf '%s' "$ALLOWED_EXTERNAL_EMAILS" | tr -s '[:space:];' ',' | sed 's/^,//; s/,$//')
-          if [ -n "$external_emails" ]; then
-            env_vars="$env_vars;ALLOWED_EXTERNAL_EMAILS=$external_emails"
+          # 任意。外部ユーザー（組織外のアカウント）を使わせるときだけ true にする
+          # （README「外部ユーザー」）。値はバックエンドが true かどうかだけを見る。
+          if [ -n "$ALLOW_EXTERNAL_USERS" ]; then
+            env_vars="$env_vars;ALLOW_EXTERNAL_USERS=$ALLOW_EXTERNAL_USERS"
           fi
           # 任意。既定の "(default)" 以外を使う場合だけリポジトリ変数を設定する。
           if [ -n "$FIRESTORE_DATABASE" ]; then
