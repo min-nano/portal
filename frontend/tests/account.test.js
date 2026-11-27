@@ -59,7 +59,7 @@ describe('hideStaffOnlyForExternalUsers', () => {
 
   it('一時的な失敗のあとで答えが届けば、外部ユーザーの入口を隠す', async () => {
     apiGet
-      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       .mockResolvedValueOnce({ email: 'partner@gmail.com', external: true });
     const wait = vi.fn(async () => {});
 
@@ -72,7 +72,7 @@ describe('hideStaffOnlyForExternalUsers', () => {
     vi.useFakeTimers();
     try {
       apiGet
-        .mockRejectedValueOnce(new Error('Failed to fetch'))
+        .mockRejectedValueOnce(new TypeError('Failed to fetch'))
         .mockResolvedValueOnce({ email: 'partner@gmail.com', external: true });
 
       const result = hideStaffOnlyForExternalUsers();
@@ -107,6 +107,14 @@ describe('hideStaffOnlyForExternalUsers', () => {
     // 待っても変わらない失敗なので、取り直さない。
     expect(wait).not.toHaveBeenCalled();
     expect(apiGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('応答の読み損ないなど、status の無い通信以外の失敗は取り直さない', async () => {
+    apiGet.mockRejectedValue(new SyntaxError('Unexpected token < in JSON'));
+    const wait = vi.fn(async () => {});
+
+    expect(await hideStaffOnlyForExternalUsers(document, wait)).toBe(false);
+    expect(wait).not.toHaveBeenCalled();
   });
 
   it('流量の制限（429）は、待てば通りうるので取り直す', async () => {

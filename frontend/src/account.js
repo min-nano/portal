@@ -30,10 +30,12 @@ export const RETRY_DELAYS_MS = Object.freeze([1000, 3000]);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** 待てば通りうる失敗か（status の無い通信の失敗・5xx・429）。 */
+/** 待てば通りうる失敗か（通信の失敗・5xx・429）。 */
 function retryable(error) {
+  // fetch の通信の失敗は TypeError（応答の読み損ない・コードの誤りは取り直さない）。
+  if (error instanceof TypeError) return true;
   const status = error?.status;
-  return status === undefined || status >= 500 || status === 429;
+  return status >= 500 || status === 429;
 }
 
 /**

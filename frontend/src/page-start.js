@@ -80,20 +80,23 @@ export function startPage({
       () => null,
       (error) => error
     );
+    // 既に届いた断り（準備が失敗したときに、どちらの理由を出すかを決めるため）。
+    let refusedEarly = null;
+    refusal.then((refused) => {
+      refusedEarly = refused;
+    });
 
     if (preparing) setPageLoadingLabel(preparing);
     try {
       if (prepare) await prepare(clerk);
     } catch (error) {
-      // 準備が別の理由（起動待ちの 503 など）で先に失敗しても、使えない
-      // アカウントだと分かれば、そちらを出す（「待てば通る」と思わせない）。
-      // 待つのは少しだけ（答えが遅いときに、準備の失敗を出すのを遅らせない）。
-      // それより遅れて断りが届いたら、そのときに画面を閉じて理由を出し直す。
-      // 準備の失敗そのものが断りなら、待たずにそのまま出す。
-      if (CLOSING_CODES.has(error.code)) throw error;
-      const refused = await settledWithin(refusal, REFUSAL_GRACE_MS);
-      if (!refused) refusal.then((late) => late && refuse(late));
-      throw refused ?? error;
+      // 準備の失敗はすぐに出す（使えないアカウントかの答えを待って遅らせない）。
+      // 使えないアカウントだと既に分かっていれば、そちらを出す（「待てば通る」と
+      // 思わせない）。まだなら、後から分かったときに画面を閉じて理由を出し直す。
+      // 準備の失敗そのものが断りなら、それで閉じる（begin の catch）。
+      if (refusedEarly) throw refusedEarly;
+      if (!CLOSING_CODES.has(error.code)) refusal.then((late) => late && refuse(late));
+      throw error;
     }
     showApp();
 
@@ -107,22 +110,6 @@ export function startPage({
   function refuse(refused) {
     closeApp(refused.message);
     onError(refused.message);
-  }
-}
-
-/** 準備が失敗したとき、使えないアカウントかの答えを待つ時間の上限。 */
-const REFUSAL_GRACE_MS = 2000;
-
-/** promise の結果を、ms 以内に出れば返す（出なければ null）。 */
-async function settledWithin(promise, ms) {
-  let timer;
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(null), ms);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -161,7 +148,14 @@ function closeApp(reason) {
   for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
   new MutationObserver((changes) => {
     for (const { target } of changes) {
-      if (target instanceof HTMLDialogElement && target.open) target.close();
+      // ポータル共通のヘッダー（アカウントのメニューなど）のものは閉じない。
+      if (
+        target instanceof HTMLDialogElement &&
+        target.open &&
+        !target.closest('portal-header')
+      ) {
+        target.close();
+      }
     }
   }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] });
 }

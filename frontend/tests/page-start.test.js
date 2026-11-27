@@ -143,14 +143,22 @@ describe('startPage', () => {
     expect(app().hasAttribute('data-closed')).toBe(true);
     // 閉じた後に開いたダイアログは、開いたそばから閉じる（見えないモーダルを
     // 残して画面全体を操作できなくしない）。開いたままでないものは触らない。
-    document.body.insertAdjacentHTML('beforeend', '<dialog id="late"></dialog><div id="other"></div>');
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      '<dialog id="late"></dialog><div id="other"></div><portal-header><dialog id="menu"></dialog></portal-header>'
+    );
     const late = document.getElementById('late');
     late.close = vi.fn(() => late.removeAttribute('open'));
     late.setAttribute('open', '');
     document.getElementById('other').setAttribute('open', '');
+    // ポータル共通のヘッダーのものは閉じない。
+    const menu = document.getElementById('menu');
+    menu.close = vi.fn();
+    menu.setAttribute('open', '');
     await settle();
     expect(late.close).toHaveBeenCalledTimes(1);
     expect(late.hasAttribute('open')).toBe(false);
+    expect(menu.close).not.toHaveBeenCalled();
     // 理由は専用の欄に出す（#message は動いている途中の処理が書き換えるため）。
     const refusal = document.getElementById('refusal');
     expect(refusal.textContent).toBe('このアプリは許可されたアカウント専用です。');
@@ -214,32 +222,36 @@ describe('startPage', () => {
     );
   });
 
-  it('使えないアカウントかの答えが遅いときは、待たずに準備の失敗を出す', async () => {
-    vi.useFakeTimers();
-    try {
-      hideStaffOnlyForExternalUsers.mockReturnValue(new Promise(() => {})); // 答えが来ない
-      const onError = vi.fn();
+  it('使えないアカウントかの答えを待たずに、準備の失敗をすぐ出す', async () => {
+    hideStaffOnlyForExternalUsers.mockReturnValue(new Promise(() => {})); // 答えが来ない
+    const onError = vi.fn();
 
-      startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')), onError });
-      await vi.advanceTimersByTimeAsync(1999);
-      expect(onError).not.toHaveBeenCalled();
+    startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')), onError });
+    await settle();
 
-      await vi.advanceTimersByTimeAsync(1);
-      expect(onError).toHaveBeenCalledWith('通信に失敗しました。');
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(onError).toHaveBeenCalledWith('通信に失敗しました。');
+    expect(app().hasAttribute('data-closed')).toBe(false);
+  });
+
+  it('外部ユーザーと分かっても、準備の失敗はそのまま（閉じない）', async () => {
+    hideStaffOnlyForExternalUsers.mockResolvedValue(true);
+    const onError = vi.fn();
+
+    startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')), onError });
+    await settle();
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(app().hasAttribute('data-closed')).toBe(false);
   });
 
   it('準備の失敗を出した後に断りが届いたら、画面を閉じて理由を出し直す', async () => {
-    vi.useFakeTimers();
-    try {
+    {
       let answer;
       hideStaffOnlyForExternalUsers.mockReturnValue(new Promise((resolve, reject) => { answer = reject; }));
       const onError = vi.fn();
 
       startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')), onError });
-      await vi.advanceTimersByTimeAsync(2000);
+      await settle();
       expect(onError).toHaveBeenLastCalledWith('通信に失敗しました。');
       expect(app().hasAttribute('data-closed')).toBe(false);
 
@@ -247,11 +259,9 @@ describe('startPage', () => {
         status: 403,
         code: 'account_not_allowed',
       }));
-      await vi.advanceTimersByTimeAsync(0);
+      await settle();
       expect(onError).toHaveBeenLastCalledWith('このアプリは許可されたアカウント専用です。');
       expect(app().hasAttribute('data-closed')).toBe(true);
-    } finally {
-      vi.useRealTimers();
     }
   });
 
