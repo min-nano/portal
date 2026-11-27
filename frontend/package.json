@@ -10,9 +10,9 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@clerk/clerk-js": "^6.46.1",
-    "@clerk/localizations": "^4.26.1",
-    "@clerk/ui": "^1.44.1",
+    "@clerk/clerk-js": "^6.46.3",
+    "@clerk/localizations": "^4.26.3",
+    "@clerk/ui": "^1.44.4",
     "@tesseract.js-data/eng": "^1.0.0",
     "onnxruntime-web": "1.31.1",
     "pdf-lib": "1.17.1",
