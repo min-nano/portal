@@ -15,7 +15,7 @@
 // 5xx・通信の失敗）では何もしない。一時的なものかもしれず、社内ユーザーの
 // 画面を一度の失敗で閉じてしまわないため。
 //
-// 一時的な失敗（起動待ちの 5xx・通信の失敗など）では、少し間を置いて取り直す
+// 一時的な失敗（起動待ちの 5xx・429・通信の失敗）では、少し間を置いて取り直す
 // （RETRY_DELAYS_MS）。一度の失敗で、外部ユーザーに社内専用の入口が見えた
 // ままにならないように。
 //
@@ -29,6 +29,12 @@ import { apiGet } from './api.js';
 export const RETRY_DELAYS_MS = Object.freeze([1000, 3000]);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 待てば通りうる失敗か（status の無い通信の失敗・5xx・429）。 */
+function retryable(error) {
+  const status = error?.status;
+  return status === undefined || status >= 500 || status === 429;
+}
 
 /**
  * 本人が外部ユーザーなら、社内専用の入口を隠す。
@@ -50,8 +56,9 @@ export async function hideStaffOnlyForExternalUsers(doc = document, wait = sleep
         doc.documentElement.dataset.account = 'refused';
         throw error;
       }
-      // 隠せないだけ（使えば、サーバーが理由を添えて断る）。
-      if (attempt >= RETRY_DELAYS_MS.length) return false;
+      // 隠せないだけ（使えば、サーバーが理由を添えて断る）。取り直すのは、
+      // 待てば通りうる失敗（通信の失敗・5xx・429）のときだけ。
+      if (!retryable(error) || attempt >= RETRY_DELAYS_MS.length) return false;
       await wait(RETRY_DELAYS_MS[attempt]);
     }
   }

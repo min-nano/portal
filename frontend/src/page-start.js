@@ -154,7 +154,9 @@ function closeApp(reason) {
   box.textContent = reason;
   app.append(box);
   app.dataset.closed = '';
-  // #app の外に開いているもの（頁の拡大表示など）も閉じる。
+  // #app の外に開いているもの（頁の拡大表示など）も閉じる。閉じた後に開こうと
+  // したもの（読み込みを待ってから開くダイアログなど）は、<html> の印で CSS が隠す。
+  document.documentElement.dataset.closed = '';
   for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
 }
 

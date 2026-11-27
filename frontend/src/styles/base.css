@@ -26,7 +26,8 @@
 
 /* 使えないアカウントには、ツールの中身を見せず断りの理由（#refusal）だけを出す
    （src/page-start.js）。 */
-#app[data-closed] > :not(#refusal) {
+#app[data-closed] > :not(#refusal),
+:root[data-closed] dialog {
   display: none !important;
 }
 

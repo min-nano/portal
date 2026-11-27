@@ -822,7 +822,7 @@ gcloud run deploy portal-api \
 | --- | --- | --- |
 | `CLERK_ISSUER` | 許可する Clerk の Frontend API URL（JWT の `iss`。カンマ区切りで複数可）。本番サービスには **本番インスタンスのみ**（プレビューは PR ごとの別サービスが開発インスタンスを受け持つ） | `CLERK_PUBLISHABLE_KEY` から導出 |
 | `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り、`*` ワイルドカード可） | `CANONICAL_HOST`（設定時のみ）と `SITE_ID` から組み立て。`https://<カスタムドメイン>,https://<サイトID>.web.app` |
-| `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り）。ここに当たるアカウントが社内ユーザー。**必須**（未設定だと誰もサインインできない。判定を飛ばすと組織外のアカウントまで社内ユーザーになるため。ローカル開発でも渡す） | 同名のリポジトリ変数 |
+| `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り）。ここに当たるアカウントが社内ユーザー。Workspace の別名ドメイン・セカンダリドメインも、社員がサインインに使うものはすべて書く（漏れていると、`ALLOW_EXTERNAL_USERS` が `true` の環境ではその社員が外部ユーザーになり、Drive を使えない）。**必須**（未設定だと誰もサインインできない。判定を飛ばすと組織外のアカウントまで社内ユーザーになるため。ローカル開発でも渡す） | 同名のリポジトリ変数 |
 | `ALLOW_EXTERNAL_USERS` | （任意）`true` のとき、社内ドメイン以外でサインインした人を外部ユーザー（Drive を使わない機能だけ）として通す。誰がサインインできるかは Clerk（Invite-only）が決める。それ以外の値・未設定なら社内ドメイン以外は 403 | 同名のリポジトリ変数（プレビューは `ALLOW_EXTERNAL_USERS_PREVIEW`）。未設定なら渡さない |
 | `DWD_SERVICE_ACCOUNT_EMAIL` | 代理トークンに使う SA のメール（省略時は ADC から推定） | `RUNTIME_SA_EMAIL` |
 | `SETTINGS_CHANNEL_PATH` | 共有設定を置くチャンネルの Firestore ドキュメントパス。**未設定だと development チャンネルを指す**（「共有設定（Firestore）」参照） | `static-channels/production` 固定（環境の別はワークフローが決めるので変数にしない） |

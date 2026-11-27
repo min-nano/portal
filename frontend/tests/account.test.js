@@ -97,12 +97,27 @@ describe('hideStaffOnlyForExternalUsers', () => {
     expect(document.documentElement.dataset.account).toBe('refused');
   });
 
-  it('目印の無い 403（プロキシなど）は、使えないアカウントとは見なさない', async () => {
+  it('目印の無い 403（プロキシなど）は、使えないアカウントとは見なさず、取り直しもしない', async () => {
     apiGet.mockRejectedValue(
       Object.assign(new Error('サーバーエラーが発生しました (HTTP 403)。'), { status: 403 })
     );
+    const wait = vi.fn(async () => {});
 
-    expect(await hideStaffOnlyForExternalUsers(document, async () => {})).toBe(false);
+    expect(await hideStaffOnlyForExternalUsers(document, wait)).toBe(false);
+    // 待っても変わらない失敗なので、取り直さない。
+    expect(wait).not.toHaveBeenCalled();
+    expect(apiGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('流量の制限（429）は、待てば通りうるので取り直す', async () => {
+    apiGet
+      .mockRejectedValueOnce(Object.assign(new Error('HTTP 429'), { status: 429 }))
+      .mockResolvedValueOnce({ email: 'tester@example.co.jp', external: false });
+    const wait = vi.fn(async () => {});
+
+    expect(await hideStaffOnlyForExternalUsers(document, wait)).toBe(false);
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(apiGet).toHaveBeenCalledTimes(2);
   });
 
   it('5xx は一時的かもしれないので、何もしない（画面を閉じない）', async () => {
@@ -150,6 +165,13 @@ describe('hideStaffOnlyForExternalUsers', () => {
     document.getElementById('merge').hidden = false;
     // ツールの理由の欄（#message）は、動いている処理が書き換えるので見せない。
     expect([shown('merge'), shown('message'), shown('refusal')]).toEqual([false, false, true]);
+
+    // 閉じた後に開いたダイアログも見せない（<html> の印）。
+    document.body.insertAdjacentHTML('beforeend', '<dialog id="late" open>拡大表示</dialog>');
+    expect(shown('late')).toBe(true);
+    document.documentElement.dataset.closed = '';
+    expect(shown('late')).toBe(false);
+    delete document.documentElement.dataset.closed;
     style.remove();
   });
 });
