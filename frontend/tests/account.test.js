@@ -303,7 +303,7 @@ describe('見せ方の決めごと（base.css）', () => {
   it('印の付いた入口は、社内ユーザーと確かめてから見せる', () => {
     withBaseCss(
       `<button id="staff" data-staff-only>Drive から選ぶ</button>
-       <button id="open">手元の PDF を追加</button>`,
+       <button id="open">ファイルを追加</button>`,
       (shown) => {
         // 確かめる前は見せない（外部の人に一瞬でも見せない）。
         expect([shown('staff'), shown('open')]).toEqual([false, true]);
