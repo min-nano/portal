@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const apiGet = vi.fn();
 vi.mock('../src/api.js', () => ({ apiGet: (...args) => apiGet(...args) }));
 
-const { hideStaffOnlyForExternalUsers } = await import('../src/account.js');
+const { RETRY_DELAYS_MS, hideStaffOnlyForExternalUsers } = await import('../src/account.js');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -44,13 +44,45 @@ describe('hideStaffOnlyForExternalUsers', () => {
     expect(document.documentElement.dataset.account).toBeUndefined();
   });
 
-  it('聞けなかったときは何もしない（入口が見えたままになるだけ）', async () => {
+  it('取り直しても聞けなかったときは何もしない（入口が見えたままになるだけ）', async () => {
     apiGet.mockRejectedValue(
       Object.assign(new Error('サーバーエラーが発生しました (HTTP 503)。'), { status: 503 })
     );
+    const wait = vi.fn(async () => {});
 
-    expect(await hideStaffOnlyForExternalUsers()).toBe(false);
+    expect(await hideStaffOnlyForExternalUsers(document, wait)).toBe(false);
     expect(document.documentElement.dataset.account).toBeUndefined();
+    // 間を置いて取り直してから、あきらめる。
+    expect(wait.mock.calls).toEqual(RETRY_DELAYS_MS.map((ms) => [ms]));
+    expect(apiGet).toHaveBeenCalledTimes(RETRY_DELAYS_MS.length + 1);
+  });
+
+  it('一時的な失敗のあとで答えが届けば、外部ユーザーの入口を隠す', async () => {
+    apiGet
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockResolvedValueOnce({ email: 'partner@gmail.com', external: true });
+    const wait = vi.fn(async () => {});
+
+    expect(await hideStaffOnlyForExternalUsers(document, wait)).toBe(true);
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(document.documentElement.dataset.account).toBe('external');
+  });
+
+  it('既定では、取り直す前に実際に間を置く', async () => {
+    vi.useFakeTimers();
+    try {
+      apiGet
+        .mockRejectedValueOnce(new Error('Failed to fetch'))
+        .mockResolvedValueOnce({ email: 'partner@gmail.com', external: true });
+
+      const result = hideStaffOnlyForExternalUsers();
+      await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0] - 1);
+      expect(apiGet).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await result).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('使えないアカウント（403）は、理由を投げる', async () => {
@@ -70,7 +102,7 @@ describe('hideStaffOnlyForExternalUsers', () => {
       Object.assign(new Error('サーバーエラーが発生しました (HTTP 403)。'), { status: 403 })
     );
 
-    expect(await hideStaffOnlyForExternalUsers()).toBe(false);
+    expect(await hideStaffOnlyForExternalUsers(document, async () => {})).toBe(false);
   });
 
   it('5xx は一時的かもしれないので、何もしない（画面を閉じない）', async () => {
@@ -78,7 +110,7 @@ describe('hideStaffOnlyForExternalUsers', () => {
       Object.assign(new Error('サーバーエラーが発生しました (HTTP 500)。'), { status: 500 })
     );
 
-    expect(await hideStaffOnlyForExternalUsers()).toBe(false);
+    expect(await hideStaffOnlyForExternalUsers(document, async () => {})).toBe(false);
   });
 
   it('隠すのは、印の付いた入口だけ（base.css の決めごと）', () => {
@@ -102,20 +134,22 @@ describe('hideStaffOnlyForExternalUsers', () => {
     style.remove();
   });
 
-  it('閉じた画面（#app[data-closed]）は、理由の欄だけを見せる（base.css の決めごと）', () => {
+  it('閉じた画面（#app[data-closed]）は、断りの理由（#refusal）だけを見せる（base.css の決めごと）', () => {
     const style = document.createElement('style');
     style.textContent = readFileSync(resolve(process.cwd(), 'src/styles/base.css'), 'utf8');
     document.head.append(style);
     document.body.innerHTML = `
       <div id="app" data-closed>
         <button id="merge">結合</button>
-        <div id="message">このアプリは許可されたアカウント専用です。</div>
+        <div id="message">画像からの読み取りを使えませんでした。</div>
+        <p id="refusal">このアプリは許可されたアカウント専用です。</p>
       </div>`;
     const shown = (id) => getComputedStyle(document.getElementById(id)).display !== 'none';
 
     // ツールが後から hidden を外しても、閉じたまま。
     document.getElementById('merge').hidden = false;
-    expect([shown('merge'), shown('message')]).toEqual([false, true]);
+    // ツールの理由の欄（#message）は、動いている処理が書き換えるので見せない。
+    expect([shown('merge'), shown('message'), shown('refusal')]).toEqual([false, false, true]);
     style.remove();
   });
 });

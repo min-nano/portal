@@ -129,7 +129,7 @@ describe('startPage', () => {
     expect(onError).toHaveBeenCalledWith('このアプリは許可されたアカウント専用です。');
   });
 
-  it('使えないアカウントには、理由の欄だけを残して画面を隠す（API を呼ばないツールも使わせない）', async () => {
+  it('使えないアカウントには、画面を隠して断りの理由だけを出す（API を呼ばないツールも使わせない）', async () => {
     app().insertAdjacentHTML('afterbegin', '<button id="mergeBtn">結合</button>');
     hideStaffOnlyForExternalUsers.mockRejectedValue(
       Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403, code: 'account_not_allowed' })
@@ -141,9 +141,17 @@ describe('startPage', () => {
     // 消さずに印を付け、CSS で隠す（動いている途中の処理が要素を見失わない）。
     expect(document.getElementById('mergeBtn')).not.toBeNull();
     expect(app().hasAttribute('data-closed')).toBe(true);
+    // 理由は専用の欄に出す（#message は動いている途中の処理が書き換えるため）。
+    const refusal = document.getElementById('refusal');
+    expect(refusal.textContent).toBe('このアプリは許可されたアカウント専用です。');
+    expect(refusal.getAttribute('role')).toBe('alert');
+    // 既定の理由の出し方（#message）にも出る（閉じた画面では見えない）。
     expect(document.getElementById('message').textContent).toBe(
       'このアプリは許可されたアカウント専用です。'
     );
+    // 動いている途中の処理が #message を書き換えても、理由は残る。
+    document.getElementById('message').textContent = '画像からの読み取りを使えませんでした。';
+    expect(refusal.textContent).toBe('このアプリは許可されたアカウント専用です。');
   });
 
   it('準備が使えないアカウントとして断られたら、画面の中身も隠す', async () => {

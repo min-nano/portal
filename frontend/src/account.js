@@ -15,29 +15,45 @@
 // 5xx・通信の失敗）では何もしない。一時的なものかもしれず、社内ユーザーの
 // 画面を一度の失敗で閉じてしまわないため。
 //
+// 一時的な失敗（起動待ちの 5xx・通信の失敗など）では、少し間を置いて取り直す
+// （RETRY_DELAYS_MS）。一度の失敗で、外部ユーザーに社内専用の入口が見えた
+// ままにならないように。
+//
 // 待たない: /api/me の答えを待ってから画面を出すと、社内ユーザーまで
 // Cloud Run の起動待ちを被る。社内ユーザーには何も変わらないので、外部ユーザー
 // だけが、答えが届いた時点で入口が消えるのを見る。
 
 import { apiGet } from './api.js';
 
+/** 取り直すまでに待つ時間（回ごと）。使い切ったら、隠さずにあきらめる。 */
+export const RETRY_DELAYS_MS = Object.freeze([1000, 3000]);
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * 本人が外部ユーザーなら、社内専用の入口を隠す。
  *
- * @returns {Promise<boolean>} 外部ユーザーだったか（読めなかったときは false）
+ * @param {Document} [doc]
+ * @param {(ms: number) => Promise<void>} [wait] 取り直す前に待つ（テストが差し替える）
+ * @returns {Promise<boolean>} 外部ユーザーだったか（取り直しても読めなかったときは false）
  * @throws 使えないアカウント（account_not_allowed）のとき。message はサーバーの理由
  */
-export async function hideStaffOnlyForExternalUsers(doc = document) {
+export async function hideStaffOnlyForExternalUsers(doc = document, wait = sleep) {
   let account;
-  try {
-    account = await apiGet('/api/me');
-  } catch (error) {
-    if (error?.code === 'account_not_allowed') {
-      // 使えないアカウント。社内専用の入口（「設定」など）も隠してから投げる。
-      doc.documentElement.dataset.account = 'refused';
-      throw error;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      account = await apiGet('/api/me');
+      break;
+    } catch (error) {
+      if (error?.code === 'account_not_allowed') {
+        // 使えないアカウント。社内専用の入口（「設定」など）も隠してから投げる。
+        doc.documentElement.dataset.account = 'refused';
+        throw error;
+      }
+      // 隠せないだけ（使えば、サーバーが理由を添えて断る）。
+      if (attempt >= RETRY_DELAYS_MS.length) return false;
+      await wait(RETRY_DELAYS_MS[attempt]);
     }
-    return false; // 隠せないだけ（使えば、サーバーが理由を添えて断る）。
   }
   if (account?.external !== true) return false;
   doc.documentElement.dataset.account = 'external';

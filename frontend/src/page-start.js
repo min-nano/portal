@@ -61,7 +61,7 @@ export function startPage({
     finishPageLoading();
     // 使えないアカウント・社内専用のツールとして断られたなら、画面の中身も隠す
     // （出しておいても、どのボタンも同じ理由で断られるだけ）。
-    if (CLOSING_CODES.has(error.code)) closeApp();
+    if (CLOSING_CODES.has(error.code)) closeApp(error.message);
     onError(error.message);
   });
 
@@ -98,14 +98,14 @@ export function startPage({
     showApp();
 
     // 準備が API を呼ばないページ（PDF 結合ツールは画面の中だけで動く）でも
-    // 使わせないよう、理由の欄（#message）だけを残して画面の中身を隠す。
+    // 使わせないよう、画面の中身を隠して理由だけを出す。
     const refused = await refusal;
     if (refused) refuse(refused);
   }
 
   /** 使えないアカウント: 画面の中身を隠して、理由を出す。 */
   function refuse(refused) {
-    closeApp();
+    closeApp(refused.message);
     onError(refused.message);
   }
 }
@@ -133,14 +133,27 @@ async function settledWithin(promise, ms) {
 const CLOSING_CODES = new Set(['account_not_allowed', 'staff_only']);
 
 /**
- * 画面（#app）の中身を、理由の欄（#message）だけ残して隠す。
+ * 画面（#app）の中身を隠し、断りの理由だけを出す。
  *
  * 要素は消さず、#app に印を付けて CSS（base.css）で隠す。動いている途中の
  * 処理が要素を見失って落ちることがなく、ツールが後から要素を出し直しても
  * （hidden を外しても）閉じたままになる。
+ *
+ * 理由はツールの理由の欄（#message）ではなく、専用の欄（#refusal）に出す。
+ * #message は動いている途中の処理（PDF の読み取りの失敗など）も書き換えるので、
+ * そこに出すと理由が後から消えてしまうため。
  */
-function closeApp() {
-  document.getElementById('app').dataset.closed = '';
+function closeApp(reason) {
+  // 1 つのページで閉じるのは 1 度だけ（断りは、準備の失敗か /api/me の答えの
+  // どちらか一方からしか届かない）。
+  const app = document.getElementById('app');
+  const box = document.createElement('p');
+  box.id = 'refusal';
+  box.setAttribute('role', 'alert');
+  box.style.color = 'red';
+  box.textContent = reason;
+  app.append(box);
+  app.dataset.closed = '';
   // #app の外に開いているもの（頁の拡大表示など）も閉じる。
   for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
 }

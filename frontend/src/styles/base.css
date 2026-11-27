@@ -24,9 +24,9 @@
   display: none !important;
 }
 
-/* 使えないアカウントには、ツールの中身を見せず理由の欄だけを残す
+/* 使えないアカウントには、ツールの中身を見せず断りの理由（#refusal）だけを出す
    （src/page-start.js）。 */
-#app[data-closed] > :not(#message) {
+#app[data-closed] > :not(#refusal) {
   display: none !important;
 }
 
