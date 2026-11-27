@@ -53,7 +53,7 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
 * **Drive の入口は代理アクセスの手前で断る。** 開いたツールの中でも、Drive を使う入口（PDF 結合の Drive の PDF、ファイル選択の一覧）は、`portal_sdk.delegated_session` などが、なりかわりを頼む前に断ります。
 * **全員共通の設定の書き換え**（`PUT /api/site`）は `require_internal_user`。雛形の設定は社内専用のツールの中にあるので、上の 1 つ目で断られます。
 
-**画面は見せ方だけを合わせます。** サインインの後に `/api/me`（`{"email", "external"}`）を読み、外部ユーザーなら `<html data-account="external">`（使えないアカウントなら `"refused"`）にして、`data-staff-only` を付けた入口（社内専用ツールのカード、「Drive から選ぶ」、「設定」メニュー）を CSS でまとめて隠します（`frontend/src/account.js`）。答えは待たずに画面を出すので、社内ユーザーが Cloud Run の起動待ちを被ることはありません。`/api/me` が一時的に失敗したとき（起動待ちの 5xx など）は、間を置いて 2 回まで取り直します。外部ユーザーには、答えが届いた時点で入口が消えます。社内専用のツールのページを直接開いた場合は、ツールの準備（`/config`）が「この機能は社内アカウント専用です。」で断られ、その理由が画面に出ます。
+**画面は見せ方だけを合わせます。** `data-staff-only` を付けた入口（社内専用ツールのカード、「Drive から選ぶ」、「設定」メニュー）は、**社内ユーザーだと確かめてから見せます**（`frontend/src/account.js`。CSS は `<html data-account="internal">` になるまで隠す）。サインインの後に `/api/me`（`{"email", "external"}`）を読み、`external` が `false` なら `"internal"`、外部ユーザーなら `"external"`、使えないアカウントなら `"refused"` にします。社内ユーザーと確かめられない限り入口は見えないので、外部の人に一瞬でも見えることはありません。答えは待たずに画面を出し、最後に確かめた結果をその端末にサインインしているアドレスごとに覚えておいて、前回社内ユーザーだった人には先に入口を見せてから確かめ直します（違っていればその時点で隠す。覚えた値は見せ方にしか使わない）。初めての端末や起動待ちのときは、社員にも入口が少し遅れて出ます。`/api/me` が一時的に失敗したとき（通信の失敗・5xx・429）は、間を置いて 2 回まで取り直し、それでも確かめられなければ見せ方を変えません。社内専用のツールのページを直接開いた場合は、ツールの準備（`/config`）が「この機能は社内アカウント専用です。」で断られ、その理由が画面に出ます。
 
 画面とバックエンドの名乗り（`tool.js` の `externalUsers` と `Tool.external_users`）がそろっていることは、`backend/tests/test_external_users.py` が確かめます。
 
@@ -539,7 +539,7 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   src/site-settings.js        # ポータルの名前とロゴを出す（端末に覚えた値を先に出し、/api/site から読み直す）
   src/site-settings-dialog.js # サイトの設定画面（アカウントのメニューの「設定」から開く）
   src/auth.js                 # Clerk（サインインゲート・トークン取得。サインイン画面は必要になってから読む）
-  src/account.js              # 外部ユーザーに社内専用の入口（data-staff-only）を見せない
+  src/account.js              # 社内専用の入口（data-staff-only）を、社内ユーザーと確かめてから見せる
   src/clerk-frontend-api.js   # Publishable Key から Clerk の接続先を取り出す（preconnect 用）
   src/api.js                  # Bearer 付き fetch ラッパー（バックエンドの起こし方も）
   src/core.js                 # 計算実装（wasm）の読み込みと呼び出し（ツール共通）

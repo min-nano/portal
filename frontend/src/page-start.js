@@ -13,8 +13,9 @@
 //   3. ポータルの名前とロゴを出す（前回の値をすぐ出して、裏で読み直す。
 //      サインインの確認を待たない。サインイン画面のヘッダーにも出すため）
 //   4. サインインの確認。未サインインなら、サインイン画面を出して終わり。
-//      サインイン済みなら、アカウントのメニューの「設定」をつなぎ、外部
-//      ユーザーなら社内専用の入口を隠す（答えは待たない。account.js）
+//      サインイン済みなら、アカウントのメニューの「設定」をつなぎ、社内
+//      ユーザーだと確かめてから社内専用の入口を見せる（答えは待たない。前回
+//      社内ユーザーだった人には先に見せておく。account.js）
 //   5. 待っているものを言い換えて（サインインの確認 → ツールの準備）、
 //      そのページの準備を走らせる
 //   6. 準備が終わったら画面を出す。**画面を出すのは「入力できるように
@@ -25,7 +26,7 @@
 // （ツールは画面の中の #message、トップページはサインインゲート）、
 // onError に任せる。
 
-import { hideStaffOnlyForExternalUsers } from './account.js';
+import { checkAccount, showRememberedAccount } from './account.js';
 import { warmUpApi } from './api.js';
 import { requireSignIn } from './auth.js';
 import { redirectToCanonicalHost } from './canonical-host.js';
@@ -76,7 +77,9 @@ export function startPage({
     // 答えは待たない。使えないアカウントだと分かったら理由を出すが、出すのは
     // 画面を出した後（組み立て途中の画面を見せない）。準備のほうが先に失敗
     // したら、そちらの理由を出す（準備が API を呼ぶページなら、同じ理由で断られる）。
-    const refusal = hideStaffOnlyForExternalUsers().then(
+    // 前回社内ユーザーだったなら、確かめ直す前に社内専用の入口を見せておく。
+    showRememberedAccount(clerk.user?.primaryEmailAddress?.emailAddress);
+    const refusal = checkAccount().then(
       () => null,
       (error) => error
     );

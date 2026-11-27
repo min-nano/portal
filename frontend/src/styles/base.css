@@ -17,10 +17,9 @@
   display: none !important;
 }
 
-/* 外部ユーザー（組織外のアカウント）には、社内専用の入口を見せない
+/* 社内専用の入口は、社内ユーザーだと確かめてから見せる
    （src/account.js。断るのはサーバーで、これは見せ方だけ）。 */
-:root[data-account='external'] [data-staff-only],
-:root[data-account='refused'] [data-staff-only] {
+:root:not([data-account='internal']) [data-staff-only] {
   display: none !important;
 }
 

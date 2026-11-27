@@ -21,7 +21,8 @@ const requireSignIn = vi.fn();
 const warmUpApi = vi.fn();
 const showSite = vi.fn();
 const connectSiteSettingsMenu = vi.fn();
-const hideStaffOnlyForExternalUsers = vi.fn();
+const checkAccount = vi.fn();
+const showRememberedAccount = vi.fn();
 
 vi.mock('../src/canonical-host.js', () => ({
   redirectToCanonicalHost: () => redirectToCanonicalHost(),
@@ -32,7 +33,8 @@ vi.mock('../src/auth.js', () => ({
 }));
 vi.mock('../src/api.js', () => ({ warmUpApi: () => warmUpApi() }));
 vi.mock('../src/account.js', () => ({
-  hideStaffOnlyForExternalUsers: () => hideStaffOnlyForExternalUsers(),
+  checkAccount: () => checkAccount(),
+  showRememberedAccount: (email) => showRememberedAccount(email),
 }));
 vi.mock('../src/site-settings.js', () => ({
   showSite: () => showSite(),
@@ -64,7 +66,7 @@ function app() {
 beforeEach(() => {
   document.body.innerHTML = PAGE;
   vi.clearAllMocks();
-  hideStaffOnlyForExternalUsers.mockResolvedValue(false);
+  checkAccount.mockResolvedValue('internal');
   redirectToCanonicalHost.mockReturnValue(false);
   requireSignIn.mockResolvedValue(CLERK);
 });
@@ -118,7 +120,7 @@ describe('startPage', () => {
   });
 
   it('使えないアカウントだと分かったら、その理由を出す', async () => {
-    hideStaffOnlyForExternalUsers.mockRejectedValue(
+    checkAccount.mockRejectedValue(
       Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403, code: 'account_not_allowed' })
     );
     const onError = vi.fn();
@@ -131,7 +133,7 @@ describe('startPage', () => {
 
   it('使えないアカウントには、画面を隠して断りの理由だけを出す（API を呼ばないツールも使わせない）', async () => {
     app().insertAdjacentHTML('afterbegin', '<button id="mergeBtn">結合</button>');
-    hideStaffOnlyForExternalUsers.mockRejectedValue(
+    checkAccount.mockRejectedValue(
       Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403, code: 'account_not_allowed' })
     );
 
@@ -169,7 +171,7 @@ describe('startPage', () => {
 
   it('準備が使えないアカウントとして断られたら、画面の中身も隠す', async () => {
     // /api/me は断りを返さなかった（準備のほうが断られた）。
-    hideStaffOnlyForExternalUsers.mockResolvedValue(false);
+    checkAccount.mockResolvedValue('internal');
     const refused = Object.assign(new Error('このアプリは許可されたアカウント専用です。'), {
       status: 403,
       code: 'account_not_allowed',
@@ -185,7 +187,7 @@ describe('startPage', () => {
   });
 
   it('外部ユーザーが社内専用のツールを開いたら、画面の中身を隠す（答えを待たずに）', async () => {
-    hideStaffOnlyForExternalUsers.mockReturnValue(new Promise(() => {})); // /api/me はまだ
+    checkAccount.mockReturnValue(new Promise(() => {})); // /api/me はまだ
     const refused = Object.assign(new Error('この機能は社内アカウント専用です。'), {
       status: 403,
       code: 'staff_only',
@@ -198,7 +200,7 @@ describe('startPage', () => {
   });
 
   it('準備が別の理由で先に失敗しても、使えないアカウントならそちらを出す', async () => {
-    hideStaffOnlyForExternalUsers.mockRejectedValue(
+    checkAccount.mockRejectedValue(
       Object.assign(new Error('このアプリは許可されたアカウント専用です。'), {
         status: 403,
         code: 'account_not_allowed',
@@ -218,7 +220,7 @@ describe('startPage', () => {
   });
 
   it('使えないアカウントかの答えを待たずに、準備の失敗をすぐ出す', async () => {
-    hideStaffOnlyForExternalUsers.mockReturnValue(new Promise(() => {})); // 答えが来ない
+    checkAccount.mockReturnValue(new Promise(() => {})); // 答えが来ない
     const onError = vi.fn();
 
     startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')), onError });
@@ -229,7 +231,7 @@ describe('startPage', () => {
   });
 
   it('外部ユーザーと分かっても、準備の失敗はそのまま（閉じない）', async () => {
-    hideStaffOnlyForExternalUsers.mockResolvedValue(true);
+    checkAccount.mockResolvedValue('external');
     const onError = vi.fn();
 
     startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')), onError });
@@ -242,7 +244,7 @@ describe('startPage', () => {
   it('準備の失敗を出した後に断りが届いたら、画面を閉じて理由を出し直す', async () => {
     {
       let answer;
-      hideStaffOnlyForExternalUsers.mockReturnValue(new Promise((resolve, reject) => { answer = reject; }));
+      checkAccount.mockReturnValue(new Promise((resolve, reject) => { answer = reject; }));
       const onError = vi.fn();
 
       startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')), onError });
@@ -264,7 +266,7 @@ describe('startPage', () => {
     document.body.insertAdjacentHTML('beforeend', '<dialog id="preview" open></dialog>');
     const preview = document.getElementById('preview');
     preview.close = vi.fn(() => preview.removeAttribute('open'));
-    hideStaffOnlyForExternalUsers.mockRejectedValue(
+    checkAccount.mockRejectedValue(
       Object.assign(new Error('このアプリは許可されたアカウント専用です。'), {
         status: 403,
         code: 'account_not_allowed',
@@ -287,7 +289,7 @@ describe('startPage', () => {
   });
 
   it('準備の途中で断られたと分かっても、理由を出すのは準備が終わってから', async () => {
-    hideStaffOnlyForExternalUsers.mockRejectedValue(
+    checkAccount.mockRejectedValue(
       Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403, code: 'account_not_allowed' })
     );
     let finishPreparing;
@@ -306,15 +308,19 @@ describe('startPage', () => {
     expect(onError).toHaveBeenCalledWith('このアプリは許可されたアカウント専用です。');
   });
 
-  it('サインインしたら、外部ユーザーかを確かめに行くが、答えは待たない', async () => {
+  it('サインインしたら、覚えた結果で先に見せてから確かめに行き、答えは待たない', async () => {
     // 答えが返らないままでも、画面は出る（社内ユーザーに起動待ちを被せない）。
-    hideStaffOnlyForExternalUsers.mockReturnValue(new Promise(() => {}));
+    requireSignIn.mockResolvedValue({
+      user: { id: 'user-1', primaryEmailAddress: { emailAddress: 'tester@example.co.jp' } },
+    });
+    checkAccount.mockReturnValue(new Promise(() => {}));
     const prepare = vi.fn(async () => {});
 
     startPage({ prepare });
     await settle();
 
-    expect(hideStaffOnlyForExternalUsers).toHaveBeenCalledTimes(1);
+    expect(showRememberedAccount).toHaveBeenCalledWith('tester@example.co.jp');
+    expect(checkAccount).toHaveBeenCalledTimes(1);
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(app().hidden).toBe(false);
   });
@@ -327,7 +333,8 @@ describe('startPage', () => {
 
     expect(showSite).toHaveBeenCalledTimes(1);
     expect(connectSiteSettingsMenu).not.toHaveBeenCalled();
-    expect(hideStaffOnlyForExternalUsers).not.toHaveBeenCalled();
+    expect(checkAccount).not.toHaveBeenCalled();
+    expect(showRememberedAccount).not.toHaveBeenCalled();
   });
 
   it('バックエンドを使わないページでは起こさない', async () => {
