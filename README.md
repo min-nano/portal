@@ -84,7 +84,7 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
 | --- | --- | --- |
 | Sign-up with email | オン | 「Create user」でメールアドレスだけのユーザーを作るため |
 | Require email address | オン | バックエンドはセッショントークンのメールアドレスで判定するので、全員が必ず持つようにする |
-| Verify at sign-up | どちらでもよい | Invite-only なので、利用者が自分でサインアップする場面が無い |
+| Verify at sign-up | オン（推奨） | Invite-only なので利用者が自分でサインアップする場面は無いが、Access mode がうっかり Open に戻ったときなどに、確かめていないメールアドレスのユーザーを作らせない二重の守り |
 | **Sign-in with email** | **オフ** | オンにすると、メールの確認コードやリンクでサインインできるようになり、社員のメールを読める人がその社員として入れてしまう。オフのとき、サインイン画面には Google のボタンだけが出る |
 
 ダッシュボードで作れない場合は、Backend API の `createUser` を `skipPasswordRequirement` 付きで呼んで作ります（[createUser](https://clerk.com/docs/reference/backend/user/create-user)）。**招待や確認コードを有効に戻して代わりにしないでください**（下の理由で、社員になりすませる経路が開きます）。こうして作ったメールアドレスは確認済みとして登録され（[createUser](https://clerk.com/docs/reference/backend/user/create-user)）、本人が同じアドレスの Google アカウントでサインインすると、そのユーザーに紐づきます。外部ユーザーは、そのアドレスを `ALLOWED_EXTERNAL_EMAILS` に足すのとあわせて作ります。
