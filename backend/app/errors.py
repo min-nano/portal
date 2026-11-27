@@ -12,8 +12,13 @@ google_drive・settings_store）がこれを使う一方で、portal_sdk がそ�
 
 
 class PortalError(Exception):
-    """message はそのまま画面に出せる日本語、status は HTTP のステータス。"""
+    """message はそのまま画面に出せる日本語、status は HTTP のステータス。
 
-    def __init__(self, message: str, status: int = 400):
+    code は、画面が文言ではなく種類で見分けたい失敗にだけ付ける目印
+    （応答の本文に {"error": …, "code": …} として載る）。
+    """
+
+    def __init__(self, message: str, status: int = 400, code: str | None = None):
         super().__init__(message)
         self.status = status
+        self.code = code

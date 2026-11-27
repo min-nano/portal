@@ -50,7 +50,7 @@ async def create_report(request: Request, user: User = Depends(require_user)):
     reports = panel_shear.validate(data)
     verification = panel_shear.verify(reports, body.get("verify"))
 
-    session = portal_sdk.delegated_write_session(user.email)
+    session = portal_sdk.delegated_write_session(user)
     destination = portal_sdk.resolve_pdf_destination(
         session,
         body.get("save"),

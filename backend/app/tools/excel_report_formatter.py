@@ -58,13 +58,13 @@ async def save_template_selection(request: Request, user: User = Depends(require
     親フォルダを特定できないファイルは拒否する）。
     """
     file_id = (await portal_sdk.json_body(request)).get("fileId")
-    return TEMPLATE.save(portal_sdk.delegated_session(user.email), file_id)
+    return TEMPLATE.save(portal_sdk.delegated_session(user), file_id)
 
 
 @router.get("/template/preview")
 async def preview_template(user: User = Depends(require_user)):
     """今の雛形の中身を返す（画面で雛形のファイル名を押したときのポップアップ）。"""
-    return TEMPLATE.preview(portal_sdk.delegated_session(user.email))
+    return TEMPLATE.preview(portal_sdk.delegated_session(user))
 
 
 @router.post("/reports")
@@ -81,7 +81,7 @@ async def create_report(request: Request, user: User = Depends(require_user)):
     folder_id, file_name = TEMPLATE.require()
 
     template_bytes = google_drive.fetch_latest_template(
-        portal_sdk.delegated_session(user.email), folder_id, file_name
+        portal_sdk.delegated_session(user), folder_id, file_name
     )
     xlsx_bytes = excel_report.generate_report(
         template_bytes, body.get("property_name"), body.get("rooms")

@@ -17,6 +17,18 @@
   display: none !important;
 }
 
+/* 社内専用の入口は、社内ユーザーだと確かめてから見せる
+   （src/account.js。断るのはサーバーで、これは見せ方だけ）。 */
+:root:not([data-account='internal']) [data-staff-only] {
+  display: none !important;
+}
+
+/* 使えないアカウントには、ツールの中身を見せず断りの理由（#refusal）だけを出す
+   （src/page-start.js）。 */
+#app[data-closed] > :not(#refusal) {
+  display: none !important;
+}
+
 /* iOS Safari は、ビューポートより広い塊（横スクロールする表など）の中の
    文字を勝手に大きくする（自動テキスト拡大）。判定の行だけ文字が飛び抜けて
    大きくなってしまうので、拡大は行わせない。指でのピンチ拡大は妨げない。 */

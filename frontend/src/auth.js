@@ -8,6 +8,7 @@
 
 import { Clerk } from '@clerk/clerk-js';
 import { jaJP } from '@clerk/localizations';
+import { forgetRememberedAccount } from './account.js';
 import { avatarUrl } from './account-avatar.js';
 import { finishPageLoading } from './components/loading.js';
 
@@ -126,6 +127,9 @@ export async function requireSignIn() {
   const clerk = await initClerk();
 
   if (!clerk.user) {
+    // サインインしていない（セッションが切れた・別の端末でサインアウトした）なら、
+    // 前の人について覚えたアドレスを共用の端末に残さない（account.js）。
+    forgetRememberedAccount();
     // サインイン画面を出すので、ページの読み込み中の表示はここで終わり
     // （ゲートの中には、サインイン画面が現れるまでの表示が別にある）。
     finishPageLoading();
@@ -144,7 +148,19 @@ export async function requireSignIn() {
   if (signOutBtn) {
     signOutBtn.addEventListener('click', async () => {
       signingOut = true;
-      await clerk.signOut();
+      // 社内ユーザーと確かめたアドレスを、共用の端末に残さない（account.js。
+      // 一度忘れたら、取り直し中の /api/me の答えが後から届いても書き戻さない）。
+      // サインアウトに失敗しても、アドレスは消しておく。
+      forgetRememberedAccount();
+      try {
+        await clerk.signOut();
+      } catch {
+        // 済んだと思って席を離れないよう、失敗したことを知らせる（読み込み直すと
+        // サインインしたままの画面に戻り、失敗に気付きにくい）。
+        signingOut = false;
+        window.alert('サインアウトできませんでした。通信を確かめて、もう一度お試しください。');
+        return;
+      }
       window.location.reload();
     });
   }
@@ -156,7 +172,11 @@ export async function requireSignIn() {
   // reload してしまうと削除リクエストが中断され、リロード後もサインイン状態の
   // ままになる。このタブの後始末は上のクリックハンドラ側が行う。
   clerk.addListener(({ user }) => {
-    if (!user && !signingOut) window.location.reload();
+    if (!user && !signingOut) {
+      // 別のタブでのサインアウトやセッションの失効でも、アドレスを残さない。
+      forgetRememberedAccount();
+      window.location.reload();
+    }
   });
 
   return clerk;

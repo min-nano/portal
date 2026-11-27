@@ -7,6 +7,10 @@
 操作する。これにより GAS 版の「アクセスしているユーザーとして実行」と同じ
 権限モデル（雛形にアクセス権のある本人しか読めない）を維持する。
 
+外部ユーザー（組織外のアカウント。ALLOW_EXTERNAL_USERS）は、Drive を
+使わないツールだけを使える。ツールは既定で社内専用で、Tool.external_users を
+名乗ったツールだけを外部ユーザーにも開く（下の「ツール」）。
+
 このファイルが持つのは **組み立てだけ** で、ツールの中身は 1 行も無い:
 
   - どのツールにも同じように効くもの（/healthz・/me・/drive/items・/site）
@@ -22,10 +26,10 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import config, drive_browser, google_drive, portal_sdk, site_settings
+from . import config, drive_browser, portal_sdk, site_settings
 from .clerk_auth import User
 from .errors import PortalError
-from .portal_sdk import require_user
+from .portal_sdk import require_internal_user, require_user
 from .tools import TOOLS
 
 app = FastAPI(title="portal-api", docs_url=None, redoc_url=None)
@@ -47,8 +51,11 @@ app.add_middleware(
 )
 
 
-def _error_response(status: int, message: str) -> JSONResponse:
-    return JSONResponse(status_code=status, content={"error": message})
+def _error_response(status: int, message: str, code: str | None = None) -> JSONResponse:
+    content = {"error": message}
+    if code:
+        content["code"] = code
+    return JSONResponse(status_code=status, content=content)
 
 
 @app.exception_handler(PortalError)
@@ -58,7 +65,7 @@ async def _portal_error_handler(_request: Request, exc: PortalError):
     土台もツールも同じ形（message + status）で失敗を伝えるので、ハンドラは
     これ 1 つで足りる。ツールが増えてもここは増えない。
     """
-    return _error_response(exc.status, str(exc))
+    return _error_response(exc.status, str(exc), exc.code)
 
 
 @app.exception_handler(Exception)
@@ -76,7 +83,12 @@ async def healthz():
 
 @app.get("/api/me")
 async def me(user: User = Depends(require_user)):
-    return {"email": user.email}
+    """本人のメールアドレスと、外部ユーザーか（画面が使えない入口を隠すため）。
+
+    画面はこれを見て出し分けるだけで、断るのはいつもサーバー側
+    （require_internal_user と portal_sdk の代理アクセス）。
+    """
+    return {"email": user.email, "external": user.external}
 
 
 @app.get("/api/drive/items")
@@ -100,7 +112,7 @@ def list_drive_items(
     しておく（FastAPI がスレッドプールで動かし、待つ間もイベントループを
     止めない）。フォルダを開くたび・検索のたびに呼ばれるため。
     """
-    session = google_drive.delegated_session(user.email)
+    session = portal_sdk.delegated_session(user)
     return drive_browser.list_items(
         session,
         location=location,
@@ -120,9 +132,16 @@ app.include_router(site_settings.router)
 #
 # 載せるツールは app/tools/ が決める。ここは並んだものを順に載せるだけで、
 # ツールの名前も、ツールごとの分岐も持たない。
+#
+# 外部ユーザーにも使わせると名乗っていないツールは、ルートすべてを社内専用に
+# する。ツールのルートを 1 本ずつ守るのではなく、載せるところで一度に掛けるので、
+# ツールにルートが増えても掛け忘れない（新しいツールも、名乗るまでは社内専用）。
 
 for _tool in TOOLS:
-    app.include_router(_tool.router)
+    app.include_router(
+        _tool.router,
+        dependencies=[] if _tool.external_users else [Depends(require_internal_user)],
+    )
 
 
 # 土台がツールへ貸し出すもの。ツール側からは portal_sdk として見えるが、

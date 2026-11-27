@@ -6,7 +6,7 @@
     <span class="help">
       <button type="button" class="help-btn" aria-label="このツールの説明" aria-expanded="false" aria-controls="helpIntro">?</button>
       <span class="help-body" id="helpIntro">
-        選んだ PDF を 1 つの PDF にまとめます。裁断した本を分けてスキャンした PDF（奇数頁の束・偶数頁の束・表紙・裏表紙など）は、頁番号を読み取って 1 冊ぶんの順に並べます（部ごとに番号が振り直されていても並べられます）。頁番号の無い PDF は、ファイルの一覧の順（追加順・名前順・更新日時順、または手で並べ替えた順）につなぎます。頁の抜け・重なりと、スキャンの傾き・ずれ・すじを確かめてから結合し、結合した PDF も元の頁と突き合わせて検証します。頁番号の読み取り・検査・結合はすべてこの端末の中で行い、Drive のファイルもこの端末が Drive から直接読みます。サーチャブル PDF の文字情報はそのまま残ります。
+        選んだ PDF を 1 つの PDF にまとめます。裁断した本を分けてスキャンした PDF（奇数頁の束・偶数頁の束・表紙・裏表紙など）は、頁番号を読み取って 1 冊ぶんの順に並べます（部ごとに番号が振り直されていても並べられます）。頁番号の無い PDF は、ファイルの一覧の順（追加順・名前順・更新日時順、または手で並べ替えた順）につなぎます。頁の抜け・重なりと、スキャンの傾き・ずれ・すじを確かめてから結合し、結合した PDF も元の頁と突き合わせて検証します。頁番号の読み取り・検査・結合はすべてこの端末の中で行います<span data-staff-only>（Drive のファイルも、この端末が Drive から直接読みます）</span>。サーチャブル PDF の文字情報はそのまま残ります。
       </span>
     </span>
   </h2>
@@ -19,12 +19,13 @@
     <span class="help">
       <button type="button" class="help-btn" aria-label="ファイルの選び方" aria-expanded="false" aria-controls="helpFiles">?</button>
       <span class="help-body" id="helpFiles">
-        Drive の選択画面では、PDF を押すたびに選ぶ・外すが切り替わり、いくつでも選べます（フォルダを移っても残ります）。手元のファイルは、この枠へドラッグ＆ドロップしても追加できます。最後の頁から並んでいるファイル（給紙の都合で逆順になったもの）も、頁番号から自動で並べ直します。番号の無い表紙なども、ファイルごとに「進み方」で逆順を選べます。文字情報に頁番号が見つからない頁は、画像の余白から読み取ります（初回だけ数 MB の読み込みがあります）。
+        <span data-staff-only>Drive の選択画面では、PDF を押すたびに選ぶ・外すが切り替わり、いくつでも選べます（フォルダを移っても残ります）。</span>手元のファイルは、この枠へドラッグ＆ドロップしても追加できます。最後の頁から並んでいるファイル（給紙の都合で逆順になったもの）も、頁番号から自動で並べ直します。番号の無い表紙なども、ファイルごとに「進み方」で逆順を選べます。文字情報に頁番号が見つからない頁は、画像の余白から読み取ります（初回だけ数 MB の読み込みがあります）。
       </span>
     </span>
   </h3>
   <div class="bm-actions">
-    <button type="button" id="driveBtn">Drive から選ぶ</button>
+    <!-- Drive は社内アカウント専用（社内ユーザーと確かめてから見せる。src/account.js）。 -->
+    <button type="button" id="driveBtn" data-staff-only>Drive から選ぶ</button>
     <button type="button" id="localBtn" class="secondary">手元の PDF を追加</button>
     <input type="file" id="localInput" accept="application/pdf,.pdf" multiple hidden>
   </div>
