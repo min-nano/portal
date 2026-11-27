@@ -32,7 +32,7 @@ describe('portal-header', () => {
     expect(document.getElementById('accountEmail')).not.toBeNull();
     expect(document.getElementById('signOutBtn').textContent).toBe('サインアウト');
     expect(document.getElementById('siteSettingsBtn').textContent).toBe('設定');
-    // 全員に効く設定なので社内専用（外部ユーザーには見せない。account.js）。
+    // 全員に効く設定なので社内専用（社内ユーザーと確かめてから見せる。account.js）。
     expect(document.getElementById('siteSettingsBtn').hasAttribute('data-staff-only')).toBe(true);
     // メールアドレス・設定・サインアウトは、アバターから開くメニューの中にある。
     const menu = document.getElementById('accountMenu');

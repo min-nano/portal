@@ -225,6 +225,16 @@ describe('forgetRememberedAccount', () => {
     expect(storage.setItem).toHaveBeenCalledTimes(1);
   });
 
+  it('ほかのタブで保存場所が丸ごと消されたとき（clear）も、もう覚えない', async () => {
+    const { checkAccount: check } = await freshModule();
+    const storage = memoryStorage();
+    apiGet.mockResolvedValue({ email: 'a@example.co.jp', external: false });
+
+    window.dispatchEvent(new StorageEvent('storage', { key: null }));
+    expect(await check(document, noWait, storage)).toBe('internal');
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
   it('忘れた後に届いた答えでは、もう覚えない（サインアウト中の書き戻しを防ぐ）', async () => {
     const { forgetRememberedAccount: forget, checkAccount: check } = await freshModule();
     const storage = memoryStorage();

@@ -173,7 +173,7 @@ describe('requireSignIn（サインイン済み）', () => {
     expect(signedOut).toBe(true);
   });
 
-  it('サインアウトに失敗しても、覚えたアドレスは消す', async () => {
+  it('サインアウトに失敗しても、覚えたアドレスは消し、失敗を知らせる', async () => {
     document.body.innerHTML = '';
     const { requireSignIn } = await loadAuthModule();
     document.body.insertAdjacentHTML(
@@ -183,14 +183,20 @@ describe('requireSignIn（サインイン済み）', () => {
     signedInUser = { primaryEmailAddress: { emailAddress: 'taro@example.com' } };
     localStorage.setItem('portal.account', JSON.stringify({ email: 'taro@example.com' }));
     signOutFails = true;
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
     try {
       await requireSignIn();
       document.getElementById('signOutBtn').click();
       for (let i = 0; i < 5; i += 1) await Promise.resolve();
 
       expect(localStorage.getItem('portal.account')).toBeNull();
+      // 済んだと思って席を離れないよう、失敗したことを知らせる。
+      expect(alert).toHaveBeenCalledWith(
+        'サインアウトできませんでした。通信を確かめて、もう一度お試しください。'
+      );
     } finally {
       signOutFails = false;
+      alert.mockRestore();
     }
   });
 

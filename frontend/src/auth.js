@@ -150,13 +150,16 @@ export async function requireSignIn() {
       signingOut = true;
       // 社内ユーザーと確かめたアドレスを、共用の端末に残さない（account.js。
       // 一度忘れたら、取り直し中の /api/me の答えが後から届いても書き戻さない）。
-      // サインアウトに失敗しても消して、読み込み直す（読み込み直した先で、
-      // まだサインインしていればそのまま、済んでいればサインイン画面になる）。
+      // サインアウトに失敗しても、アドレスは消しておく。
       forgetRememberedAccount();
       try {
         await clerk.signOut();
       } catch {
-        // 読み込み直せば、Clerk が今の状態から出し直す。
+        // 済んだと思って席を離れないよう、失敗したことを知らせる（読み込み直すと
+        // サインインしたままの画面に戻り、失敗に気付きにくい）。
+        signingOut = false;
+        window.alert('サインアウトできませんでした。通信を確かめて、もう一度お試しください。');
+        return;
       }
       window.location.reload();
     });

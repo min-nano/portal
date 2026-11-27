@@ -64,10 +64,13 @@ function readRemembered(storage) {
 
 // このページで一度忘れたら（サインアウトしたら）、もう覚えない。取り直し中の
 // /api/me の答えが後から届いても、消したアドレスを書き戻さないため。ほかの
-// タブで消されたとき（storage イベント）も同じ。
+// タブで消されたとき（storage イベント。localStorage.clear() なら key は null）も同じ。
+// ブラウザ以外（addEventListener の無い環境）で読み込んでも落ちないようにする。
 let forgotten = false;
-globalThis.addEventListener('storage', (event) => {
-  if (event.key === CACHE_KEY && event.newValue === null) forgotten = true;
+globalThis.addEventListener?.('storage', (event) => {
+  if (event.key === null || (event.key === CACHE_KEY && event.newValue === null)) {
+    forgotten = true;
+  }
 });
 
 /** 社内ユーザーと確かめたアドレスを覚える（email が無ければ忘れる）。 */
