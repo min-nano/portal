@@ -11,9 +11,12 @@ export default {
   title: 'PDF 結合ツール',
   dir: fileURLToPath(new URL('.', import.meta.url)),
   page: 'page.html',
-  // <div id="app"> の外に出す部分（拡大表示と、Drive への保存ダイアログ）。
+  // <div id="app"> の外に出す部分（頁の拡大表示）。
   overlay: 'overlay.html',
   entry: 'main.js', // 画面の入口
   icon: 'icon.svg', // トップページの絵: 2 つの書類が 1 つにまとまる
   styles: 'tool.css', // このツールにしか出てこない形（見本ページが束ねる）
+  // 外部ユーザー（組織外のアカウント）にも使わせる。手元の PDF を結合してダウンロードできる（「Drive から選ぶ」は隠す）。
+  // バックエンドの Tool(external_users=True) とそろえる。
+  externalUsers: true,
 };

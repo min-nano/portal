@@ -82,6 +82,8 @@ export class PortalHeader extends HTMLElement {
     settings.id = 'siteSettingsBtn';
     settings.className = 'secondary';
     settings.textContent = '設定';
+    // 全員に効く設定なので社内専用（社内ユーザーと確かめてから見せる。../account.js）。
+    settings.dataset.staffOnly = '';
     const signOut = doc.createElement('button');
     signOut.type = 'button';
     signOut.id = 'signOutBtn';

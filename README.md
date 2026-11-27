@@ -13,7 +13,7 @@
 | レイヤー | 技術 | 役割 |
 | --- | --- | --- |
 | フロントエンド | **Firebase Hosting** + Vite (vanilla JS) | モバイル最適化の入力フォーム。`/api/**` は Hosting のリライトで Cloud Run へ転送（同一オリジン） |
-| 認証 | **Clerk**（Google ログインのみ有効化） | サインインとセッション JWT の発行 |
+| 認証 | **Clerk**（Google ログインのみ有効化。外部ユーザーも Google でサインイン） | サインインとセッション JWT の発行 |
 | バックエンド | **Cloud Run**（FastAPI / Python） | Clerk JWT の検証、Excel 生成（openpyxl）、PDF 生成・解析（Docs API + pypdf / pdfminer.six）、Drive アクセス |
 | 計算 | **Rust → wasm**（`core/`） | 面材張り大壁と釘配列諸定数、必要壁量と柱の小径の計算・入力の解釈・表示の桁揃え。**同じ .wasm を画面とバックエンドの両方が動かす**（「計算の一元管理（Rust → wasm）」参照） |
 | データ保存 | **Google Workspace の Drive** / Firestore / リポジトリ同梱 | Drive: Excel 雛形（社外秘フォーマット）・証明書の雛形（Google ドキュメント）・生成した PDF・**事務所オリジナルの係数とロジックの定義**（[docs/external-resources.md](docs/external-resources.md)）。Firestore: 全利用者共通の設定と、**発行済みの定義**。同梱: 一般に配布されている必要壁量の表計算ツール（`backend/app/templates/`。誰でも同じものを配布ページから入手できるので、Drive に置かず版を固定して持つ） |
@@ -24,7 +24,7 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
 
 1. **Clerk セッション JWT の検証**（バックエンド）
    - Clerk の JWKS で署名を検証し、`exp` / `iss` / `azp` を確認して、トークンからユーザーの **メールアドレス** を取り出す。
-   - 許可ドメイン（`ALLOWED_EMAIL_DOMAINS`）以外のアカウントは 403。
+   - 許可ドメイン（`ALLOWED_EMAIL_DOMAINS`）のアカウントは**社内ユーザー**、それ以外のアカウントは、`ALLOW_EXTERNAL_USERS` が `true` のときだけ**外部ユーザー**（誰がサインインできるかは Clerk の Invite-only で決める）。`true` でなければ 403。外部ユーザーにできることは下の「外部ユーザー（組織外のアカウント）」。
 2. **代理アクセストークン（domain-wide delegation）**
    - 確認したメールアドレスのユーザーとして、サービスアカウントが **読み取り専用スコープ** (`drive.readonly`) の代理トークンを取得し、Workspace の Drive API を呼ぶ。
    - つまり雛形の取得は常に **本人の Drive 権限の範囲内** で行われる。雛形にアクセス権の無いユーザーは、サインインできても雛形を読めない（GAS 版と同じ UX・同じ境界）。
@@ -33,7 +33,75 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
 
 全利用者共通の設定（雛形フォルダ ID・ファイル名。GAS 版のスクリプトプロパティ相当。ポータルの名前とロゴ）は **Firestore** に保存します。人が直接編集できる Drive 上の JSON ファイルと違い、管理ユーザーの誤操作で設定が壊れるリスクがなく、アクセスはランタイム SA の IAM（`roles/datastore.user`）だけで完結します。delegation のスコープも広げません。保存先は環境（チャンネル）ごとに分かれています（「共有設定（Firestore）」参照）。
 
-認証の要らない API は `/api/healthz` と、ポータルの名前とロゴを読む `GET /api/site` だけです（サインイン画面のヘッダーにも出すため。以前は同じものをビルド時に静的な HTML へ埋め込んで配っていたので、読める範囲は変わっていません）。書き換え（`PUT /api/site`）はサインインが要ります（「サイトの設定（ポータルの名前とロゴ）」参照）。
+#### 外部ユーザー（組織外のアカウント）
+
+組織外の Google アカウント（例 `someone@gmail.com`）も、`ALLOW_EXTERNAL_USERS` を `true` にし、管理者が Clerk にその人のユーザーを作れば使えます（下の「外部ユーザーのサインインの方法」）。バックエンドは社内ドメインかどうかだけを見て、社内ドメイン以外を外部ユーザーとして通します。**誰を通すかは Clerk が決めます**（Access mode を Invite-only にし、利用者が自分でユーザーを作れないようにする）。外部ユーザーのアドレスの一覧をバックエンドにも持つと、Clerk のユーザーと二重に管理することになるので持ちません。そのため、`ALLOW_EXTERNAL_USERS` を `true` にしたインスタンスでは、**Clerk の Access mode を Invite-only にしておくことが必須**です（Open のままだと、どの Google アカウントでもサインアップして外部ユーザーとして使えてしまう。PR プレビューで `ALLOW_EXTERNAL_USERS_PREVIEW` を `true` にするときの開発インスタンスも同じ）。`true` にする前に、前提 5 のとおり、社内ドメイン以外の Clerk ユーザーが使わせたい人だけであることを確かめてください（Invite-only は既存のユーザーのサインインを止めないので、残っているユーザーはそのまま外部ユーザーになる）。外部ユーザーにできるのは Drive を使わないツールだけなので、崩れたときに起きるのは計算ツールを使われる（Cloud Run の費用が掛かる）ことで、社内のデータには届きません。
+
+外部ユーザーには代理アクセス（domain-wide delegation）が効きません（Workspace の外のアドレスにはなりかわれない）。そこで、**Drive を使わない機能だけ**を使わせます。手元のファイルを読み、画面の中や Cloud Run で編集したものをダウンロードする、という使い方です。本人の Google アカウントの Drive 権限（OAuth トークン）を預かって使う方式は採りませんでした（制限付きスコープの審査・同意画面の警告・トークンの保管が要り、そこまでの必要がないため）。
+
+| | 社内ユーザー | 外部ユーザー |
+| --- | --- | --- |
+| 必要壁量 計算ツール | ✅ | ✅（Drive を使わない） |
+| PDF 結合ツール | ✅ | ✅ 手元のファイルだけ（「Drive から選ぶ」は出さない） |
+| 現況検査レポート・構造計算安全証明書・面材張り大壁 | ✅ | ❌（雛形の読み込みか保存に Drive を使う） |
+| Drive のファイル選択（`/api/drive/items`） | ✅ | ❌ |
+| ポータルの名前とロゴの変更（`PUT /api/site`）・雛形の設定 | ✅ | ❌（全員に効く設定なので社内だけ） |
+
+**断るのはサーバーです。** 次の 3 か所で、外部ユーザーには 403 を返します。
+
+* **ツールは既定で社内専用。** `Tool(external_users=True)` を名乗ったツールだけを外部ユーザーにも開き、それ以外のツールはルートすべてに `require_internal_user` を掛けて載せます（`main.py`）。ルートを 1 本ずつ守るのではないので、ルートを足しても掛け忘れません。新しいツールも、名乗るまでは社内専用です。
+* **Drive の入口は代理アクセスの手前で断る。** 開いたツールの中でも、Drive を使う入口（PDF 結合の Drive の PDF、ファイル選択の一覧）は、`portal_sdk.delegated_session` などが、なりかわりを頼む前に断ります。
+* **全員共通の設定の書き換え**（`PUT /api/site`）は `require_internal_user`。雛形の設定は社内専用のツールの中にあるので、上の 1 つ目で断られます。
+
+**画面は見せ方だけを合わせます。** `data-staff-only` を付けた入口（社内専用ツールのカード、「Drive から選ぶ」、「設定」メニュー）は、**社内ユーザーだと確かめてから見せます**（`frontend/src/account.js`。CSS は `<html data-account="internal">` になるまで隠す）。サインインの後に `/api/me`（`{"email", "external"}`）を読み、`external` が `false` なら `"internal"`、外部ユーザーなら `"external"`、使えないアカウントなら `"refused"` にします。社内ユーザーと確かめられない限り入口は見えません。答えは待たずに画面を出し、その端末で最後に社内ユーザーと確かめたアドレスを 1 つだけ覚えておいて、同じアドレスでサインインしたら先に入口を見せてから確かめ直します（違っていればその時点で隠す。そのため、前回社内ユーザーだった人が外部ユーザーに変わった場合は、確かめ終わるまで入口が見える。覚えた値は見せ方にしか使わず、外部ユーザーのアドレスは端末に残さない）。初めての端末や起動待ちのときは、社員にも入口が少し遅れて出ます。`/api/me` が一時的に失敗したとき（通信の失敗・5xx・429）は、Cloud Run の起動待ちを越えられるよう、間を置いて 3 回まで（合わせて約 12 秒）取り直し、それでも確かめられなければ見せ方を変えません。サインアウトしたとき、ページを開いたらサインインしていなかったとき（セッションの失効など）、ほかのタブでサインアウトしたときは、覚えたアドレスを消します（一度消したページでは、取り直し中の答えが後から届いても書き戻さない）。社内専用のツールのページを直接開いた場合は、ツールの準備（`/config`）が「この機能は社内アカウント専用です。」で断られ、その理由が画面に出ます。
+
+画面とバックエンドの名乗り（`tool.js` の `externalUsers` と `Tool.external_users`）がそろっていることは、`backend/tests/test_external_users.py` が確かめます。
+
+**外部ユーザーのサインインの方法。** 社員も外部ユーザーも Google でサインインします。そのために、Clerk が使う Google の OAuth クライアントの同意画面を **「外部」**（公開状態は「本番」でも「テスト」でもよい。下記）にし、Clerk の Access mode を **Invite-only** にします（外部ユーザーを使わせるインスタンスごとに。「1. Clerk」）。同意画面の種類（内部 / 外部）は **GCP プロジェクト単位**の設定なので、本番と開発の OAuth クライアントが同じ GCP プロジェクトにあると、片方だけ「外部」にはできません。片方だけ外部ユーザーを使わせるなら、OAuth クライアントを別の GCP プロジェクトに分けます（分けないなら、両方のインスタンスに下の前提が要ります）。求める権限は名前とメールアドレスだけなので、制限付きスコープの審査は要りません。同じ理由で、公開状態が「テスト」でも、テストユーザーに登録していない Google アカウントがサインインでき、警告画面も 7 日の期限も出ません（[Manage App Audience](https://support.google.com/cloud/answer/15549945) の、名前・メールアドレス・プロフィールだけを求めるアプリの例外）。**テストユーザーの一覧は許可リストの代わりにならない**ので、公開状態によらず下の前提が要ります（Drive などの権限をこのクライアントで求めるようにすると、この例外は当てはまらなくなる）。
+
+社内ユーザーかどうかは**メールアドレスのドメインだけ**で決め（ただし社内ドメインで `+` を含むアドレスは通さない。社外では Clerk のテストモードの `+clerk_test` のアドレスを通さない。Workspace のアドレスに `+` は無い一方、`社員+x@社内ドメイン` 宛てのメールは社員本人に届くので、そのサブアドレスで個人の Google アカウントを作られうるため）、社内ユーザーの Drive には、そのアドレスの社員になりかわってアクセスします。この判定が正しいのは、**社内ドメインのアドレスでサインインできるのが、その Workspace のアカウントの持ち主だけ**のときです。同意画面が「外部」だと、Google ログインは Workspace の外のアカウントも通すので、次の 2 つでそれを保ちます。
+
+* **社内ドメインのアドレスを持つ、Workspace に属さない Google アカウントを作らせない・残さない。** 個人の Google アカウントは、受け取れるメールアドレスなら何でも使って作れます（[競合アカウント](https://support.google.com/accounts/answer/181526)）。そうしたアカウントで Google ログインすると、Clerk は同じアドレスの既存ユーザー（その社員）に紐づけてサインインさせ（[Account linking for OAuth](https://clerk.com/docs/guides/configure/auth-strategies/social-connections/account-linking)）、セッショントークンにも Backend API にも「どの Google アカウントか」は出てこないので、ポータルの側ではこれを見分けられません。
+* **Clerk のユーザーは管理者だけが作る（Invite-only）。** Invite-only は利用者が自分でユーザーを作ること（サインアップ）を止める設定で、すでにいるユーザーのサインインは制限しません（[Restricting access](https://clerk.com/docs/guides/secure/restricting-access)）。
+
+**外部ユーザーを使わせる前に、次をすべて満たしてください**（Google 管理コンソールと Clerk のダッシュボード）。
+
+| # | 前提 | 設定・確認の場所 | 理由 |
+| --- | --- | --- | --- |
+| 1 | 既存の競合アカウントが無い | 管理コンソール → ディレクトリ → 管理対象外のユーザー → **個人アカウント** の一覧が空（あれば[移行を促すか名前を変えさせる](https://knowledge.workspace.google.com/admin/users/use-the-transfer-tool-to-migrate-unmanaged-personal-accounts)） | すでに Clerk にユーザーがいる社員のアドレスの競合アカウントは、Invite-only でも止まらず、その社員として入れる（Drive にも代理アクセスできる） |
+| 2 | Workspace のユーザーがいない社内アドレスで、個人アカウントを作らせない | Gmail → コンプライアンス → **コンテンツ コンプライアンス**（最上位の組織部門）：受信メッセージ／エンベロープ送信者の末尾が `@idverification.bounces.google.com` なら**メールを拒否**／影響を受けるアカウントの種類は**ユーザー・グループ・認識できない / キャッチオール**のすべて | Google のアカウント作成の確認メールを止める（[Prevent creation of unmanaged personal accounts](https://knowledge.workspace.google.com/admin/users/prevent-creation-of-unmanaged-personal-accounts)）。社内ドメイン宛てのメールをすべて Gmail が受けている場合に効く（MX や分割配信で別のメールシステムへ届く分は、そちらで同じ送信元を止める）。拒否したメールには、ほかのルーティングやコンプライアンスの規則（社外への写しなど）は適用されない（[Set up rules for advanced email content filtering](https://knowledge.workspace.google.com/admin/gmail/advanced/set-up-rules-for-advanced-email-content-filtering)）。Workspace のユーザーがいるアドレスと、グループのアドレスは、Google が「既に使用されている」として作らせない（後者はこのドメインで試して確認） |
+| 3 | 管理されていない仕事用アカウントの作成を禁止する | 管理コンソール → ディレクトリ → 管理対象外のユーザー → 仕事用アカウント → 設定を管理（[Prevent new unmanaged work accounts](https://knowledge.workspace.google.com/admin/users/prevent-new-unmanaged-work-accounts)） | 2 と同じく、Workspace のユーザーがいない社内アドレスで Google アカウントを作らせないため。**画面が開けない環境もある**（特権管理者で権限があっても「アクセス権がありません」になった）。その場合は 2・4 で代える |
+| 4 | Clerk の Access mode を **Invite-only** にし、社内ドメインのグループや別名のアドレスのユーザーは作らない | Clerk ダッシュボード → Access mode | 2・3 をすり抜けたアカウントがあっても、Clerk にそのアドレスのユーザーが無ければ入れない（自分でアドレスを足して入ることは 7 で止める） |
+| 5 | Clerk のユーザーが、在籍中の社員（Workspace のユーザーのアドレス）と、使わせたい外部ユーザーだけである（退職した社員、やめてもらう外部ユーザー、グループ・別名・試しに作ったアドレス、Open だった間にできたユーザーを消す） | Clerk ダッシュボード → Users（**本番・開発の両インスタンス**で。切り替えるときと、1 と同じく定期的に） | Invite-only はすでにいるユーザーのサインインを止めない。Workspace のユーザーがいないアドレスの Clerk ユーザーは、そのアドレスで作られた Google アカウントから入られうるうえ、社内ユーザーとして扱われ続ける |
+| 6 | 社員が第三者アプリの制限で締め出されないようにする | 管理コンソール → セキュリティ → API の制御 → アプリのアクセス制御で、Clerk の OAuth クライアントを**信頼できる**にする（同意画面を「外部」にするインスタンスのクライアントすべて） | 同意画面が「外部」だと、社員から見ると第三者のアプリになる |
+| 7 | 利用者が自分でメールアドレスを足したり変えたりできないようにする | Clerk ダッシュボード → User & authentication → User model → User permissions → **Allow users to change their email address** をオフ（両インスタンス） | セッショントークンの `email` は主のメールアドレス。外部ユーザーが社内ドメインのアドレス（の Google アカウント）を自分のユーザーに足して主にすると、社員として扱われる。オフにすると、新しいアドレスを伴う OAuth アカウントの紐づけも止まる（[Restrict changes](https://clerk.com/docs/guides/configure/auth-strategies/sign-up-sign-in-options)） |
+
+1 の一覧と 5 は、定期的に確かめます。1〜3 は Workspace 全体の設定なので、**どのインスタンスの同意画面を「外部」にする前にも**済ませます（本番は「内部」のまま、PR プレビューだけで外部ユーザーを試す場合も。ただしそれができるのは、開発インスタンスの OAuth クライアントが本番と別の GCP プロジェクトにあるときだけ。同じなら本番も「外部」になり、本番にも 4〜7 が要る）。開発インスタンスで試すなら、4〜7 も開発インスタンスに要り、あわせて開発インスタンスの **Test mode をオフ**にします（オンだと `+clerk_test` のアドレスがメールを受け取らずに固定のコードで確認済みになる）。プレビューのバックエンドも同じ `ALLOWED_EMAIL_DOMAINS` で社内ユーザーを決め、Drive に代理アクセスするためです。
+
+**外部ユーザーを使わせるインスタンス（Invite-only）では、新しく使い始める人は、社員も外部ユーザーも、先に Clerk にユーザーを作ります**（Google でのサインインでも同じ。社員だけで使う「内部」・Open のインスタンスでは要りません）。Clerk のダッシュボードの **Users → Create user** で、その人のメールアドレスだけを入れて作ります。そのため、Clerk の **User & authentication → Email** は次のようにします（「1. Clerk」）。Clerk は、メールアドレスなどの識別子が 1 つも有効でないと「Create user」を使わせないためです。
+
+| 設定 | 値 | 理由 |
+| --- | --- | --- |
+| Sign-up with email | オン | 「Create user」でメールアドレスだけのユーザーを作るため |
+| Require email address | オン | バックエンドはセッショントークンのメールアドレスで判定するので、全員が必ず持つようにする |
+| Verify at sign-up | オン（推奨） | Invite-only なので利用者が自分でサインアップする場面は無いが、Access mode がうっかり Open に戻ったときなどに、確かめていないメールアドレスのユーザーを作らせない二重の守り |
+| **Sign-in with email** | **オフ** | オンにすると、メールの確認コードやリンクでサインインできるようになり、社員のメールを読める人がその社員として入れてしまう。オフのとき、サインイン画面には Google のボタンだけが出る |
+
+ダッシュボードで作れない場合は、Backend API の `createUser` を `skipPasswordRequirement` 付きで呼んで作ります（[createUser](https://clerk.com/docs/reference/backend/user/create-user)）。**招待や確認コードを有効に戻して代わりにしないでください**（下の理由で、社員になりすませる経路が開きます）。こうして作ったメールアドレスは確認済みとして登録され（[createUser](https://clerk.com/docs/reference/backend/user/create-user)）、本人が同じアドレスの Google アカウントでサインインすると、そのユーザーに紐づきます。外部ユーザーも同じく作るだけです（バックエンドに一覧は無い）。外部ユーザーをやめてもらうときは、Clerk のユーザーを消します。
+
+Clerk の**招待（Invitations）は使いません**（開発インスタンスで招待のリンクから登録すると、そのブラウザで以前にポータルを開いていないと「Clerk cannot redirect to your application」と出て、ポータルへ戻らないこともある。その場合はポータルの URL を開き直す）。招待のリンクはそのアドレス宛てのメールで届き、開いた人がそのアドレスのユーザーとして登録を済ませられるので、社員のメールを読める人（社外への転送先、メールの委任先など）がその社員になりすませる経路になるためです（確認コードを採らない理由と同じ。下記）。
+
+Clerk のユーザーには、**その人の Google アカウントの主のアドレスを、表示されているとおりに**（Gmail ならドットの位置も含めて）登録します。Gmail はドットの有無や googlemail.com を同じ宛先として扱いますが、Clerk の照合は文字列のまま行うためです。外部ユーザーには、**登録したアドレスそのものの Google アカウント**が要ります（Gmail のアドレスか、相手の組織の Google Workspace のアドレスなど）。別のアドレスの Google アカウントでは、登録したユーザーと一致せず、Invite-only なのでサインアップもできません。相手が Google アカウントを持っていないアドレスなら、相手の Gmail のアドレスなどを聞いて、そちらで登録し直します。
+
+ほかに知っておくこと:
+
+* 別名（エイリアス）のアドレスで個人の Google アカウントを作れるかは、Google の文書からは判断できませんでした。別名宛ての確認メールも、前提 2 の規則（影響を受けるアカウントの種類「ユーザー」）が止めます。別名のアドレスの Clerk ユーザーは作りません（前提 4・5）。
+* 二重の守りとして、Clerk の Restrictions の **Allowlist**（本番は有料プラン）で、社内ドメインと、Clerk に作った外部ユーザーのアドレスに絞っておくこともできます。Invite-only がうっかり Open に戻ったときにも、知らないアドレスのユーザーが作られません（Allowlist もサインアップを制限するもので、すでにいるユーザーには効きません）。
+* 使えないアカウント（`ALLOW_EXTERNAL_USERS` が `true` でない環境の、社内ドメイン以外のアカウントなど）は、バックエンドが 403（目印 `"code": "account_not_allowed"` 付き）で断り、画面はツールの中身を隠して理由だけを出します（`page-start.js`）。目印で見分けるのは、プロキシなどが返す 403 で社員の画面を閉じないためです。画面の中だけで動く PDF 結合ツールも閉じますが、これは見せ方の上での措置で、`/api/me` が答えられないときは閉じません（PDF 結合はサーバーのデータに触れないので、守るべきものは画面の外にありません）。
+* 1〜3 の運用に頼らない方法として、社内ドメインに Clerk の **Enterprise SSO**（SAML で Google Workspace と連携）を設定すると、そのドメインのアドレスは必ず Workspace で認証されるようになります（[Enterprise SSO](https://clerk.com/docs/guides/configure/auth-strategies/enterprise-connections/overview)。本番は Pro / Business プランと、SSO 接続の別料金が要る）。
+* 外部ユーザーを Clerk の「メールアドレス＋確認コード」でサインインさせる方法は採りません。確認コードはそのアドレス宛てのメールで届くので、社外への自動転送・グループの外部メンバー・メールの委任などで**社員のメールを読める人なら、その社員として入れてしまう**ためです（Workspace の設定で塞ぐ項目が増え、委任は塞げない）。
+
+認証の要らない API は `/api/healthz` と、ポータルの名前とロゴを読む `GET /api/site` だけです（サインイン画面のヘッダーにも出すため。以前は同じものをビルド時に静的な HTML へ埋め込んで配っていたので、読める範囲は変わっていません）。書き換え（`PUT /api/site`）はサインインが要り、社内ユーザーだけができます（「サイトの設定（ポータルの名前とロゴ）」参照）。
 
 ```
 ブラウザ (Firebase Hosting)
@@ -363,9 +431,9 @@ pdf.js には、PDF の外にあるデータ——**CMap・標準フォント・
 * **名前**: 60 文字まで。空にすると「社内ポータル」になります。
 * **ロゴ**: **PNG か SVG**、256KB まで。画像そのものを **base64** にして Firestore のドキュメントに入れます（Cloud Storage などの置き場所を別に持たないため。上限は base64 にしても Firestore のドキュメントの上限 1 MiB に余裕を持って収まる大きさです）。種類は申告やファイル名ではなく中身（PNG の署名・SVG の `<svg>` 要素）でサーバーが決めます。縦横比を保ったまま 24px の枠に収めて出します。未設定なら、これまでどおりの小さな四角です。
 * **SVG の安全**: 画面はロゴを `<img>` の `data:` URL として描きます。`<img>` で読み込んだ SVG はスクリプトを動かさないので、SVG の中に何が書かれていても画面の中では実行されません（SVG を単独の文書として、このポータルのオリジンで配ることもしていません）。
-* **書き換えられる人**: サインインできる人（許可ドメインのアカウント）なら誰でも。雛形の設定と同じ扱いです。
+* **書き換えられる人**: 社内ユーザー（許可ドメインのアカウント）なら誰でも。雛形の設定と同じ扱いです。外部ユーザーには「設定」のメニューを出さず、API も 403 で断ります（「外部ユーザー（組織外のアカウント）」）。
 
-保存先は共有設定と同じチャンネルの下の `site_settings/site` です（「共有設定（Firestore）」参照。`backend/app/site_settings.py`）。API は `GET /api/site`（**サインイン不要**。サインイン画面のヘッダーにも出すため）と `PUT /api/site`（サインインが要る）です。
+保存先は共有設定と同じチャンネルの下の `site_settings/site` です（「共有設定（Firestore）」参照。`backend/app/site_settings.py`）。API は `GET /api/site`（**サインイン不要**。サインイン画面のヘッダーにも出すため）と `PUT /api/site`（社内ユーザーだけ。外部ユーザーは 403）です。
 
 **ちらつかせない工夫**: 名前とロゴはページを開くたびに `/api/site` から読みますが、最後に読めた値をその端末（`localStorage`）に覚えておき、**まずそれを出してから**読み直します（`frontend/src/site-settings.js`）。ヘッダーは JS が組み立てるまで中身が無いので、組み立てと同じ流れで覚えた値を入れれば、初めて描かれるときにはもう正しい名前が入っています。読み直しはサインインの確認を待たずに始めます。読めなかったときは覚えている値のまま（初めての端末なら「社内ポータル」）で、ツールはふつうに使えます。ほかの人が設定を変えたときは、次にページを開いたときに届きます。
 
@@ -399,7 +467,7 @@ pdf.js には、PDF の外にあるデータ——**CMap・標準フォント・
 
 **ツールの準備（2 段目）**
 
-* **バックエンドを先に起こしておく。** 2 段目は「`/config` → wasm」という直列の並びで、その先頭が **Cloud Run のインスタンス起動待ち**を丸ごと被ります（常時起動のインスタンスは置いていません）。そこで `startPage()` は、サインインの確認を始めるのと同時に、認証の要らない `/api/healthz` を投げます（`api.js` の `warmUpApi()`）。Clerk とやり取りしているあいだに起動が済むので、その分が待ち時間から消えます。失敗しても構いません（起きていなければ、続く `/config` が普通に起こします）。
+* **バックエンドを先に起こしておく。** 2 段目は「`/config` → wasm」という直列の並びで、その先頭が **Cloud Run のインスタンス起動待ち**を丸ごと被ります（常時起動のインスタンスは置いていません）。そこで `startPage()` は、サインインの確認を始めるのと同時に、認証の要らない `/api/healthz` を投げます（`api.js` の `warmUpApi()`）。Clerk とやり取りしているあいだに起動が済むので、その分が待ち時間から消えます。失敗しても構いません（起きていなければ、続く `/config` が普通に起こします）。トップページも、外部ユーザーかを聞く `/api/me`（答えは待たない。「外部ユーザー（組織外のアカウント）」）のために同じく起こします。
 * **計算実装（wasm）を gzip で配る。** 直列の並びの最後にある取得で、そのままだと 221 kB あります。受け取れる相手には gzip で送って **85 kB**（39%）にします。縮めたものは起動時に 1 度だけ作って持っておき、リクエストごとに縮め直しません（`backend/app/nail_core.py` の `wasm_gzip()` と `portal_sdk.py` の `wasm_response()`）。URL に中身のハッシュが付いているので、2 回目からはブラウザのキャッシュから読まれます。
 
 > それでも足りない場合、次の一手は Cloud Run の最小インスタンス数を 1 にすること（起動待ちが完全に消える代わりに、常時課金になります）です。
@@ -415,6 +483,8 @@ pdf.js には、PDF の外にあるデータ——**CMap・標準フォント・
 | --- | --- | --- |
 | 画面 | `frontend/src/<id>/tool.js`（id・名前・説明・絵・ページ・入口・CSS） | `frontend/tools.config.js` → `tools-plugin.js` がページとツール一覧を組み立てる |
 | API | `backend/app/tools/<id>.py` の `TOOL = Tool(...)`（id・名前・ルーター） | `backend/app/tools/__init__.py` → `main.py` が `/api/tools/<id>` へ載せる |
+
+外部ユーザー（組織外のアカウント）にも使わせるツールは、画面の `externalUsers: true` と API の `external_users=True` の両方で名乗ります。名乗らないツールは社内専用です（「外部ユーザー（組織外のアカウント）」）。
 
 ツールを増やす・減らすときに触るのは、この 2 つの一覧だけです。`vite.config.js` にも
 `index.html` にも `main.py` にもツールの名前は出てきません。
@@ -473,6 +543,8 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   src/site-settings.js        # ポータルの名前とロゴを出す（端末に覚えた値を先に出し、/api/site から読み直す）
   src/site-settings-dialog.js # サイトの設定画面（アカウントのメニューの「設定」から開く）
   src/auth.js                 # Clerk（サインインゲート・トークン取得。サインイン画面は必要になってから読む）
+  src/account.js              # 社内専用の入口（data-staff-only）を、社内ユーザーと確かめてから見せる
+  src/device-storage.js       # この端末の保存場所（localStorage。読めないブラウザでは null）
   src/clerk-frontend-api.js   # Publishable Key から Clerk の接続先を取り出す（preconnect 用）
   src/api.js                  # Bearer 付き fetch ラッパー（バックエンドの起こし方も）
   src/core.js                 # 計算実装（wasm）の読み込みと呼び出し（ツール共通）
@@ -570,11 +642,12 @@ firebase.json                 # Hosting 設定（/api/** → Cloud Run リライ
 
 1. Clerk でアプリケーションを作成する。**本番（production）インスタンス** は `main` のデプロイに、**開発（development）インスタンス** は PR プレビューに使う。
 2. **両インスタンス** で以下を設定する:
-   - **SSO connections で Google のみを有効化** し、Email/Password などその他のサインイン手段はすべて無効にする。
+   - **SSO connections で Google のみを有効化** し、**Use custom credentials** で自分の GCP プロジェクトの OAuth クライアントを使う（開発インスタンスの既定は Clerk 共有の認証情報で、どの Google アカウントでも通り、同意画面も自分では変えられない）。そのうえで、パスワードなどその他のサインイン手段はすべて無効にする。**Email** は、外部ユーザーを使わせるインスタンスでは「Sign-up with email」と「Require email address」をオン、「**Sign-in with email」はオフ**にする（「Create user」のため。理由は「外部ユーザー（組織外のアカウント）」）。社員だけで使うインスタンスでは Email も無効でよい。サインイン画面に Google のボタンだけが出ることを確かめる。
    - **Sessions → Customize session token** に以下を設定する（バックエンドがメールアドレスを取り出すために必須）:
      ```json
      {"email": "{{user.primary_email_address}}"}
      ```
+   - その OAuth クライアントの同意画面は、社員だけで使うなら **「内部」** にする（Workspace のアカウントしか通らないので、「外部ユーザー（組織外のアカウント）」の前提は要らない。「内部」を選べるのは、OAuth クライアントの GCP プロジェクトがその Workspace の組織に属しているときだけ）。組織外のアカウント（外部ユーザー）も使わせる場合に限り、同意画面を **「外部」**（公開状態は「本番」でも「テスト」でもよい。理由は「外部ユーザー（組織外のアカウント）」）にし、**Access mode を Invite-only** にする。**変える前に、「外部ユーザー（組織外のアカウント）」の前提 1〜7 を満たし、開発インスタンスでは Test mode をオフにしておく**（とくに 6 を先にしないと、社員が第三者アプリの制限で締め出されることがある）。
 3. API Keys から **Publishable Key** を控える。本番（`pk_live_...`）はリポジトリ変数 `CLERK_PUBLISHABLE_KEY`、開発（`pk_test_...`）は `CLERK_PUBLISHABLE_KEY_TEST` に設定する（ローカル開発ではどちらかを `VITE_CLERK_PUBLISHABLE_KEY` として渡す）。
 4. 本番ドメイン（Firebase Hosting の URL / カスタムドメイン）を本番インスタンスに登録する。開発インスタンスにはプレビュー URL のパターン（後述の「PR プレビュー」参照）を Allowed origins に登録する。
 
@@ -754,7 +827,8 @@ gcloud run deploy portal-api \
 | --- | --- | --- |
 | `CLERK_ISSUER` | 許可する Clerk の Frontend API URL（JWT の `iss`。カンマ区切りで複数可）。本番サービスには **本番インスタンスのみ**（プレビューは PR ごとの別サービスが開発インスタンスを受け持つ） | `CLERK_PUBLISHABLE_KEY` から導出 |
 | `CLERK_AUTHORIZED_PARTIES` | 許可するフロントエンドのオリジン（JWT の `azp` 検証。カンマ区切り、`*` ワイルドカード可） | `CANONICAL_HOST`（設定時のみ）と `SITE_ID` から組み立て。`https://<カスタムドメイン>,https://<サイトID>.web.app` |
-| `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り） | 同名のリポジトリ変数 |
+| `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り）。ここに当たるアカウントが社内ユーザー。Workspace の別名ドメイン・セカンダリドメインも、社員がサインインに使うものはすべて書く（漏れていると、`ALLOW_EXTERNAL_USERS` が `true` の環境ではその社員が外部ユーザーになり、Drive を使えない）。**必須**（未設定だと誰もサインインできない。判定を飛ばすと組織外のアカウントまで社内ユーザーになるため。ローカル開発でも渡す） | 同名のリポジトリ変数 |
+| `ALLOW_EXTERNAL_USERS` | （任意）`true` のとき、社内ドメイン以外でサインインした人を外部ユーザー（Drive を使わない機能だけ）として通す。誰がサインインできるかは Clerk（Invite-only）が決める。それ以外の値・未設定なら社内ドメイン以外は 403 | 同名のリポジトリ変数（プレビューは `ALLOW_EXTERNAL_USERS_PREVIEW`）。未設定なら渡さない |
 | `DWD_SERVICE_ACCOUNT_EMAIL` | 代理トークンに使う SA のメール（省略時は ADC から推定） | `RUNTIME_SA_EMAIL` |
 | `SETTINGS_CHANNEL_PATH` | 共有設定を置くチャンネルの Firestore ドキュメントパス。**未設定だと development チャンネルを指す**（「共有設定（Firestore）」参照） | `static-channels/production` 固定（環境の別はワークフローが決めるので変数にしない） |
 | `FIRESTORE_DATABASE` | （任意）共有設定の Firestore データベース名。既定 `(default)` | 同名のリポジトリ変数。未設定なら渡さない |
@@ -821,7 +895,9 @@ Hosting は `https://<サイトID>.firebaseapp.com` でも同じアプリを配�
 | `SA_EMAIL` | デプロイ実行用サービスアカウントのメール | 両方 |
 | `RUNTIME_SA_EMAIL` | Cloud Run のランタイム SA のメール。サービスのランタイム SA と `DWD_SERVICE_ACCOUNT_EMAIL` に渡す | 両方 |
 | `SITE_ID` | Hosting のサイト ID。許可オリジン（本番は `https://<サイトID>.web.app` 等、プレビューは `https://<サイトID>--pr-<番号>-*.web.app`）の組み立てに使う | 両方 |
-| `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り） | 両方 |
+| `ALLOWED_EMAIL_DOMAINS` | 利用を許可するメールドメイン（カンマ区切り）。**必須**（未設定だとデプロイが止まり、バックエンドも誰も通さない） | 両方 |
+| `ALLOW_EXTERNAL_USERS_PREVIEW` | （任意）PR プレビューで外部ユーザーを試すときだけ `true`。プレビューにはまだレビューされていないコードが載るので、本番の `ALLOW_EXTERNAL_USERS` とは分ける。未設定ならプレビューに外部ユーザーはいない（開発インスタンスにも「外部ユーザー」の前提 4〜7 が要る） | プレビュー |
+| `ALLOW_EXTERNAL_USERS` | （任意）外部ユーザー（組織外のアカウント）を使わせるときだけ `true`。「外部ユーザー（組織外のアカウント）」参照。未設定なら外部ユーザーはいない | 本番 |
 | `CLERK_PUBLISHABLE_KEY` | Clerk Publishable Key（**本番インスタンス** `pk_live_...`）。本番ビルドに埋め込み、バックエンドの `CLERK_ISSUER` もここから導出する | 本番 |
 | `CLERK_PUBLISHABLE_KEY_TEST` | Clerk Publishable Key（**開発インスタンス** `pk_test_...`）。プレビュービルドに埋め込み、プレビュー用バックエンドの `CLERK_ISSUER` もここから導出する | プレビュー |
 | `CANONICAL_HOST` | 本番のカスタムドメイン（例 `portal.example.com`）。`.web.app` へのアクセスをここへリダイレクトし、許可オリジンにも加える。未設定ならどちらも行わない | 本番 |
@@ -910,7 +986,7 @@ PR クローズ時は `preview-cleanup.yml` が、チャンネル・Cloud Run �
 
 プレビューを動かすための前提:
 
-1. **Clerk 開発インスタンス** にも本番と同じ設定を行う（Google のみ有効化・セッショントークンの `email` クレーム）。開発インスタンスは既定で任意のオリジンからの利用を許可するため、プレビュー URL のための追加設定は通常不要。オリジンを明示的に制限したい場合のみ、**Allowed origins** を Backend API で設定する（ダッシュボードに UI は無い。渡した配列で全置換される点に注意）:
+1. **Clerk 開発インスタンス** にも本番と同じ設定を行う（Google のみ有効化・セッショントークンの `email` クレーム。外部ユーザーをプレビューでも試すなら、「外部ユーザー（組織外のアカウント）」の前提 1〜3（Workspace 全体）と、開発インスタンスでの 4〜7・Test mode のオフを満たしてから（本番と同じ GCP プロジェクトの OAuth クライアントなら、本番にも 4〜7 を満たしてから）、Google 接続の同意画面を「外部」にする。試す人は Clerk にユーザーを作っておく。「1. Clerk」）。開発インスタンスは既定で任意のオリジンからの利用を許可するため、プレビュー URL のための追加設定は通常不要。オリジンを明示的に制限したい場合のみ、**Allowed origins** を Backend API で設定する（ダッシュボードに UI は無い。渡した配列で全置換される点に注意）:
    ```bash
    curl -X PATCH https://api.clerk.com/v1/instance \
      -H "Authorization: Bearer <開発インスタンスの Secret Key (sk_test_...)>" \
@@ -1071,6 +1147,7 @@ Node.js は **24**（同梱の npm 11）を使います。CI・プレビュー�
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 CLERK_ISSUER=https://xxxx.clerk.accounts.dev \
+ALLOWED_EMAIL_DOMAINS=example.co.jp \
 GOOGLE_APPLICATION_CREDENTIALS=~/keys/portal-api-dev.json \
 .venv/bin/uvicorn app.main:app --reload --port 8080
 # SETTINGS_CHANNEL_PATH は未設定でよい。既定の development チャンネル

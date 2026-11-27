@@ -12,6 +12,8 @@
 // /api/site はサインイン前でも読める（サインイン画面のヘッダーにも出すため）。
 // ここは認証（auth.js）を読み込まない。設定を保存する側だけが認証を使う。
 
+import { deviceStorage } from './device-storage.js';
+
 export const DEFAULT_PORTAL_TITLE = '社内ポータル';
 
 const CACHE_KEY = 'portal.site';
@@ -43,7 +45,7 @@ export function normalizeSite(value) {
 }
 
 /** この端末に覚えている設定。無ければ（読めなければ）null。 */
-export function readCachedSite(storage = globalThis.localStorage) {
+export function readCachedSite(storage = deviceStorage()) {
   try {
     const text = storage?.getItem(CACHE_KEY);
     return text ? normalizeSite(JSON.parse(text)) : null;
@@ -52,7 +54,7 @@ export function readCachedSite(storage = globalThis.localStorage) {
   }
 }
 
-export function writeCachedSite(site, storage = globalThis.localStorage) {
+export function writeCachedSite(site, storage = deviceStorage()) {
   try {
     storage?.setItem(CACHE_KEY, JSON.stringify(normalizeSite(site)));
   } catch {

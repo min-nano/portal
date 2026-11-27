@@ -14,4 +14,7 @@ export default {
   entry: 'main.js', // 画面の入口
   icon: 'icon.svg', // トップページの絵: 筋かいの入った壁のある家（木造の壁量）
   styles: 'tool.css', // このツールにしか出てこない形（見本ページが束ねる）
+  // 外部ユーザー（組織外のアカウント）にも使わせる。Drive を使わない（入力 → xlsx のダウンロード）。
+  // バックエンドの Tool(external_users=True) とそろえる。
+  externalUsers: true,
 };

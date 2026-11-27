@@ -71,4 +71,6 @@ TOOL = Tool(
     # 本文が xlsx なので、突き合わせの結果はヘッダで返す。ブラウザから読める
     # ようにするため、CORS の expose_headers へ載せてもらう。
     expose_headers=(VERIFICATION_HEADER,),
+    # Drive を使わない（入力 → xlsx のダウンロード）ので、外部ユーザーにも使わせる。
+    external_users=True,
 )

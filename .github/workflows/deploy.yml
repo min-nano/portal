@@ -54,6 +54,7 @@ jobs:
           SITE_ID: '${{ vars.SITE_ID }}'
           CANONICAL_HOST: '${{ vars.CANONICAL_HOST }}'
           ALLOWED_EMAIL_DOMAINS: '${{ vars.ALLOWED_EMAIL_DOMAINS }}'
+          ALLOW_EXTERNAL_USERS: '${{ vars.ALLOW_EXTERNAL_USERS }}'
           RUNTIME_SA_EMAIL: '${{ vars.RUNTIME_SA_EMAIL }}'
           FIRESTORE_DATABASE: '${{ vars.FIRESTORE_DATABASE }}'
         run: |
@@ -78,6 +79,18 @@ jobs:
           env_vars="$env_vars;ALLOWED_EMAIL_DOMAINS=$ALLOWED_EMAIL_DOMAINS"
           env_vars="$env_vars;DWD_SERVICE_ACCOUNT_EMAIL=$RUNTIME_SA_EMAIL"
           env_vars="$env_vars;SETTINGS_CHANNEL_PATH=static-channels/production"
+          # 任意。外部ユーザー（組織外のアカウント）を使わせるときだけ true にする
+          # （README「外部ユーザー」）。値はバックエンドが true かどうかだけを見る。
+          # 空白・改行・; は取り除く（残ると環境変数の受け渡しの書式が壊れる）。
+          allow_external=$(printf '%s' "$ALLOW_EXTERNAL_USERS" | tr -d '[:space:];' | tr '[:upper:]' '[:lower:]')
+          # 1・yes などと書くと黙ってオフになるので、空・true・false 以外は止める。
+          case "$allow_external" in
+            ''|true|false) ;;
+            *) echo "::error::ALLOW_EXTERNAL_USERS は空・true・false のどれかにしてください（今の値: $allow_external）"; exit 1 ;;
+          esac
+          if [ -n "$allow_external" ]; then
+            env_vars="$env_vars;ALLOW_EXTERNAL_USERS=$allow_external"
+          fi
           # 任意。既定の "(default)" 以外を使う場合だけリポジトリ変数を設定する。
           if [ -n "$FIRESTORE_DATABASE" ]; then
             env_vars="$env_vars;FIRESTORE_DATABASE=$FIRESTORE_DATABASE"

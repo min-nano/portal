@@ -13,7 +13,8 @@
   ─────────────────────────────    ─────────────────────────────
   TOOL = Tool(id=…, router=…)  →   main.py が /api/tools/<id> に載せる
   Depends(require_user)        →   Clerk JWT を検証して確定した本人
-  delegated_session(email)     →   本人の代理で Drive を触るセッション
+  Tool(external_users=True)    →   外部ユーザーにも使わせる（既定は社内だけ）
+  delegated_session(user)      →   本人の代理で Drive を触るセッション
   TEMPLATE = Template(…)       →   Drive の雛形の設定（確認・保存・読み出し）
   resolve_pdf_destination(…)   →   「保存 / 別名で保存」の保存先の確認
   raise ToolError("…")         →   利用者に見せる日本語 + HTTP ステータス
@@ -48,12 +49,20 @@ class Tool:
     expose_headers は、本文ではなくヘッダに結果を載せるツールのためのもの。
     ここに挙げたものが CORS の Access-Control-Expose-Headers に入る
     （必要壁量ツールは本文が xlsx なので、突き合わせの結果をヘッダに載せる）。
+
+    external_users は、外部ユーザー（組織外のアカウント）にも使わせるか。
+    既定は社内だけで、main.py がツールのルートすべてに require_internal_user を
+    掛ける。True にしてよいのは、Drive を使わずに済むツール（手元のファイルを
+    読み、編集したものをダウンロードする）だけ。そのツールの中で Drive を
+    使う入口（Drive から選ぶ・Drive へ保存）は、delegated_session などが断る。
+    画面側のマニフェストの externalUsers と一致していなければならない。
     """
 
     id: str
     name: str
     router: APIRouter
     expose_headers: tuple[str, ...] = field(default=())
+    external_users: bool = False
 
 
 def tool_router(tool_id: str) -> APIRouter:
@@ -68,6 +77,28 @@ def tool_router(tool_id: str) -> APIRouter:
 def require_user(authorization: str | None = Header(default=None)) -> User:
     """Clerk セッション JWT を検証して、本人のメールアドレスを確定する。"""
     return clerk_auth.user_from_authorization_header(authorization)
+
+
+# 外部ユーザーへの断りの目印。STAFF_ONLY（社内専用のツール・操作）なら画面は
+# ツールを閉じ、DRIVE_STAFF_ONLY（開いたツールの中の Drive の入口）なら閉じない
+# （手元のファイルを使う機能は、そのまま使えるため）。
+STAFF_ONLY = "staff_only"
+DRIVE_STAFF_ONLY = "drive_staff_only"
+
+
+def ensure_internal(user: User, message: str, code: str = STAFF_ONLY) -> User:
+    """外部ユーザーなら message で断る（403）。社内ユーザーはそのまま返す。"""
+    if user.external:
+        raise clerk_auth.AuthError(message, 403, code)
+    return user
+
+
+def require_internal_user(user: User = Depends(require_user)) -> User:
+    """社内ユーザーだけを通す（外部ユーザーは 403）。
+
+    社内向けのツールのルートすべてと、全員共通の設定の書き換えに掛ける。
+    """
+    return ensure_internal(user, "この機能は社内アカウント専用です。")
 
 
 async def json_body(request: Request) -> dict:
@@ -286,25 +317,34 @@ class Template:
 
 
 # --- 代理アクセス（Drive / Docs） --------------------------------------------
+#
+# 代理アクセス（domain-wide delegation）は Workspace の中のアカウントにしか
+# 効かない。外部ユーザーには、なりかわりを頼む前にここで断る（外部ユーザーにも
+# 使わせるツールの中の、Drive を使う入口はすべてここを通る）。
+
+def _drive_user(user: User) -> User:
+    return ensure_internal(
+        user, "Google ドライブを使う機能は社内アカウント専用です。", DRIVE_STAFF_ONLY
+    )
 
 
-def delegated_session(email: str):
+def delegated_session(user: User):
     """本人の代理で Drive を**読む**セッション。"""
-    return google_drive.delegated_session(email)
+    return google_drive.delegated_session(_drive_user(user).email)
 
 
-def delegated_read_token(email: str):
+def delegated_read_token(user: User):
     """本人の代理で Drive を**読む**アクセストークンと期限（ブラウザへ渡す）。
 
     ブラウザへ渡してよいのは、Cloud Run を通さずに大きなファイルを Drive から
     直接読むときだけ（PDF の結合）。google_drive.delegated_read_token を参照。
     """
-    return google_drive.delegated_read_token(email)
+    return google_drive.delegated_read_token(_drive_user(user).email)
 
 
-def delegated_write_session(email: str):
+def delegated_write_session(user: User):
     """本人の代理で Drive を**読み書きする**セッション。"""
-    return google_drive.delegated_write_session(email)
+    return google_drive.delegated_write_session(_drive_user(user).email)
 
 
 # --- PDF を Drive へ保存する（証明書・計算書の共通処理） ----------------------
@@ -440,7 +480,7 @@ def pdf_parse_routes(
         ここで返す file.id が、そのまま「上書き保存」の対象になる。
         """
         file_id = (await json_body(request)).get("fileId")
-        session = delegated_session(user.email)
+        session = delegated_session(user)
         content, meta = open_drive_pdf(session, file_id, error)
         return {
             **parse(content),

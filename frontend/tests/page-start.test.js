@@ -21,6 +21,8 @@ const requireSignIn = vi.fn();
 const warmUpApi = vi.fn();
 const showSite = vi.fn();
 const connectSiteSettingsMenu = vi.fn();
+const checkAccount = vi.fn();
+const showRememberedAccount = vi.fn();
 
 vi.mock('../src/canonical-host.js', () => ({
   redirectToCanonicalHost: () => redirectToCanonicalHost(),
@@ -30,6 +32,10 @@ vi.mock('../src/auth.js', () => ({
   getSessionToken: async () => 'token',
 }));
 vi.mock('../src/api.js', () => ({ warmUpApi: () => warmUpApi() }));
+vi.mock('../src/account.js', () => ({
+  checkAccount: () => checkAccount(),
+  showRememberedAccount: (email) => showRememberedAccount(email),
+}));
 vi.mock('../src/site-settings.js', () => ({
   showSite: () => showSite(),
   connectSiteSettingsMenu: () => connectSiteSettingsMenu(),
@@ -60,6 +66,7 @@ function app() {
 beforeEach(() => {
   document.body.innerHTML = PAGE;
   vi.clearAllMocks();
+  checkAccount.mockResolvedValue('internal');
   redirectToCanonicalHost.mockReturnValue(false);
   requireSignIn.mockResolvedValue(CLERK);
 });
@@ -112,6 +119,219 @@ describe('startPage', () => {
     expect(connectSiteSettingsMenu).toHaveBeenCalledTimes(1);
   });
 
+  it('使えないアカウントだと分かったら、その理由を出す', async () => {
+    checkAccount.mockRejectedValue(
+      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403, code: 'account_not_allowed' })
+    );
+    const onError = vi.fn();
+
+    startPage({ onError });
+    await settle();
+
+    expect(onError).toHaveBeenCalledWith('このアプリは許可されたアカウント専用です。');
+  });
+
+  it('使えないアカウントには、画面を隠して断りの理由だけを出す（API を呼ばないツールも使わせない）', async () => {
+    app().insertAdjacentHTML('afterbegin', '<button id="mergeBtn">結合</button>');
+    checkAccount.mockRejectedValue(
+      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403, code: 'account_not_allowed' })
+    );
+
+    startPage({ prepare: async () => {} });
+    await settle();
+
+    // 消さずに印を付け、CSS で隠す（動いている途中の処理が要素を見失わない）。
+    expect(document.getElementById('mergeBtn')).not.toBeNull();
+    expect(app().hasAttribute('data-closed')).toBe(true);
+    // 閉じた後に開いたダイアログは、開いたそばから閉じる（見えないモーダルを
+    // 残して画面全体を操作できなくしない）。開いたままでないものは触らない。
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      '<dialog id="late"></dialog><div id="other"></div>'
+    );
+    const late = document.getElementById('late');
+    late.close = vi.fn(() => late.removeAttribute('open'));
+    late.setAttribute('open', '');
+    document.getElementById('other').setAttribute('open', '');
+    await settle();
+    expect(late.close).toHaveBeenCalledTimes(1);
+    expect(late.hasAttribute('open')).toBe(false);
+    // 理由は専用の欄に出す（#message は動いている途中の処理が書き換えるため）。
+    const refusal = document.getElementById('refusal');
+    expect(refusal.textContent).toBe('このアプリは許可されたアカウント専用です。');
+    expect(refusal.getAttribute('role')).toBe('alert');
+    // 既定の理由の出し方（#message）にも出る（閉じた画面では見えない）。
+    expect(document.getElementById('message').textContent).toBe(
+      'このアプリは許可されたアカウント専用です。'
+    );
+    // 動いている途中の処理が #message を書き換えても、理由は残る。
+    document.getElementById('message').textContent = '画像からの読み取りを使えませんでした。';
+    expect(refusal.textContent).toBe('このアプリは許可されたアカウント専用です。');
+  });
+
+  it('準備が使えないアカウントとして断られたら、画面の中身も隠す', async () => {
+    // /api/me は断りを返さなかった（準備のほうが断られた）。
+    checkAccount.mockResolvedValue('internal');
+    const refused = Object.assign(new Error('このアプリは許可されたアカウント専用です。'), {
+      status: 403,
+      code: 'account_not_allowed',
+    });
+
+    startPage({ prepare: async () => Promise.reject(refused) });
+    await settle();
+
+    expect(app().hasAttribute('data-closed')).toBe(true);
+    expect(document.getElementById('message').textContent).toBe(
+      'このアプリは許可されたアカウント専用です。'
+    );
+  });
+
+  it('外部ユーザーが社内専用のツールを開いたら、画面の中身を隠す（答えを待たずに）', async () => {
+    checkAccount.mockReturnValue(new Promise(() => {})); // /api/me はまだ
+    const refused = Object.assign(new Error('この機能は社内アカウント専用です。'), {
+      status: 403,
+      code: 'staff_only',
+    });
+
+    startPage({ prepare: async () => Promise.reject(refused) });
+    await settle();
+
+    expect(app().hasAttribute('data-closed')).toBe(true);
+  });
+
+  it('準備が別の理由で先に失敗しても、使えないアカウントならそちらを出す', async () => {
+    checkAccount.mockRejectedValue(
+      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), {
+        status: 403,
+        code: 'account_not_allowed',
+      })
+    );
+    const coldStart = Object.assign(new Error('サーバーエラーが発生しました (HTTP 503)。'), {
+      status: 503,
+    });
+
+    startPage({ prepare: async () => Promise.reject(coldStart) });
+    await settle();
+
+    expect(app().hasAttribute('data-closed')).toBe(true);
+    expect(document.getElementById('message').textContent).toBe(
+      'このアプリは許可されたアカウント専用です。'
+    );
+  });
+
+  it('使えないアカウントかの答えを待たずに、準備の失敗をすぐ出す', async () => {
+    checkAccount.mockReturnValue(new Promise(() => {})); // 答えが来ない
+    const onError = vi.fn();
+
+    startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')), onError });
+    await settle();
+
+    expect(onError).toHaveBeenCalledWith('通信に失敗しました。');
+    expect(app().hasAttribute('data-closed')).toBe(false);
+  });
+
+  it('外部ユーザーと分かっても、準備の失敗はそのまま（閉じない）', async () => {
+    checkAccount.mockResolvedValue('external');
+    const onError = vi.fn();
+
+    startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')), onError });
+    await settle();
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(app().hasAttribute('data-closed')).toBe(false);
+  });
+
+  it('準備の失敗を出した後に断りが届いたら、画面を閉じて理由を出し直す', async () => {
+    {
+      let answer;
+      checkAccount.mockReturnValue(new Promise((resolve, reject) => { answer = reject; }));
+      const onError = vi.fn();
+
+      startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')), onError });
+      await settle();
+      expect(onError).toHaveBeenLastCalledWith('通信に失敗しました。');
+      expect(app().hasAttribute('data-closed')).toBe(false);
+
+      answer(Object.assign(new Error('このアプリは許可されたアカウント専用です。'), {
+        status: 403,
+        code: 'account_not_allowed',
+      }));
+      await settle();
+      expect(onError).toHaveBeenLastCalledWith('このアプリは許可されたアカウント専用です。');
+      expect(app().hasAttribute('data-closed')).toBe(true);
+    }
+  });
+
+  it('画面を閉じるときは、#app の外に開いているダイアログも閉じる', async () => {
+    document.body.insertAdjacentHTML('beforeend', '<dialog id="preview" open></dialog>');
+    const preview = document.getElementById('preview');
+    preview.close = vi.fn(() => preview.removeAttribute('open'));
+    checkAccount.mockRejectedValue(
+      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), {
+        status: 403,
+        code: 'account_not_allowed',
+      })
+    );
+
+    startPage({ prepare: async () => {} });
+    await settle();
+
+    expect(preview.close).toHaveBeenCalledTimes(1);
+    expect(preview.hasAttribute('open')).toBe(false);
+  });
+
+  it('ほかの理由で準備に失敗したときは、画面を閉じない（理由を出すだけ）', async () => {
+    startPage({ prepare: async () => Promise.reject(new Error('通信に失敗しました。')) });
+    await settle();
+
+    expect(app().hasAttribute('data-closed')).toBe(false);
+    expect(document.getElementById('message').textContent).toBe('通信に失敗しました。');
+  });
+
+  it('準備の途中で断られたと分かっても、理由を出すのは準備が終わってから', async () => {
+    checkAccount.mockRejectedValue(
+      Object.assign(new Error('このアプリは許可されたアカウント専用です。'), { status: 403, code: 'account_not_allowed' })
+    );
+    let finishPreparing;
+    const prepare = vi.fn(() => new Promise((resolve) => { finishPreparing = resolve; }));
+    const onError = vi.fn(() => expect(app().hidden).toBe(false));
+
+    startPage({ prepare, onError });
+    await settle();
+    // 組み立て途中の画面は出さない（理由もまだ出さない）。
+    expect(app().hidden).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+
+    finishPreparing();
+    await settle();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith('このアプリは許可されたアカウント専用です。');
+  });
+
+  it('サインインしたら、覚えた結果で先に見せてから確かめに行き、答えは待たない', async () => {
+    // 答えが返らないままでも、画面は出る（社内ユーザーに起動待ちを被せない）。
+    requireSignIn.mockResolvedValue({
+      user: { id: 'user-1', primaryEmailAddress: { emailAddress: 'tester@example.co.jp' } },
+    });
+    checkAccount.mockReturnValue(new Promise(() => {}));
+    const prepare = vi.fn(async () => {});
+
+    startPage({ prepare });
+    await settle();
+
+    expect(showRememberedAccount).toHaveBeenCalledWith('tester@example.co.jp');
+    expect(checkAccount).toHaveBeenCalledTimes(1);
+    // 覚えた結果で先に見せてから確かめに行き、準備はその後（社員の待ちを減らす）。
+    expect(showRememberedAccount.mock.invocationCallOrder[0]).toBeLessThan(
+      checkAccount.mock.invocationCallOrder[0]
+    );
+    expect(checkAccount.mock.invocationCallOrder[0]).toBeLessThan(
+      prepare.mock.invocationCallOrder[0]
+    );
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(app().hidden).toBe(false);
+  });
+
   it('未サインインのときも名前とロゴは出すが、「設定」はつながない', async () => {
     requireSignIn.mockResolvedValue(null);
 
@@ -120,6 +340,8 @@ describe('startPage', () => {
 
     expect(showSite).toHaveBeenCalledTimes(1);
     expect(connectSiteSettingsMenu).not.toHaveBeenCalled();
+    expect(checkAccount).not.toHaveBeenCalled();
+    expect(showRememberedAccount).not.toHaveBeenCalled();
   });
 
   it('バックエンドを使わないページでは起こさない', async () => {

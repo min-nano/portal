@@ -51,9 +51,20 @@ vi.mock('@clerk/clerk-js', () => ({
       node.appendChild(document.createElement('div'));
     }
 
-    addListener() {}
+    addListener(listener) {
+      sessionListener = listener;
+    }
+
+    async signOut() {
+      signedOut = true;
+      if (signOutFails) throw new Error('通信に失敗しました。');
+    }
   },
 }));
+
+let signedOut = false;
+let signOutFails = false;
+let sessionListener = null;
 
 const PAGE = `
   <portal-loading id="pageLoading" class="page-loading">サインインを確認しています…</portal-loading>
@@ -142,13 +153,76 @@ describe('requireSignIn（サインイン済み）', () => {
     expect(document.getElementById('accountArea').hidden).toBe(false);
     expect(document.getElementById('accountEmail').textContent).toBe('taro@example.com');
   });
+
+  it('サインアウトするとき、端末に覚えた社内ユーザーのアドレスを消す', async () => {
+    document.body.innerHTML = '';
+    const { requireSignIn } = await loadAuthModule();
+    document.body.insertAdjacentHTML(
+      'afterbegin',
+      '<portal-header class="portal-header"></portal-header>'
+    );
+    signedInUser = { primaryEmailAddress: { emailAddress: 'taro@example.com' } };
+    localStorage.setItem('portal.account', JSON.stringify({ email: 'taro@example.com' }));
+    signedOut = false;
+
+    await requireSignIn();
+    document.getElementById('signOutBtn').click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+    expect(localStorage.getItem('portal.account')).toBeNull();
+    expect(signedOut).toBe(true);
+  });
+
+  it('サインアウトに失敗しても、覚えたアドレスは消し、失敗を知らせる', async () => {
+    document.body.innerHTML = '';
+    const { requireSignIn } = await loadAuthModule();
+    document.body.insertAdjacentHTML(
+      'afterbegin',
+      '<portal-header class="portal-header"></portal-header>'
+    );
+    signedInUser = { primaryEmailAddress: { emailAddress: 'taro@example.com' } };
+    localStorage.setItem('portal.account', JSON.stringify({ email: 'taro@example.com' }));
+    signOutFails = true;
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    try {
+      await requireSignIn();
+      document.getElementById('signOutBtn').click();
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+      expect(localStorage.getItem('portal.account')).toBeNull();
+      // 済んだと思って席を離れないよう、失敗したことを知らせる。
+      expect(alert).toHaveBeenCalledWith(
+        'サインアウトできませんでした。通信を確かめて、もう一度お試しください。'
+      );
+    } finally {
+      signOutFails = false;
+      alert.mockRestore();
+    }
+  });
+
+  it('別のタブでのサインアウトなどでセッションが消えても、覚えたアドレスを消す', async () => {
+    const { requireSignIn } = await loadAuthModule();
+    signedInUser = { primaryEmailAddress: { emailAddress: 'taro@example.com' } };
+    localStorage.setItem('portal.account', JSON.stringify({ email: 'taro@example.com' }));
+
+    await requireSignIn();
+    sessionListener({ user: signedInUser }); // まだサインインしている間は消さない
+    expect(localStorage.getItem('portal.account')).not.toBeNull();
+    sessionListener({ user: null });
+
+    expect(localStorage.getItem('portal.account')).toBeNull();
+  });
 });
 
 describe('requireSignIn（未サインイン）', () => {
   it('サインインゲートを出し、そこで初めて @clerk/ui を読み込む', async () => {
     const { requireSignIn } = await loadAuthModule();
+    // 前の人（セッションが切れた社員）について覚えたアドレスは、ここで消す。
+    localStorage.setItem('portal.account', JSON.stringify({ email: 'taro@example.com' }));
 
     const clerk = await requireSignIn();
+
+    expect(localStorage.getItem('portal.account')).toBeNull();
 
     expect(clerk).toBeNull();
     expect(document.getElementById('app').hidden).toBe(true);

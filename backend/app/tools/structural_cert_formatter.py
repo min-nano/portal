@@ -67,13 +67,13 @@ async def save_certificate_template(
     変わらないため、画面ではタイトル横の小さな設定ボタンから設定する。
     """
     file_id = (await portal_sdk.json_body(request)).get("fileId")
-    return TEMPLATE.save(portal_sdk.delegated_session(user.email), file_id)
+    return TEMPLATE.save(portal_sdk.delegated_session(user), file_id)
 
 
 @router.get("/template/preview")
 async def preview_template(user: User = Depends(require_user)):
     """今の雛形の中身を返す（画面で雛形のファイル名を押したときのポップアップ）。"""
-    return TEMPLATE.preview(portal_sdk.delegated_session(user.email))
+    return TEMPLATE.preview(portal_sdk.delegated_session(user))
 
 
 def _render(session, data: dict, settings: dict) -> tuple[bytes, list]:
@@ -123,7 +123,7 @@ async def create_certificate(request: Request, user: User = Depends(require_user
     settings = TEMPLATE.settings()
     TEMPLATE.require(settings)
 
-    session = portal_sdk.delegated_write_session(user.email)
+    session = portal_sdk.delegated_write_session(user)
 
     # 保存先の確認は生成の前に済ませる。保存できない指定のために雛形を複製・
     # 書き出しするのは無駄なうえ、後片付けの機会も増えるため。

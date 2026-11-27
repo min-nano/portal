@@ -319,7 +319,7 @@ def test_create_certificate_cleans_up_the_copy_when_export_fails(client, drive, 
     def boom(session, file_id, mime_type):
         raise RuntimeError("export failed")
 
-    monkeypatch.setattr("app.main.google_drive.export_file", boom)
+    monkeypatch.setattr("app.google_drive.export_file", boom)
 
     resp = client.post(CERTIFICATES_URL, json=valid_body())
 

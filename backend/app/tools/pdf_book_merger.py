@@ -55,7 +55,7 @@ def file_info(file_id: str, user: User = Depends(require_user)):
     Drive が断る。ゴミ箱のもの・PDF でないものには、トークンを渡さない。
     """
     file_id = _file_id(file_id)
-    session = portal_sdk.delegated_session(user.email)
+    session = portal_sdk.delegated_session(user)
     meta = google_drive.get_file_metadata(session, file_id)
     if meta.get("trashed"):
         raise MergeError("選択したファイルはゴミ箱に入っています。")
@@ -67,7 +67,7 @@ def file_info(file_id: str, user: User = Depends(require_user)):
         size = 0
     if size <= 0:
         raise MergeError("ファイルの大きさが分かりませんでした。")
-    token, expiry = portal_sdk.delegated_read_token(user.email)
+    token, expiry = portal_sdk.delegated_read_token(user)
     return JSONResponse(
         {
             "id": file_id,
@@ -87,4 +87,7 @@ TOOL = Tool(
     id=TOOL_ID,
     name="PDF 結合ツール",
     router=router,
+    # 手元のファイルを結合してダウンロードするだけなら Drive は要らないので、外部
+    # ユーザーにも使わせる。Drive から読む入口（/files）は代理アクセスが断る。
+    external_users=True,
 )
