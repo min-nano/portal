@@ -78,7 +78,16 @@ GAS 版は「ウェブアプリにアクセスしているユーザーとして�
 
 1 の一覧と 5 は、定期的に確かめます。1〜3 は Workspace 全体の設定なので、**どのインスタンスの同意画面を「外部」にする前にも**済ませます（本番は「内部」のまま、PR プレビューだけで外部ユーザーを試す場合も。ただしそれができるのは、開発インスタンスの OAuth クライアントが本番と別の GCP プロジェクトにあるときだけ。同じなら本番も「外部」になり、本番にも 4〜7 が要る）。開発インスタンスで試すなら、4〜7 も開発インスタンスに要り、あわせて開発インスタンスの **Test mode をオフ**にします（オンだと `+clerk_test` のアドレスがメールを受け取らずに固定のコードで確認済みになる）。プレビューのバックエンドも同じ `ALLOWED_EMAIL_DOMAINS` で社内ユーザーを決め、Drive に代理アクセスするためです。
 
-**外部ユーザーを使わせるインスタンス（Invite-only）では、新しく使い始める人は、社員も外部ユーザーも、先に Clerk にユーザーを作ります**（Google でのサインインでも同じ。社員だけで使う「内部」・Open のインスタンスでは要りません）。Clerk のダッシュボードの **Users → Create user** で、その人のメールアドレスだけを入れて作ります。そのため、Clerk の **Email address はユーザーの属性として必須のまま**残します（無効にするのはサインインの手段としての確認コード・リンク・パスワード）。メールアドレスだけで作れることを、先に開発インスタンスで確かめてください。ダッシュボードで作れない場合は、Backend API の `createUser` を `skipPasswordRequirement` 付きで呼んで作ります（[createUser](https://clerk.com/docs/reference/backend/user/create-user)）。**招待や確認コードを有効に戻して代わりにしないでください**（下の理由で、社員になりすませる経路が開きます）。こうして作ったメールアドレスは確認済みとして登録され（[createUser](https://clerk.com/docs/reference/backend/user/create-user)）、本人が同じアドレスの Google アカウントでサインインすると、そのユーザーに紐づきます。外部ユーザーは、そのアドレスを `ALLOWED_EXTERNAL_EMAILS` に足すのとあわせて作ります。
+**外部ユーザーを使わせるインスタンス（Invite-only）では、新しく使い始める人は、社員も外部ユーザーも、先に Clerk にユーザーを作ります**（Google でのサインインでも同じ。社員だけで使う「内部」・Open のインスタンスでは要りません）。Clerk のダッシュボードの **Users → Create user** で、その人のメールアドレスだけを入れて作ります。そのため、Clerk の **User & authentication → Email** は次のようにします（「1. Clerk」）。Clerk は、メールアドレスなどの識別子が 1 つも有効でないと「Create user」を使わせないためです。
+
+| 設定 | 値 | 理由 |
+| --- | --- | --- |
+| Sign-up with email | オン | 「Create user」でメールアドレスだけのユーザーを作るため |
+| Require email address | オン | バックエンドはセッショントークンのメールアドレスで判定するので、全員が必ず持つようにする |
+| Verify at sign-up | どちらでもよい | Invite-only なので、利用者が自分でサインアップする場面が無い |
+| **Sign-in with email** | **オフ** | オンにすると、メールの確認コードやリンクでサインインできるようになり、社員のメールを読める人がその社員として入れてしまう。オフのとき、サインイン画面には Google のボタンだけが出る |
+
+ダッシュボードで作れない場合は、Backend API の `createUser` を `skipPasswordRequirement` 付きで呼んで作ります（[createUser](https://clerk.com/docs/reference/backend/user/create-user)）。**招待や確認コードを有効に戻して代わりにしないでください**（下の理由で、社員になりすませる経路が開きます）。こうして作ったメールアドレスは確認済みとして登録され（[createUser](https://clerk.com/docs/reference/backend/user/create-user)）、本人が同じアドレスの Google アカウントでサインインすると、そのユーザーに紐づきます。外部ユーザーは、そのアドレスを `ALLOWED_EXTERNAL_EMAILS` に足すのとあわせて作ります。
 
 Clerk の**招待（Invitations）は使いません**（開発インスタンスで招待のリンクから登録すると、そのブラウザで以前にポータルを開いていないと「Clerk cannot redirect to your application」と出て、ポータルへ戻らないこともある。その場合はポータルの URL を開き直す）。招待のリンクはそのアドレス宛てのメールで届き、開いた人がそのアドレスのユーザーとして登録を済ませられるので、社員のメールを読める人（社外への転送先、メールの委任先など）がその社員になりすませる経路になるためです（確認コードを採らない理由と同じ。下記）。
 
@@ -628,7 +637,7 @@ firebase.json                 # Hosting 設定（/api/** → Cloud Run リライ
 
 1. Clerk でアプリケーションを作成する。**本番（production）インスタンス** は `main` のデプロイに、**開発（development）インスタンス** は PR プレビューに使う。
 2. **両インスタンス** で以下を設定する:
-   - **SSO connections で Google のみを有効化** し、**Use custom credentials** で自分の GCP プロジェクトの OAuth クライアントを使う（開発インスタンスの既定は Clerk 共有の認証情報で、どの Google アカウントでも通り、同意画面も自分では変えられない）。そのうえで、Email/Password などその他のサインイン手段はすべて無効にする。
+   - **SSO connections で Google のみを有効化** し、**Use custom credentials** で自分の GCP プロジェクトの OAuth クライアントを使う（開発インスタンスの既定は Clerk 共有の認証情報で、どの Google アカウントでも通り、同意画面も自分では変えられない）。そのうえで、パスワードなどその他のサインイン手段はすべて無効にする。**Email** は、外部ユーザーを使わせるインスタンスでは「Sign-up with email」と「Require email address」をオン、「**Sign-in with email」はオフ**にする（「Create user」のため。理由は「外部ユーザー（組織外のアカウント）」）。社員だけで使うインスタンスでは Email も無効でよい。サインイン画面に Google のボタンだけが出ることを確かめる。
    - **Sessions → Customize session token** に以下を設定する（バックエンドがメールアドレスを取り出すために必須）:
      ```json
      {"email": "{{user.primary_email_address}}"}
