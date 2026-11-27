@@ -318,7 +318,7 @@ describe('textIssues / mergeIssues', () => {
       b: null,
       c: { kind: 'reversed', sample: 'すまりあ' },
     };
-    const text = textIssues(order, (entry) => ({ textCheck: checks[entry.pageKey] }));
+    const text = textIssues(order, (entry) => ({ textCheck: checks[entry.pageKey], invisibleText: 4 }));
     expect(text).toEqual(
       new Map([
         ['a', [{ kind: 'text', level: 'warn', message: '文字情報が文字化けしているようです（「縺ゅ≠縺」）' }]],
@@ -330,5 +330,32 @@ describe('textIssues / mergeIssues', () => {
     expect(merged.get('a').map((issue) => issue.kind)).toEqual(['skew', 'text']);
     expect(merged.get('c').map((issue) => issue.kind)).toEqual(['text']);
     expect(merged.has('b')).toBe(false);
+  });
+
+  it('文字情報を消す頁は、消すことを知らせ、透明な文字の無い頁は消せないと添える', () => {
+    const order = [body('a', 1), body('b', 2), body('c', 3)];
+    const pages = {
+      a: { textCheck: { kind: 'mojibake', sample: '縺ゅ≠縺' }, invisibleText: 4 },
+      b: { textCheck: { kind: 'garbled', sample: '#$%&' }, invisibleText: 0 },
+      c: { textCheck: null, invisibleText: 4 },
+    };
+    const text = textIssues(order, (entry) => pages[entry.pageKey], new Set(['a', 'c']));
+    expect(text).toEqual(
+      new Map([
+        ['a', [{ kind: 'text-removed', level: 'info', message: '結合するときに、この頁の文字情報（OCR の結果）を消します' }]],
+        [
+          'b',
+          [
+            {
+              kind: 'text',
+              level: 'warn',
+              message:
+                '文字情報が文になっていません（図や汚れを文字と読んだ・フォントの対応違い）（「#$%&」）。画像の上の透明な文字ではないので、消せません',
+            },
+          ],
+        ],
+        ['c', [{ kind: 'text-removed', level: 'info', message: '結合するときに、この頁の文字情報（OCR の結果）を消します' }]],
+      ])
+    );
   });
 });

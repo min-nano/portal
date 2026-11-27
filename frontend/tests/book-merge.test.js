@@ -313,8 +313,28 @@ describe('compareOutput', () => {
       ok: true,
       pageCount: { expected: 2, actual: 2 },
       textPages: 2,
+      removedPages: 0,
       mismatches: [],
     });
+  });
+
+  it('文字情報を消した頁は、残した文字が無ければ文字情報が無いことを、あれば文字情報があることを確かめる', () => {
+    const none = { length: 0, hash: '811c9dc5' };
+    const result = compareOutput(
+      [
+        page({ removed: { removed: 3, kept: 0 } }),
+        page({ removed: { removed: 3, kept: 0 } }),
+        page({ removed: { removed: 3, kept: 2 } }),
+        page({ removed: { removed: 3, kept: 2 } }),
+      ],
+      [page({ signature: none }), page(), page({ signature: { length: 2, hash: 'xyz' } }), page({ signature: none })]
+    );
+
+    expect(result.mismatches.map((m) => [m.index, m.reasons])).toEqual([
+      [1, ['消したはずの文字情報が残っています']],
+      [3, ['残すはずの文字情報（見える文字）が失われています']],
+    ]);
+    expect(result.removedPages).toBe(4);
   });
 
   it('大きさ・文字情報・描く中身の違いを頁ごとに挙げる', () => {

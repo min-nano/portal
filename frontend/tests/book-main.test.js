@@ -265,15 +265,21 @@ async function fakeStash() {
 }
 
 /** 結合に渡されたファイルの中身を読み、並べる順の頁の仕様にする。 */
-async function sourcePages(sources, order) {
-  // 本物と同じく、ファイルごとに 1 度だけ読む。
+async function sourcePages(sources, order, removeText = new Set()) {
+  // 本物と同じく、ファイルごとに 1 度だけ読む。文字情報を消す頁は、文字情報の無い頁にする。
   const specs = new Map();
   const pages = [];
   for (const entry of order) {
     if (!specs.has(entry.fileKey)) specs.set(entry.fileKey, specOf(await sources.get(entry.fileKey).load()));
-    pages.push(specs.get(entry.fileKey).pages[entry.pageIndex]);
+    const spec = specs.get(entry.fileKey).pages[entry.pageIndex];
+    pages.push(removeText.has(entry.pageKey) ? { ...spec, noText: true } : spec);
   }
   return pages;
+}
+
+/** 結合の偽物が返す、文字情報を消した頁の数え（merge.js の removed）。 */
+function removedOf(order, removeText = new Set()) {
+  return order.map((entry) => (removeText.has(entry.pageKey) ? { removed: 4, kept: 0 } : null));
 }
 
 function file(name, bytes) {
@@ -367,6 +373,8 @@ beforeEach(async () => {
     return {
       scans: pages.map((p) => (p.jpeg === false ? null : { jpeg: p.id })),
       softMasks: pages.map((p) => p.softMasks ?? 0),
+      // 頁の仕様に invisibleText と書いた頁だけ、透明な文字がある（消せる）。
+      invisibleText: pages.map((p) => p.invisibleText ?? 0),
       reasons: new Map(fallback ? [['画像の上に図形を描いている', fallback]] : []),
       example: fallback ? '2 頁目: 画像 1 枚（DCTDecode 100×140 DeviceGray 8bit）' : '',
     };
@@ -386,25 +394,26 @@ beforeEach(async () => {
   mocks.renderMargins.mockImplementation(async (doc, index) => strips(doc, index));
   mocks.closePdf.mockResolvedValue(undefined);
   mocks.views = true;
-  mocks.mergePdf.mockImplementation(async ({ sources, order, title, labels, onProgress }) => {
+  mocks.mergePdf.mockImplementation(async ({ sources, order, title, labels, removeText, onProgress }) => {
     const { pageLabelTexts } = await import('../src/pdf-book-merger/ordering.js');
-    const pages = await sourcePages(sources, order);
+    const pages = await sourcePages(sources, order, removeText);
     onProgress?.(order.length, order.length);
     return {
       bytes: pdf(pages, { title, labels: labels.length ? pageLabelTexts(labels, order.length) : null }),
       digests: pages.map((p) => `d-${p.id}`),
+      removed: removedOf(order, removeText),
     };
   });
 
   // 少しずつ書き出す結合の偽物（2 つに分けて書く）。
-  mocks.writeMergedPdf.mockImplementation(async ({ sources, order, title, labels, write, onProgress }) => {
+  mocks.writeMergedPdf.mockImplementation(async ({ sources, order, title, labels, removeText, write, onProgress }) => {
     const { pageLabelTexts } = await import('../src/pdf-book-merger/ordering.js');
-    const pages = await sourcePages(sources, order);
+    const pages = await sourcePages(sources, order, removeText);
     onProgress?.(order.length, order.length);
     const bytes = pdf(pages, { title, labels: labels.length ? pageLabelTexts(labels, order.length) : null });
     await write(bytes.slice(0, 10));
     await write(bytes.slice(10));
-    return { size: bytes.length, digests: pages.map((p) => `d-${p.id}`) };
+    return { size: bytes.length, digests: pages.map((p) => `d-${p.id}`), removed: removedOf(order, removeText) };
   });
 
   created = [];
@@ -1651,7 +1660,13 @@ describe('ファイルを足して並べる', () => {
   });
 
   it('PDF の中を調べられなければ、すべての頁を pdf.js で描く', async () => {
-    mocks.findScanImages.mockResolvedValue({ scans: [], softMasks: [], reasons: new Map([['PDF を読めない（暗号化）', 1]]), example: '' });
+    mocks.findScanImages.mockResolvedValue({
+      scans: [],
+      softMasks: [],
+      invisibleText: [],
+      reasons: new Map([['PDF を読めない（暗号化）', 1]]),
+      example: '',
+    });
     drop([file('odd.pdf', pdf(ODD))]);
     await settled(1);
 
@@ -1666,7 +1681,7 @@ describe('ファイルを足して並べる', () => {
   it('pdf.js で描く PDF は、作ったアプリと、開き直して描き直したかを記録に出す', async () => {
     const pages = [page('o1', 1, { jpeg: false })];
     // 1 つ目は、描けない理由の分からない頁として見つかる。
-    mocks.findScanImages.mockResolvedValueOnce({ scans: [null], softMasks: [0], reasons: new Map(), example: '' });
+    mocks.findScanImages.mockResolvedValueOnce({ scans: [null], softMasks: [0], invisibleText: [0], reasons: new Map(), example: '' });
     drop([
       file('a.pdf', pdf(pages, { info: { Creator: 'Adobe Illustrator', Producer: 'Adobe PDF library' }, redrawn: true })),
       file('b.pdf', pdf(pages, { info: { Creator: 'Word', Producer: 'Word' } })),
@@ -2215,7 +2230,7 @@ describe('確かめる', () => {
     const mojibake = new TextDecoder('shift_jis').decode(
       new TextEncoder().encode('吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。')
     );
-    const odd = [ODD[0], { ...ODD[1], text: mojibake }, ODD[2], ODD[3]];
+    const odd = [ODD[0], { ...ODD[1], text: mojibake, invisibleText: 3 }, ODD[2], ODD[3]];
     drop([file('猫_奇数.pdf', pdf(odd)), file('猫_偶数.pdf', pdf(EVEN))]);
     await settled(2);
 
@@ -2225,6 +2240,69 @@ describe('確かめる', () => {
     const card = document.querySelector('[data-page-key="f1:1"]');
     expect(card.classList.contains('warn')).toBe(true);
     expect(card.querySelector('.bm-page-issues').textContent).toMatch(/^文字情報が文字化けしているようです（「.+」）$/);
+  });
+
+  it('文字化けした文字情報を、頁ごと・項目ごとに消して結合し、元に戻せる', async () => {
+    const mojibake = new TextDecoder('shift_jis').decode(
+      new TextEncoder().encode('吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。')
+    );
+    // 奇数の 3 頁と 7 頁は透明な文字（消せる）、偶数の 8 頁は見えている文字（消せない）。
+    const odd = [ODD[0], { ...ODD[1], text: mojibake, invisibleText: 3 }, ODD[2], { ...ODD[3], text: mojibake, invisibleText: 2 }];
+    const even = [{ ...EVEN[0], text: mojibake }, EVEN[1], EVEN[2], EVEN[3]];
+    drop([file('猫_奇数.pdf', pdf(odd)), file('猫_偶数.pdf', pdf(even))]);
+    await settled(2);
+
+    const group = (key) => $('problems').querySelector(`[data-key="${key}"]`);
+    const card = (key) => $('pageGrid').querySelector(`[data-page-key="${key}"]`);
+    const textButton = (key) => card(key).querySelector('.bm-page-text');
+    expect(group('text').querySelector('summary').textContent).toBe(
+      '文字情報（OCR の結果）が文字化けしている・文として読めない頁が 3 頁あります。'
+    );
+    expect(group('text').querySelector('.bm-problem-action').textContent).toBe('消せる 2 頁の文字情報をすべて消す');
+    // 見えている文字の頁には、消すボタンを出さず、消せないと添える。
+    expect(textButton('f2:0')).toBeNull();
+    expect(card('f2:0').querySelector('.bm-page-issues').textContent).toMatch(/。画像の上の透明な文字ではないので、消せません$/);
+    expect(textButton('f1:0')).toBeNull(); // 指摘の無い頁にも出さない
+
+    // 頁ごとに消す。項目が分かれ、消す頁は軽いお知らせになる。
+    expect(textButton('f1:1').textContent).toBe('文字情報を消す');
+    textButton('f1:1').click();
+    expect(group('text-removed').querySelector('summary').textContent).toBe('文字情報を消して結合する頁が 1 頁あります。');
+    expect(group('text-removed').querySelector('.bm-problem-action').textContent).toBe('1 頁とも文字情報を残す');
+    expect(group('text').querySelector('.bm-problem-action').textContent).toBe('消せる 1 頁の文字情報をすべて消す');
+    expect(card('f1:1').classList.contains('info')).toBe(true);
+    expect(card('f1:1').querySelector('.bm-page-issues').textContent).toBe(
+      '結合するときに、この頁の文字情報（OCR の結果）を消します'
+    );
+    expect(textButton('f1:1').textContent).toBe('文字情報を残す');
+    textButton('f1:1').click();
+    expect(group('text-removed')).toBeNull();
+    expect(textButton('f1:1').textContent).toBe('文字情報を消す');
+
+    // 項目のボタンで、消せる頁をまとめて消す（消せない頁だけが残った項目では、ボタンを隠す）。
+    group('text').querySelector('.bm-problem-action').click();
+    expect(group('text-removed').querySelector('summary').textContent).toBe('文字情報を消して結合する頁が 2 頁あります。');
+    expect(group('text').querySelector('summary').textContent).toBe(
+      '文字情報（OCR の結果）が文字化けしている・文として読めない頁が 1 頁あります。'
+    );
+    expect(group('text').querySelector('.bm-problem-action').hidden).toBe(true);
+
+    $('mergeBtn').click();
+    await vi.waitFor(() => expect($('verifyResult').hidden).toBe(false));
+    const { removeText } = mocks.mergePdf.mock.calls[0][0];
+    expect([...removeText].sort()).toEqual(['f1:1', 'f1:3']);
+    expect($('verifyResult').className).toBe('bm-verify ok');
+    expect($('verifyResult').textContent).toContain('（文字情報を消した頁 2 頁）');
+    $('logBox').open = true;
+    $('logBox').dispatchEvent(new Event('toggle'));
+    expect($('logText').textContent).toContain('2 頁の文字情報を消して結合します');
+
+    // 残すと結合した PDF は捨て、項目のボタンで、まとめて元に戻せる。
+    group('text-removed').querySelector('.bm-problem-action').click();
+    expect($('downloadBtn').disabled).toBe(true);
+    expect(group('text-removed')).toBeNull();
+    expect(group('text').querySelector('.bm-problem-action').hidden).toBe(false);
+    expect($('logText').textContent).toContain('2 頁の文字情報を残して結合することにしました');
   });
 
   it('頁を押すと拡大し、前後の頁へ送れる', async () => {
@@ -2632,7 +2710,11 @@ describe('結合と検証', () => {
       const source = await sourcePages(sources, order);
       const pages = source.map((p, i) => ({ ...p, noText: true, corrupt: i === 0 }));
       // タイトルも書き込めていない。
-      return { bytes: pdf(pages, { title: '', labels: null }), digests: source.map((p) => `d-${p.id}`) };
+      return {
+        bytes: pdf(pages, { title: '', labels: null }),
+        digests: source.map((p) => `d-${p.id}`),
+        removed: source.map(() => null),
+      };
     });
 
     window.confirm.mockReturnValueOnce(false);

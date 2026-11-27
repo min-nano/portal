@@ -16,105 +16,11 @@
 //
 // 頁の中身は pdf-lib で読む（結合にも使っているもの）。
 
-import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNull, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNull, PDFRawStream } from 'pdf-lib';
 import './pdf-lib-views.js';
+import { contentBytes, decodedBytes, operations } from './content-stream.js';
+import { stripInvisibleText } from './strip-text.js';
 import { multiply } from './text-layer.js';
-
-// --- 頁の中身の命令を読む ------------------------------------------------------
-
-const WHITESPACE = new Set([0x00, 0x09, 0x0a, 0x0c, 0x0d, 0x20]);
-const DELIMITERS = new Set([0x28, 0x29, 0x3c, 0x3e, 0x5b, 0x5d, 0x7b, 0x7d, 0x2f, 0x25]);
-
-/**
- * 頁の中身の命令を、[オペランド…, 命令] の並びに切り分ける。
- *
- * 要るのは数と名前だけなので、文字列・配列・辞書は「何かがあった」ことだけを
- * 残す（null）。インライン画像（BI … ID … EI）が出てきたら、そこで止める。
- *
- * @param {Uint8Array} bytes
- * @returns {Generator<{op:string, operands:(number|string|null)[]}>}
- */
-export function* operations(bytes) {
-  let operands = [];
-  let i = 0;
-  const n = bytes.length;
-  while (i < n) {
-    const c = bytes[i];
-    if (WHITESPACE.has(c)) {
-      i++;
-    } else if (c === 0x25) {
-      // % から行の終わりまでは注釈。
-      while (i < n && bytes[i] !== 0x0a && bytes[i] !== 0x0d) i++;
-    } else if (c === 0x28) {
-      // ( 文字列 )。入れ子の括弧と \ の逃がしを数える。
-      let depth = 0;
-      for (; i < n; i++) {
-        if (bytes[i] === 0x5c) i++;
-        else if (bytes[i] === 0x28) depth++;
-        else if (bytes[i] === 0x29 && --depth === 0) break;
-      }
-      i++;
-      operands.push(null);
-    } else if (c === 0x3c && bytes[i + 1] === 0x3c) {
-      // << 辞書 >>（印の付いた内容の属性）。入れ子を数えて読み飛ばす。
-      let depth = 0;
-      for (; i < n; i++) {
-        if (bytes[i] === 0x3c && bytes[i + 1] === 0x3c) {
-          depth++;
-          i++;
-        } else if (bytes[i] === 0x3e && bytes[i + 1] === 0x3e) {
-          i++;
-          if (--depth === 0) break;
-        } else if (bytes[i] === 0x28) {
-          // 辞書の中の文字列に > が入っていることがある。
-          let inner = 0;
-          for (; i < n; i++) {
-            if (bytes[i] === 0x5c) i++;
-            else if (bytes[i] === 0x28) inner++;
-            else if (bytes[i] === 0x29 && --inner === 0) break;
-          }
-        }
-      }
-      i++;
-      operands.push(null);
-    } else if (c === 0x3c) {
-      // < 16 進の文字列 >
-      while (i < n && bytes[i] !== 0x3e) i++;
-      i++;
-      operands.push(null);
-    } else if (c === 0x5b || c === 0x5d || c === 0x7b || c === 0x7d || c === 0x3e) {
-      // 配列の括弧は、中の要素ごとオペランドとして積むだけでよい（数は使わない）。
-      i++;
-      operands.push(null);
-    } else if (c === 0x2f) {
-      let j = i + 1;
-      while (j < n && !WHITESPACE.has(bytes[j]) && !DELIMITERS.has(bytes[j])) j++;
-      operands.push(`/${latin1(bytes, i + 1, j)}`);
-      i = j;
-    } else {
-      let j = i;
-      while (j < n && !WHITESPACE.has(bytes[j]) && !DELIMITERS.has(bytes[j])) j++;
-      if (j === i) j++; // 対応の無い ) など。1 文字読み飛ばす。
-      const word = latin1(bytes, i, j);
-      i = j;
-      if (/^[+-]?(\d+\.?\d*|\.\d+)$/.test(word)) {
-        operands.push(Number(word));
-      } else if (word === 'true' || word === 'false' || word === 'null') {
-        operands.push(null);
-      } else {
-        yield { op: word, operands };
-        if (word === 'BI') return;
-        operands = [];
-      }
-    }
-  }
-}
-
-function latin1(bytes, start, end) {
-  let text = '';
-  for (let k = start; k < end; k++) text += String.fromCharCode(bytes[k]);
-  return text;
-}
 
 // 描かない命令（状態・色・文字・印・切り抜きの道筋）。文字を描く命令は通す
 // （スキャンの文字情報は透明で、描かれない）。
@@ -203,32 +109,6 @@ export function inspectImage(context, stream) {
   if (!space.plain) return result(`色の変換が要る画像（${space.name}）`);
   if (!(width > 0 && height > 0)) return result('大きさの分からない画像');
   return result(null);
-}
-
-function decodedBytes(streams) {
-  const parts = [];
-  for (const stream of streams) {
-    if (!(stream instanceof PDFRawStream)) return null;
-    parts.push(decodePDFRawStream(stream).decode(), new Uint8Array([0x0a]));
-  }
-  const all = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
-  let offset = 0;
-  for (const part of parts) {
-    all.set(part, offset);
-    offset += part.length;
-  }
-  return all;
-}
-
-function contentBytes(node) {
-  const contents = node.Contents();
-  const streams =
-    contents instanceof PDFArray
-      ? contents.asArray().map((ref) => node.context.lookup(ref))
-      : contents
-        ? [contents]
-        : [];
-  return decodedBytes(streams);
 }
 
 /**
@@ -379,8 +259,10 @@ export function inspectPage(page) {
  * 読めない PDF（暗号化など）は、すべての頁を pdf.js で描く。
  *
  * @param {Uint8Array} bytes
- * @returns {Promise<{scans:(object|null)[], softMasks:number[], reasons:Map<string, number>, example:string}>}
+ * @returns {Promise<{scans:(object|null)[], softMasks:number[], invisibleText:number[],
+ *            reasons:Map<string, number>, example:string}>}
  *   scans は頁ごと（描けない頁は null）。softMasks は頁ごとのソフトマスクの数。
+ *   invisibleText は頁ごとの、消せる透明な文字の命令の数（strip-text.js。消せない頁は 0）。
  *   reasons は描けない理由ごとの頁数、example は描けなかった最初の頁の作り
  *   （どちらも記録に出す）。
  */
@@ -391,21 +273,29 @@ export async function findScanImages(bytes) {
     doc = await PDFDocument.load(bytes, { updateMetadata: false, objectsPerTick: 50 });
   } catch (error) {
     // pdf-lib の失敗は Error で届く。
-    return { scans: [], softMasks: [], reasons: new Map([[`PDF を読めない（${error.message}）`, 1]]), example: '' };
+    return {
+      scans: [],
+      softMasks: [],
+      invisibleText: [],
+      reasons: new Map([[`PDF を読めない（${error.message}）`, 1]]),
+      example: '',
+    };
   }
   const scans = [];
   const softMasks = [];
+  const invisibleText = [];
   const reasons = new Map();
   let example = '';
   doc.getPages().forEach((page, index) => {
     const { scan, reason, outline, softMasks: count } = inspectPage(page);
     scans.push(scan);
     softMasks.push(count);
+    invisibleText.push(stripInvisibleText(page)?.removed ?? 0);
     if (!reason) return;
     reasons.set(reason, (reasons.get(reason) || 0) + 1);
     example ||= `${index + 1} 頁目: ${outline}`;
   });
-  return { scans, softMasks, reasons, example };
+  return { scans, softMasks, invisibleText, reasons, example };
 }
 
 // --- 描く ----------------------------------------------------------------------

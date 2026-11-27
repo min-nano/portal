@@ -115,6 +115,8 @@ let nextKey = 1;
 const files = [];
 /** 頁ごとに手で直した番号（頁の key → parsePageNumber の形）。 */
 const overrides = new Map();
+/** 文字情報（透明な文字）を消して結合する頁の key（strip-text.js）。 */
+const removeText = new Set();
 /** 同じ頁らしい組を探す（前に見比べた頁どうしは見比べ直さない）。 */
 const findDuplicates = createDuplicateFinder();
 /** 最後に組み立てた並びと指摘。 */
@@ -731,6 +733,7 @@ async function readFile(file) {
         ocr: false,
         scan: null,
         softMasks: 0, // ソフトマスクの数（頁の画像を調べるときに数える。PDF を調べられなければ undefined）
+        invisibleText: 0, // 消せる透明な文字の命令の数（頁の画像を調べるときに数える）
       });
       if (index % 16 === 0) await breathe();
     }
@@ -744,11 +747,15 @@ async function readFile(file) {
     // 調べた JPEG は読み終えたら手放す（ファイルと同じだけの大きさがある）。
     showProgress(`「${file.name}」の頁の画像を調べています`, null);
     const imagesStarted = performance.now();
-    const { scans, softMasks, reasons, example } = await findScanImages(file.bytes);
+    const { scans, softMasks, invisibleText, reasons, example } = await findScanImages(file.bytes);
     // ソフトマスクの数は、pdf.js で描く頁の分だけ持つ（JPEG のまま描く頁は、
     // JPEG だけを描くのでソフトマスクの手間が掛からない）。調べられなかった
     // PDF（暗号化など）は数が無い（描くときは 0 として扱う）。
-    for (const page of file.pages) page.softMasks = scans[page.index] ? 0 : softMasks[page.index];
+    for (const page of file.pages) {
+      page.softMasks = scans[page.index] ? 0 : softMasks[page.index];
+      // PDF を調べられなければ、文字情報は消せない。
+      page.invisibleText = invisibleText[page.index] ?? 0;
+    }
 
     // 文字情報だけでは番号の決まらない頁（候補が無い・並びに合わない）は、
     // 画像の余白を OCR する（page-numbers.js の unsettledPages）。名前で表紙と分かる
@@ -1155,6 +1162,7 @@ function removeFile(file) {
   for (const page of file.pages) {
     if (page.thumbUrl) URL.revokeObjectURL(page.thumbUrl);
     overrides.delete(page.key);
+    removeText.delete(page.key);
   }
   // 使っている処理（調べる・OCR）があれば、その最後の releaseDoc で閉じる
   // （描いている途中の文書を壊さない）。使っていなければ、ここで閉じる。
@@ -1332,7 +1340,7 @@ function refresh() {
   const issues = pageIssues(
     order,
     problems,
-    mergeIssues(compareScans(bodyPages), duplicates.issues, textIssues(order, pageOf)),
+    mergeIssues(compareScans(bodyPages), duplicates.issues, textIssues(order, pageOf, removeText)),
     textless
   );
 
@@ -1360,11 +1368,12 @@ function refresh() {
 /** 結合する中身（名前と、並びの頁・配置・頁番号）を 1 つの文字列にしたもの。 */
 function mergeKey() {
   // 状態と部は頁ラベル（表紙・番号なし・部が分かれていれば付けない）を決める。
+  // 文字情報を消すかどうかも、結合する中身を変える。
   return [
     outputName(),
     ...view.order.map(
       (entry) =>
-        `${entry.pageKey}|${entry.role}|${entry.number}|${entry.branch ?? ''}|${entry.prefix ?? ''}|${entry.role === 'body' ? '' : entry.status}|${entry.part}|${entry.section ?? ''}`
+        `${entry.pageKey}|${entry.role}|${entry.number}|${entry.branch ?? ''}|${entry.prefix ?? ''}|${entry.role === 'body' ? '' : entry.status}|${entry.part}|${entry.section ?? ''}|${removeText.has(entry.pageKey)}`
     ),
   ].join('\n');
 }
@@ -1804,6 +1813,8 @@ function renderProblems() {
     if (!group) continue;
     const details = item.querySelector(':scope > details');
     (details?.querySelector('summary') ?? item.firstElementChild).textContent = group.message;
+    const action = item.querySelector(':scope > .bm-problem-action');
+    if (action) showGroupAction(action, group);
     // 開いた直後で toggle がまだ届いていない項目は、toggle の側で並べる。
     if (details?.open && openGroups.has(group.key)) renderGroupPages(details, group);
   }
@@ -1847,7 +1858,44 @@ function problemItem(group) {
     }
   });
   item.append(details);
+  // 文字情報の項目には、まとめて消す・残すボタンを付ける（文は renderProblems が入れる）。
+  if (key === 'text' || key === 'text-removed') {
+    const action = el(document, 'button', 'secondary bm-problem-action');
+    action.type = 'button';
+    action.addEventListener('click', () => {
+      const { pageKeys } = groupsNow.get(key);
+      if (key === 'text') setRemoveText(removableKeys(pageKeys), true);
+      else setRemoveText(pageKeys, false);
+    });
+    item.append(action);
+  }
   return item;
+}
+
+/** 頁のうち、文字情報（透明な文字）を消せるもの。 */
+function removableKeys(pageKeys) {
+  return pageKeys.filter((pageKey) => pageOf(contextNow.entries.get(pageKey)).invisibleText > 0);
+}
+
+/** 文字情報の項目の、まとめて消す・残すボタンの文（消せる頁が無ければ隠す）。 */
+function showGroupAction(action, group) {
+  if (group.key === 'text') {
+    const count = removableKeys(group.pageKeys).length;
+    action.hidden = count === 0;
+    action.textContent = `消せる ${count} 頁の文字情報をすべて消す`;
+  } else {
+    action.textContent = `${group.pageKeys.length} 頁とも文字情報を残す`;
+  }
+}
+
+/** 頁の文字情報を、結合するときに消す（on）・残す。並びと指摘を組み立て直す。 */
+function setRemoveText(pageKeys, on) {
+  for (const pageKey of pageKeys) {
+    if (on) removeText.add(pageKey);
+    else removeText.delete(pageKey);
+  }
+  log(`${pageKeys.length} 頁の文字情報を${on ? '消して' : '残して'}結合することにしました`);
+  refresh();
 }
 
 function renderGroupPages(details, group) {
@@ -1907,6 +1955,7 @@ function pageCardItem(entry, { jump = false } = {}) {
     file.pages.length,
     file.pages[entry.pageIndex].thumbUrl,
     overrides.get(entry.pageKey) ?? null,
+    removeText.has(entry.pageKey),
   ]);
   return { key: entry.pageKey, sig, build: () => pageCard(entry, file, issues, { jump }) };
 }
@@ -1953,6 +2002,15 @@ function pageCard(entry, file, issues, { jump }) {
     const list = el(document, 'ul', 'bm-page-issues');
     for (const issue of issues) list.append(el(document, 'li', issue.level, issue.message));
     card.append(list);
+  }
+
+  // 文字情報に指摘のある頁は、文字情報を消して結合できる（消せる形の頁だけ）。
+  const removing = removeText.has(entry.pageKey);
+  if (removing || (page.textCheck && page.invisibleText > 0)) {
+    const [text, title] = removing
+      ? ['文字情報を残す', `${displayLabel(entry)} の文字情報を消さずに結合する`]
+      : ['文字情報を消す', `${displayLabel(entry)} の文字情報（OCR の結果）を消して結合する`];
+    card.append(smallButton(text, title, () => setRemoveText([entry.pageKey], !removing), 'secondary bm-page-text'));
   }
 
   if (jump) {
@@ -2172,12 +2230,15 @@ async function mergeAndVerify() {
         `${navigator.userAgent}）`
     );
     const { mergePdf, pageDigests, writeMergedPdf } = await import('./merge.js');
+    const removing = new Set(order.filter((entry) => removeText.has(entry.pageKey)).map((entry) => entry.pageKey));
+    if (removing.size) log(`${removing.size} 頁の文字情報を消して結合します`);
     const options = {
       sources,
       order,
       title: fileName.replace(/\.pdf$/i, ''),
       labels: ranges,
       infoFrom,
+      removeText: removing,
       onProgress: (done, total) => mergeProgress.show(`結合しています（${done} / ${total} 頁）`, done / total),
     };
     // 保存領域があれば、そこへ少しずつ書き出す（結合した PDF をメモリに持たない）。
@@ -2185,7 +2246,7 @@ async function mergeAndVerify() {
     let output = null;
     if (stash) output = await mergeIntoStash(writeMergedPdf, options);
     output ??= await mergePdf(options);
-    const { digests, size = output.bytes.length } = output;
+    const { digests, removed, size = output.bytes.length } = output;
 
     // 結合した PDF を読み直し、元の頁と突き合わせる（頁を描き直さないので軽い）。
     const where = !output.file ? 'メモリの上で' : stash.kind === 'opfs' ? '保存領域に書き出し' : 'Blob に書き出し';
@@ -2243,6 +2304,7 @@ async function mergeAndVerify() {
       label: displayLabel(entry),
       ...originals[i],
       digest: digests[i],
+      removed: removed[i],
     }));
     const result = compareOutput(expected, actual);
     // 頁ラベルを付けない（本文が無い・部が分かれている）ときは、付いていないこと。
@@ -2303,11 +2365,14 @@ async function mergeIntoStash(writeMergedPdf, options) {
   let writer = null;
   try {
     writer = await guard(() => stash.writer(name));
-    const { size, digests } = await writeMergedPdf({ ...options, write: (chunk) => guard(() => writer.write(chunk)) });
+    const { size, digests, removed } = await writeMergedPdf({
+      ...options,
+      write: (chunk) => guard(() => writer.write(chunk)),
+    });
     const file = await guard(() => writer.close());
     if (mergedName) stash.remove(mergedName);
     mergedName = name;
-    return { file, size, digests };
+    return { file, size, digests, removed };
   } catch (error) {
     // 書きかけは閉じて消す（書き口を開いたままにすると、次の結合で開けない）。
     if (writer) await writer.close().catch(() => {});
@@ -2333,7 +2398,8 @@ function renderVerify() {
     lines.push(`頁の数が違います（並べた数 ${result.pageCount.expected}、結合した PDF ${result.pageCount.actual}）。`);
   }
   lines.push(
-    `文字情報（検索できる文字）のある頁: ${result.textPages} / ${result.pageCount.actual} 頁。` +
+    `文字情報（検索できる文字）のある頁: ${result.textPages} / ${result.pageCount.actual} 頁` +
+      `${result.removedPages ? `（文字情報を消した頁 ${result.removedPages} 頁）` : ''}。` +
       `頁ラベル（ビューアーに出る頁番号）: ${
         !labelsOk ? '書き込みを確かめられませんでした' : noLabels ? '付けていません（通し番号）' : '本の頁番号と一致'
       }。` +
