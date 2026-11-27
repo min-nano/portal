@@ -6,6 +6,8 @@ import {
   measurePages,
   numberingDepth,
   predictSoftmax,
+  refineInBook,
+  tocEntries,
   trainSoftmax,
 } from '../src/pdf-book-merger/page-model.js';
 
@@ -203,6 +205,78 @@ describe('featureVectors（頁ごとの特徴）', () => {
     expect(title[0]).toMatchObject({ firstY: 0.3, firstDepth: 0 });
     const measures = measurePages([{ label: '表紙', bytes: 0, items: [] }]);
     expect(measures[0]).toMatchObject({ blank: 1, largest: 0, firstDepth: 0, shallowestDepth: 0, front: 1, bytes: 0 });
+  });
+});
+
+describe('tocEntries（目次の項目の形の行）', () => {
+  it('2 段組の目次の行は、点線のあとの頁番号ごとに分け、左の段を上から下まで、次に右の段の順に並べる', () => {
+    const lines = [
+      { text: '告示 第1号（ハ） …………… 28 その他金物の詳細 P226', x0: 0.1, x1: 0.9 },
+      { text: '告示 第1号（ニ） …………… 35 柱脚金物………… 227', x0: 0.1, x1: 0.9 },
+      { text: '本文の行 12 も 3', x0: 0.1, x1: 0.9 },
+      // 右の段だけの行は、右の段の左端より右にあるので右の段。
+      { text: '火打ち ………… 228', x0: 0.5, x1: 0.9 },
+    ];
+    const entries = tocEntries(lines);
+    expect(entries.map((e) => [e.title, e.ref, e.column])).toEqual([
+      ['告示 第1号（ハ）', '28', 0],
+      ['告示 第1号（ニ）', '35', 0],
+      ['本文の行 12 も', '3', 0],
+      ['その他金物の詳細', '226', 1],
+      ['柱脚金物', '227', 1],
+      ['火打ち', '228', 1],
+    ]);
+    // 右の段の左端は、行の中の字の位置で割り振る。
+    expect(entries[3].x0).toBeGreaterThan(0.4);
+  });
+});
+
+describe('refineInBook（目次を手本にして、本の中で学び直す）', () => {
+  const line = (text, y, h = 0.01, x0 = 0.1, x1 = 0.9) => [text, x0, x1, y, h];
+  const body = (k) => Array.from({ length: 20 }, (_, j) => line(`本文の行です。${k}の${j}行目の本文です。`, 0.15 + j * 0.035));
+  const door = (title) => [line(title, 0.3, 0.04, 0.55, 0.95), line('詳細マニュアル', 0.35, 0.04, 0.55, 0.95)];
+  // 番号の無い項目（検査の手引き）は、字下げの段から深さを決める。
+  const titles = ['第1章 総論', '第2章 材料', '第3章 施工', '検査の手引き'];
+  const build = (count) => {
+    const pages = [
+      {
+        label: '前付(1) 頁',
+        bytes: 1,
+        items: titles.slice(0, count).map((title, k) => line(`${title} …… ${2 + k * 4}`, 0.1 + k * 0.03)),
+      },
+    ];
+    for (let number = 1; number <= 18; number++) {
+      const k = (number - 2) / 4;
+      const opens = Number.isInteger(k) && k >= 0 && k < count;
+      // 18 頁は、目次に無いが扉と同じ作りの頁（付録の扉）。
+      const items = opens ? door(titles[k]) : number === 18 ? door('付録 資料') : body(number);
+      pages.push({ label: `${number} 頁`, bytes: 1, items });
+    }
+    return pages;
+  };
+
+  it('目次から指された扉の頁を手本に学び、目次に無い同じ作りの頁も区切りとする', () => {
+    const pages = build(4);
+    // 本をまたいで学んだ判定: どの頁も区切りでないとし、18 頁だけ迷っている。2 頁は深さ 2 の区切りとしている。
+    const probs = pages.map((_, p) => (p === 18 ? [0.4, 0.3, 0.2, 0.1] : p === 2 ? [0.1, 0.1, 0.7, 0.1] : [0.9, 0.05, 0.03, 0.02]));
+    const top = refineInBook(pages, featureVectors(pages), probs);
+    // 手本の頁: 本をまたいで学んだ判定の深さ（2 頁）か、手本の深さ（目次の番号のいちばん浅い段で 1）。
+    expect([top[2], top[6], top[10], top[14]]).toEqual([2, 1, 1, 1]);
+    expect(top[18]).toBe(1);
+    expect(top.filter((d, p) => ![2, 6, 10, 14, 18].includes(p)).every((d) => d === 0)).toBe(true);
+  });
+
+  it('区切りの手本が少なければ、本をまたいで学んだ判定のまま', () => {
+    const pages = build(2);
+    const probs = pages.map((_, p) => (p === 18 ? [0.4, 0.3, 0.2, 0.1] : [0.9, 0.05, 0.03, 0.02]));
+    expect(refineInBook(pages, featureVectors(pages), probs)).toEqual(probs.map(argmax));
+  });
+
+  it('区切りでない手本が無ければ、本をまたいで学んだ判定のまま', () => {
+    const pages = build(4);
+    const probs = pages.map(() => [0.4, 0.3, 0.2, 0.1]);
+    expect(refineInBook(pages, featureVectors(pages), probs)).toEqual(probs.map(argmax));
+    expect(refineInBook([], [], [])).toEqual([]);
   });
 });
 

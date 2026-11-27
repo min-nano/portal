@@ -100,18 +100,49 @@ const TOC_ORDERED = 0.8;
 /** 目次の項目の題と、本文の行の似ている度合いを比べる、本文の行の長さの上限。 */
 const TOC_TITLE_LINE = 80;
 
+/** 右の段だけの行を右の段とみなす、右の段の左端（行の中の字の位置から見積もったもの）からのずれの許し（頁の幅に対する割合）。 */
+const TOC_COLUMN_SLACK = 0.05;
+
 /**
- * 頁の行のうち、目次の項目の形のもの（題・頁番号・左端の位置）。題に字が 2 つ以上あるもの。
+ * 行の途中の、点線のあとの頁番号（2 段組の目次で、左の段の項目の終わり。そのあとに右の段の項目が続く）。
+ * 終わりは空白か行の終わり（後読みは iOS 16.3 以前の Safari が読めないので、先読みだけ使う）。
+ */
+const TOC_LEADER_REF = /[.．…・‥]{2,}\s*(?:[PpＰ]\.?\s*)?(?:\d{1,3}\s*[-－‐−]\s*)*\d{1,4}(?=\s|$)/g;
+
+/**
+ * 頁の行のうち、目次の項目の形のもの（題・頁番号・左端の位置）。題に字が 2 つ以上あるもの。2 段組の
+ * 目次の行（「項目 …… 12 項目 …… 34」）は、点線のあとの頁番号ごとに分け、左端の位置は行の中の字の
+ * 位置で割り振り、読む順（左の段を上から下まで、次に右の段）に並べる。右の段だけの行は、右の段の
+ * 左端より右にあれば右の段とする。
  *
- * @param {{text:string, x0:number}[]} lines
- * @returns {{title:string, ref:string, x0:number}[]}
+ * @param {{text:string, x0:number, x1:number}[]} lines
+ * @returns {{title:string, ref:string, x0:number, column:number}[]} column は段（0 が左）
  */
 export function tocEntries(lines) {
-  return lines.flatMap((line) => {
-    const found = line.text.match(TOC_ENTRY);
-    if (!found || found[1].replace(/[^\p{L}]/gu, '').length < 2) return [];
-    return [{ title: found[1], ref: found[2].replace(/\s/g, '').replace(/[－‐−]/g, '-'), x0: line.x0 }];
+  const pieces = lines.flatMap((line) => {
+    const bounds = [];
+    let start = 0;
+    for (const found of line.text.matchAll(TOC_LEADER_REF)) {
+      bounds.push([start, found.index + found[0].length]);
+      start = found.index + found[0].length;
+    }
+    bounds.push([start, line.text.length]);
+    return bounds.map(([from, to], index) => ({
+      text: line.text.slice(from, to).trim(),
+      index,
+      x0: line.x0 + ((line.x1 - line.x0) * from) / line.text.length,
+    }));
   });
+  // 右の段だけの行（左の段の項目が前の行で終わっている）は、右の段の左端より右にあることで見分ける。
+  const right = Math.min(...pieces.filter((piece) => piece.index > 0).map((piece) => piece.x0));
+  const columns = [];
+  for (const piece of pieces) {
+    const found = piece.text.match(TOC_ENTRY);
+    if (!found || found[1].replace(/[^\p{L}]/gu, '').length < 2) continue;
+    const column = piece.index || (piece.x0 >= right - TOC_COLUMN_SLACK ? 1 : 0);
+    (columns[column] ??= []).push({ title: found[1], ref: found[2].replace(/\s/g, '').replace(/[－‐−]/g, '-'), x0: piece.x0, column });
+  }
+  return columns.flat();
 }
 
 /** 頁番号の最後の段（「1-23」は 23）。 */
@@ -146,7 +177,10 @@ function tocLinks(keys, body) {
   for (const [tocPage, lines] of body.entries()) {
     const entries = tocEntries(lines);
     if (!isToc(entries)) continue;
-    const indents = [...new Set(entries.map((entry) => Math.round(entry.x0 * 50)))].sort((a, b) => a - b);
+    // 字下げの段は、目次の段（2 段組の左右）ごとに数える。
+    const indents = [];
+    for (const entry of entries) (indents[entry.column] ??= new Set()).add(Math.round(entry.x0 * 50));
+    const indentOf = (entry) => [...indents[entry.column]].sort((a, b) => a - b).indexOf(Math.round(entry.x0 * 50));
     // 目次の頁そのものは指さない（目次の頁の頁番号と同じ頁番号の項目——部の目次の 1 頁と、部の最初の 1 頁——で）。
     let from = tocPage + 1;
     for (const entry of entries) {
@@ -162,7 +196,7 @@ function tocLinks(keys, body) {
       const link = links[target];
       link.hit = 1;
       link.entries++;
-      link.indent = Math.min(link.indent ?? 2, indents.indexOf(Math.round(entry.x0 * 50)), 2);
+      link.indent = Math.min(link.indent ?? 2, indentOf(entry), 2);
       const depth = numberingDepth(entry.title);
       if (depth > 0) link.depth = Math.min(link.depth ?? depth, depth);
       const grams = letterGrams(entry.title);
@@ -563,6 +597,63 @@ function softmax(scores) {
   const exps = scores.map((score) => Math.exp(score - top));
   const total = exps.reduce((sum, value) => sum + value, 0);
   return exps.map((value) => value / total);
+}
+
+/** 本の中で学ぶときに、本をまたいで学んだ判定で区切りでないとみなす、区切りでない確からしさの下限。 */
+const IN_BOOK_NEGATIVE = 0.5;
+
+/** 本の中で学んだ判定で区切りとみなす、区切りでない確からしさの上限。 */
+const IN_BOOK_POSITIVE = 0.05;
+
+/** 本の中で学ぶ手本とする、目次の項目の題と頁の最初の行の似ている度合いの下限。 */
+const IN_BOOK_MATCH = 0.5;
+
+/** 本の中で学ぶのに要る、区切りの手本の数の下限。 */
+const IN_BOOK_MIN_EXAMPLES = 3;
+
+/**
+ * 本の中で学び直す（その本の目次を手本にして、その本のレイアウトを読む）。本をまたいで学んだ判定は、
+ * 見たことのないレイアウト（扉の作りなど）を読み違える。そこで、目次の項目が頁の最初の行の題を指す頁を、
+ * その深さ（項目の題の番号の段、無ければ字下げの段に 1 を足したもの）の単位が頭から始まる手本、
+ * 目次から指されず、本をまたいで学んだ判定で区切りでないとみなす頁を、区切りでない手本にして、
+ * その本の頁の特徴（目次の特徴は除く。手本の選び方そのものなので）から分類器を学び、
+ * (1) 手本の頁は区切りとし（深さは本をまたいで学んだ判定のもの、区切りでないとしていれば手本の深さ）、
+ * (2) どちらの手本でもない頁（目次が頁の途中の行を指す頁も。目次の題の読み違いで頭の題と合わないことが
+ * 多いので）は、本の中で学んだ判定で区切りと確かなら、その深さにする。
+ * 手本が少なければ（区切りの手本が 3 つ未満、または区切りでない手本が無ければ）、そのまま返す。
+ *
+ * @param {Parameters<typeof measurePages>[0]} pages
+ * @param {number[][]} rows featureVectors(pages)
+ * @param {number[][]} probs 本をまたいで学んだ判定の、頁ごとの「頭から始まる単位の深さ」の確からしさ
+ * @returns {number[]} 頁ごとの、頭から始まる単位の深さ（0 は無し）
+ */
+export function refineInBook(pages, rows, probs) {
+  if (!probs.length) return [];
+  const classes = probs[0].length;
+  const top = probs.map(argmax);
+  const measures = measurePages(pages);
+  const examples = measures.map(({ toc }, page) => {
+    if (toc.hit && toc.matchFirst && toc.match >= IN_BOOK_MATCH) return Math.min(classes - 1, (toc.depth ?? toc.indent) + 1);
+    if (!toc.hit && probs[page][0] > IN_BOOK_NEGATIVE) return 0;
+    return null;
+  });
+  const taught = examples.map((example, page) => (example === null ? -1 : page)).filter((page) => page >= 0);
+  if (taught.filter((page) => examples[page] > 0).length < IN_BOOK_MIN_EXAMPLES || !taught.some((page) => examples[page] === 0)) {
+    return top;
+  }
+  const columns = FEATURE_NAMES.map((name, j) => (name.startsWith('toc') ? -1 : j)).filter((j) => j >= 0);
+  const pick = (row) => columns.map((j) => row[j]);
+  const model = trainSoftmax(
+    taught.map((page) => pick(rows[page])),
+    taught.map((page) => examples[page]),
+    classes,
+    { epochs: 200 }
+  );
+  return predictSoftmax(model, rows.map(pick)).map((own, page) => {
+    if (examples[page] > 0) return top[page] || examples[page];
+    if (examples[page] === null && own[0] < IN_BOOK_POSITIVE) return argmax(own.map((p, c) => (c ? p : 0)));
+    return top[page];
+  });
 }
 
 /** 確からしさのいちばん高いクラス。 */

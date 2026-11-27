@@ -13,7 +13,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { featureVectors, FEATURE_NAMES, trainSoftmax, predictSoftmax, argmax } from '../src/pdf-book-merger/page-model.js';
+import { featureVectors, FEATURE_NAMES, trainSoftmax, predictSoftmax, argmax, refineInBook } from '../src/pdf-book-merger/page-model.js';
 import { MAX_DEPTH, pageTargets, structureCuts } from '../src/pdf-book-merger/structure.js';
 
 const LIMIT = 40 * 2 ** 20;
@@ -45,7 +45,8 @@ function train(set) {
 
 /** 当たり方を数える（頁ごと: 頭から始まる単位の有無と深さ。分ける位置: 正解から求めた位置との一致）。 */
 function evaluate(model, entry) {
-  const top = predictSoftmax(model.top, entry.rows).map(argmax);
+  // 本をまたいで学んだ判定を、外した本の中で学び直す（refineInBook）。
+  const top = refineInBook(entry.pages, entry.rows, predictSoftmax(model.top, entry.rows));
   const mid = predictSoftmax(model.mid, entry.rows).map(argmax);
   const count = { tp: 0, fp: 0, fn: 0, depthOk: 0 };
   top.forEach((depth, p) => {
