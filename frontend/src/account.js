@@ -6,7 +6,7 @@
 // メニュー——には data-staff-only を付けておく。CSS（base.css）は、
 // <html data-account="internal"> になるまでそれらを隠す。社内ユーザーだと
 // 確かめられない限り（外部ユーザー・使えないアカウント・確かめられなかった）
-// 見えないので、外部の人に社内専用の入口が一瞬でも見えることがない。
+// 見えないので、外部の人に社内専用の入口は見えない（例外は下の「待たない」）。
 // 部品ごとに隠す処理を書かないので、社内専用の入口を増やすときは印を付けるだけでよい。
 //
 // これは**見せ方だけ**。断るのはいつもサーバー（社内専用のツールと Drive の
@@ -15,11 +15,13 @@
 // 使えないので、理由（サーバーの文言）を投げて呼び出し側に出させる。
 //
 // 待たない: /api/me の答えを待ってから画面を出すと、社内ユーザーまで Cloud Run の
-// 起動待ちを被る。そこで、最後に確かめた結果をこの端末に、サインインしている
-// アドレスごとに覚えておき（ポータルの名前とロゴと同じ）、前回社内ユーザー
-// だった人には**まず入口を見せてから**確かめ直す。違っていれば（外部ユーザーに
-// なった、使えなくなった）その時点で隠す。覚えた値は見せ方にしか使わないので、
-// 書き換えられても使えるようにはならない。
+// 起動待ちを被る。そこで、この端末で最後に社内ユーザーと確かめたアドレスを
+// 1 つだけ覚えておき（ポータルの名前とロゴと同じ）、同じアドレスでサインイン
+// したら**まず入口を見せてから**確かめ直す。違っていれば（外部ユーザーに
+// なった、使えなくなった）その時点で隠す。つまり、前回社内ユーザーだった人には、
+// 確かめ終わるまで（確かめられなければそのページの間）入口が見えることがある。
+// 覚えた値は見せ方にしか使わないので、書き換えられても使えるようにはならない。
+// 外部ユーザーのアドレスは覚えない（端末に残さない）。
 //
 // 一時的な失敗（起動待ちの 5xx・429・通信の失敗）では、少し間を置いて取り直す
 // （RETRY_DELAYS_MS）。取り直しても確かめられなければ、見せ方はそのまま
@@ -46,20 +48,22 @@ function sameAddress(a, b) {
   return typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 }
 
-/** この端末に覚えている、最後に確かめた結果（{ email, internal }）。無ければ null。 */
+/** この端末で最後に社内ユーザーと確かめたアドレス（{ email }）。無ければ null。 */
 function readRemembered(storage) {
   try {
-    const value = JSON.parse(storage?.getItem(CACHE_KEY) || 'null');
+    const value = JSON.parse(storage.getItem(CACHE_KEY) || 'null');
     return value && typeof value === 'object' ? value : null;
   } catch {
+    // 保存場所が無い・壊れた値は、覚えていないのと同じ。
     return null;
   }
 }
 
-function remember(value, storage) {
+/** 社内ユーザーと確かめたアドレスを覚える（email が無ければ忘れる）。 */
+function remember(email, storage) {
   try {
-    if (value) storage?.setItem(CACHE_KEY, JSON.stringify(value));
-    else storage?.removeItem(CACHE_KEY);
+    if (email) storage.setItem(CACHE_KEY, JSON.stringify({ email }));
+    else storage.removeItem(CACHE_KEY);
   } catch {
     // 覚えられなくても、毎回確かめてから見せるだけで困らない。
   }
@@ -76,7 +80,7 @@ export function showRememberedAccount(
   storage = globalThis.localStorage
 ) {
   const remembered = readRemembered(storage);
-  if (remembered?.internal === true && sameAddress(remembered.email, email)) {
+  if (remembered && sameAddress(remembered.email, email)) {
     doc.documentElement.dataset.account = 'internal';
   }
 }
@@ -113,9 +117,9 @@ export async function checkAccount(
     }
   }
   // 社内ユーザーと言えるのは external が false とはっきり答えたときだけ。
-  const internal = account?.external === false;
+  const internal = account.external === false;
   const kind = internal ? 'internal' : 'external';
   doc.documentElement.dataset.account = kind;
-  remember({ email: account?.email, internal }, storage);
+  remember(internal ? account.email : null, storage);
   return kind;
 }

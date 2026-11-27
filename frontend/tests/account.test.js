@@ -35,6 +35,7 @@ const account = () => document.documentElement.dataset.account;
 beforeEach(() => {
   vi.clearAllMocks();
   delete document.documentElement.dataset.account;
+  localStorage.clear();
 });
 
 describe('checkAccount', () => {
@@ -48,22 +49,21 @@ describe('checkAccount', () => {
     expect(account()).toBe('internal');
     expect(JSON.parse(storage.items.get('portal.account'))).toEqual({
       email: 'tester@example.co.jp',
-      internal: true,
     });
   });
 
-  it('外部ユーザーなら隠したまま（前回社内として見せていても隠す）', async () => {
+  it('外部ユーザーなら隠したまま（前回社内として見せていても隠し、覚えた値も忘れる）', async () => {
     document.documentElement.dataset.account = 'internal';
     apiGet.mockResolvedValue({ email: 'partner@gmail.com', external: true });
-    const storage = memoryStorage();
+    const storage = memoryStorage({
+      'portal.account': JSON.stringify({ email: 'partner@gmail.com' }),
+    });
 
     expect(await checkAccount(document, noWait, storage)).toBe('external');
 
     expect(account()).toBe('external');
-    expect(JSON.parse(storage.items.get('portal.account'))).toEqual({
-      email: 'partner@gmail.com',
-      internal: false,
-    });
+    // 外部ユーザーのアドレスは端末に残さない。
+    expect(storage.items.has('portal.account')).toBe(false);
   });
 
   it('社内ユーザーかをはっきり答えない（古いバックエンド）なら、見せない', async () => {
@@ -81,7 +81,7 @@ describe('checkAccount', () => {
     );
     apiGet.mockRejectedValue(refused);
     const storage = memoryStorage({
-      'portal.account': JSON.stringify({ email: 'someone@gmail.com', internal: true }),
+      'portal.account': JSON.stringify({ email: 'someone@gmail.com' }),
     });
 
     await expect(checkAccount(document, noWait, storage)).rejects.toBe(refused);
@@ -154,6 +154,13 @@ describe('checkAccount', () => {
     }
   });
 
+  it('端末に保存場所が無くても、見せ方は決まる', async () => {
+    apiGet.mockResolvedValue({ email: 'tester@example.co.jp', external: false });
+
+    expect(await checkAccount(document, noWait, null)).toBe('internal');
+    expect(account()).toBe('internal');
+  });
+
   it('端末に覚えられなくても（プライベートモードなど）、見せ方は決まる', async () => {
     apiGet.mockResolvedValue({ email: 'tester@example.co.jp', external: false });
     const storage = {
@@ -174,14 +181,14 @@ describe('showRememberedAccount', () => {
     showRememberedAccount(
       'Tester@Example.co.jp',
       document,
-      remembered({ email: 'tester@example.co.jp', internal: true })
+      remembered({ email: 'tester@example.co.jp' })
     );
     expect(account()).toBe('internal');
   });
 
   it.each([
-    ['別のアドレスで覚えていた', { email: 'other@example.co.jp', internal: true }],
-    ['前回は外部ユーザーだった', { email: 'tester@example.co.jp', internal: false }],
+    ['別のアドレスで覚えていた', { email: 'other@example.co.jp' }],
+    ['アドレスの無い値', {}],
   ])('%s なら、見せない', (_, value) => {
     showRememberedAccount('tester@example.co.jp', document, remembered(value));
     expect(account()).toBeUndefined();
@@ -191,7 +198,7 @@ describe('showRememberedAccount', () => {
     ['覚えていない', memoryStorage()],
     ['壊れた値', memoryStorage({ 'portal.account': '{' })],
     ['オブジェクトでない値', memoryStorage({ 'portal.account': '"internal"' })],
-    ['端末に保存場所が無い', undefined],
+    ['端末に保存場所が無い', null],
   ])('%s なら、見せない', (_, storage) => {
     showRememberedAccount('tester@example.co.jp', document, storage);
     expect(account()).toBeUndefined();
@@ -201,7 +208,7 @@ describe('showRememberedAccount', () => {
     showRememberedAccount(
       undefined,
       document,
-      remembered({ email: 'tester@example.co.jp', internal: true })
+      remembered({ email: 'tester@example.co.jp' })
     );
     expect(account()).toBeUndefined();
   });
