@@ -76,11 +76,17 @@ describe('checkAccount', () => {
     }
   );
 
-  it('社内ユーザーかをはっきり答えない（古いバックエンド）なら、見せない', async () => {
+  it('外部ユーザーかをはっきり答えない（古いバックエンド）なら、確かめられなかったのと同じ', async () => {
+    document.documentElement.dataset.account = 'internal'; // 覚えた値で見せていた
     apiGet.mockResolvedValue({ email: 'tester@example.co.jp' });
+    const storage = memoryStorage({
+      'portal.account': JSON.stringify({ email: 'tester@example.co.jp' }),
+    });
 
-    expect(await checkAccount(document, noWait, memoryStorage())).toBe('external');
-    expect(account()).toBe('external');
+    expect(await checkAccount(document, noWait, storage)).toBeNull();
+    // 見せ方も覚えた値も変えない。
+    expect(account()).toBe('internal');
+    expect(storage.items.has('portal.account')).toBe(true);
   });
 
   it('使えないアカウント（403）は、覚えた値を捨て、隠してから理由を投げる', async () => {

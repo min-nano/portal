@@ -28,6 +28,7 @@
 // （覚えた値で見せていればそのまま、そうでなければ隠したまま）。
 
 import { apiGet } from './api.js';
+import { deviceStorage } from './device-storage.js';
 
 /** 取り直すまでに待つ時間（回ごと）。使い切ったら、見せ方を変えずにあきらめる。 */
 // 確かめられないと社員にも入口が出ないので、Cloud Run の起動待ち（数秒〜10 秒
@@ -72,7 +73,7 @@ function remember(email, storage) {
 }
 
 /** 覚えたアドレスを忘れる（サインアウトのとき。共用の端末にアドレスを残さない）。 */
-export function forgetRememberedAccount(storage = globalThis.localStorage) {
+export function forgetRememberedAccount(storage = deviceStorage()) {
   remember(null, storage);
 }
 
@@ -84,7 +85,7 @@ export function forgetRememberedAccount(storage = globalThis.localStorage) {
 export function showRememberedAccount(
   email,
   doc = document,
-  storage = globalThis.localStorage
+  storage = deviceStorage()
 ) {
   const remembered = readRemembered(storage);
   if (remembered && sameAddress(remembered.email, email)) {
@@ -104,7 +105,7 @@ export function showRememberedAccount(
 export async function checkAccount(
   doc = document,
   wait = sleep,
-  storage = globalThis.localStorage
+  storage = deviceStorage()
 ) {
   let account;
   for (let attempt = 0; ; attempt += 1) {
@@ -123,11 +124,10 @@ export async function checkAccount(
       await wait(RETRY_DELAYS_MS[attempt]);
     }
   }
-  // 答えがオブジェクトでなければ（途中の何かが返した null など）、確かめられ
-  // なかったのと同じ。社内ユーザーと言えるのは external が false とはっきり
-  // 答えたときだけ。
-  if (!account || typeof account !== 'object') return null;
-  const internal = account.external === false;
+  // external を true / false ではっきり答えなければ（途中の何かが返した null、
+  // 古いバックエンドなど）、確かめられなかったのと同じ（見せ方も覚えた値も変えない）。
+  if (typeof account?.external !== 'boolean') return null;
+  const internal = !account.external;
   const kind = internal ? 'internal' : 'external';
   doc.documentElement.dataset.account = kind;
   remember(internal ? account.email : null, storage);

@@ -51,7 +51,9 @@ vi.mock('@clerk/clerk-js', () => ({
       node.appendChild(document.createElement('div'));
     }
 
-    addListener() {}
+    addListener(listener) {
+      sessionListener = listener;
+    }
 
     async signOut() {
       signedOut = true;
@@ -60,6 +62,7 @@ vi.mock('@clerk/clerk-js', () => ({
 }));
 
 let signedOut = false;
+let sessionListener = null;
 
 const PAGE = `
   <portal-loading id="pageLoading" class="page-loading">サインインを確認しています…</portal-loading>
@@ -166,6 +169,19 @@ describe('requireSignIn（サインイン済み）', () => {
 
     expect(localStorage.getItem('portal.account')).toBeNull();
     expect(signedOut).toBe(true);
+  });
+
+  it('別のタブでのサインアウトなどでセッションが消えても、覚えたアドレスを消す', async () => {
+    const { requireSignIn } = await loadAuthModule();
+    signedInUser = { primaryEmailAddress: { emailAddress: 'taro@example.com' } };
+    localStorage.setItem('portal.account', JSON.stringify({ email: 'taro@example.com' }));
+
+    await requireSignIn();
+    sessionListener({ user: signedInUser }); // まだサインインしている間は消さない
+    expect(localStorage.getItem('portal.account')).not.toBeNull();
+    sessionListener({ user: null });
+
+    expect(localStorage.getItem('portal.account')).toBeNull();
   });
 });
 

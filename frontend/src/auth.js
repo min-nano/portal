@@ -145,9 +145,11 @@ export async function requireSignIn() {
   if (signOutBtn) {
     signOutBtn.addEventListener('click', async () => {
       signingOut = true;
-      // 社内ユーザーと確かめたアドレスを、共用の端末に残さない（account.js）。
-      forgetRememberedAccount();
       await clerk.signOut();
+      // 社内ユーザーと確かめたアドレスを、共用の端末に残さない（account.js）。
+      // サインアウトが済んでから消す（その間に届いた /api/me の答えが書き戻しても、
+      // ここで消える）。
+      forgetRememberedAccount();
       window.location.reload();
     });
   }
@@ -159,7 +161,11 @@ export async function requireSignIn() {
   // reload してしまうと削除リクエストが中断され、リロード後もサインイン状態の
   // ままになる。このタブの後始末は上のクリックハンドラ側が行う。
   clerk.addListener(({ user }) => {
-    if (!user && !signingOut) window.location.reload();
+    if (!user && !signingOut) {
+      // 別のタブでのサインアウトやセッションの失効でも、アドレスを残さない。
+      forgetRememberedAccount();
+      window.location.reload();
+    }
   });
 
   return clerk;

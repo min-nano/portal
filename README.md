@@ -540,6 +540,7 @@ frontend/                     # Firebase Hosting に載せる SPA (Vite)
   src/site-settings-dialog.js # サイトの設定画面（アカウントのメニューの「設定」から開く）
   src/auth.js                 # Clerk（サインインゲート・トークン取得。サインイン画面は必要になってから読む）
   src/account.js              # 社内専用の入口（data-staff-only）を、社内ユーザーと確かめてから見せる
+  src/device-storage.js       # この端末の保存場所（localStorage。読めないブラウザでは null）
   src/clerk-frontend-api.js   # Publishable Key から Clerk の接続先を取り出す（preconnect 用）
   src/api.js                  # Bearer 付き fetch ラッパー（バックエンドの起こし方も）
   src/core.js                 # 計算実装（wasm）の読み込みと呼び出し（ツール共通）
