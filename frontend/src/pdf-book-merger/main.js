@@ -26,6 +26,7 @@ import '../styles.css';
 import './tool.css';
 import '../components/index.js';
 import { el } from '../components/form-field.js';
+import { connectHelpTips } from '../components/help-tip.js';
 import { startPage } from '../page-start.js';
 import { pickFiles } from '../drive-picker.js';
 import { ensurePdfExtension } from '../pdf-file-ops.js';
@@ -95,9 +96,6 @@ import { createDuplicateFinder, duplicateIssues, textPrint } from './duplicates.
 
 const PDF_MIME = 'application/pdf';
 const DEFAULT_NAME = '結合.pdf';
-
-/** 見出しの「?」からマウスを外して、説明を閉じるまでの猶予（説明の文へ動かす間）。 */
-const HELP_LEAVE_MS = 300;
 
 /** 同時に読み取る頁の数（OCR の worker の数より少し多くして、待ちを埋める）。 */
 const OCR_IN_FLIGHT = 3;
@@ -2414,50 +2412,6 @@ function addLocal(fileList) {
   );
 }
 
-/**
- * 見出しの「?」。押すと説明を開き（もう一度押すか、外を押すか、Esc で閉じる）、
- * マウスでは載せている間だけ開く。どちらも同じ open の切り替えで表すので、
- * 見た目と aria-expanded が食い違わない。開くのはいつも 1 つだけ。
- */
-function wireHelp() {
-  const helps = [...document.querySelectorAll('.bm-help')];
-  const setOpen = (help, open) => {
-    help.classList.toggle('open', open);
-    help.querySelector('.bm-help-btn').setAttribute('aria-expanded', String(open));
-  };
-  const openOnly = (help) => helps.forEach((other) => setOpen(other, other === help));
-  for (const help of helps) {
-    // マウスを載せている間（説明の文へ動かす途中の隙間は少し待つ）。タッチの
-    // pointerenter は押したのと同じなので、ここでは扱わない。
-    let hovering = false;
-    let leaving = 0;
-    help.addEventListener('pointerenter', (event) => {
-      if (event.pointerType !== 'mouse') return;
-      clearTimeout(leaving);
-      hovering = true;
-      openOnly(help);
-    });
-    help.addEventListener('pointerleave', (event) => {
-      if (event.pointerType !== 'mouse') return;
-      hovering = false;
-      leaving = setTimeout(() => setOpen(help, false), HELP_LEAVE_MS);
-    });
-    help.querySelector('.bm-help-btn').addEventListener('click', () => {
-      // 載せて開いているときに押しても閉じない（押した途端に消えて見えるので）。
-      if (hovering || !help.classList.contains('open')) openOnly(help);
-      else setOpen(help, false);
-    });
-    // 見出しの中にあるので、説明の文を押しても節を畳まない（文を選んで読めるように）。
-    help.querySelector('.bm-help-body').addEventListener('click', (event) => event.stopPropagation());
-  }
-  document.addEventListener('click', (event) => {
-    for (const help of helps) if (!help.contains(event.target)) setOpen(help, false);
-  });
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') helps.forEach((help) => setOpen(help, false));
-  });
-}
-
 function wireUp() {
   // 前回、途中でページが落ちていたら、その記録を出す。
   crashLog.clearOnLeave();
@@ -2503,7 +2457,7 @@ function wireUp() {
     if (event.dataTransfer?.files?.length) addLocal(event.dataTransfer.files);
   });
 
-  wireHelp();
+  connectHelpTips();
 
   $('fileSort').addEventListener('change', (event) => setFileSort(event.target.value));
   // ファイルの行のメニューは、外を押すか Esc で閉じる。

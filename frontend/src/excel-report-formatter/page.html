@@ -16,6 +16,19 @@
 </div>
 
 <form id="reportForm" onsubmit="return false;">
+  <!-- 物件のデータシートと間取り図の写真から、物件名と部屋（階・室名）を入れる
+       （photo-reading.js・room-dialog.js）。写真はこの端末の中で読むだけ。
+       説明は長いので「?」に畳む（../components/help-tip.js）。説明の文は、途中で
+       改行すると空白が入って見えるので 1 行に書く。 -->
+  <div class="photo-reading help-host">
+    <button type="button" class="secondary" id="photoReadBtn">写真から読み取る</button>
+    <span class="help">
+      <button type="button" class="help-btn" aria-label="写真からの読み取りの説明" aria-expanded="false" aria-controls="helpPhoto">?</button>
+      <span class="help-body" id="helpPhoto">データシートの写真から物件名を、間取り図の写真から部屋（階・室名）を入れます。部屋は一覧で確かめてから入れます。資料は文字が縦向きのまま、正面から大きく撮ってください。写真はこの端末の中で読むだけで、どこにも送りません。初回は読み取りの準備（約 36MB の読み込み）に時間がかかります。</span>
+    </span>
+    <input type="file" id="photoInput" accept="image/*" multiple hidden>
+  </div>
+
   <div class="field field-half">
     <label for="property_name">住宅(物件)名</label>
     <div class="field-row">

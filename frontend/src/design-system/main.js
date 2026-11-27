@@ -16,7 +16,7 @@ import '../styles.css';
 // ツールが増えても、束ねる中身が変わるだけでここは変わらない。
 import '../../tools/tools.css';
 import './page.css';
-import '../components/index.js';
+import { connectHelpTips } from '../components/index.js';
 import { showSite } from '../site-settings.js';
 
 const THEMES = ['auto', 'light', 'dark'];
@@ -64,3 +64,4 @@ function setUpVerdictToggle() {
 showSite();
 setUpThemeToggle();
 setUpVerdictToggle();
+connectHelpTips();

@@ -150,3 +150,42 @@
   background-position: right 2px center;
   background-size: 10px 10px;
 }
+
+/* 写真から読み取る（データシート・間取り図）。フォームの先頭に、ボタンと
+   説明の「?」を 1 行に置く（説明は「?」の下に重ねて開く）。 */
+.photo-reading {
+  display: flex;
+  align-items: center;
+  margin-bottom: var(--s-4);
+}
+
+/* 読み取った部屋を確かめるダイアログ（room-dialog.js）。1 行に 階・室名・削除 を並べる。 */
+.room-reading-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.room-reading-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.room-reading-row .room-reading-floor {
+  flex: none;
+  width: 4rem;
+}
+
+.room-reading-row .room-reading-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.room-reading-row .room-reading-remove {
+  flex: none;
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
+}
