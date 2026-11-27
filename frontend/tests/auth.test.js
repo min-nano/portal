@@ -52,8 +52,14 @@ vi.mock('@clerk/clerk-js', () => ({
     }
 
     addListener() {}
+
+    async signOut() {
+      signedOut = true;
+    }
   },
 }));
+
+let signedOut = false;
 
 const PAGE = `
   <portal-loading id="pageLoading" class="page-loading">サインインを確認しています…</portal-loading>
@@ -141,6 +147,25 @@ describe('requireSignIn（サインイン済み）', () => {
 
     expect(document.getElementById('accountArea').hidden).toBe(false);
     expect(document.getElementById('accountEmail').textContent).toBe('taro@example.com');
+  });
+
+  it('サインアウトするとき、端末に覚えた社内ユーザーのアドレスを消す', async () => {
+    document.body.innerHTML = '';
+    const { requireSignIn } = await loadAuthModule();
+    document.body.insertAdjacentHTML(
+      'afterbegin',
+      '<portal-header class="portal-header"></portal-header>'
+    );
+    signedInUser = { primaryEmailAddress: { emailAddress: 'taro@example.com' } };
+    localStorage.setItem('portal.account', JSON.stringify({ email: 'taro@example.com' }));
+    signedOut = false;
+
+    await requireSignIn();
+    document.getElementById('signOutBtn').click();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+    expect(localStorage.getItem('portal.account')).toBeNull();
+    expect(signedOut).toBe(true);
   });
 });
 

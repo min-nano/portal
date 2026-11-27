@@ -321,6 +321,13 @@ describe('startPage', () => {
 
     expect(showRememberedAccount).toHaveBeenCalledWith('tester@example.co.jp');
     expect(checkAccount).toHaveBeenCalledTimes(1);
+    // 覚えた結果で先に見せてから確かめに行き、準備はその後（社員の待ちを減らす）。
+    expect(showRememberedAccount.mock.invocationCallOrder[0]).toBeLessThan(
+      checkAccount.mock.invocationCallOrder[0]
+    );
+    expect(checkAccount.mock.invocationCallOrder[0]).toBeLessThan(
+      prepare.mock.invocationCallOrder[0]
+    );
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(app().hidden).toBe(false);
   });

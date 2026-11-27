@@ -8,6 +8,7 @@
 
 import { Clerk } from '@clerk/clerk-js';
 import { jaJP } from '@clerk/localizations';
+import { forgetRememberedAccount } from './account.js';
 import { avatarUrl } from './account-avatar.js';
 import { finishPageLoading } from './components/loading.js';
 
@@ -144,6 +145,8 @@ export async function requireSignIn() {
   if (signOutBtn) {
     signOutBtn.addEventListener('click', async () => {
       signingOut = true;
+      // 社内ユーザーと確かめたアドレスを、共用の端末に残さない（account.js）。
+      forgetRememberedAccount();
       await clerk.signOut();
       window.location.reload();
     });

@@ -30,7 +30,9 @@
 import { apiGet } from './api.js';
 
 /** 取り直すまでに待つ時間（回ごと）。使い切ったら、見せ方を変えずにあきらめる。 */
-export const RETRY_DELAYS_MS = Object.freeze([1000, 3000]);
+// 確かめられないと社員にも入口が出ないので、Cloud Run の起動待ち（数秒〜10 秒
+// ほど）を越えられるだけ待つ（合わせて約 12 秒）。
+export const RETRY_DELAYS_MS = Object.freeze([1000, 3000, 8000]);
 
 const CACHE_KEY = 'portal.account';
 
@@ -67,6 +69,11 @@ function remember(email, storage) {
   } catch {
     // 覚えられなくても、毎回確かめてから見せるだけで困らない。
   }
+}
+
+/** 覚えたアドレスを忘れる（サインアウトのとき。共用の端末にアドレスを残さない）。 */
+export function forgetRememberedAccount(storage = globalThis.localStorage) {
+  remember(null, storage);
 }
 
 /**
@@ -116,7 +123,10 @@ export async function checkAccount(
       await wait(RETRY_DELAYS_MS[attempt]);
     }
   }
-  // 社内ユーザーと言えるのは external が false とはっきり答えたときだけ。
+  // 答えがオブジェクトでなければ（途中の何かが返した null など）、確かめられ
+  // なかったのと同じ。社内ユーザーと言えるのは external が false とはっきり
+  // 答えたときだけ。
+  if (!account || typeof account !== 'object') return null;
   const internal = account.external === false;
   const kind = internal ? 'internal' : 'external';
   doc.documentElement.dataset.account = kind;
