@@ -70,6 +70,127 @@ function similarity(a, b) {
   return common / (a.size + b.size - common);
 }
 
+/** 文字（数・記号を除く）の 2 字ずつの組（目次の項目の題と、本文の行を比べる）。 */
+function letterGrams(text) {
+  const plain = text.replace(/[^\p{L}]/gu, '');
+  const set = new Set();
+  for (let k = 0; k + 1 < plain.length; k++) set.add(plain.slice(k, k + 2));
+  return set;
+}
+
+/** 2 字ずつの組の重なり（Dice 係数。どちらも空でないものを比べる——字が 2 つ以上ある題と行）。 */
+function dice(a, b) {
+  let common = 0;
+  for (const gram of a) if (b.has(gram)) common++;
+  return (2 * common) / (a.size + b.size);
+}
+
+/**
+ * 目次の項目の形（題のあとに、点線か空白、P のあと、頁番号——「1-23」のような段のある
+ * ものも——で終わる行）。題の最後は点線・空白でない字。
+ */
+const TOC_ENTRY = /^(.*?[^\s.．…・‥_－‐-])[\s.．…・‥_]*(?:[PpＰ]\.?\s*)?((?:\d{1,3}\s*[-－‐−]\s*)*\d{1,4})$/;
+
+/** 目次とみなす、1 頁の項目の数の下限。 */
+const TOC_MIN_ENTRIES = 3;
+
+/** 目次とみなす、頁番号が前の項目から戻らない項目の割合の下限（本文の、数で終わる表の行と分ける）。 */
+const TOC_ORDERED = 0.8;
+
+/** 目次の項目の題と、本文の行の似ている度合いを比べる、本文の行の長さの上限。 */
+const TOC_TITLE_LINE = 80;
+
+/**
+ * 頁の行のうち、目次の項目の形のもの（題・頁番号・左端の位置）。題に字が 2 つ以上あるもの。
+ *
+ * @param {{text:string, x0:number}[]} lines
+ * @returns {{title:string, ref:string, x0:number}[]}
+ */
+export function tocEntries(lines) {
+  return lines.flatMap((line) => {
+    const found = line.text.match(TOC_ENTRY);
+    if (!found || found[1].replace(/[^\p{L}]/gu, '').length < 2) return [];
+    return [{ title: found[1], ref: found[2].replace(/\s/g, '').replace(/[－‐−]/g, '-'), x0: line.x0 }];
+  });
+}
+
+/** 頁番号の最後の段（「1-23」は 23）。 */
+const lastNumber = (ref) => Number(ref.split('-').at(-1));
+
+/** 頁番号の前の段（「1-23」は「1」。段の無いものは空）。 */
+const refPrefix = (ref) => ref.split('-').slice(0, -1).join('-');
+
+/** 目次の頁か（項目が多く、頁番号がおおむね前の項目から戻らない——段が変われば戻ってよい）。 */
+function isToc(entries) {
+  if (entries.length < TOC_MIN_ENTRIES) return false;
+  let ordered = 0;
+  for (let k = 1; k < entries.length; k++) {
+    const [a, b] = [entries[k - 1].ref, entries[k].ref];
+    if (lastNumber(b) >= lastNumber(a) || refPrefix(b) !== refPrefix(a)) ordered++;
+  }
+  return ordered >= (entries.length - 1) * TOC_ORDERED;
+}
+
+/**
+ * 目次と本文の対応付け。目次の頁の項目ごとに、その頁番号の頁（目次の頁の次、または前の項目の頁から
+ * 後ろで、いちばん近いもの。前の段の無い頁番号は、どの部の頁とも合う——部ごとに振り直す本では、
+ * 後ろで最初に合う部の頁になる）を探し、その頁に手掛かりを残す: 項目が指すか・項目の数・項目の題と
+ * いちばん似ている行（似ている度合い・高さの位置・頁の最初の行か）・項目の字下げの段（目次の中の
+ * 左端の位置の、浅い順に 0, 1, 2）・項目の題の番号の段の数（本の目次の中でいちばん浅いものを 0 とする）。
+ *
+ * @param {{key:{number:number, full:string}|null}[]} keys 頁ごとの頁番号（full は前の段とつないだもの）
+ * @param {{text:string, x0:number, y:number}[][]} body 頁ごとの本文の行
+ */
+function tocLinks(keys, body) {
+  const links = body.map(() => ({ hit: 0, entries: 0, match: 0, matchY: 1, matchFirst: 0, indent: null, depth: null }));
+  for (const [tocPage, lines] of body.entries()) {
+    const entries = tocEntries(lines);
+    if (!isToc(entries)) continue;
+    const indents = [...new Set(entries.map((entry) => Math.round(entry.x0 * 50)))].sort((a, b) => a - b);
+    // 目次の頁そのものは指さない（目次の頁の頁番号と同じ頁番号の項目——部の目次の 1 頁と、部の最初の 1 頁——で）。
+    let from = tocPage + 1;
+    for (const entry of entries) {
+      const plain = !entry.ref.includes('-');
+      const target = keys.findIndex(
+        (key, page) =>
+          page >= from &&
+          key !== null &&
+          (plain ? key.number === lastNumber(entry.ref) : key.full === entry.ref || key.full.endsWith(`-${entry.ref}`))
+      );
+      if (target < 0) continue;
+      from = target;
+      const link = links[target];
+      link.hit = 1;
+      link.entries++;
+      link.indent = Math.min(link.indent ?? 2, indents.indexOf(Math.round(entry.x0 * 50)), 2);
+      const depth = numberingDepth(entry.title);
+      if (depth > 0) link.depth = Math.min(link.depth ?? depth, depth);
+      const grams = letterGrams(entry.title);
+      const content = body[target].filter((line) => line.text.replace(/[^\p{L}]/gu, '').length > 1);
+      content.forEach((line, k) => {
+        if (line.text.length > TOC_TITLE_LINE) return;
+        const score = dice(grams, letterGrams(line.text));
+        if (score <= link.match) return;
+        link.match = score;
+        link.matchY = line.y;
+        link.matchFirst = k === 0 ? 1 : 0;
+      });
+    }
+  }
+  const shallowest = Math.min(...links.map((link) => link.depth ?? Infinity));
+  return links.map((link) => ({ ...link, depth: link.depth === null ? null : link.depth - shallowest }));
+}
+
+/** 頁番号（前の段とつないだもの）。頁番号の構造（版 5 から）か、頁のラベルの頭の数から。 */
+function pageKey(page) {
+  const numbering = page.numbering;
+  if (numbering && Number.isFinite(numbering.number)) {
+    return { number: numbering.number, full: [...(numbering.prefix ?? []), numbering.number].join('-') };
+  }
+  const found = page.label.match(/^-?\d+(?:-\d+)*/);
+  return found ? { number: lastNumber(found[0]), full: found[0] } : null;
+}
+
 function median(values) {
   if (!values.length) return 0;
   const sorted = values.slice().sort((x, y) => x - y);
@@ -93,6 +214,7 @@ export function measurePages(pages) {
   const typical = median(body.map((ls) => median(ls.map((line) => line.h))).filter((h) => h > 0)) || 0.01;
   const typicalBytes = median(pages.map((page) => page.bytes).filter((bytes) => bytes > 0)) || 1;
   const styles = headingStyles(body, typical);
+  const links = tocLinks(pages.map(pageKey), body);
   return pages.map((page, index) => {
     const ls = body[index];
     const chars = ls.reduce((sum, line) => sum + line.text.replace(/\s/g, '').length, 0);
@@ -134,6 +256,7 @@ export function measurePages(pages) {
       number,
       bytes: Math.log((page.bytes || typicalBytes) / typicalBytes),
       ...styles[index],
+      toc: links[index],
     };
   });
 }
@@ -266,6 +389,16 @@ export const FEATURE_NAMES = [
   'bestY',
   'bestInSequence',
   'bestIsFirst',
+  'tocHit',
+  'tocEntries',
+  'tocMatch',
+  'tocMatchY',
+  'tocMatchFirst',
+  'tocIndent0',
+  'tocIndent1',
+  'tocDepth0',
+  'tocDepth1',
+  'tocDepth2',
 ];
 
 /** 柱の番号が、前の柱のある頁（CONTEXT まで）に無い番号に変わったか（0 か 1）。 */
@@ -358,6 +491,16 @@ export function featureVectors(pages) {
       m.bestY,
       m.bestInSequence,
       m.bestIsFirst,
+      m.toc.hit,
+      Math.log1p(m.toc.entries),
+      m.toc.match,
+      m.toc.matchY,
+      m.toc.matchFirst * m.toc.match,
+      depthIs(0, m.toc.indent),
+      depthIs(1, m.toc.indent),
+      depthIs(0, m.toc.depth),
+      depthIs(1, m.toc.depth),
+      depthIs(2, m.toc.depth),
     ];
   });
 }

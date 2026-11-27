@@ -4,6 +4,8 @@
 //
 // 一覧.json は [{"book": "本の名前", "data": "学習データ.json", "labels": "正解.json"}, …]
 // （パスは一覧からの相対）。同じ本の別のファイル（章ごとと結合版など）は、同じ book にする。
+// 正解の unknown（[{page, end}]）の頁は、学ぶのにも頁ごとの当たり方にも数えない（分ける位置の当たり方は、
+// その頁に深い単位が無いものとして正解から求めるので、目安）。
 // 1 冊ずつ外して学び、外した本で確かめ（頁ごとの当たり方と、上限 40 MB で求めた分ける位置の
 // 当たり方）、そのあと全部で学んだ重みを --write で src/pdf-book-merger/split-model.json に
 // 書く。学習データ・正解は業務の資料を含むので、リポジトリには入れない（重みは数だけ）。
@@ -27,17 +29,18 @@ const entries = JSON.parse(readFileSync(listPath, 'utf8')).map((entry) => {
   if (!(data.version >= 4)) throw new Error(`${entry.data} は版 ${data.version} です。版 4 で保存し直してください`);
   const labels = JSON.parse(readFileSync(resolve(base, entry.labels), 'utf8'));
   const { top, mid } = pageTargets(labels.units, data.pages.length);
-  return { book: entry.book, name: entry.data, pages: data.pages, rows: featureVectors(data.pages), top, mid };
+  // 正解の分からない頁（文字化けなどで、深い単位が始まるかが分からない頁）は、学ぶのにも確かめるのにも数えない。
+  const known = data.pages.map(() => true);
+  for (const range of labels.unknown ?? []) for (let p = range.page; p < range.end; p++) known[p] = false;
+  return { book: entry.book, name: entry.data, pages: data.pages, rows: featureVectors(data.pages), top, mid, known };
 });
 const books = [...new Set(entries.map((entry) => entry.book))];
 const classes = MAX_DEPTH + 1;
 
 function train(set) {
-  const rows = set.flatMap((entry) => entry.rows);
-  return {
-    top: trainSoftmax(rows, set.flatMap((entry) => entry.top), classes),
-    mid: trainSoftmax(rows, set.flatMap((entry) => entry.mid), classes),
-  };
+  const pick = (key) => set.flatMap((entry) => entry[key].filter((_, p) => entry.known[p]));
+  const rows = pick('rows');
+  return { top: trainSoftmax(rows, pick('top'), classes), mid: trainSoftmax(rows, pick('mid'), classes) };
 }
 
 /** 当たり方を数える（頁ごと: 頭から始まる単位の有無と深さ。分ける位置: 正解から求めた位置との一致）。 */
@@ -46,6 +49,7 @@ function evaluate(model, entry) {
   const mid = predictSoftmax(model.mid, entry.rows).map(argmax);
   const count = { tp: 0, fp: 0, fn: 0, depthOk: 0 };
   top.forEach((depth, p) => {
+    if (!entry.known[p]) return;
     const truth = entry.top[p];
     if (depth && truth) {
       count.tp++;

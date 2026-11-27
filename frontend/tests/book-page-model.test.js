@@ -119,6 +119,84 @@ describe('featureVectors（頁ごとの特徴）', () => {
     expect(m[4]).toMatchObject({ bestLevel: 5, bestY: 1, bestInSequence: 0 });
   });
 
+  it('目次の項目を、その頁番号の頁に対応付け、題の行・字下げ・番号の段を手掛かりにする', () => {
+    const toc = (text, y, x0 = 0.1) => line(text, y, 0.01, x0);
+    const pages = [
+      {
+        label: '前付(1) 頁',
+        bytes: 1,
+        items: [
+          toc('第1章 総論 …… 1', 0.1),
+          toc('1.1 概要 …… 1', 0.13, 0.15),
+          toc('1.2 材料 ………… 2', 0.16, 0.15),
+          toc('付録 ・・・ 3', 0.19),
+          toc('第2章 施工 99', 0.22),
+          toc('本 4', 0.25),
+        ],
+      },
+      { label: '表紙', bytes: 1, items: body },
+      { label: '1 頁', bytes: 1, items: [line('第1章 総論', 0.1, 0.03), line('1.1 概要', 0.15), ...body] },
+      {
+        label: '2 頁',
+        bytes: 1,
+        items: [line('本文の行です。'.repeat(13), 0.1), line('本文の材料の行です。', 0.3), line('1.2 材料', 0.5), ...body.slice(0, 3)],
+      },
+      { label: '3 頁', bytes: 1, items: [line('付録', 0.1), ...body] },
+    ];
+    const m = measurePages(pages);
+    expect(m.map((x) => x.toc.hit)).toEqual([0, 0, 1, 1, 1]);
+    // 「第1章」と「1.1」が同じ頁を指す。字下げのいちばん浅い段・番号のいちばん浅い段（本の目次で 1 段）が 0。
+    expect(m[2].toc).toMatchObject({ entries: 2, indent: 0, depth: 0, match: 1, matchY: 0.1, matchFirst: 1 });
+    // 題の行が頁の途中にある。長すぎる行は比べない。
+    expect(m[3].toc).toMatchObject({ entries: 1, indent: 1, depth: 1, matchY: 0.5, matchFirst: 0 });
+    expect(m[3].toc.match).toBeGreaterThan(0.5);
+    // 番号の無い項目は、番号の段が分からない。
+    expect(m[4].toc).toMatchObject({ indent: 0, depth: null });
+    const rows = featureVectors(pages);
+    const at = (row, name) => row[FEATURE_NAMES.indexOf(name)];
+    expect([at(rows[2], 'tocHit'), at(rows[2], 'tocIndent0'), at(rows[2], 'tocDepth0'), at(rows[2], 'tocMatchFirst')]).toEqual([1, 1, 1, 1]);
+    expect([at(rows[3], 'tocIndent1'), at(rows[3], 'tocDepth1'), at(rows[3], 'tocDepth2')]).toEqual([1, 1, 0]);
+    expect(at(rows[0], 'tocMatchY')).toBe(1);
+  });
+
+  it('目次の頁番号は、前の段とつないだ頁番号（「1-3」）で探し、前の項目の頁から後ろで探す', () => {
+    const numbered = (number, prefix, items = body) => ({
+      label: '見ない',
+      bytes: 1,
+      items,
+      numbering: { role: 'body', number, prefix, part: null },
+    });
+    const pages = [
+      numbered(1, [1], [
+        line('目次の頁 1-1', 0.07),
+        line('1.1 適用範囲 P 1-3', 0.1),
+        line('1.2 用語 P 1-3', 0.13),
+        line('2.1 構造 P1-2', 0.16),
+        line('付 資料 P 2-1', 0.19),
+        line('別冊 2-2', 0.22),
+        line('別表 2-2', 0.25),
+      ]),
+      numbered(2, [1]),
+      numbered(3, [1]),
+      numbered(1, [2]),
+      numbered(2, [6, 2]),
+      numbered(null, null),
+    ];
+    const m = measurePages(pages);
+    // 目次の頁そのもの（1-1）は指さない。「P1-2」は前の項目（1-3）より前を指すので見つからない。段が変わる（1-3 → 2-1）のは戻ってよい。
+    // 「2-2」は前の段をつないだ「6-2-2」の後ろの部分として見つかる。
+    expect(m.map((x) => x.toc.hit)).toEqual([0, 0, 1, 1, 1, 0]);
+  });
+
+  it('頁番号が前の項目から戻る項目の多い頁・項目の少ない頁は、目次とみなさない', () => {
+    const page = (texts) => ({ label: '9 頁', bytes: 1, items: texts.map((text, k) => line(text, 0.1 + k * 0.03)) });
+    const targets = Array.from({ length: 5 }, (_, k) => ({ label: `${k + 1} 頁`, bytes: 1, items: body }));
+    expect(measurePages([page(['表の行 5', '表の行 3', '表の行 1', '表の行 4']), ...targets]).map((x) => x.toc.hit)).toEqual([
+      0, 0, 0, 0, 0, 0,
+    ]);
+    expect(measurePages([page(['一つ目 1', '二つ目 2']), ...targets]).map((x) => x.toc.hit)).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+
   it('大きさの分からない頁・行の無い頁があっても測れる', () => {
     // 日本語だけの行も、最初の行として見る。
     const title = measurePages([{ label: '1 頁', bytes: 1, items: [line('保有水平耐力計算等の構造計算', 0.3, 0.03), line('6.1 許容', 0.5)] }]);
