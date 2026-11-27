@@ -145,20 +145,15 @@ describe('startPage', () => {
     // 残して画面全体を操作できなくしない）。開いたままでないものは触らない。
     document.body.insertAdjacentHTML(
       'beforeend',
-      '<dialog id="late"></dialog><div id="other"></div><portal-header><dialog id="menu"></dialog></portal-header>'
+      '<dialog id="late"></dialog><div id="other"></div>'
     );
     const late = document.getElementById('late');
     late.close = vi.fn(() => late.removeAttribute('open'));
     late.setAttribute('open', '');
     document.getElementById('other').setAttribute('open', '');
-    // ポータル共通のヘッダーのものは閉じない。
-    const menu = document.getElementById('menu');
-    menu.close = vi.fn();
-    menu.setAttribute('open', '');
     await settle();
     expect(late.close).toHaveBeenCalledTimes(1);
     expect(late.hasAttribute('open')).toBe(false);
-    expect(menu.close).not.toHaveBeenCalled();
     // 理由は専用の欄に出す（#message は動いている途中の処理が書き換えるため）。
     const refusal = document.getElementById('refusal');
     expect(refusal.textContent).toBe('このアプリは許可されたアカウント専用です。');

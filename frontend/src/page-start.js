@@ -148,14 +148,7 @@ function closeApp(reason) {
   for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
   new MutationObserver((changes) => {
     for (const { target } of changes) {
-      // ポータル共通のヘッダー（アカウントのメニューなど）のものは閉じない。
-      if (
-        target instanceof HTMLDialogElement &&
-        target.open &&
-        !target.closest('portal-header')
-      ) {
-        target.close();
-      }
+      if (target instanceof HTMLDialogElement && target.open) target.close();
     }
   }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] });
 }
