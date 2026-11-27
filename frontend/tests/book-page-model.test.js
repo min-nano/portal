@@ -97,6 +97,28 @@ describe('featureVectors（頁ごとの特徴）', () => {
     expect(rows.map((row) => at(row, 'numberRestart'))).toEqual([0, 0, 0, 1, 0]);
   });
 
+  it('本の中の見出しの形の繰り返しから、見出しの段（字の大きい順、同じなら番号の段の浅い順）を推定する', () => {
+    const at = (y, text, h = 0.01) => line(text, y, h);
+    const bodyLines = (from) => Array.from({ length: 8 }, (_, k) => at(from + k * 0.03, '本文の行です。本文の行です。'));
+    const pages = [
+      { label: '1 頁', bytes: 1, items: [at(0.1, '第1章 総論', 0.03), at(0.2, '1.1 概要', 0.015), at(0.25, '(1) 手順'), at(0.28, '1.1.1 細目'), ...bodyLines(0.4)] },
+      { label: '2 頁', bytes: 1, items: [at(0.1, '1.2 材料', 0.015), at(0.2, '(2) 手順'), at(0.25, '1.1.2 細目'), ...bodyLines(0.4)] },
+      { label: '3 頁', bytes: 1, items: [at(0.1, '第2章 施工', 0.03), at(0.2, '2.1 下地', 0.015), ...bodyLines(0.4)] },
+      { label: '4 頁', bytes: 1, items: [...bodyLines(0.1), at(0.5, '2.2 仕上げ', 0.015), at(0.6, '2.5 飛んだ番号', 0.015)] },
+      // 目次の項目の形（頁番号で終わる行）は数えない。
+      { label: '5 頁', bytes: 1, items: [at(0.1, '第9章 付録 …… 99', 0.03), ...bodyLines(0.4)] },
+    ];
+    const m = measurePages(pages);
+    // 章（いちばん大きな字）が段 0、節が段 1。番号の続く「(1)」と「1.1.1」は字の大きさが同じなので、段の浅い「(1)」が上。
+    expect(m.map((x) => x.bestLevel)).toEqual([0, 1, 0, 1, 5]);
+    expect(m[0]).toMatchObject({ bestIsFirst: 1, bestInSequence: 1, firstLevel: 0, firstInSequence: 1, firstStyleSequential: 1 });
+    expect(m[1]).toMatchObject({ firstLevel: 1, firstInSequence: 1, bestY: 0.1 });
+    // 頁の頭が本文の行なら、最初の行の形は無い。飛んだ番号は順に進んでいない。
+    expect(m[3]).toMatchObject({ firstLevel: 5, firstStyleCount: 0, firstStyleSequential: 0, bestIsFirst: 0, bestY: 0.5 });
+    expect(m[3].bestInSequence).toBe(1);
+    expect(m[4]).toMatchObject({ bestLevel: 5, bestY: 1, bestInSequence: 0 });
+  });
+
   it('大きさの分からない頁・行の無い頁があっても測れる', () => {
     // 日本語だけの行も、最初の行として見る。
     const title = measurePages([{ label: '1 頁', bytes: 1, items: [line('保有水平耐力計算等の構造計算', 0.3, 0.03), line('6.1 許容', 0.5)] }]);

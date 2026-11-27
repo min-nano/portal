@@ -12,7 +12,7 @@
 import { groupLines } from './page-numbers.js';
 
 /** 頁の上下の余白の帯（柱・頁番号）とみなす高さ（頁の高さに対する割合）。 */
-const BAND = 0.075;
+const BAND = 0.06;
 
 /** 番号らしい形（頭の 8 字までの言葉と、点・ハイフンで続く数）。言葉そのものは見ない。 */
 const NUMBERING = /^\s*[^\s\d]{0,8}?\s*([0-9０-９]+(?:\s*[.．\-−－‐ー一]\s*[0-9０-９]+)*)/;
@@ -92,6 +92,7 @@ export function measurePages(pages) {
   // 本の本文の字の高さ（頁ごとの行の高さの中央値の、さらに中央値）。
   const typical = median(body.map((ls) => median(ls.map((line) => line.h))).filter((h) => h > 0)) || 0.01;
   const typicalBytes = median(pages.map((page) => page.bytes).filter((bytes) => bytes > 0)) || 1;
+  const styles = headingStyles(body, typical);
   return pages.map((page, index) => {
     const ls = body[index];
     const chars = ls.reduce((sum, line) => sum + line.text.replace(/\s/g, '').length, 0);
@@ -132,8 +133,93 @@ export function measurePages(pages) {
       prefix: numbering?.prefix ? numbering.prefix.join('-') : null,
       number,
       bytes: Math.log((page.bytes || typicalBytes) / typicalBytes),
+      ...styles[index],
     };
   });
+}
+
+/** 目次の項目の形（点線か空白のあとの頁番号で終わる行）。 */
+const TOC_LIKE = /(?:[.．…・]{2,}|\s)\d{1,4}$/;
+
+/** 見出しの形の段の数の上限（これより下の段と、段の分からない形は、この数にする）。 */
+const LEVELS = 5;
+
+/** 見出しの形が順に進むとみなす、順に進んだ出現の割合の下限。 */
+const SEQUENTIAL = 0.6;
+
+/**
+ * 本の中の見出しの形の繰り返し（決まった言葉に頼らず、その本の中から見出しの作りを読む）。
+ * 見出しらしい行（短く、番号らしい形で始まるか、本文より大きな字の行）を、形——番号の前の
+ * 言葉・番号の段の数・字の大きさ（本文に対する比。4 分の 1 刻み）——でまとめ、形ごとに、本の中で
+ * 何度出るか、番号が前の同じ形の行から順に進むか（最後の段が 1 つ進むか、1 に戻る）、頁の最初の行として出るか、を数える。順に進む形を字の大きい順に並べ、その本の
+ * 中での段（0 がいちばん上）とする。頁ごとに、最初の行の形と、いちばん上の段の行を返す。
+ *
+ * @param {{text:string, x0:number, y:number, h:number}[][]} body 頁ごとの本文の行
+ * @param {number} typical 本文の字の高さ
+ */
+function headingStyles(body, typical) {
+  const stats = new Map();
+  const previous = new Map();
+  const occurrences = body.map((ls) => {
+    const first = ls.find((line) => line.text.replace(/[^\p{L}\p{N}]/gu, '').length > 1) ?? null;
+    return ls
+      // 目次の項目の形（頁番号で終わる行）は、見出しの並びを乱すので数えない。
+      .filter((line) => line.text.length <= 60 && !TOC_LIKE.test(line.text))
+      .flatMap((line) => {
+        const parts = numberingParts(line.text);
+        const height = Math.round((line.h / typical) * 4) / 4;
+        if (!parts.length && height < 1.2) return [];
+        const word = parts.length ? line.text.replace(MARGIN_LINE_NUMBER, '').match(/^\s*([^\d０-９]*)/)[1].trim() : '';
+        const key = [word, parts.length, height].join('|');
+        const numbers = parts.map(Number);
+        const before = previous.get(key);
+        const inSequence = parts.length > 0 && followsAfter(before, numbers);
+        if (parts.length) previous.set(key, numbers);
+        const stat = stats.get(key) ?? { count: 0, sequential: 0, first: 0, height, depth: parts.length };
+        stat.count++;
+        stat.sequential += inSequence ? 1 : 0;
+        stat.first += line === first ? 1 : 0;
+        stats.set(key, stat);
+        return [{ key, line, inSequence, isFirst: line === first }];
+      });
+  });
+  // 順に進む形（2 度以上出て、順に進む出現が多いもの）を、字の大きい順（同じなら段の浅い順）に並べる。
+  const ordered = [...stats.entries()]
+    .filter(([, stat]) => stat.count >= 2 && stat.sequential / stat.count >= SEQUENTIAL)
+    .sort(([, a], [, b]) => b.height - a.height || a.depth - b.depth);
+  const level = new Map(ordered.map(([key], rank) => [key, Math.min(rank, LEVELS)]));
+  return occurrences.map((found) => {
+    const first = found.find((occurrence) => occurrence.isFirst);
+    const best = found.reduce((top, occurrence) => {
+      const own = level.get(occurrence.key) ?? LEVELS;
+      return own < (top ? (level.get(top.key) ?? LEVELS) : LEVELS + 1) ? occurrence : top;
+    }, null);
+    const stat = first ? stats.get(first.key) : null;
+    return {
+      firstStyleCount: stat ? Math.log1p(stat.count) : 0,
+      firstStyleSequential: stat ? stat.sequential / stat.count : 0,
+      firstInSequence: first?.inSequence ? 1 : 0,
+      firstLevel: first ? (level.get(first.key) ?? LEVELS) : LEVELS,
+      bestLevel: best ? (level.get(best.key) ?? LEVELS) : LEVELS,
+      bestY: best ? best.line.y : 1,
+      bestInSequence: best?.inSequence ? 1 : 0,
+      bestIsFirst: best?.isFirst ? 1 : 0,
+    };
+  });
+}
+
+/**
+ * 番号が、前の同じ形の番号から順に進んだか（前の段が同じで最後の段が 1 つ進むか、最後の段が
+ * 1 に戻る——前の段が進んだか、章が変わって 01 に戻った）。前が無ければ、最後の段が 1 以下なら順。
+ */
+function followsAfter(before, numbers) {
+  const last = numbers.at(-1);
+  if (!before) return last <= 1;
+  const head = numbers.slice(0, -1);
+  const beforeHead = before.slice(0, -1);
+  // 最後の段が 1 に戻るのは、前の段が進んだか、段が 1 つだけの番号（章が変わって 01 に戻る）とき。
+  if (last === 1) return true;
+  return head.every((part, k) => part === beforeHead[k]) && last === before.at(-1) + 1;
 }
 
 /** 特徴の名前（重みの並びと同じ順）。 */
@@ -172,6 +258,14 @@ export const FEATURE_NAMES = [
   'nextHeadChange',
   'headNumberNew',
   'nextHeadNumberNew',
+  'firstStyleCount',
+  'firstStyleSequential',
+  'firstInSequence',
+  'firstLevel',
+  'bestLevel',
+  'bestY',
+  'bestInSequence',
+  'bestIsFirst',
 ];
 
 /** 柱の番号が、前の柱のある頁（CONTEXT まで）に無い番号に変わったか（0 か 1）。 */
@@ -256,6 +350,14 @@ export function featureVectors(pages) {
       next ? changes[index + 1] : 0,
       numbersNew[index],
       next ? numbersNew[index + 1] : 0,
+      m.firstStyleCount,
+      m.firstStyleSequential,
+      m.firstInSequence,
+      m.firstLevel,
+      m.bestLevel,
+      m.bestY,
+      m.bestInSequence,
+      m.bestIsFirst,
     ];
   });
 }
