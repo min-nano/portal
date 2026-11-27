@@ -82,7 +82,12 @@ jobs:
           # 任意。外部ユーザー（組織外のアカウント）を使わせるときだけ true にする
           # （README「外部ユーザー」）。値はバックエンドが true かどうかだけを見る。
           # 空白・改行・; は取り除く（残ると環境変数の受け渡しの書式が壊れる）。
-          allow_external=$(printf '%s' "$ALLOW_EXTERNAL_USERS" | tr -d '[:space:];')
+          allow_external=$(printf '%s' "$ALLOW_EXTERNAL_USERS" | tr -d '[:space:];' | tr '[:upper:]' '[:lower:]')
+          # 1・yes などと書くと黙ってオフになるので、空・true・false 以外は止める。
+          case "$allow_external" in
+            ''|true|false) ;;
+            *) echo "::error::ALLOW_EXTERNAL_USERS は空・true・false のどれかにしてください（今の値: $ALLOW_EXTERNAL_USERS）"; exit 1 ;;
+          esac
           if [ -n "$allow_external" ]; then
             env_vars="$env_vars;ALLOW_EXTERNAL_USERS=$allow_external"
           fi

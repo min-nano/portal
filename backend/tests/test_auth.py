@@ -165,6 +165,13 @@ def test_other_domains_are_refused_unless_enabled_exactly(monkeypatch, value):
     assert e.value.code == clerk_auth.ACCOUNT_NOT_ALLOWED
 
 
+def test_other_subaddresses_outside_the_staff_domain_are_external(monkeypatch):
+    # 独自ドメインで作った Google アカウントは、主のアドレスに + を含みうる。
+    monkeypatch.setenv("ALLOW_EXTERNAL_USERS", "true")
+
+    assert clerk_auth.verify_token(make_token(email="jane+portal@partner.example")).external
+
+
 def test_enabling_is_case_insensitive(monkeypatch):
     monkeypatch.setenv("ALLOW_EXTERNAL_USERS", " True ")
 
@@ -172,15 +179,24 @@ def test_enabling_is_case_insensitive(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "email", ["x+clerk_test@example.co.jp", "Tester+a@Example.co.jp", "x+clerk_test@gmail.com"]
+    "email",
+    [
+        "x+clerk_test@example.co.jp",
+        "Tester+a@Example.co.jp",
+        "x+clerk_test@gmail.com",
+        "example.co.jp",
+        "@example.co.jp",
+        "someone@",
+    ],
 )
 @pytest.mark.parametrize("external", ["", "true"])
-def test_subaddresses_are_refused(monkeypatch, email, external):
+def test_subaddresses_and_malformed_addresses_are_refused(monkeypatch, email, external):
     # 社員+x@ 宛てのメールは社員本人に届くので、そのサブアドレスで個人の
     # Google アカウントを作られうる（同意画面が「外部」だと Google ログインも
     # 通る）。Clerk のテストモードの +clerk_test も同じ。Workspace のアドレスに
     # + は無いので、社内ドメインでは + を通さない（外部ユーザーとしても通さない）。
     # 社外の +clerk_test も、外部ユーザーを通す環境でメール無しで入られないよう断る。
+    # @ の前後が欠けたアドレスも、社内・社外の判定をせずに断る。
     monkeypatch.setenv("ALLOW_EXTERNAL_USERS", external)
     with pytest.raises(AuthError) as e:
         clerk_auth.verify_token(make_token(email=email))

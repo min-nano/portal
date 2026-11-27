@@ -153,19 +153,26 @@ def verify_token(token: str) -> User:
         raise AuthError("サーバーの認証設定（ALLOWED_EMAIL_DOMAINS）が未設定です。", 500)
 
     local_part, _, email_domain = email.lower().rpartition("@")
-    # + を含むアドレス（サブアドレス）は、社内・社外を問わず通さない。Google
-    # アカウントの主のアドレスにも Workspace のアドレスにも + は無いので、正規の
-    # 利用者は困らない。一方、社員+x@社内ドメイン 宛てのメールは社員本人（や、
-    # そのメールを読める人）に届くのでそのサブアドレスで個人の Google アカウントを
-    # 作られうるし、Clerk のテストモード（開発インスタンスは既定でオン）では
-    # +clerk_test のアドレスがメールを受け取らずに固定のコードで登録できる。
-    # 主な守りは README「外部ユーザー」の前提の表（1〜7）で、これは二重の守り
-    # （別名やキャッチオールは防げない）。
-    if "+" in local_part:
+    if not local_part or not email_domain:
         raise _not_allowed(email)
 
     if email_domain in [d.lower() for d in domains]:
+        # 社内ドメインでも、+ を含むアドレス（サブアドレス）は通さない（外部
+        # ユーザーにもしない）。Workspace のアドレスには + を使えないので社員は
+        # 困らない。一方、社員+x@社内ドメイン 宛てのメールは社員本人（や、そのメールを
+        # 読める人）に届くので、そのサブアドレスで個人の Google アカウントを作られ
+        # うる。主な守りは README「外部ユーザー」の前提の表（1〜7）で、これは二重の
+        # 守り（別名やキャッチオールは防げない）。
+        if "+" in local_part:
+            raise _not_allowed(email)
         return User(email=email, external=False)
+
+    # Clerk のテストモード（開発インスタンスは既定でオン）では、+clerk_test を
+    # 含むアドレスがメールを受け取らずに固定のコードで登録できる。外部ユーザーを
+    # 通す環境で、それで入られないようにする（社外の + 全般は、独自ドメインで
+    # 作った Google アカウントにありうるので断らない）。
+    if "+clerk_test" in local_part:
+        raise _not_allowed(email)
 
     # 社内ドメイン以外は、外部ユーザーを使わせる環境でだけ通す。誰が
     # サインインできるかは Clerk（Invite-only）が決める。
