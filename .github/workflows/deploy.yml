@@ -81,8 +81,10 @@ jobs:
           env_vars="$env_vars;SETTINGS_CHANNEL_PATH=static-channels/production"
           # 任意。外部ユーザー（組織外のアカウント）を使わせるときだけ true にする
           # （README「外部ユーザー」）。値はバックエンドが true かどうかだけを見る。
-          if [ -n "$ALLOW_EXTERNAL_USERS" ]; then
-            env_vars="$env_vars;ALLOW_EXTERNAL_USERS=$ALLOW_EXTERNAL_USERS"
+          # 空白・改行・; は取り除く（残ると環境変数の受け渡しの書式が壊れる）。
+          allow_external=$(printf '%s' "$ALLOW_EXTERNAL_USERS" | tr -d '[:space:];')
+          if [ -n "$allow_external" ]; then
+            env_vars="$env_vars;ALLOW_EXTERNAL_USERS=$allow_external"
           fi
           # 任意。既定の "(default)" 以外を使う場合だけリポジトリ変数を設定する。
           if [ -n "$FIRESTORE_DATABASE" ]; then

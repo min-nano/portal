@@ -15,8 +15,6 @@ def _csv(name: str) -> list[str]:
     return [v.strip() for v in os.environ.get(name, "").split(",") if v.strip()]
 
 
-
-
 def clerk_issuers() -> list[str]:
     """許可する Clerk の Frontend API の URL（JWT の iss。カンマ区切りで複数可）。
 

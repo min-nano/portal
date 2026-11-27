@@ -137,8 +137,10 @@ jobs:
           env_vars="$env_vars;SETTINGS_CHANNEL_PATH=preview-channels/pr-$PR"
           # 任意。プレビューで外部ユーザーを試すときだけ true にする
           # （ALLOW_EXTERNAL_USERS_PREVIEW）。
-          if [ -n "$ALLOW_EXTERNAL_USERS" ]; then
-            env_vars="$env_vars;ALLOW_EXTERNAL_USERS=$ALLOW_EXTERNAL_USERS"
+          # 空白・改行・; は取り除く（残ると環境変数の受け渡しの書式が壊れる）。
+          allow_external=$(printf '%s' "$ALLOW_EXTERNAL_USERS" | tr -d '[:space:];')
+          if [ -n "$allow_external" ]; then
+            env_vars="$env_vars;ALLOW_EXTERNAL_USERS=$allow_external"
           fi
           gcloud run deploy "portal-api-pr-$PR" \
             --source backend \

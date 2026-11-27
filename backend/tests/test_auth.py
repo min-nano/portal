@@ -171,13 +171,16 @@ def test_enabling_is_case_insensitive(monkeypatch):
     assert clerk_auth.verify_token(make_token(email="partner@gmail.com")).external
 
 
-@pytest.mark.parametrize("email", ["x+clerk_test@example.co.jp", "Tester+a@Example.co.jp"])
+@pytest.mark.parametrize(
+    "email", ["x+clerk_test@example.co.jp", "Tester+a@Example.co.jp", "x+clerk_test@gmail.com"]
+)
 @pytest.mark.parametrize("external", ["", "true"])
-def test_subaddresses_in_the_staff_domain_are_refused(monkeypatch, email, external):
+def test_subaddresses_are_refused(monkeypatch, email, external):
     # 社員+x@ 宛てのメールは社員本人に届くので、そのサブアドレスで個人の
     # Google アカウントを作られうる（同意画面が「外部」だと Google ログインも
     # 通る）。Clerk のテストモードの +clerk_test も同じ。Workspace のアドレスに
     # + は無いので、社内ドメインでは + を通さない（外部ユーザーとしても通さない）。
+    # 社外の +clerk_test も、外部ユーザーを通す環境でメール無しで入られないよう断る。
     monkeypatch.setenv("ALLOW_EXTERNAL_USERS", external)
     with pytest.raises(AuthError) as e:
         clerk_auth.verify_token(make_token(email=email))
