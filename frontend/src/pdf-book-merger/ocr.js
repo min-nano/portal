@@ -68,8 +68,11 @@ async function addWorker(Tesseract, scheduler) {
     await worker.setParameters({
       // 渡すのは切り出した短いかたまり 1 つずつなので、1 行として読む。
       tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
-      // 頁番号に出てくる文字だけ。和文を無理に英字として読ませない。
-      tessedit_char_whitelist: '0123456789-()',
+      // 頁番号に出てくる文字だけ（前付けのローマ数字の字も）。和文を無理に英字として読ませない。
+      // ローマ数字の字を足しても、数字の頁番号の読みは変わらなかった（合成した 1・11・4-26 などを
+      // 5 つの書体・3 通りの大きさで読み比べた）。x と X、v と V は取り違えるので、大文字・小文字は
+      // 問わずに読む（page-numbers.js）。
+      tessedit_char_whitelist: '0123456789-()ivxlcIVXLC',
       // 描いた細かさ（帯は 1 頁 2400px で描くので、およそ 300dpi）を伝える。
       // 伝えないと、読むたびに推定してその旨を出力する。
       user_defined_dpi: '300',
@@ -142,8 +145,8 @@ export async function releaseOcr() {
 // 3 通りの大きさで読んで多数決にする。
 const READ_HEIGHTS = [34, 20, 54];
 
-/** 頁番号として意味のある読み（数字を含み、数字と飾りだけ）。 */
-const NUMERIC = /^[-()]*\d[-()\d]*$/;
+/** 頁番号として意味のある読み（数字を含み数字と飾りだけのもの、ローマ数字の字と飾りだけのもの）。 */
+const NUMERIC = /^[-()]*(?:\d[-()\d]*|[ivxlcIVXLC]+[-()]*)$/;
 
 /**
  * かたまりを、周りに字の高さぶんの白い余白を付けて、指定の字の高さで描き出す。

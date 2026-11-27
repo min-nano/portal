@@ -21,6 +21,7 @@
 // pdf.js にも DOM にも触らない（テストで縛るため）。
 
 import { PRINT_COLUMNS, PRINT_ROWS, printSimilarity } from './image-checks.js';
+import { pageNumberText } from './page-numbers.js';
 import { fnv1a } from './text-layer.js';
 
 /** MinHash の数。多いほど見積もりが確かになる（64 で誤差はおよそ ±0.06）。 */
@@ -235,7 +236,10 @@ export function duplicateIssues(order, pairs, describe) {
   // 中身まで同じ頁（exact）は、部が違っても同じ頁（同じ束を 2 度入れて、部の始まりと見られたとき）。
   const readNumber = ({ entry }, exact) => {
     if (entry.role !== 'body' || entry.status !== 'detected') return null;
-    return exact ? `${entry.number}` : `${entry.part ?? 0}:${entry.number}`;
+    // 前の段（部・編などの番号）の違う頁は、番号が同じでも別の頁。中身まで同じ頁は、番号が戻った
+    // ところで分けたまとまり（6/）が違っても同じ頁（同じ束を 2 度入れて、分けたまとまりと見られた）。
+    const number = pageNumberText({ prefix: entry.prefix, number: entry.number, roman: entry.roman });
+    return exact ? number : `${entry.part ?? 0}:${number}`;
   };
   const issues = new Map();
   const groups = new Map(); // 頁 → 同じ頁らしい頁の集まり（並びの順）
