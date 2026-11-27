@@ -102,7 +102,7 @@ def test_the_drive_file_list_is_refused(external_client, drive):
     assert drive.delegated_emails == []
 
 
-def test_an_account_on_neither_list_is_refused_with_a_code(anon_client, monkeypatch):
+def test_a_refused_account_is_refused_with_a_code(anon_client, monkeypatch):
     """使えないアカウントは、目印（code）付きの 403 で断る。"""
 
     def refuse(authorization):

@@ -142,7 +142,7 @@ jobs:
           # 1・yes などと書くと黙ってオフになるので、空・true・false 以外は止める。
           case "$allow_external" in
             ''|true|false) ;;
-            *) echo "::error::ALLOW_EXTERNAL_USERS は空・true・false のどれかにしてください（今の値: $ALLOW_EXTERNAL_USERS）"; exit 1 ;;
+            *) echo "::error::ALLOW_EXTERNAL_USERS は空・true・false のどれかにしてください（今の値: $allow_external）"; exit 1 ;;
           esac
           if [ -n "$allow_external" ]; then
             env_vars="$env_vars;ALLOW_EXTERNAL_USERS=$allow_external"

@@ -187,6 +187,7 @@ def test_enabling_is_case_insensitive(monkeypatch):
         "example.co.jp",
         "@example.co.jp",
         "someone@",
+        "x@evil.example@example.co.jp",
     ],
 )
 @pytest.mark.parametrize("external", ["", "true"])

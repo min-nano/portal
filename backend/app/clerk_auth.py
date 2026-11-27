@@ -153,7 +153,7 @@ def verify_token(token: str) -> User:
         raise AuthError("サーバーの認証設定（ALLOWED_EMAIL_DOMAINS）が未設定です。", 500)
 
     local_part, _, email_domain = email.lower().rpartition("@")
-    if not local_part or not email_domain:
+    if email.count("@") != 1 or not local_part or not email_domain:
         raise _not_allowed(email)
 
     if email_domain in [d.lower() for d in domains]:
