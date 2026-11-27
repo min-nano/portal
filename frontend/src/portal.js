@@ -17,7 +17,7 @@ function showStartError(message) {
   gate.querySelector('.note').textContent = message;
 }
 
-// バックエンドは、外部ユーザーかを聞く（/api/me。答えは待たない）ために使う。
-// サインインの確認と同時に起こしておき、外部ユーザーに社内専用のツールが
-// 見えている時間を、起動待ちのぶん短くする。
+// バックエンドは、社内ユーザーかを確かめる（/api/me。答えは待たない）ために使う。
+// サインインの確認と同時に起こしておき、社内ユーザーに社内専用のツールが
+// 出てくるまでの時間を、起動待ちのぶん短くする。
 startPage({ usesApi: true, onError: showStartError });

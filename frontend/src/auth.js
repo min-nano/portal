@@ -145,11 +145,16 @@ export async function requireSignIn() {
   if (signOutBtn) {
     signOutBtn.addEventListener('click', async () => {
       signingOut = true;
-      await clerk.signOut();
-      // 社内ユーザーと確かめたアドレスを、共用の端末に残さない（account.js）。
-      // サインアウトが済んでから消す（その間に届いた /api/me の答えが書き戻しても、
-      // ここで消える）。
+      // 社内ユーザーと確かめたアドレスを、共用の端末に残さない（account.js。
+      // 一度忘れたら、取り直し中の /api/me の答えが後から届いても書き戻さない）。
+      // サインアウトに失敗しても消して、読み込み直す（読み込み直した先で、
+      // まだサインインしていればそのまま、済んでいればサインイン画面になる）。
       forgetRememberedAccount();
+      try {
+        await clerk.signOut();
+      } catch {
+        // 読み込み直せば、Clerk が今の状態から出し直す。
+      }
       window.location.reload();
     });
   }

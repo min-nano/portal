@@ -62,8 +62,13 @@ function readRemembered(storage) {
   }
 }
 
+// このページで一度忘れたら（サインアウトしたら）、もう覚えない。取り直し中の
+// /api/me の答えが後から届いても、消したアドレスを書き戻さないため。
+let forgotten = false;
+
 /** 社内ユーザーと確かめたアドレスを覚える（email が無ければ忘れる）。 */
 function remember(email, storage) {
+  if (email && forgotten) return;
   try {
     if (email) storage.setItem(CACHE_KEY, JSON.stringify({ email }));
     else storage.removeItem(CACHE_KEY);
@@ -74,6 +79,7 @@ function remember(email, storage) {
 
 /** 覚えたアドレスを忘れる（サインアウトのとき。共用の端末にアドレスを残さない）。 */
 export function forgetRememberedAccount(storage = deviceStorage()) {
+  forgotten = true;
   remember(null, storage);
 }
 

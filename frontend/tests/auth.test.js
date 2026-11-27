@@ -57,11 +57,13 @@ vi.mock('@clerk/clerk-js', () => ({
 
     async signOut() {
       signedOut = true;
+      if (signOutFails) throw new Error('通信に失敗しました。');
     }
   },
 }));
 
 let signedOut = false;
+let signOutFails = false;
 let sessionListener = null;
 
 const PAGE = `
@@ -169,6 +171,27 @@ describe('requireSignIn（サインイン済み）', () => {
 
     expect(localStorage.getItem('portal.account')).toBeNull();
     expect(signedOut).toBe(true);
+  });
+
+  it('サインアウトに失敗しても、覚えたアドレスは消す', async () => {
+    document.body.innerHTML = '';
+    const { requireSignIn } = await loadAuthModule();
+    document.body.insertAdjacentHTML(
+      'afterbegin',
+      '<portal-header class="portal-header"></portal-header>'
+    );
+    signedInUser = { primaryEmailAddress: { emailAddress: 'taro@example.com' } };
+    localStorage.setItem('portal.account', JSON.stringify({ email: 'taro@example.com' }));
+    signOutFails = true;
+    try {
+      await requireSignIn();
+      document.getElementById('signOutBtn').click();
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+      expect(localStorage.getItem('portal.account')).toBeNull();
+    } finally {
+      signOutFails = false;
+    }
   });
 
   it('別のタブでのサインアウトなどでセッションが消えても、覚えたアドレスを消す', async () => {

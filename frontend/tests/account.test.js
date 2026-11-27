@@ -14,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const apiGet = vi.fn();
 vi.mock('../src/api.js', () => ({ apiGet: (...args) => apiGet(...args) }));
 
-const { RETRY_DELAYS_MS, checkAccount, forgetRememberedAccount, showRememberedAccount } = await import(
+const { RETRY_DELAYS_MS, checkAccount, showRememberedAccount } = await import(
   '../src/account.js'
 );
 
@@ -191,12 +191,31 @@ describe('checkAccount', () => {
 });
 
 describe('forgetRememberedAccount', () => {
-  it('覚えたアドレスを忘れる', () => {
+  // 「忘れた」印はページ（モジュール）ごとに持つので、ほかのテストに残らないよう
+  // ここでは読み込み直したものを使う。
+  async function freshModule() {
+    vi.resetModules();
+    return import('../src/account.js');
+  }
+
+  it('覚えたアドレスを忘れる', async () => {
+    const { forgetRememberedAccount: forget } = await freshModule();
     const storage = memoryStorage({ 'portal.account': JSON.stringify({ email: 'a@example.co.jp' }) });
 
-    forgetRememberedAccount(storage);
+    forget(storage);
 
     expect(storage.items.has('portal.account')).toBe(false);
+  });
+
+  it('忘れた後に届いた答えでは、もう覚えない（サインアウト中の書き戻しを防ぐ）', async () => {
+    const { forgetRememberedAccount: forget, checkAccount: check } = await freshModule();
+    const storage = memoryStorage();
+    apiGet.mockResolvedValue({ email: 'a@example.co.jp', external: false });
+
+    forget(storage);
+    expect(await check(document, noWait, storage)).toBe('internal');
+
+    expect(storage.setItem).not.toHaveBeenCalled();
   });
 });
 
