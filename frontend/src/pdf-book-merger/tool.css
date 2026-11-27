@@ -25,6 +25,22 @@
   gap: var(--s-2);
 }
 
+/* URL の入力欄と「追加」のボタン（くっつけず、少し空ける）。 */
+.bm-url {
+  margin-top: var(--s-3);
+}
+
+.bm-url .field-row {
+  gap: var(--s-2);
+}
+
+.bm-url textarea {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  resize: vertical;
+}
+
 .bm-progress {
   display: flex;
   align-items: center;

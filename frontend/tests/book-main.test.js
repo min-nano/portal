@@ -68,6 +68,7 @@ const mocks = vi.hoisted(() => ({
   prepare: null,
   pickFiles: vi.fn(),
   downloadDriveFile: vi.fn(),
+  downloadUrlFile: vi.fn(),
   prepareOcr: vi.fn(),
   readStrip: vi.fn(),
   releaseOcr: vi.fn(),
@@ -93,6 +94,11 @@ vi.mock('../src/drive-picker.js', () => ({
 }));
 vi.mock('../src/pdf-book-merger/drive-download.js', () => ({
   downloadDriveFile: (...args) => mocks.downloadDriveFile(...args),
+}));
+vi.mock('../src/pdf-book-merger/url-download.js', async (importOriginal) => ({
+  // URL の読み分け・名前の付け方は本物を使う。
+  ...(await importOriginal()),
+  downloadUrlFile: (...args) => mocks.downloadUrlFile(...args),
 }));
 vi.mock('../src/pdf-book-merger/scan-images.js', () => ({
   findScanImages: (...args) => mocks.findScanImages(...args),
@@ -2015,6 +2021,75 @@ describe('ファイルを足して並べる', () => {
     Object.defineProperty($('localInput'), 'files', { value: [file('猫_奇数.pdf', pdf(ODD))], configurable: true });
     $('localInput').dispatchEvent(new Event('change'));
     await settled(1);
+  });
+
+  describe('URL から追加', () => {
+    const submitUrls = (text) => {
+      $('urlInput').value = text;
+      $('urlForm').dispatchEvent(new Event('submit', { cancelable: true }));
+    };
+
+    it('空白・改行で区切った URL を入れた順に足し、この端末が直接読む', async () => {
+      mocks.downloadUrlFile.mockImplementation(async (url, { reserve }) => {
+        await reserve(0); // 大きさが分からない（枠をまるごと取るので、1 つずつ読む）
+        return pdf(url.endsWith('odd.pdf') ? ODD : EVEN);
+      });
+      submitUrls(' https://example.com/scans/odd.pdf\nhttps://example.com/%E5%81%B6%E6%95%B0 ');
+      expect($('urlInput').value).toBe(''); // 足したら空にする
+      await settled(2);
+      expect(mocks.downloadUrlFile.mock.calls.map(([url]) => url)).toEqual([
+        'https://example.com/scans/odd.pdf',
+        'https://example.com/%E5%81%B6%E6%95%B0',
+      ]);
+      expect(fileItem('odd.pdf')).toBeTruthy();
+      expect(fileItem('偶数.pdf')).toBeTruthy(); // 名前は URL の最後の部分から（.pdf を付ける）
+      $('logBox').open = true;
+      $('logBox').dispatchEvent(new Event('toggle'));
+      expect($('logText').textContent).toContain('「odd.pdf」を追加しました（https://example.com/scans/odd.pdf）');
+
+      // 同じ URL は 2 度足さない。
+      submitUrls('https://example.com/scans/odd.pdf');
+      expect($('message').textContent).toBe('「https://example.com/scans/odd.pdf」はすでに追加してあります。');
+      expect(document.querySelectorAll('#fileList .bm-file')).toHaveLength(2);
+    });
+
+    it('届いた割合をストライプに描く', async () => {
+      let release;
+      mocks.downloadUrlFile.mockImplementation(async (url, { onProgress, reserve }) => {
+        await reserve(100);
+        await vi.waitFor(() => expect($('progressText').textContent).toBe('ファイルを調べています（1 / 1）'));
+        onProgress(25, 100);
+        await new Promise((done) => (release = done));
+        onProgress(100, 100);
+        return pdf(ODD);
+      });
+      submitUrls('https://example.com/odd.pdf');
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+      expect($('progressLoaded').hidden).toBe(false);
+      expect($('progressLoaded').style.width).toBe('25%');
+      release();
+      await settled(1);
+    });
+
+    it('http・https でないものがあれば、どれも足さずに知らせる。空なら何もしない', async () => {
+      submitUrls('https://example.com/a.pdf file:///tmp/b.pdf');
+      expect($('message').textContent).toBe(
+        'URL として読めないものがあります（http・https の URL を入れてください）: file:///tmp/b.pdf'
+      );
+      expect($('urlInput').value).toBe('https://example.com/a.pdf file:///tmp/b.pdf'); // 直せるように残す
+      submitUrls('   ');
+      await flush();
+      expect(mocks.downloadUrlFile).not.toHaveBeenCalled();
+      expect(document.querySelectorAll('#fileList .bm-file')).toHaveLength(0);
+    });
+
+    it('読めなかった URL は、一覧にその理由を出す', async () => {
+      mocks.downloadUrlFile.mockRejectedValue(new Error('「https://example.com/x.pdf」を読み込めませんでした（HTTP 404）。'));
+      submitUrls('https://example.com/x.pdf');
+      await settled(1);
+      expect(fileItem('x.pdf').classList.contains('error')).toBe(true);
+      expect(fileItem('x.pdf').textContent).toContain('HTTP 404');
+    });
   });
 });
 

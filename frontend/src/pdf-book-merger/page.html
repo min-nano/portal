@@ -19,7 +19,7 @@
     <span class="help">
       <button type="button" class="help-btn" aria-label="ファイルの選び方" aria-expanded="false" aria-controls="helpFiles">?</button>
       <span class="help-body" id="helpFiles">
-        <span data-staff-only>Drive の選択画面では、PDF を押すたびに選ぶ・外すが切り替わり、いくつでも選べます（フォルダを移っても残ります）。</span>手元のファイルは、この枠へドラッグ＆ドロップしても追加できます。最後の頁から並んでいるファイル（給紙の都合で逆順になったもの）も、頁番号から自動で並べ直します。番号の無い表紙なども、ファイルごとに「進み方」で逆順を選べます。文字情報に頁番号が見つからない頁は、画像の余白から読み取ります（初回だけ数 MB の読み込みがあります）。
+        <span data-staff-only>Drive の選択画面では、PDF を押すたびに選ぶ・外すが切り替わり、いくつでも選べます（フォルダを移っても残ります）。</span>手元のファイルは、この枠へドラッグ＆ドロップしても追加できます。URL を入れると、この端末がその URL から直接読み込みます（読み込みを許していないサーバーの PDF は読めません。そのときはダウンロードしてから追加してください）。最後の頁から並んでいるファイル（給紙の都合で逆順になったもの）も、頁番号から自動で並べ直します。番号の無い表紙なども、ファイルごとに「進み方」で逆順を選べます。文字情報に頁番号が見つからない頁は、画像の余白から読み取ります（初回だけ数 MB の読み込みがあります）。
       </span>
     </span>
   </h3>
@@ -29,6 +29,16 @@
     <button type="button" id="localBtn" class="secondary">ファイルを追加</button>
     <input type="file" id="localInput" accept="application/pdf,.pdf" multiple hidden>
   </div>
+  <!-- URL の PDF は、この端末が直接読む（相手のサーバーが CORS で許していないと読めない）。
+       空白・改行で区切れば、いくつでも一度に足せる（何行も貼り付けられるように textarea にする。
+       input は貼り付けた改行を消し、URL がつながってしまう）。 -->
+  <form id="urlForm" class="field bm-url">
+    <label for="urlInput">URL から追加</label>
+    <div class="field-row">
+      <textarea id="urlInput" rows="2" inputmode="url" placeholder="https://example.com/scan.pdf" autocomplete="off" spellcheck="false"></textarea>
+      <button type="submit" class="secondary">追加</button>
+    </div>
+  </form>
   <div id="progress" class="bm-progress" hidden>
     <!-- 調べ終えたところ（ベタ塗り）と、中身が届いたところ（ストライプ）を重ねて描く。 -->
     <div id="progressBar" class="bm-bar" role="progressbar" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0">

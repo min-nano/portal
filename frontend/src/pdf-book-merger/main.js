@@ -7,7 +7,7 @@
 // のは、Drive の PDF を確かめて読み取り専用のトークンを渡すことだけ（中身は
 // 通さない）。
 //
-//   1. ファイルを読む   Drive（そのトークンで直接。drive-download.js）
+//   1. ファイルを読む   Drive（そのトークンで直接。drive-download.js）・URL（直接。url-download.js）
 //                       か手元から
 //   2. 文字情報を読む   頁番号の候補（pdf-source.js → page-numbers.js）。軽い
 //   3. 頁の画像を測る   傾き・ずれ・すじ（image-checks.js を worker で）。
@@ -31,6 +31,7 @@ import { startPage } from '../page-start.js';
 import { pickFiles } from '../drive-picker.js';
 import { ensurePdfExtension } from '../pdf-file-ops.js';
 import { downloadDriveFile } from './drive-download.js';
+import { downloadUrlFile, nameFromUrl, parseUrls } from './url-download.js';
 import { createDownloadPool } from './download-pool.js';
 import { compareScans } from './image-checks.js';
 import { isMobile, saveMethod, savePdf } from './save-file.js';
@@ -193,7 +194,7 @@ function showMessage(text, color = '') {
 // ときにだけ隠す（仕事の替わり目で隠すと、行が消えて画面がちらつく）。
 //
 // バーは、調べ終えたところ（頁の数で数える）をベタ塗りにし、中身が手元に届いた
-// ところ（Drive から読み込んだバイトの数で数える）を動くストライプで重ねる。調べる
+// ところ（Drive・URL から読み込んだバイトの数で数える）を動くストライプで重ねる。調べる
 // のは届いてからなので、ベタ塗りがストライプを追い越すことはない。読み込みと調べる
 // のにかかる時間の割合はファイルによって何倍も違う（スキャンは大きさに、InDesign の
 // PDF は頁の数に比例する）ので、1 本の進み具合にまとめて見積もらず、それぞれの数え方
@@ -221,7 +222,7 @@ const crashLog = createCrashLog();
  * ときの位置から残りを数え直す。
  *
  * loaded は、いまの仕事で中身が届いた割合（0〜1。ストライプに描く）。たいていの
- * 仕事は中身が手元にあるので 1 とし、Drive から読み込む間だけ下げる（showLoading）。
+ * 仕事は中身が手元にあるので 1 とし、Drive・URL から読み込む間だけ下げる（showLoading）。
  * ahead は、順番を待っている仕事の中身が届いた分（仕事の数で数える）を返す。
  * 読み込みは調べるのを待たずに先へ進むので、ストライプはその分も先へ伸ばす。
  */
@@ -468,7 +469,7 @@ function breathe() {
  * なり（400 ファイルで、折り畳みの節を 8 万個作っては捨てる）、iPhone では
  * 足している途中でページごと落ちた。処理の記録を残すのも、足し終えてから 1 度。
  *
- * @param {Array<{name:string, size?:number, driveId?:string, modified?:number|null,
+ * @param {Array<{name:string, size?:number, driveId?:string, url?:string, modified?:number|null,
  *          load:(onProgress:Function, onWait:Function, reserve:Function) => Promise<Uint8Array>}>} sources
  *   load は、中身の大きさが分かったら、読み始める前に reserve(size) を待つ（download-pool.js）
  */
@@ -479,12 +480,17 @@ function addFiles(sources) {
       showMessage(`「${source.name}」はすでに追加してあります。`, 'red');
       continue;
     }
+    if (source.url && files.some((file) => file.url === source.url)) {
+      showMessage(`「${source.url}」はすでに追加してあります。`, 'red');
+      continue;
+    }
     const file = {
       key: `f${nextKey}`,
       added: nextKey++, // 追加した順（「追加順」に戻すときに使う）
       name: source.name,
       modified: Number.isFinite(source.modified) ? source.modified : null, // 更新日時（ミリ秒）
       driveId: source.driveId || '',
+      url: source.url || '', // URL から読むファイルの URL
       status: 'waiting', // waiting → loading → loaded → reading → ocr → ready / error
       error: '',
       role: 'body',
@@ -499,7 +505,7 @@ function addFiles(sources) {
     };
     files.push(file);
     added.push({ file, source });
-    logLine(`「${file.name}」を追加しました（${source.driveId ? 'Drive' : 'この端末'}）`);
+    logLine(`「${file.name}」を追加しました（${source.driveId ? 'Drive' : source.url || 'この端末'}）`);
   }
   sortFiles();
   renderFiles();
@@ -538,7 +544,7 @@ function showWaiting(file) {
 }
 
 /**
- * ファイルの中身を読み（Drive なら転送）、file.bytes に入れる。
+ * ファイルの中身を読み（Drive・URL なら転送）、file.bytes に入れる。
  *
  * 中身は file.bytes にだけ持つ（読み込みの約束には残さない）。調べられなかった
  * ファイルや外したファイルは、file.bytes を捨てればメモリが空く。保存領域を
@@ -646,7 +652,7 @@ async function bytesOf(file) {
  * ものとする。外したファイルは、もう待たないので 1。
  */
 function loadedPart(file) {
-  if (!file || !file.driveId || !files.includes(file)) return 1;
+  if (!file || !(file.driveId || file.url) || !files.includes(file)) return 1;
   return file.loadedShown ?? 0;
 }
 
@@ -2394,6 +2400,27 @@ function addDriveFiles(picked) {
   );
 }
 
+/** 入力欄の URL の PDF を、入れた順に足す。 */
+function addFromUrl() {
+  const { urls, bad, schemes } = parseUrls($('urlInput').value);
+  if (bad.length) {
+    showMessage(`URL として読めないものがあります（${schemes} の URL を入れてください）: ${bad.join(' ')}`, 'red');
+    return;
+  }
+  if (urls.length === 0) return;
+  showMessage('');
+  $('urlInput').value = '';
+  addFiles(
+    urls.map((url) => ({
+      name: nameFromUrl(url),
+      url,
+      // 大きさが分からない（Content-Length が無い）ときは、ほかと並べて読まない（枠をまるごと取る）。
+      load: (onProgress, onWait, reserve) =>
+        downloadUrlFile(url, { onProgress, reserve: (size) => reserve(size || DOWNLOAD_BUDGET) }),
+    }))
+  );
+}
+
 function addLocal(fileList) {
   const pdfs = [...fileList].filter((file) => file.type === PDF_MIME || /\.pdf$/i.test(file.name));
   if (pdfs.length < fileList.length) showMessage('PDF 以外のファイルは外しました。', 'red');
@@ -2440,6 +2467,10 @@ function wireUp() {
   );
   $('driveBtn').addEventListener('click', addFromDrive);
   $('localBtn').addEventListener('click', () => $('localInput').click());
+  $('urlForm').addEventListener('submit', (event) => {
+    event.preventDefault();
+    addFromUrl();
+  });
   $('localInput').addEventListener('change', (event) => {
     addLocal(event.target.files);
     event.target.value = '';
