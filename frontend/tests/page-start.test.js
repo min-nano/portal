@@ -63,7 +63,6 @@ function app() {
 
 beforeEach(() => {
   document.body.innerHTML = PAGE;
-  delete document.documentElement.dataset.closed;
   vi.clearAllMocks();
   hideStaffOnlyForExternalUsers.mockResolvedValue(false);
   redirectToCanonicalHost.mockReturnValue(false);
@@ -142,8 +141,16 @@ describe('startPage', () => {
     // 消さずに印を付け、CSS で隠す（動いている途中の処理が要素を見失わない）。
     expect(document.getElementById('mergeBtn')).not.toBeNull();
     expect(app().hasAttribute('data-closed')).toBe(true);
-    // 閉じた後に開くダイアログも隠せるよう、<html> にも印を付ける。
-    expect(document.documentElement.hasAttribute('data-closed')).toBe(true);
+    // 閉じた後に開いたダイアログは、開いたそばから閉じる（見えないモーダルを
+    // 残して画面全体を操作できなくしない）。開いたままでないものは触らない。
+    document.body.insertAdjacentHTML('beforeend', '<dialog id="late"></dialog><div id="other"></div>');
+    const late = document.getElementById('late');
+    late.close = vi.fn(() => late.removeAttribute('open'));
+    late.setAttribute('open', '');
+    document.getElementById('other').setAttribute('open', '');
+    await settle();
+    expect(late.close).toHaveBeenCalledTimes(1);
+    expect(late.hasAttribute('open')).toBe(false);
     // 理由は専用の欄に出す（#message は動いている途中の処理が書き換えるため）。
     const refusal = document.getElementById('refusal');
     expect(refusal.textContent).toBe('このアプリは許可されたアカウント専用です。');

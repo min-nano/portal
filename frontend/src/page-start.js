@@ -155,9 +155,15 @@ function closeApp(reason) {
   app.append(box);
   app.dataset.closed = '';
   // #app の外に開いているもの（頁の拡大表示など）も閉じる。閉じた後に開こうと
-  // したもの（読み込みを待ってから開くダイアログなど）は、<html> の印で CSS が隠す。
-  document.documentElement.dataset.closed = '';
+  // したもの（読み込みを待ってから開くダイアログなど）も、開いたそばから閉じる。
+  // CSS で隠すだけだと、見えないモーダルが残って画面全体（サインアウトも）が
+  // 操作できなくなるため。
   for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
+  new MutationObserver((changes) => {
+    for (const { target } of changes) {
+      if (target instanceof HTMLDialogElement && target.open) target.close();
+    }
+  }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] });
 }
 
 /**

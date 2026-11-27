@@ -165,13 +165,6 @@ describe('hideStaffOnlyForExternalUsers', () => {
     document.getElementById('merge').hidden = false;
     // ツールの理由の欄（#message）は、動いている処理が書き換えるので見せない。
     expect([shown('merge'), shown('message'), shown('refusal')]).toEqual([false, false, true]);
-
-    // 閉じた後に開いたダイアログも見せない（<html> の印）。
-    document.body.insertAdjacentHTML('beforeend', '<dialog id="late" open>拡大表示</dialog>');
-    expect(shown('late')).toBe(true);
-    document.documentElement.dataset.closed = '';
-    expect(shown('late')).toBe(false);
-    delete document.documentElement.dataset.closed;
     style.remove();
   });
 });
