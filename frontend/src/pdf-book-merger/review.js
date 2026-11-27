@@ -108,6 +108,7 @@ const PAGE_KIND_TEXT = {
   streak: ['warn', 'すじが入っている頁'],
   blank: ['info', '白紙の頁'],
   text: ['warn', '文字情報（OCR の結果）が文字化けしている・文として読めない頁'],
+  'text-removed': ['info', '文字情報を消して結合する頁'],
   textless: ['info', '文字情報の無い頁'],
 };
 
@@ -294,17 +295,30 @@ export function textCoverage(order, pageOf) {
 /**
  * 文字情報（OCR の結果）の確かめ（text-quality.js）を、頁ごとの指摘にする。
  *
+ * 文字情報を消して結合する頁（removing）は、確かめた結果に代えて、消すことを
+ * 知らせる（指摘はもう片付いたものとして、軽いお知らせにする）。透明な文字が
+ * 無い頁（見えている文字・調べられなかった頁）は消せないので、そう添える。
+ *
  * @param {ReturnType<import('./ordering.js').arrangeBook>['order']} order
- * @param {(entry:object) => {textCheck?:{kind:string, sample:string}|null}} pageOf
- * @returns {Map<string, {kind:'text', level:'warn', message:string}[]>}
+ * @param {(entry:object) => {textCheck?:{kind:string, sample:string}|null, invisibleText:number}} pageOf
+ * @param {Set<string>} [removing] 文字情報を消して結合する頁の key
+ * @returns {Map<string, {kind:'text'|'text-removed', level:'warn'|'info', message:string}[]>}
  */
-export function textIssues(order, pageOf) {
+export function textIssues(order, pageOf, removing = new Set()) {
   const issues = new Map();
   for (const entry of order) {
-    const check = pageOf(entry).textCheck;
+    const page = pageOf(entry);
+    if (removing.has(entry.pageKey)) {
+      issues.set(entry.pageKey, [
+        { kind: 'text-removed', level: 'info', message: '結合するときに、この頁の文字情報（OCR の結果）を消します' },
+      ]);
+      continue;
+    }
+    const check = page.textCheck;
     if (!check) continue;
+    const note = page.invisibleText > 0 ? '' : '。画像の上の透明な文字ではないので、消せません';
     issues.set(entry.pageKey, [
-      { kind: 'text', level: 'warn', message: `${TEXT_QUALITY_MESSAGE[check.kind]}（「${check.sample}」）` },
+      { kind: 'text', level: 'warn', message: `${TEXT_QUALITY_MESSAGE[check.kind]}（「${check.sample}」）${note}` },
     ]);
   }
   return issues;

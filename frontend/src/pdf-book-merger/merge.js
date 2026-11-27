@@ -5,6 +5,9 @@
 // 頁の中身の一部なので、写せばそのまま残る。画像を再圧縮しないので、
 // 画質も落ちない。
 //
+// 選んだ頁だけは、透明な文字（文字化けした OCR の結果）を消してから写す
+// （strip-text.js。画像はそのまま）。
+//
 // 文書の情報（タイトル・作成者など）は、本文の最初のファイルから引き継ぐ。
 // タイトルだけは保存するファイル名にする（1 冊にまとめたものなので）。
 // 頁ラベル（ordering.js の pageLabelRanges）を付けて、ビューアーの頁番号を
@@ -27,6 +30,7 @@ import {
   PDFStream,
 } from 'pdf-lib';
 import './pdf-lib-views.js';
+import { stripInvisibleText } from './strip-text.js';
 
 /** 画面に名乗る、このツールの名前（文書の情報の「作成アプリ」に入れる）。 */
 const CREATOR = 'PDF 結合ツール';
@@ -224,12 +228,25 @@ async function writeTrailer(out, offsets, context) {
  * @param {string} options.title 文書のタイトル
  * @param {{start:number, style:string|null, prefix:string, first:number}[]} [options.labels]
  * @param {string} [options.infoFrom] 文書の情報を引き継ぐファイルの key
+ * @param {Set<string>} [options.removeText] 透明な文字（文字情報）を消す頁
+ *   （「ファイルの key:頁の位置」。strip-text.js）
  * @param {(chunk:Uint8Array) => (void|Promise<void>)} options.write 書き出す先
  * @param {(done:number, total:number) => void} [options.onProgress]
- * @returns {Promise<{size:number, digests:string[]}>}
- *   size は書き出した大きさ、digests は並べた順の元の頁の指紋（pageDigest）
+ * @returns {Promise<{size:number, digests:string[], removed:({removed:number, kept:number}|null)[]}>}
+ *   size は書き出した大きさ、digests は並べた順の元の頁の指紋（pageDigest。
+ *   文字情報を消した頁は、消したあとの頁の指紋）、removed は並べた順の、
+ *   文字情報を消した頁の、消した・残った文字の命令の数（消さない頁は null）
  */
-export async function writeMergedPdf({ sources, order, title, labels = [], infoFrom, write, onProgress }) {
+export async function writeMergedPdf({
+  sources,
+  order,
+  title,
+  labels = [],
+  infoFrom,
+  removeText = new Set(),
+  write,
+  onProgress,
+}) {
   const merged = await PDFDocument.create();
   const { context } = merged;
   const needed = new Map();
@@ -249,6 +266,7 @@ export async function writeMergedPdf({ sources, order, title, labels = [], infoF
   // 書体を、頁の数だけ複製しないため）。
   const copied = new Map();
   const digests = new Map();
+  const removed = new Map();
   let info = null;
   let done = 0;
   for (const [fileKey, indices] of needed) {
@@ -268,6 +286,18 @@ export async function writeMergedPdf({ sources, order, title, labels = [], infoF
       copied.set(`${fileKey}:${index}`, pages[i]);
       kept.add(pages[i].ref);
     });
+    // 文字情報を消す頁は、写した頁を書き換える（元の文書は書き換えない）。
+    // 同じファイルの頁が共有するフォームは、写しを 1 つにする。指紋は、
+    // 書き換えた頁のもの（結合した PDF に書いたものと突き合わせる）。
+    const forms = new Map();
+    for (const [i, index] of list.entries()) {
+      const key = `${fileKey}:${index}`;
+      if (!removeText.has(key)) continue;
+      const result = stripInvisibleText(pages[i], { write: true, cache: forms });
+      if (!result) throw new Error(`「${source.name}」の ${index + 1} 頁目の文字情報を消せませんでした（頁の中身が、読めないか、消せない形です）。`);
+      removed.set(key, result);
+      digests.set(key, await pageDigest(pages[i]));
+    }
     // 写した中身を書き出して、手放す（元のファイルのバイト列を指しているので、
     // 手放せば元のファイルもまるごと手放せる）。
     for (const [ref, object] of context.enumerateIndirectObjects()) {
@@ -301,6 +331,7 @@ export async function writeMergedPdf({ sources, order, title, labels = [], infoF
   return {
     size: out.offset,
     digests: order.map((item) => digests.get(`${item.fileKey}:${item.pageIndex}`)),
+    removed: order.map((item) => removed.get(`${item.fileKey}:${item.pageIndex}`) ?? null),
   };
 }
 
@@ -309,14 +340,14 @@ export async function writeMergedPdf({ sources, order, title, labels = [], infoF
  *
  * @param {object} options writeMergedPdf と同じ（write は要らない）。sources の
  *   中身は、load の代わりに bytes でも渡せる
- * @returns {Promise<{bytes:Uint8Array, digests:string[]}>}
+ * @returns {Promise<{bytes:Uint8Array, digests:string[], removed:({removed:number, kept:number}|null)[]}>}
  */
 export async function mergePdf({ sources, ...options }) {
   const chunks = [];
   const loaders = new Map(
     [...sources].map(([key, source]) => [key, { name: source.name, load: source.load ?? (async () => source.bytes) }])
   );
-  const { size, digests } = await writeMergedPdf({
+  const { size, digests, removed } = await writeMergedPdf({
     ...options,
     sources: loaders,
     write: (chunk) => {
@@ -331,7 +362,7 @@ export async function mergePdf({ sources, ...options }) {
     at += chunks[i].length;
     chunks[i] = null;
   }
-  return { bytes, digests };
+  return { bytes, digests, removed };
 }
 
 /** 頁ラベル（/PageLabels の数の木）を書き込む。 */

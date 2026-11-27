@@ -11,7 +11,15 @@
 //   - 展開は 1 回で、要る大きさに縮めて頼む
 
 import { deflateSync } from 'node:zlib';
-import { PDFDocument, PDFName, PDFNumber, PDFRawStream, StandardFonts } from 'pdf-lib';
+import {
+  PDFDocument,
+  PDFName,
+  PDFNumber,
+  PDFRawStream,
+  StandardFonts,
+  TextRenderingMode,
+  setTextRenderingMode,
+} from 'pdf-lib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   decodeSize,
@@ -20,9 +28,9 @@ import {
   imageTransform,
   inflate,
   inspectPage,
-  operations,
   softMaskCount,
 } from '../src/pdf-book-merger/scan-images.js';
+import { operations } from '../src/pdf-book-merger/content-stream.js';
 
 // 8×6 の白い JPEG（灰色と CMYK）。
 const GRAY_JPEG = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/wAALCAAGAAgBAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/APQK/9k=';
@@ -52,6 +60,20 @@ describe('頁の中身の命令を切り分ける', () => {
     expect(ops[2].operands).toEqual(['/Im0']);
     expect(ops[5].operands).toEqual([null]);
     expect(ops[8].operands).toEqual(['/Span', null]);
+  });
+
+  it('入れ子の辞書・辞書の中の逃がした括弧・true などの語・対応の無い括弧も読み、命令の範囲を返す', () => {
+    const text = '/Span <</A <</B (x\\)) >> /C 1>> BDC true false null 1 ) Tj EMC';
+    const ops = [...operations(encode(text))];
+    expect(ops.map((o) => o.op)).toEqual(['BDC', ')', 'Tj', 'EMC']);
+    expect(ops[0].operands).toEqual(['/Span', null]);
+    expect(ops[1].operands).toEqual([null, null, null, 1]);
+    expect(ops.map((o) => text.slice(o.start, o.end))).toEqual([
+      '/Span <</A <</B (x\\)) >> /C 1>> BDC',
+      'true false null 1 )',
+      'Tj',
+      'EMC',
+    ]);
   });
 
   it('インライン画像が出てきたら、そこで止める（中身は読まない）', () => {
@@ -200,15 +222,26 @@ describe('頁から JPEG を取り出す', () => {
     doc.addPage([100, 100]).drawImage(image, { x: 0, y: 0, width: 100, height: 100 });
     doc.addPage([100, 100]).drawRectangle({ x: 0, y: 0, width: 5, height: 5 });
     doc.addPage([100, 100]);
+    // 透明な文字の頁と、インライン画像で中身を最後まで読めない頁。
+    const hidden = doc.addPage([100, 100]);
+    hidden.pushOperators(setTextRenderingMode(TextRenderingMode.Invisible));
+    hidden.drawText('hidden text');
+    const inline = doc.addPage([100, 100]);
+    inline.node.set(PDFName.of('Contents'), doc.context.register(doc.context.flateStream('BI /W 1 /H 1 ID \x00 EI')));
 
-    const { scans, reasons, example } = await findScanImages(await doc.save());
-    expect(scans.map((scan) => (scan ? 'jpeg' : null))).toEqual(['jpeg', null, null]);
-    expect([...reasons]).toEqual([['画像が無い', 2]]);
+    const { scans, reasons, example, invisibleText } = await findScanImages(await doc.save());
+    expect(scans.map((scan) => (scan ? 'jpeg' : null))).toEqual(['jpeg', null, null, null, null]);
+    expect([...reasons]).toEqual([
+      ['画像が無い', 3],
+      ['インライン画像を使っている', 1],
+    ]);
     expect(example).toBe('2 頁目: 画像 0 枚・下地の塗り 1');
+    expect(invisibleText).toEqual([0, 0, 0, 1, 0]);
 
     const broken = await findScanImages(encode('not a pdf'));
     expect(broken.scans).toEqual([]);
     expect(broken.softMasks).toEqual([]);
+    expect(broken.invisibleText).toEqual([]);
     expect([...broken.reasons.keys()][0]).toMatch(/^PDF を読めない/);
   });
 });

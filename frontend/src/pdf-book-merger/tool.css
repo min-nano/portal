@@ -628,3 +628,16 @@ input.bm-page-number {
   width: 100%;
   height: auto;
 }
+
+/* 文字情報の項目の、まとめて消す・残すボタン（開いて頁を並べても、上に寄せる）。 */
+.bm-problem-action,
+.bm-page-text {
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
+}
+
+.bm-problem-action {
+  align-self: flex-start;
+  flex-shrink: 0;
+}
