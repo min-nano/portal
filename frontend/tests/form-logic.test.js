@@ -170,8 +170,8 @@ describe('selectFocusTarget', () => {
 describe('fileNameFromDisposition', () => {
   it('RFC 5987 の filename* をデコードする', () => {
     const disposition =
-      "attachment; filename*=UTF-8''%E5%82%BE%E6%96%9C%E6%B8%AC%E5%AE%9A%E5%A0%B1%E5%91%8A%E6%9B%B8.xlsx";
-    expect(fileNameFromDisposition(disposition)).toBe('傾斜測定報告書.xlsx');
+      "attachment; filename*=UTF-8''%E8%A8%88%E6%B8%AC%E7%AD%89%E6%95%B0%E5%80%A4%E5%A0%B1%E5%91%8A%E3%82%B7%E3%83%BC%E3%83%88.xlsx";
+    expect(fileNameFromDisposition(disposition)).toBe('計測等数値報告シート.xlsx');
   });
 
   it('ヘッダーが無ければ null', () => {

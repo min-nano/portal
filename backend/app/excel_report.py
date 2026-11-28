@@ -18,7 +18,7 @@ from .errors import PortalError
 _MAPPING_PATH = os.path.join(os.path.dirname(__file__), "mapping.json")
 _MAPPING = None
 
-REPORT_FILE_NAME = "傾斜測定報告書.xlsx"
+REPORT_FILE_NAME = "計測等数値報告シート.xlsx"
 
 
 class ReportError(PortalError):

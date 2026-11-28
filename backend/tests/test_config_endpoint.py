@@ -31,7 +31,7 @@ def test_config_validation_and_limits(client, drive):
 
     assert body["validation"] == MAPPING["validation"]
     assert body["max_rooms"] == len(STARTS)
-    assert body["report_file_name"] == "傾斜測定報告書.xlsx"
+    assert body["report_file_name"] == "計測等数値報告シート.xlsx"
 
 
 def test_config_requires_auth(anon_client):
